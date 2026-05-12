@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "movielens-recsys"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    # Data
+    "psycopg2-binary",
+    "sqlalchemy>=2.0",
+    "pandas",
+    "numpy",
+    # ML
+    "torch",
+    "lightgbm",
+    "scikit-learn",
+    "implicit",
+    # Feature store
+    "feast[redis]",
+    # Tracking
+    "mlflow",
+    # Orchestration
+    "prefect",
+    # Serving
+    "fastapi",
+    "uvicorn[standard]",
+    "redis",
+    # Monitoring
+    "evidently",
+    "prometheus-client",
+    # Config
+    "pydantic-settings",
+    # DVC
+    "dvc[s3]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "black",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "types-redis",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+where = ["src"]
