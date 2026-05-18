@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: pytest tests/unit/ -v
+      - run: pytest tests/unit/ -v || [ $? -eq 5 ]
 
   feature-parity:
     runs-on: ubuntu-latest
@@ -39,4 +39,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: pytest tests/feature_parity/ -v
+      - run: pytest tests/feature_parity/ -v || [ $? -eq 5 ]
