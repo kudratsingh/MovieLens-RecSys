@@ -1,9 +1,9 @@
 import math
+
 import pytest
 
-from src.evaluation.metrics import recall_at_k, ndcg_at_k
-from src.evaluation.protocol import evaluate, COLD_START_THRESHOLD, K
-
+from src.evaluation.metrics import ndcg_at_k, recall_at_k
+from src.evaluation.protocol import COLD_START_THRESHOLD, evaluate
 
 # --- metrics ---
 

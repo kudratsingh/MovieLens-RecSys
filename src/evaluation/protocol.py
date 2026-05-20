@@ -1,7 +1,5 @@
 from dataclasses import dataclass
 
-import pandas as pd
-
 from .metrics import ndcg_at_k, recall_at_k
 
 # Matches ADR 0001: users with fewer than this many training interactions are cold.
