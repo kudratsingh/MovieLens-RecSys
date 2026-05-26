@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test train serve infra-up infra-down
+.PHONY: install lint format typecheck test train serve infra-up infra-down data-download data-ingest data-ingest-reset
 
 install:
 	pip install -e ".[dev]"
@@ -37,6 +37,15 @@ infra-up:
 
 infra-down:
 	docker-compose down
+
+data-download:
+	python -m src.data.download
+
+data-ingest:
+	python -m src.data.ingest
+
+data-ingest-reset:
+	python -m src.data.ingest --reset
 
 dvc-pull:
 	dvc pull

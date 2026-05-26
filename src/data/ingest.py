@@ -7,25 +7,29 @@ Postgres is the source of truth — don't read from the CSVs downstream.
 
 from __future__ import annotations
 
+import argparse
 import logging
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, create_engine, text
 
+from src.config import Settings
 from src.data.schema import create_tables
 
 logger = logging.getLogger(__name__)
 
 
-def ingest_movielens(raw_dir: Path, engine: Engine) -> None:
+def ingest_movielens(raw_dir: Path, engine: Engine, *, reset: bool = False) -> None:
     """Read the four CSVs and bulk-insert into Postgres.
 
-    This is a one-shot script meant to run against a fresh database.
-    Tables are created if they don't exist. Running it twice will insert
-    duplicates — truncate the tables first if you need to re-ingest.
+    Tables are created if they don't exist. With ``reset=True`` the target
+    tables are truncated first so the script is idempotent; otherwise rows
+    are appended and re-running will produce duplicates.
     """
     create_tables(engine)
+    if reset:
+        _truncate(engine)
 
     files = {
         "ratings": raw_dir / "ratings.csv",
@@ -46,15 +50,45 @@ def ingest_movielens(raw_dir: Path, engine: Engine) -> None:
     logger.info("Ingestion complete.")
 
 
+def _truncate(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE ratings, movies, tags, links RESTART IDENTITY"))
+
+
 def _create_indices(engine: Engine) -> None:
-    """Indices that matter for the queries this system actually runs."""
+    """Indices that matter for the queries this system actually runs.
+
+    The camelCase column names come from the MovieLens CSV headers; Postgres
+    folds unquoted identifiers to lower-case, so we must quote them explicitly
+    here to match what SQLAlchemy created.
+    """
     statements = [
-        "CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(userId)",
-        "CREATE INDEX IF NOT EXISTS idx_ratings_movie ON ratings(movieId)",
+        'CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings("userId")',
+        'CREATE INDEX IF NOT EXISTS idx_ratings_movie ON ratings("movieId")',
         "CREATE INDEX IF NOT EXISTS idx_ratings_ts ON ratings(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(userId)",
-        "CREATE INDEX IF NOT EXISTS idx_tags_movie ON tags(movieId)",
+        'CREATE INDEX IF NOT EXISTS idx_tags_user ON tags("userId")',
+        'CREATE INDEX IF NOT EXISTS idx_tags_movie ON tags("movieId")',
     ]
     with engine.begin() as conn:
         for stmt in statements:
             conn.execute(text(stmt))
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    parser = argparse.ArgumentParser(description="Ingest MovieLens 25M CSVs into Postgres.")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Truncate ratings/movies/tags/links before inserting. Use this on re-runs.",
+    )
+    args = parser.parse_args()
+
+    settings = Settings()
+    engine = create_engine(settings.database_url)
+    raw_dir = settings.raw_data_dir / "ml-25m"
+    ingest_movielens(raw_dir, engine, reset=args.reset)
+
+
+if __name__ == "__main__":
+    main()
