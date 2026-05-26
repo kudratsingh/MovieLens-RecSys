@@ -14,7 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff black mypy
+      # Install the project (with dev extras) so mypy sees the real types
+      # of external classes like pydantic's BaseSettings. Without this, mypy's
+      # `ignore_missing_imports` makes them Any, and strict mode's
+      # `disallow_subclassing_any` fires on every legitimate subclass.
+      - run: pip install -e ".[dev]"
       - run: ruff check src/ tests/
       - run: black --check src/ tests/
       - run: mypy src/
