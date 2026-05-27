@@ -15,7 +15,7 @@ import pandas as pd
 from sqlalchemy import Engine, create_engine, text
 
 from src.config import Settings
-from src.data.schema import create_tables
+from src.data.schema import create_tables, metadata
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,15 @@ logger = logging.getLogger(__name__)
 def ingest_movielens(raw_dir: Path, engine: Engine, *, reset: bool = False) -> None:
     """Read the four CSVs and bulk-insert into Postgres.
 
-    Tables are created if they don't exist. With ``reset=True`` the target
-    tables are truncated first so the script is idempotent; otherwise rows
-    are appended and re-running will produce duplicates.
+    With ``reset=True`` the target tables are dropped and recreated from the
+    current schema definition before loading. That makes re-runs safe after a
+    schema change (otherwise ``create_all`` is a no-op against the stale
+    in-DB schema and inserts fail). Without ``reset``, rows are appended —
+    re-running will produce duplicates.
     """
-    create_tables(engine)
     if reset:
-        _truncate(engine)
+        metadata.drop_all(engine)
+    create_tables(engine)
 
     files = {
         "ratings": raw_dir / "ratings.csv",
@@ -48,11 +50,6 @@ def ingest_movielens(raw_dir: Path, engine: Engine, *, reset: bool = False) -> N
 
     _create_indices(engine)
     logger.info("Ingestion complete.")
-
-
-def _truncate(engine: Engine) -> None:
-    with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE ratings, movies, tags, links RESTART IDENTITY"))
 
 
 def _create_indices(engine: Engine) -> None:
@@ -80,7 +77,11 @@ def main() -> None:
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Truncate ratings/movies/tags/links before inserting. Use this on re-runs.",
+        help=(
+            "DROP and recreate ratings/movies/tags/links before inserting. "
+            "Use on re-runs and after any schema change. Destructive: wipes "
+            "all existing data in those four tables."
+        ),
     )
     args = parser.parse_args()
 
