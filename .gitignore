@@ -22,9 +22,16 @@ mlartifacts/
 *.onnx
 models/
 
-# DVC
-/data/raw/
-/data/processed/
+# DVC: ignore the data dirs' contents but keep the DVC pointer files
+# and the per-directory .gitignore files that `dvc add` manages.
+# Without the un-ignores, the blanket /data/raw/ pattern would hide the
+# very .dvc refs git needs to track.
+/data/raw/*
+/data/processed/*
+!/data/raw/.gitignore
+!/data/raw/*.dvc
+!/data/processed/.gitignore
+!/data/processed/*.dvc
 .dvc/cache/
 .dvc/tmp/
 
