@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test train serve infra-up infra-down data-download data-ingest data-ingest-reset
+.PHONY: install lint format typecheck test train serve infra-up infra-down data-download data-ingest data-ingest-reset eda
 
 install:
 	pip install -e ".[dev]"
@@ -46,6 +46,9 @@ data-ingest:
 
 data-ingest-reset:
 	python -m src.data.ingest --reset
+
+eda:
+	python -m notebooks.eda
 
 dvc-pull:
 	dvc pull

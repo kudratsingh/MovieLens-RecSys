@@ -1,7 +1,10 @@
 """
 Exploratory data analysis on MovieLens 25M in Postgres.
 
-Re-runnable from the project root: `python notebooks/eda.py`. Every section
+Re-runnable from the project root: `python -m notebooks.eda` (or `make eda`).
+Run with `-m` so the project root lands on sys.path and `src.config` resolves;
+running `python notebooks/eda.py` directly will fail with ModuleNotFoundError.
+Every section
 runs as a SQL aggregation so result sets are tiny — we never pull 25 M rows
 into pandas. Output is plain text designed to be pasted into docs/eda.md
 when iterating on the writeup.
