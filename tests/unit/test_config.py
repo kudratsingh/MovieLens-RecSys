@@ -15,6 +15,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "POSTGRES_PORT",
         "POSTGRES_DB",
         "RAW_DATA_DIR",
+        "MLFLOW_TRACKING_URI",
+        "MLFLOW_EXPERIMENT",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -51,3 +53,19 @@ def test_env_overrides(clean_env: None, monkeypatch: pytest.MonkeyPatch) -> None
 def test_raw_data_dir_default(clean_env: None) -> None:
     s = _defaults(clean_env)
     assert s.raw_data_dir == Path("data/raw")
+
+
+def test_mlflow_defaults(clean_env: None) -> None:
+    # Defaults must point at the local docker-compose MLflow so `make
+    # train-popularity` works on a fresh checkout without extra config.
+    s = _defaults(clean_env)
+    assert s.mlflow_tracking_uri == "http://localhost:5000"
+    assert s.mlflow_experiment == "phase-1-baselines"
+
+
+def test_mlflow_env_overrides(clean_env: None, monkeypatch) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.prod.example.com")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT", "challenger-runs")
+    s = Settings(_env_file=None)
+    assert s.mlflow_tracking_uri == "https://mlflow.prod.example.com"
+    assert s.mlflow_experiment == "challenger-runs"

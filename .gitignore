@@ -20,7 +20,9 @@ mlartifacts/
 *.joblib
 *.pt
 *.onnx
-models/
+# Anchored to repo root so we don't accidentally ignore `src/models/`
+# (the source tree for model classes). Future trained-model dumps go in /models/.
+/models/
 
 # DVC: ignore the data dirs' contents but keep the DVC pointer files
 # and the per-directory .gitignore files that `dvc add` manages.
