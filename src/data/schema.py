@@ -43,7 +43,11 @@ tags = Table(
     metadata,
     Column("userId", Integer, nullable=False),
     Column("movieId", Integer, nullable=False),
-    Column("tag", Text, nullable=False),
+    # Tags are user-generated free text; MovieLens 25M ships rows with empty
+    # tag values, which pandas reads as NaN and SQLAlchemy converts to NULL.
+    # Keep them as NULL rather than dropping the rows — the (user, movie,
+    # timestamp) triple is still an interaction signal even without a tag string.
+    Column("tag", Text, nullable=True),
     Column("timestamp", BigInteger, nullable=False),
 )
 
