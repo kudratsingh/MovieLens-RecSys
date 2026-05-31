@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Where raw datasets live on disk. DVC tracks the contents; .gitignore excludes them.
     raw_data_dir: Path = Path("data/raw")
 
+    # MLflow tracking server. The default points at the local docker-compose
+    # MLflow service (host 5000 → container 5000). Override in any non-local
+    # environment via MLFLOW_TRACKING_URI.
+    mlflow_tracking_uri: str = "http://localhost:5000"
+    mlflow_experiment: str = "phase-1-baselines"
+
     @property
     def database_url(self) -> str:
         return (
