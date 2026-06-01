@@ -109,6 +109,23 @@ def test_recommend_for_users_returns_one_list_per_user() -> None:
     assert all(len(v) <= 3 for v in out.values())
 
 
+def test_was_served_by_als_matches_recommend_routing() -> None:
+    # The predicate is the contract the training pipeline relies on for
+    # per-policy MLflow metrics. It must mirror the exact branch in
+    # recommend(): True iff ALS factors exist AND the user was in train.
+    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    assert model.was_served_by_als(1) is True
+    assert model.was_served_by_als(999) is False  # unknown user → fallback
+
+
+def test_was_served_by_als_false_for_empty_train() -> None:
+    # No ALS factors means every user routes to the popularity fallback,
+    # so the predicate must return False even for an id the caller
+    # might think is "known."
+    model = CFModel(iterations=5).fit(_ratings([]))
+    assert model.was_served_by_als(1) is False
+
+
 def test_determinism_with_fixed_random_state() -> None:
     # Two models with the same seed + hyperparams on the same data should
     # produce the same recommendations. If this breaks, something is

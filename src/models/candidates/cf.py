@@ -125,3 +125,14 @@ class CFModel:
     def recommend_for_users(self, user_ids: list[int], k: int) -> dict[int, list[int]]:
         """Batch variant — one ``list[int]`` per user, keyed by user id."""
         return {uid: self.recommend(uid, k) for uid in user_ids}
+
+    def was_served_by_als(self, user_id: int) -> bool:
+        """Predicate: would ``recommend(user_id, …)`` go through ALS or popularity?
+
+        True iff this user has any training history and the ALS factors are
+        fitted. Mirrors the routing condition inside ``recommend`` exactly so
+        the training pipeline can attribute metrics to the right policy
+        without re-deriving the predicate. Exposed for per-policy MLflow
+        breakdowns; not used by ``recommend`` itself.
+        """
+        return self._als is not None and user_id in self._user_to_index
