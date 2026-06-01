@@ -190,17 +190,27 @@ movielens-recsys/
 
 ## Current status
 
-Starting Phase 1. Next concrete steps:
-1. `git init`, set local git author config to me, add `.gitignore` (Python, ML artifacts, `mlruns/`, `data/raw/`, DVC cache, env files), push initial scaffold to a fresh GitHub repo. Enable branch protection on `main` and squash merges. Add MIT LICENSE and a short README.
-2. Set up Python project: `pyproject.toml`, ruff, black, mypy, pytest, Makefile skeleton (`make lint`, `make test`, `make train`, `make serve`).
-3. Stand up Postgres + MLflow via docker-compose. Verify a dummy MLflow run shows in the UI.
-4. **Write `docs/adr/0001-evaluation-protocol.md` BEFORE any modeling.** Pin down metric(s), split definition (cutoff timestamp T, train < T, eval on next-W-days), negative sampling strategy, user slicing (cold-start treated separately), and the promotion threshold for Phase 4's evaluation gate.
-5. Build `src/evaluation/` as a real module with tests. Every model run goes through it — no ad-hoc metrics in notebooks.
-6. Download MovieLens 25M, ingest to Postgres, version raw data with DVC.
-7. Build the time-based split function (its own module, with tests).
-8. EDA notebook → save findings to `docs/eda.md`.
-9. Popularity baseline → first MLflow run, evaluated through the harness.
-10. Collaborative filtering baseline (`implicit` ALS or LightFM) → second MLflow run.
+**Phase 1 — complete.** Baselines, data foundation, and the evaluation harness all landed:
+
+- ADR 0001 (evaluation protocol) and ADR 0002 (implicit-feedback labeling) pin the contracts every model trains and is scored against.
+- `src/evaluation/` is the single source of truth for metrics — warm/cold user slicing per ADR 0001, used by every model run; no ad-hoc metric computation anywhere else (non-negotiable #5).
+- MovieLens 25M ingested into Postgres (`movielens` DB, 25 000 095 ratings) and versioned with DVC. Stack runs via docker-compose: Postgres, Redis, MLflow (psycopg2-enabled), Prometheus, Grafana.
+- Temporal train/holdout/test split (`src/data/split.py`) implementing ADR 0001's `T = percentile_disc(0.8)` cutoff. Train hits exactly 80.00% of rows; holdout = 28 days × 129 683 interactions × 2 641 users (~26.6% cold-start).
+- EDA writeup in `docs/eda.md` (2026-05-31 snapshot) characterizes scale, sparsity, rating distribution, item popularity tail, the temporal split as applied to real data, and cold-start sizing.
+- Popularity baseline (`PopularityModel`, PR #12) — first MLflow run logged into experiment `phase-1-baselines`.
+- CF/ALS baseline (`CFModel` via `implicit`, PR #14) — second run in the same experiment; embeds popularity fallback for cold users per ADR 0001.
+
+**Phase 2 — starting.** Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. Next concrete steps:
+
+1. **ADR 0004 (item-item before two-tower)** — pin the candidate-stage progression before code.
+2. **ADR 0005 (LightGBM over neural ranker)** — pin the ranker choice before code.
+3. **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`) — third candidate model alongside popularity and CF; trained, evaluated, and logged through the same skeleton so all three are comparable side-by-side in MLflow.
+4. **Two-tower candidate generator** (PyTorch) — the candidate-stage upgrade; learned user/item embeddings, ANN index for retrieval.
+5. **Feature module** (`src/features/`) — engineered features used by the ranker (user history aggregates, popularity windows, genre affinities, recency). Provisional home until Phase 3 introduces Feast as the feature store.
+6. **LightGBM ranker** (`src/models/ranker/lgbm.py`) — scores the surviving candidates; scored against NDCG@10 per ADR 0001.
+7. **Per-stage evaluation in the harness** — recall@K_candidates for the candidate stage, NDCG@10 for the ranker stage, in the same run, so each stage's contribution is legible.
+
+Phase 2 stays all-offline — no FastAPI, no Redis online store, no Feast yet. Those land in Phase 3.
 
 ## How to work with Claude Code on this
 
