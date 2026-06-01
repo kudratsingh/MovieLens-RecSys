@@ -31,7 +31,12 @@ services:
       retries: 5
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.13.0
+    # Custom image extending ghcr.io/mlflow/mlflow:v2.13.0 with psycopg2 so
+    # MLflow can reach its Postgres backend store. The `image:` tag below
+    # names the locally-built image so subsequent `up`s use the cache.
+    build:
+      context: ./infra/mlflow
+    image: movielens-recsys/mlflow:v2.13.0-pg
     command: >
       mlflow server
       --host 0.0.0.0
