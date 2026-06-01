@@ -100,6 +100,34 @@ def main() -> None:
         result.overall.ndcg,
     )
 
+    # Per-policy attribution. CFModel embeds a popularity fallback for users
+    # not seen in train, so the overall metrics above mix two policies. Split
+    # the holdout by which policy actually served each user and re-evaluate
+    # each slice through the same harness — that's the only way to tell
+    # whether ALS is earning its keep beyond what popularity alone delivers.
+    holdout_als = {uid: items for uid, items in holdout.items() if model.was_served_by_als(uid)}
+    holdout_fallback = {
+        uid: items for uid, items in holdout.items() if not model.was_served_by_als(uid)
+    }
+    result_als = evaluate(recommendations, holdout_als, train_counts)
+    result_fallback = evaluate(recommendations, holdout_fallback, train_counts)
+    logger.info(
+        "ALS-served (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
+        len(holdout_als),
+        K,
+        result_als.overall.recall,
+        K,
+        result_als.overall.ndcg,
+    )
+    logger.info(
+        "Fallback-served (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
+        len(holdout_fallback),
+        K,
+        result_fallback.overall.recall,
+        K,
+        result_fallback.overall.ndcg,
+    )
+
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(settings.mlflow_experiment)
@@ -141,6 +169,20 @@ def main() -> None:
                 "overall_ndcg_at_k": result.overall.ndcg,
                 "n_warm_users": result.n_warm_users,
                 "n_cold_users": result.n_cold_users,
+                # Per-policy attribution: same metrics computed over the
+                # subset of holdout users actually served by ALS vs. by the
+                # popularity fallback. Sum of als_served + fallback_served
+                # user counts equals n_warm_users + n_cold_users overall.
+                "als_served_recall_at_k": result_als.overall.recall,
+                "als_served_ndcg_at_k": result_als.overall.ndcg,
+                "als_served_warm_recall_at_k": result_als.warm.recall,
+                "als_served_warm_ndcg_at_k": result_als.warm.ndcg,
+                "als_served_cold_recall_at_k": result_als.cold.recall,
+                "als_served_cold_ndcg_at_k": result_als.cold.ndcg,
+                "n_als_served_users": len(holdout_als),
+                "fallback_served_recall_at_k": result_fallback.overall.recall,
+                "fallback_served_ndcg_at_k": result_fallback.overall.ndcg,
+                "n_fallback_served_users": len(holdout_fallback),
             }
         )
     logger.info("MLflow run logged. Done.")
