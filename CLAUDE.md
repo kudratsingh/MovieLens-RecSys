@@ -200,15 +200,15 @@ movielens-recsys/
 - Popularity baseline (`PopularityModel`, PR #12) — first MLflow run logged into experiment `phase-1-baselines`.
 - CF/ALS baseline (`CFModel` via `implicit`, PR #14) — second run in the same experiment; embeds popularity fallback for cold users per ADR 0001.
 
-**Phase 2 — starting.** Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. Next concrete steps:
+**Phase 2 — in progress.** Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. Status:
 
-1. **ADR 0004 (item-item before two-tower)** — pin the candidate-stage progression before code.
-2. **ADR 0005 (LightGBM over neural ranker)** — pin the ranker choice before code.
-3. **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`) — third candidate model alongside popularity and CF; trained, evaluated, and logged through the same skeleton so all three are comparable side-by-side in MLflow.
-4. **Two-tower candidate generator** (PyTorch) — the candidate-stage upgrade; learned user/item embeddings, ANN index for retrieval.
-5. **Feature module** (`src/features/`) — engineered features used by the ranker (user history aggregates, popularity windows, genre affinities, recency). Provisional home until Phase 3 introduces Feast as the feature store.
-6. **LightGBM ranker** (`src/models/ranker/lgbm.py`) — scores the surviving candidates; scored against NDCG@10 per ADR 0001.
-7. **Per-stage evaluation in the harness** — recall@K_candidates for the candidate stage, NDCG@10 for the ranker stage, in the same run, so each stage's contribution is legible.
+- ✅ **ADR 0004 (item-item before two-tower)** — merged (PR #18). Pins item-item as the zero-learned-parameters baseline the two-tower has to beat.
+- 📦 **ADR 0005 (LightGBM over neural ranker)** — drafted on `docs/adr-0005-lightgbm-over-neural-ranker` and parked locally. Bundles with the LightGBM ranker code when that PR lands.
+- ✅ **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`) — implemented via `implicit.nearest_neighbours.CosineRecommender` with `k_neighbors=200` and the same embedded popularity fallback CFModel established. Runs land in the new MLflow experiment `phase-2-candidates`.
+- ✅ **Per-stage evaluation in the harness** — `src/evaluation/protocol.py` now exposes `K_CANDIDATES = 500` and an optional `k` parameter on `evaluate()`. The candidate-stage path is `evaluate(..., k=K_CANDIDATES)`; the recommender-end-to-end path stays `evaluate(...)` defaulting to `K=10`. `EvalResult.k` is stamped on every result so no downstream consumer can confuse the two.
+- ⬜ **Two-tower candidate generator** (PyTorch) — next. The candidate-stage upgrade; learned user/item embeddings, ANN index for retrieval. Has to beat item-item's recall@K_CANDIDATES on holdout to take over as champion.
+- ⬜ **Feature module** (`src/features/`) — engineered features used by the ranker (user history aggregates, popularity windows, genre affinities, recency). Provisional home until Phase 3 introduces Feast as the feature store.
+- ⬜ **LightGBM ranker** (`src/models/ranker/lgbm.py`) — scores the surviving candidates; scored against NDCG@10 per ADR 0001. ADR 0005 ships in the same PR.
 
 Phase 2 stays all-offline — no FastAPI, no Redis online store, no Feast yet. Those land in Phase 3.
 
