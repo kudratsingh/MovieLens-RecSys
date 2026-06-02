@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test train train-popularity train-cf serve infra-up infra-down data-download data-ingest data-ingest-reset eda
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem serve infra-up infra-down data-download data-ingest data-ingest-reset eda
 
 install:
 	pip install -e ".[dev]"
@@ -31,6 +31,9 @@ train-popularity:
 
 train-cf:
 	python -m src.training.cf
+
+train-itemitem:
+	python -m src.training.itemitem
 
 serve:
 	uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --reload
