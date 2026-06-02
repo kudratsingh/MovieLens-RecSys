@@ -3,7 +3,7 @@ import math
 import pytest
 
 from src.evaluation.metrics import ndcg_at_k, recall_at_k
-from src.evaluation.protocol import COLD_START_THRESHOLD, evaluate
+from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, K, evaluate
 
 # --- metrics ---
 
@@ -111,3 +111,46 @@ def test_evaluate_overall_is_average_of_all_users():
     train_counts = {1: COLD_START_THRESHOLD, 2: 0}
     result = evaluate(recs, holdout, train_counts)
     assert result.overall.recall == pytest.approx(0.5)
+
+
+# --- candidate-stage K (recall@K_CANDIDATES) ---
+
+
+def test_evaluate_default_k_is_10():
+    # Backward-compatibility guarantee: callers passing no k still get K=10.
+    recs, holdout, counts = _make_eval_inputs(warm_users=[1], cold_users=[])
+    result = evaluate(recs, holdout, counts)
+    assert result.k == K == 10
+
+
+def test_evaluate_with_custom_k_stamps_result():
+    # The candidate-stage path: pass K_CANDIDATES; result must carry it
+    # forward so downstream consumers (MLflow tags, plots) can never confuse
+    # a candidate-stage recall@500 with a recommender-end-to-end recall@10.
+    recs, holdout, counts = _make_eval_inputs(warm_users=[1], cold_users=[])
+    result = evaluate(recs, holdout, counts, k=K_CANDIDATES)
+    assert result.k == K_CANDIDATES == 500
+
+
+def test_evaluate_larger_k_surfaces_relevant_items_truncated_under_default():
+    # Relevant item sits at rank 11 — invisible to K=10 (recall = 0),
+    # visible to K=20 (recall = 1.0). This is the exact behavior the
+    # candidate stage relies on: a recall@500 over the full retrieved set
+    # surfaces items the recommender's top-10 would hide.
+    user_id = 1
+    recs = {user_id: list(range(1, 11)) + [100]}  # 100 at rank 11
+    holdout = {user_id: {100}}
+    train_counts = {user_id: COLD_START_THRESHOLD}  # warm
+
+    assert evaluate(recs, holdout, train_counts, k=10).warm.recall == 0.0
+    assert evaluate(recs, holdout, train_counts, k=20).warm.recall == pytest.approx(1.0)
+
+
+def test_evaluate_with_k_candidates_uses_full_500_window():
+    # Sanity: at the candidate-stage K, an item at rank 499 is still a hit.
+    user_id = 1
+    recs = {user_id: list(range(1000, 1499)) + [42]}  # 42 at rank 500 (index 499)
+    holdout = {user_id: {42}}
+    train_counts = {user_id: COLD_START_THRESHOLD}
+    result = evaluate(recs, holdout, train_counts, k=K_CANDIDATES)
+    assert result.warm.recall == pytest.approx(1.0)
