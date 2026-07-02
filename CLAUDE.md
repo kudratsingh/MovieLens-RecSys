@@ -279,19 +279,19 @@ Baselines, data foundation, and the evaluation harness all landed:
 - CF/ALS baseline (`CFModel` via `implicit`, PR #14) — second run in the same experiment; embeds popularity fallback for cold users per ADR 0001.
 - Per-policy attribution metrics (PR #17) — `CFModel.was_served_by_als(user_id)` predicate + per-policy MLflow metrics partition holdout by ALS-served vs popularity-fallback-served users.
 
-### Phase 2 — in progress
+### Phase 2 — code-complete
 
 Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. Status:
 
 - ✅ **ADR 0004 (item-item before two-tower)** — merged (PR #18). Pins item-item as the zero-learned-parameters baseline the two-tower has to beat.
-- 📦 **ADR 0005 (LightGBM over neural ranker)** — drafted on `docs/adr-0005-lightgbm-over-neural-ranker` and parked locally. Bundles with the LightGBM ranker code when that PR lands (Phase 2 step #6).
+- ✅ **ADR 0005 (LightGBM over neural ranker)** — pins ranker family, LambdaRank objective, and the training-data construction rule (positives from train's trailing window, candidate-model-sampled negatives, per-(user,timestamp) LambdaRank groups). Bundled with the ranker code.
 - ✅ **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`, PR #19) — `implicit.nearest_neighbours.CosineRecommender` with `k_neighbors=200`, same embedded popularity fallback CFModel established. Runs land in the new MLflow experiment `phase-2-candidates`.
 - ✅ **Per-stage evaluation in the harness** (PR #19) — `src/evaluation/protocol.py` exposes `K_CANDIDATES = 500` and an optional `k` parameter on `evaluate()`. `EvalResult.k` is stamped on every result so downstream consumers can't confuse a candidate-stage `recall@500` with a recommender-end-to-end `recall@10`.
-- ✅ **Two-tower candidate generator** (PyTorch) — history-based user tower (mean-pool over last N=50 items, no per-user-id embedding), id-only item tower, embedding dim 64, sampled softmax with log-uniform negative correction (Yi et al. 2019), FAISS-CPU IVF-Flat ANN index over cosine-normalized item embeddings, embedded popularity fallback for zero-history users. Ships with **ADR 0006 — Two-tower retrieval architecture** in the same PR. Runs land in `phase-2-candidates` alongside item-item so ADR 0004's promotion gate can compare them directly.
-- ⬜ **Feature module** (`src/features/`) — engineered features used by the ranker (user history aggregates, popularity windows, genre affinities, recency). Provisional home until Phase 3 introduces Feast as the feature store.
-- ⬜ **LightGBM ranker** (`src/models/ranker/lgbm.py`) — scores the surviving candidates; scored against NDCG@10 per ADR 0001. ADR 0005 ships in the same PR.
+- ✅ **Two-tower candidate generator** (PyTorch, PR #24) — history-based user tower (mean-pool over last N=50 items, no per-user-id embedding), id-only item tower, embedding dim 64, sampled softmax with log-uniform negative correction (Yi et al. 2019), FAISS-CPU IVF-Flat ANN index over cosine-normalized item embeddings, embedded popularity fallback for zero-history users. Ships with **ADR 0006 — Two-tower retrieval architecture** in the same PR. Runs land in `phase-2-candidates` alongside item-item so ADR 0004's promotion gate can compare them directly.
+- ✅ **Feature module** (`src/features/`) — point-in-time-correct user / item / user×item features (interaction count, days-active, popularity windows, item age, genre affinity). `FeatureIndex` precomputes per-user and per-item sorted timestamps so per-query lookup is O(log n) via `bisect`. Point-in-time correctness enforced by a strict-equality canary test on a hand-built fixture. Provisional home until Phase 3 introduces Feast.
+- ✅ **LightGBM ranker** (`src/models/ranker/lgbm.py`) — LambdaRank booster scored against NDCG@10 per ADR 0001. `LGBMRanker.rank_candidates(...)` is the end-to-end re-ranking shape Phase 3's serving handler will call. Runs land in a new `phase-2-ranker` MLflow experiment; per-feature importances logged for a Phase 4 SHAP explainer to build on.
 
-Phase 2 stays all-offline — no FastAPI, no Redis online store, no Feast yet. Those land in Phase 3.
+Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Those open with Phase 3.
 
 ### Phase 3+ — re-scoped 2026-06-02
 
@@ -299,7 +299,11 @@ The scope shift to enterprise-grade lands here, not in Phase 2. See the "Phase 3
 
 ### Current step
 
-**Build the LightGBM ranker with ADR 0005.** Two-tower shipped; the ranker is the last Phase 2 code piece before Phase 3 opens. The parked `docs/adr-0005-lightgbm-over-neural-ranker` draft bundles with the ranker code. Feature engineering (`src/features/`) lands in the same PR as the ranker's minimum viable feature set — provisional home until Phase 3 introduces Feast. Metric is NDCG@10 per ADR 0001, scored over the candidate set the two-tower (or item-item, per ADR 0004's promotion gate) surfaces.
+**Phase 3 opens.** Phase 2 is code-complete. The first Phase 3 PR is the auth-provider ADR — Auth0 vs Keycloak (self-hosted) vs Postgres-backed JWT. Decision turns on: (a) how cleanly the provider's tenant-claim story maps onto our multi-tenancy isolation choice (which is *itself* the next ADR after auth), (b) local-dev ergonomics — the frontend and backend agents both need to authenticate against something that doesn't require internet, (c) how much of the auth work is reusable when Phase 6's A/B routing needs to read a tenant claim off every request.
+
+Recommended Phase 3 ADR order — auth first (it's the smallest surface and unblocks tenant-claim resolution), then multi-tenancy isolation (Postgres schema-per-tenant vs row-level security vs FastAPI-instance-per-tenant), then Feast, then synthetic-load-tool (k6 vs Locust). Each ADR bundles with the first code that consumes it.
+
+The Phase 2 → Phase 3 seam: candidate models and the ranker stay pure offline modules; the serving handler introduced in Phase 3 imports them behind an auth middleware + tenant router. No refactor of existing `src/models/` code should be needed — the `CandidateModel`-shaped contract already generalizes.
 
 ## How to work with Claude Code on this
 
