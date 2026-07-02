@@ -164,6 +164,4 @@ make train-itemitem       # Phase 2 candidate → MLflow phase-2-candidates
 
 MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>.
 
-## License
 
-MIT. See [LICENSE](LICENSE).
