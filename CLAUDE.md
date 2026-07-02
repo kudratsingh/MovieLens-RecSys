@@ -287,7 +287,7 @@ Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. St
 - 📦 **ADR 0005 (LightGBM over neural ranker)** — drafted on `docs/adr-0005-lightgbm-over-neural-ranker` and parked locally. Bundles with the LightGBM ranker code when that PR lands (Phase 2 step #6).
 - ✅ **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`, PR #19) — `implicit.nearest_neighbours.CosineRecommender` with `k_neighbors=200`, same embedded popularity fallback CFModel established. Runs land in the new MLflow experiment `phase-2-candidates`.
 - ✅ **Per-stage evaluation in the harness** (PR #19) — `src/evaluation/protocol.py` exposes `K_CANDIDATES = 500` and an optional `k` parameter on `evaluate()`. `EvalResult.k` is stamped on every result so downstream consumers can't confuse a candidate-stage `recall@500` with a recommender-end-to-end `recall@10`.
-- 🚧 **Two-tower candidate generator** (PyTorch) — **current step** (see below). Design locked: history-based user tower (mean-pool over last N=50 items, no per-user-id embedding), id-only item tower, embedding dim 64, sampled softmax with log-uniform negative correction (Yi et al. 2019), FAISS-CPU IVF-Flat ANN index over cosine-normalized item embeddings, embedded popularity fallback for zero-history users. Ships with **ADR 0006 — Two-tower retrieval architecture** in the same PR.
+- ✅ **Two-tower candidate generator** (PyTorch) — history-based user tower (mean-pool over last N=50 items, no per-user-id embedding), id-only item tower, embedding dim 64, sampled softmax with log-uniform negative correction (Yi et al. 2019), FAISS-CPU IVF-Flat ANN index over cosine-normalized item embeddings, embedded popularity fallback for zero-history users. Ships with **ADR 0006 — Two-tower retrieval architecture** in the same PR. Runs land in `phase-2-candidates` alongside item-item so ADR 0004's promotion gate can compare them directly.
 - ⬜ **Feature module** (`src/features/`) — engineered features used by the ranker (user history aggregates, popularity windows, genre affinities, recency). Provisional home until Phase 3 introduces Feast as the feature store.
 - ⬜ **LightGBM ranker** (`src/models/ranker/lgbm.py`) — scores the surviving candidates; scored against NDCG@10 per ADR 0001. ADR 0005 ships in the same PR.
 
@@ -299,14 +299,7 @@ The scope shift to enterprise-grade lands here, not in Phase 2. See the "Phase 3
 
 ### Current step
 
-**Build the two-tower candidate generator with ADR 0006.** Next backend PR is `feat/twotower-candidate-generator` off main, containing:
-- `docs/adr/0006-two-tower-retrieval-architecture.md` — substantive ADR covering history-based user tower, sampled softmax + log-uniform correction, FAISS, embedding dim, history window, mean-pool over attention, with Risks / Open Questions sections per ADR-size standard.
-- `src/models/candidates/twotower.py` — model + ANN index integration.
-- `src/training/twotower.py` — PyTorch training loop with the negative-sampling math, MLflow logging into `phase-2-candidates`.
-- `tests/unit/test_twotower.py` — contract tests + a converges-on-synthetic smoke test + a point-in-time-correctness canary for the history-masking logic.
-- `Makefile` — `train-twotower` target.
-- `pyproject.toml` — add `torch`, `faiss-cpu` dependencies.
-- `CLAUDE.md` — Phase 2 status bump when two-tower closes.
+**Build the LightGBM ranker with ADR 0005.** Two-tower shipped; the ranker is the last Phase 2 code piece before Phase 3 opens. The parked `docs/adr-0005-lightgbm-over-neural-ranker` draft bundles with the ranker code. Feature engineering (`src/features/`) lands in the same PR as the ranker's minimum viable feature set — provisional home until Phase 3 introduces Feast. Metric is NDCG@10 per ADR 0001, scored over the candidate set the two-tower (or item-item, per ADR 0004's promotion gate) surfaces.
 
 ## How to work with Claude Code on this
 
