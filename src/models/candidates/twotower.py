@@ -104,7 +104,8 @@ def build_user_history(
     ordered = train.sort_values(["userId", "timestamp"], kind="stable")
     ordered_dense = ordered["movieId"].map(item_to_index).astype("int64")
     # groupby preserves the sorted order of rows within each group.
-    return ordered.assign(_dense=ordered_dense).groupby("userId")["_dense"].apply(list).to_dict()
+    grouped = ordered.assign(_dense=ordered_dense).groupby("userId")["_dense"].apply(list)
+    return dict(grouped)
 
 
 def _log_uniform_probabilities(n_items: int) -> np.ndarray:
@@ -117,7 +118,8 @@ def _log_uniform_probabilities(n_items: int) -> np.ndarray:
     """
     ranks = np.arange(n_items, dtype=np.float64)
     weights = np.log(ranks + 2.0) - np.log(ranks + 1.0)
-    return weights / weights.sum()
+    normalized: np.ndarray = weights / weights.sum()
+    return normalized
 
 
 @dataclass
@@ -236,7 +238,7 @@ class TwoTowerModel:
                     log_p_per_index_t=log_p_per_index_t,
                 )
                 optimizer.zero_grad()
-                loss.backward()
+                loss.backward()  # type: ignore[no-untyped-call]
                 optimizer.step()
                 # Padding row must remain zero for the mask trick to hold.
                 with torch.no_grad():
