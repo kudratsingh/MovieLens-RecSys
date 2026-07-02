@@ -316,9 +316,7 @@ class TwoTowerModel:
             num_samples=self.config.num_sampled,
             replacement=True,
         )
-        neg_dense = torch.tensor(
-            rank_to_dense[sampled_ranks.numpy()], dtype=torch.long
-        )
+        neg_dense = torch.tensor(rank_to_dense[sampled_ranks.numpy()], dtype=torch.long)
 
         user_vecs = self._encode_user(history_batch)  # (B, d)
         pos_vecs = self._item_tower(positive_batch)  # (B, d)
@@ -348,9 +346,11 @@ class TwoTowerModel:
         assert self._item_tower is not None
         with torch.no_grad():
             # Skip the padding row (index 0).
-            item_vecs = self._item_tower(
-                torch.arange(1, n_items + 1, dtype=torch.long)
-            ).numpy().astype(np.float32)
+            item_vecs = (
+                self._item_tower(torch.arange(1, n_items + 1, dtype=torch.long))
+                .numpy()
+                .astype(np.float32)
+            )
 
         d = self.config.embedding_dim
         quantizer = faiss.IndexFlatIP(d)
