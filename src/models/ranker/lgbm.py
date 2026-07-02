@@ -131,8 +131,10 @@ class LGBMRanker:
         """
         assert self._booster is not None, "call fit() before predict()"
         feature_matrix = features_df[FEATURE_COLUMNS].to_numpy(dtype=np.float64)
-        scores: np.ndarray = self._booster.predict(feature_matrix)
-        return scores
+        # LGBM's predict return type is a union of ndarray / Any / list depending
+        # on prediction mode; the LambdaRank objective returns dense scores, so
+        # normalize to ndarray here.
+        return np.asarray(self._booster.predict(feature_matrix), dtype=np.float64)
 
     def rank_candidates(
         self,
