@@ -17,6 +17,7 @@ dependencies = [
     "lightgbm",
     "scikit-learn",
     "implicit",
+    "faiss-cpu",
     # Feature store
     "feast[redis]>=0.40",
     # Tracking
