@@ -88,12 +88,18 @@ class ItemItemModel:
         self._knn.fit(self._user_items, show_progress=False)
         return self
 
-    def recommend(self, user_id: int, k: int) -> list[int]:
+    def recommend(self, user_id: int, k: int, filter_seen: bool = True) -> list[int]:
         """Top-k items for one user.
 
         Unknown user (no training history) → popularity fallback. Known user →
-        cosine-aggregated scores over their history, with already-seen items
-        filtered out.
+        cosine-aggregated scores over their history.
+
+        ``filter_seen`` defaults to True (serving shape — items the user has
+        already interacted with in train are excluded from candidates). The
+        ranker training pipeline passes ``filter_seen=False`` so a sampled
+        positive (which is always in the user's train history) can appear in
+        the candidate list and become a LambdaRank positive; otherwise every
+        such positive is silently dropped.
         """
         if self._knn is None or user_id not in self._user_to_index:
             return self._popularity.recommend(user_id, k)
@@ -101,17 +107,22 @@ class ItemItemModel:
         user_idx = self._user_to_index[user_id]
         assert self._user_items is not None  # implied by self._knn is not None
 
-        # Same post-filter pattern CFModel uses: implicit's
-        # filter_already_liked_items pushes seen items to the bottom but does
-        # not drop them; when N approaches the catalog size, they leak into
-        # top-K. Ask for k + |seen| and filter explicitly.
-        seen = self._popularity.user_history.get(user_id, set())
-        n_request = min(k + len(seen), len(self._index_to_item))
+        if filter_seen:
+            # Same post-filter pattern CFModel uses: implicit's
+            # filter_already_liked_items pushes seen items to the bottom but
+            # does not drop them; when N approaches the catalog size, they
+            # leak into top-K. Ask for k + |seen| and filter explicitly.
+            seen = self._popularity.user_history.get(user_id, set())
+            n_request = min(k + len(seen), len(self._index_to_item))
+        else:
+            seen = set()
+            n_request = min(k, len(self._index_to_item))
+
         item_indices, _scores = self._knn.recommend(
             user_idx,
             self._user_items[user_idx],
             N=n_request,
-            filter_already_liked_items=True,
+            filter_already_liked_items=filter_seen,
         )
 
         out: list[int] = []

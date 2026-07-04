@@ -110,10 +110,12 @@ def _build_ranker_training_set(
     consumes.
 
     For each positive (user, movie, ts):
-      1. Ask the candidate model for K_CANDIDATES movies for that user.
-      2. Filter out the positive and any items already seen by the user
-         in train (avoid leaking "user liked X → so X is a negative for
-         X" as a signal).
+      1. Ask the candidate model for K_CANDIDATES movies for that user
+         with ``filter_seen=False`` — positives are sampled from train,
+         so the serving-shape "filter items the user has already seen"
+         would drop 100% of them.
+      2. Filter out the positive from the negatives pool (avoid leaking
+         "user liked X → so X is a negative for X" as a signal).
       3. Sample ``n_negatives`` from the filtered candidates.
       4. Compute features for [positive, neg₁, ..., neg_N] as-of ``ts``.
 
@@ -132,7 +134,7 @@ def _build_ranker_training_set(
         pos_movie = int(pos.movieId)
         as_of = int(pos.timestamp)
 
-        candidates = candidate_model.recommend(user_id, K_CANDIDATES)
+        candidates = candidate_model.recommend(user_id, K_CANDIDATES, filter_seen=False)
         if pos_movie not in candidates:
             dropped_missing += 1
             continue
