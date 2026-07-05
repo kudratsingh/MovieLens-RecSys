@@ -21,6 +21,21 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
+# Base table shape — the four tables the MovieLens ingest path creates.
+# The Phase 3 tenant scaffolding (`public.tenants` registry, `tenant_id`
+# column on `ratings` and `tags`, RLS policies) is added by Alembic
+# migrations, not by `create_all`. Two reasons: (a) `create_all` runs on
+# fresh ingests as a one-shot, whereas migrations run on both fresh and
+# existing DBs, so migrations are the natural home for the additive
+# tenant changes; (b) RLS policies can't be expressed in SQLAlchemy's
+# schema DSL — putting them in migrations keeps schema.py declarative
+# without a code-vs-DB drift trap.
+#
+# Workflow: `make data-ingest` creates base tables + loads CSVs;
+# `make db-migrate` layers the tenant scaffolding on top. For a full
+# reset, `docker compose down -v` is the clean-slate command — a
+# post-migrate `--reset` would drop tables the migrations own and
+# leave alembic_version out of sync.
 ratings = Table(
     "ratings",
     metadata,
