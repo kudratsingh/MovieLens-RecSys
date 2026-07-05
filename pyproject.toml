@@ -29,6 +29,8 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "redis",
+    "httpx",
+    "pyjwt[crypto]>=2.8",
     # Monitoring
     "evidently",
     "prometheus-client",

@@ -44,3 +44,56 @@ jobs:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
       - run: pytest tests/feature_parity/ -v || [ $? -eq 5 ]
+
+  # Non-negotiable #9: no code path may return one tenant's data in
+  # response to another tenant's request. This job boots the full
+  # compose stack (Postgres + pgBouncer + Keycloak), runs the Alembic
+  # migrations so RLS policies are in place, then exercises the
+  # tenant-isolation suite. Triggered on any PR touching src/serving/,
+  # src/auth/, migrations, or the compose stack.
+  tenant-isolation:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+
+      # Bring up only the services the tenant-isolation test needs.
+      # MLflow / Grafana / Prometheus are irrelevant here and add
+      # ~30s to job time if included.
+      - name: Start compose stack
+        run: docker compose up -d postgres keycloak-postgres keycloak pgbouncer
+
+      # Wait for readiness. Keycloak's cold start is the long pole
+      # (~15 s on modern GitHub runners); pgBouncer + Postgres are
+      # sub-second.
+      - name: Wait for Keycloak
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sSf http://localhost:8080/realms/default > /dev/null; then
+              echo "Keycloak ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Keycloak did not become ready"; exit 1
+
+      # Patch pg_hba to trust auth. The docker-compose sets
+      # POSTGRES_HOST_AUTH_METHOD=trust for fresh volumes, but the
+      # CI volume is fresh so no patch step should be needed — this
+      # is belt-and-suspenders in case a future Postgres image
+      # regresses the default.
+      - name: Apply Alembic migrations
+        run: alembic upgrade head
+
+      - name: Run tenant-isolation suite
+        run: pytest tests/tenant_isolation/ -v
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          docker compose logs postgres || true
+          docker compose logs pgbouncer || true
+          docker compose logs keycloak || true
