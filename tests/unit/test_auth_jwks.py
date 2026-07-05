@@ -13,7 +13,6 @@ Unit tests for ``src.auth.jwks.JwksCache``. Verifies:
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -169,12 +168,7 @@ def test_find_signing_key_hits_cache_for_known_kid() -> None:
 def test_find_signing_key_triggers_refresh_on_unknown_kid() -> None:
     counts: dict[str, int] = {}
     # First fetch returns {k1}; second fetch (post-rotation) returns {k1, k2}.
-    responses = {
-        f"{_BASE_URL}/realms/default/.well-known/openid-configuration": (
-            200,
-            _discovery_response("default"),
-        ),
-    }
+    # The stateful handler below drives the two responses.
     call_state = {"jwks_calls": 0}
 
     def _handler(request: httpx.Request) -> httpx.Response:

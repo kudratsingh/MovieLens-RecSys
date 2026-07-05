@@ -24,6 +24,7 @@ Bundle #1b (ADR 0007 + ADR 0008) added the auth + tenancy fields:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -123,7 +124,7 @@ class Settings(BaseSettings):
             f"@{self.admin_user_db_host}:{self.admin_user_db_port}/{self.admin_user_db_name}"
         )
 
-    def __init__(self, **data: object) -> None:
+    def __init__(self, **data: Any) -> None:
         super().__init__(**data)
         # Guardrail from ADR 0007 §decision — dev_auth_bypass exists for
         # local dev only. A production image that boots with the bypass

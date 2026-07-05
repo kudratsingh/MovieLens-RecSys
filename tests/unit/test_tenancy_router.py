@@ -32,10 +32,7 @@ def engine() -> object:
         # under the name 'public' so 'public.tenants' resolves.
         conn.execute(text("ATTACH DATABASE ':memory:' AS public"))
         conn.execute(
-            text(
-                "CREATE TABLE public.tenants ("
-                "id TEXT PRIMARY KEY, display_name TEXT NOT NULL)"
-            )
+            text("CREATE TABLE public.tenants (" "id TEXT PRIMARY KEY, display_name TEXT NOT NULL)")
         )
         conn.execute(
             text(

@@ -134,7 +134,7 @@ class JwksCache:
                 raise JwksFetchError(f"discovery document at {discovery_url} has no jwks_uri")
             jwks_resp = self._http.get(jwks_uri)
             jwks_resp.raise_for_status()
-            jwks = jwks_resp.json()
+            jwks: dict[str, Any] = jwks_resp.json()
             if "keys" not in jwks:
                 raise JwksFetchError(f"JWKS at {jwks_uri} has no 'keys' array")
             return jwks
@@ -145,5 +145,5 @@ class JwksCache:
     def _find_key_in_jwks(jwks: dict[str, Any], kid: str) -> dict[str, Any] | None:
         for key in jwks.get("keys", []):
             if key.get("kid") == kid:
-                return key
+                return dict(key)
         return None

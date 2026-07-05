@@ -19,8 +19,8 @@ and the process exits non-zero.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import create_engine

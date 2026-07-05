@@ -19,14 +19,15 @@ rows — the middleware is the one thing that could break that invariant.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable
 
 import jwt
 from fastapi import Request, Response
 from sqlalchemy import Engine, text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
 
 from src.auth.jwks import JwksCache, JwksFetchError
 
@@ -75,7 +76,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app: object,
+        app: ASGIApp,
         *,
         jwks: JwksCache,
         app_engine: Engine,
@@ -190,9 +191,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # client (e.g. an admin-console token) never reaches a handler.
         azp = payload.get("azp")
         if azp != self._expected_audience:
-            raise UnauthorizedError(
-                f"unexpected authorized party (azp={azp!r})"
-            )
+            raise UnauthorizedError(f"unexpected authorized party (azp={azp!r})")
 
         user_id = str(payload.get("sub"))
         return RequestPrincipal(tenant_id=realm, user_id=user_id, realm=realm)

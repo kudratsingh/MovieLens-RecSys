@@ -27,15 +27,11 @@ import time
 from typing import Any
 
 import jwt
-import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, text
-from starlette.responses import JSONResponse
 
-from src.auth.jwks import JwksCache
 from src.auth.middleware import AuthMiddleware
 
 # --- Test fixtures ----------------------------------------------------------
@@ -121,7 +117,7 @@ class _StubEngine:
     def __init__(self) -> None:
         self.set_local_calls: list[dict[str, Any]] = []
 
-    def begin(self) -> "_StubConnCtx":
+    def begin(self) -> _StubConnCtx:
         return _StubConnCtx(self)
 
 
@@ -129,7 +125,7 @@ class _StubConnCtx:
     def __init__(self, engine: _StubEngine) -> None:
         self._engine = engine
 
-    def __enter__(self) -> "_StubConn":
+    def __enter__(self) -> _StubConn:
         return _StubConn(self._engine)
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -141,9 +137,7 @@ class _StubConn:
         self._engine = engine
 
     def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> None:
-        self._engine.set_local_calls.append(
-            {"stmt": str(stmt), "params": params or {}}
-        )
+        self._engine.set_local_calls.append({"stmt": str(stmt), "params": params or {}})
 
 
 def _build_app(
@@ -152,9 +146,7 @@ def _build_app(
     dev_auth_bypass: bool = False,
 ) -> tuple[FastAPI, _StubEngine]:
     app = FastAPI()
-    jwks = _StubJwksCache(
-        {"default": {_KID: _public_key_to_jwk(key, _KID)}}
-    )
+    jwks = _StubJwksCache({"default": {_KID: _public_key_to_jwk(key, _KID)}})
     engine = _StubEngine()
     app.add_middleware(
         AuthMiddleware,

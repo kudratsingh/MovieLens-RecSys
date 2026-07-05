@@ -146,9 +146,7 @@ def _check_pgbouncer_transaction_mode(settings: Settings) -> None:
                         )
                     break
             if not found:
-                raise StartupCheckError(
-                    "pgBouncer SHOW CONFIG returned no pool_mode entry"
-                )
+                raise StartupCheckError("pgBouncer SHOW CONFIG returned no pool_mode entry")
     finally:
         conn.close()
     logger.info("Startup check: pgBouncer pool_mode = transaction (ok).")

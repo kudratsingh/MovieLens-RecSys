@@ -79,18 +79,16 @@ def test_alice_default_token_never_returns_demo_data(
     body_text = resp.text.lower()
     # Strong assertion — no reference to the demo tenant should
     # appear anywhere in the response payload.
-    assert "demo" not in body_text, (
-        f"demo tenant data leaked into a default-tenant response: {resp.text}"
-    )
+    assert (
+        "demo" not in body_text
+    ), f"demo tenant data leaked into a default-tenant response: {resp.text}"
 
 
-def test_demo_token_never_returns_default_data(
-    client: TestClient, mint_token: TokenMinter
-) -> None:
+def test_demo_token_never_returns_default_data(client: TestClient, mint_token: TokenMinter) -> None:
     token = mint_token("demo", "demo", "demo")
     resp = client.get("/whoami", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     body_text = resp.text.lower()
-    assert "default" not in body_text, (
-        f"default tenant data leaked into a demo-tenant response: {resp.text}"
-    )
+    assert (
+        "default" not in body_text
+    ), f"default tenant data leaked into a demo-tenant response: {resp.text}"
