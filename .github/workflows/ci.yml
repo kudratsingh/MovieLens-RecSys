@@ -80,11 +80,23 @@ jobs:
           done
           echo "Keycloak did not become ready"; exit 1
 
-      # Patch pg_hba to trust auth. The docker-compose sets
-      # POSTGRES_HOST_AUTH_METHOD=trust for fresh volumes, but the
-      # CI volume is fresh so no patch step should be needed — this
-      # is belt-and-suspenders in case a future Postgres image
-      # regresses the default.
+      # Create empty base tables. In dev the ingest path
+      # (`make data-ingest`) creates ratings/movies/tags/links as a
+      # side effect of loading the 25M CSVs; CI skips ingest because
+      # it doesn't have the DVC-tracked data. Migration 0003 does
+      # `ALTER TABLE ratings ADD COLUMN tenant_id`, so the base
+      # tables must exist first. `create_tables` is idempotent
+      # (SQLAlchemy uses CREATE TABLE IF NOT EXISTS internally).
+      - name: Create empty base tables
+        run: |
+          python -c "
+          from sqlalchemy import create_engine
+          from src.config import Settings
+          from src.data.schema import create_tables
+          create_tables(create_engine(Settings().database_url))
+          print('Base tables created.')
+          "
+
       - name: Apply Alembic migrations
         run: alembic upgrade head
 
