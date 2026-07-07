@@ -78,29 +78,18 @@ services:
   # mode is required so `SET LOCAL app.tenant_id` inside the middleware's
   # per-request transaction cannot leak across requests — see ADR 0008.
   #
-  # Bundle #1a limitation: this uses edoburu's env-var mode which pins
-  # a single upstream user (recsys). Bundle #1b will replace this with
-  # a mounted pgbouncer.ini + userlist so app_user connections (RLS
-  # applies) and admin_user connections (BYPASSRLS) are pooled per role.
-  # For now, RLS still functions because migrations run as recsys (which
-  # owns the tables and can bypass its own RLS via the FORCE clause —
-  # confirmed against the migration path, not a serving path).
+  # Configured via mounted infra/pgbouncer/pgbouncer.ini + userlist.txt
+  # rather than edoburu's env-var interface. The env-var mode pins a
+  # single upstream user; the mounted config exposes movielens_app
+  # (upstream = app_user, RLS applies) and movielens_admin (upstream =
+  # admin_user, BYPASSRLS) as separate database aliases, so per-role
+  # pooling works as ADR 0008's rationale-5 assumes.
   pgbouncer:
     image: edoburu/pgbouncer:v1.24.1-p1
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: recsys
-      DB_PASSWORD: recsys
-      DB_NAME: movielens
-      POOL_MODE: transaction
-      AUTH_TYPE: trust
-      MAX_CLIENT_CONN: 200
-      DEFAULT_POOL_SIZE: 25
-      # RLS session variables (app.tenant_id) are custom GUCs; pgBouncer
-      # blocks unknown startup parameters by default. `extra_float_digits`
-      # is a common psycopg2 startup param that also has to be whitelisted.
-      IGNORE_STARTUP_PARAMETERS: extra_float_digits,search_path
+    entrypoint: ["/usr/bin/pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    volumes:
+      - ./infra/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./infra/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
     ports:
       - "6432:5432"
     depends_on:
