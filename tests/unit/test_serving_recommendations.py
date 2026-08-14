@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from sqlalchemy import Connection, create_engine, text
+
+from src.serving.recommendations import RecommendationService
+
+
+def _connection() -> Connection:
+    engine = create_engine("sqlite://")
+    connection = engine.connect()
+    connection.execute(
+        text('CREATE TABLE movies ("movieId" INTEGER PRIMARY KEY, title TEXT, genres TEXT)')
+    )
+    connection.execute(text('CREATE TABLE links ("movieId" INTEGER PRIMARY KEY, "tmdbId" TEXT)'))
+    connection.execute(
+        text(
+            'CREATE TABLE ratings ("userId" INTEGER, "movieId" INTEGER, '
+            "rating FLOAT, timestamp INTEGER)"
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO movies VALUES "
+            "(1, 'Action One', 'Action|Thriller'), "
+            "(2, 'Drama Two', 'Drama'), "
+            "(3, 'Genreless', '(no genres listed)')"
+        )
+    )
+    connection.execute(text("INSERT INTO links VALUES (1, '101'), (2, NULL), (3, '303')"))
+    connection.execute(
+        text(
+            "INSERT INTO ratings VALUES "
+            "(10, 1, 4.5, 100), (11, 1, 4.0, 110), "
+            "(10, 2, 3.5, 200), (12, 2, 5.0, 210), "
+            "(11, 3, 3.0, 120)"
+        )
+    )
+    return connection
+
+
+def test_popular_for_user_excludes_seen_movies_and_breaks_ties_by_id() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().popular_for_user(connection, user_id=10, limit=10)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [3]
+    assert items[0].genres == []
+    assert items[0].tmdb_id == "303"
+    assert items[0].interaction_count == 1
+
+
+def test_popular_for_cold_user_returns_global_order() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().popular_for_user(connection, user_id=999, limit=2)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [1, 2]
+    assert items[0].genres == ["Action", "Thriller"]
+    assert items[0].tmdb_id == "101"
+
+
+def test_recent_history_is_descending_and_limited() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().recent_history(connection, user_id=10, limit=1)
+    finally:
+        connection.close()
+
+    assert len(items) == 1
+    assert items[0].movie_id == 2
+    assert items[0].rating == 3.5
+    assert items[0].timestamp == 200

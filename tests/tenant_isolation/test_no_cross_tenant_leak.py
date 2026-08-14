@@ -17,7 +17,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.serving.app import app
-from tests.tenant_isolation.conftest import TokenMinter
+from tests.tenant_isolation.conftest import (
+    CANARY_USER_ID,
+    DEFAULT_HISTORY_TITLE,
+    DEFAULT_RECOMMENDATION_TITLE,
+    DEMO_HISTORY_TITLE,
+    DEMO_RECOMMENDATION_TITLE,
+    TokenMinter,
+)
 
 
 @pytest.fixture(scope="module")
@@ -92,3 +99,37 @@ def test_demo_token_never_returns_default_data(client: TestClient, mint_token: T
     assert (
         "default" not in body_text
     ), f"default tenant data leaked into a demo-tenant response: {resp.text}"
+
+
+@pytest.mark.parametrize("endpoint", ["recommendations", "history"])
+def test_user_endpoints_never_cross_tenant_boundary(
+    client: TestClient,
+    mint_token: TokenMinter,
+    endpoint: str,
+) -> None:
+    """The same user lookup must be scoped independently for each tenant."""
+    default_token = mint_token("default", "alice", "alice")
+    demo_token = mint_token("demo", "demo", "demo")
+
+    default_response = client.get(
+        f"/users/{CANARY_USER_ID}/{endpoint}",
+        headers={"Authorization": f"Bearer {default_token}"},
+    )
+    demo_response = client.get(
+        f"/users/{CANARY_USER_ID}/{endpoint}",
+        headers={"Authorization": f"Bearer {demo_token}"},
+    )
+
+    assert default_response.status_code == 200
+    assert demo_response.status_code == 200
+    assert default_response.json()["tenant_id"] == "default"
+    assert demo_response.json()["tenant_id"] == "demo"
+    assert DEMO_HISTORY_TITLE not in default_response.text
+    assert DEMO_RECOMMENDATION_TITLE not in default_response.text
+    assert DEFAULT_HISTORY_TITLE not in demo_response.text
+    assert DEFAULT_RECOMMENDATION_TITLE not in demo_response.text
+    if endpoint == "history":
+        assert DEFAULT_HISTORY_TITLE in default_response.text
+        assert DEMO_HISTORY_TITLE in demo_response.text
+    else:
+        assert DEMO_RECOMMENDATION_TITLE in demo_response.text

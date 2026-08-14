@@ -69,9 +69,9 @@ browser → Next.js app → auth → FastAPI (recommendations, features, model m
 | Tracking + registry | MLflow | Industry standard, integrates everywhere |
 | Orchestration | Prefect | Modern, gentler than Airflow; revisit Airflow later |
 | Serving | FastAPI + Redis | Already fluent from Incident Platform |
-| Auth provider | TBD via Phase 3 ADR (Auth0 vs Keycloak vs Postgres-backed JWT) | Real auth in scope as of 2026-06-02 |
-| Multi-tenancy isolation | TBD via Phase 3 ADR (Postgres schema-per-tenant vs row-level security vs FastAPI-instance-per-tenant) | Real multi-tenancy in scope as of 2026-06-02 |
-| Synthetic load testing | TBD via Phase 3 ADR (k6 vs Locust) | Latency SLO must be measured, not assumed |
+| Auth provider | Keycloak OIDC, realm per tenant (ADR 0007) | Local-first real auth with standard JWT validation |
+| Multi-tenancy isolation | PostgreSQL row-level security (ADR 0008) | Tenant isolation remains enforced even when a query omits a filter |
+| Synthetic load testing | k6 (ADR 0010) | Latency SLO must be measured, not assumed |
 | Frontend | Next.js + TypeScript + Tailwind | Real client against the API; makes ML-engineering work visible as a portfolio surface |
 | Monitoring | Prometheus + Grafana + Evidently | System + ML-specific signals |
 | Containers | Docker, docker-compose | Already fluent |
@@ -264,7 +264,7 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-06-02.** Phase 1 complete, Phase 2 well underway, scope shifted to enterprise-grade for Phase 3+. The current concrete step (the one to take next) is at the bottom of this section.
+**Updated 2026-08-13.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs and auth/tenancy foundation have landed, and the first online recommendation path is now the concrete step.
 
 ### Phase 1 — complete
 
@@ -293,17 +293,18 @@ Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. St
 
 Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Those open with Phase 3.
 
-### Phase 3+ — re-scoped 2026-06-02
+### Phase 3 — in progress
 
-The scope shift to enterprise-grade lands here, not in Phase 2. See the "Phase 3" section above for the expanded plan. Phase 1 and Phase 2 work is unaffected by the shift — both remain pure offline ML.
+- ✅ **ADR 0007 + auth foundation** — Keycloak realm-per-tenant, JWT/JWKS validation, auth middleware, and a dev-only bypass guarded by environment assertions.
+- ✅ **ADR 0008 + tenancy foundation** — tenant registry, Postgres row-level security, pgBouncer transaction pooling, per-request tenant context, tenant router, and cross-tenant CI canaries.
+- ✅ **ADRs 0009–0011** — Feast feature-store architecture, k6 synthetic-load strategy, and cold-start coverage methodology are pinned before their implementation bundles.
+- ✅ **FastAPI serving skeleton** — `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
+- 🚧 **First online recommendation slice** — authenticated popularity recommendations and watch history establish the browser-to-API seam before learned-model serving.
+- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, synthetic personas and cold-start cohorts, k6 enforcement, multi-environment compose, and the functional Next.js demo surface.
 
 ### Current step
 
-**Phase 3 opens.** Phase 2 is code-complete. The first Phase 3 PR is the auth-provider ADR — Auth0 vs Keycloak (self-hosted) vs Postgres-backed JWT. Decision turns on: (a) how cleanly the provider's tenant-claim story maps onto our multi-tenancy isolation choice (which is *itself* the next ADR after auth), (b) local-dev ergonomics — the frontend and backend agents both need to authenticate against something that doesn't require internet, (c) how much of the auth work is reusable when Phase 6's A/B routing needs to read a tenant claim off every request.
-
-Recommended Phase 3 ADR order — auth first (it's the smallest surface and unblocks tenant-claim resolution), then multi-tenancy isolation (Postgres schema-per-tenant vs row-level security vs FastAPI-instance-per-tenant), then Feast, then synthetic-load-tool (k6 vs Locust). Each ADR bundles with the first code that consumes it.
-
-The Phase 2 → Phase 3 seam: candidate models and the ranker stay pure offline modules; the serving handler introduced in Phase 3 imports them behind an auth middleware + tenant router. No refactor of existing `src/models/` code should be needed — the `CandidateModel`-shaped contract already generalizes.
+**Complete the demo vertical slice without weakening Phase 3's boundaries.** The immediate sequence is: serve a tenant-scoped popularity baseline and history through FastAPI; connect the Next.js user selector and poster grid; seed demo personas; then replace the baseline's direct feature reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
 
 ## How to work with Claude Code on this
 

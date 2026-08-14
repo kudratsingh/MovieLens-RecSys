@@ -1,10 +1,13 @@
 """
 FastAPI entrypoint per ADR 0007 + 0008.
 
-Bundle #1b ships two endpoints:
+The authenticated surface currently includes:
   * ``GET /healthz`` — unauthenticated, always 200.
   * ``GET /whoami`` — authenticated, returns the resolved
     ``(tenant_id, user_id)`` plus tenant metadata.
+  * ``GET /users/{user_id}/recommendations`` — tenant-scoped online
+    popularity baseline.
+  * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
 
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
@@ -22,11 +25,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
-from sqlalchemy import create_engine
+from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import Connection, create_engine
 
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
+from src.serving.recommendations import RecommendationService
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
 
@@ -65,6 +70,38 @@ _jwks = JwksCache(
 )
 
 _tenant_router = TenantRouter(_admin_engine)
+_recommendations = RecommendationService()
+
+
+class RecommendationItem(BaseModel):
+    movie_id: int
+    title: str
+    genres: list[str]
+    tmdb_id: str | None
+    score: float
+    reason: str
+
+
+class RecommendationResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    model_version: str
+    policy: str
+    items: list[RecommendationItem]
+
+
+class HistoryItem(BaseModel):
+    movie_id: int
+    title: str
+    genres: list[str]
+    rating: float
+    timestamp: int
+
+
+class HistoryResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[HistoryItem]
 
 
 @asynccontextmanager
@@ -135,3 +172,64 @@ async def whoami(request: Request) -> dict[str, str]:
         "tenant_display_name": tenant.display_name,
         "redis_prefix": tenant.redis_prefix,
     }
+
+
+@app.get(
+    "/users/{user_id}/recommendations",
+    response_model=RecommendationResponse,
+)
+async def recommendations(
+    user_id: int,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> RecommendationResponse:
+    """Return the first online recommendation policy for a tenant user."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _recommendations.popular_for_user(connection, user_id=user_id, limit=limit)
+    return RecommendationResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        model_version="popularity-db-v1",
+        policy="popularity",
+        items=[
+            RecommendationItem(
+                movie_id=item.movie_id,
+                title=item.title,
+                genres=item.genres,
+                tmdb_id=item.tmdb_id,
+                score=float(item.interaction_count),
+                reason="Popular with viewers in this tenant",
+            )
+            for item in items
+        ],
+    )
+
+
+@app.get(
+    "/users/{user_id}/history",
+    response_model=HistoryResponse,
+)
+async def history(
+    user_id: int,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> HistoryResponse:
+    """Return recent interactions for the demo's watch-history panel."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _recommendations.recent_history(connection, user_id=user_id, limit=limit)
+    return HistoryResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        items=[
+            HistoryItem(
+                movie_id=item.movie_id,
+                title=item.title,
+                genres=item.genres,
+                rating=item.rating,
+                timestamp=item.timestamp,
+            )
+            for item in items
+        ],
+    )

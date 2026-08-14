@@ -10,10 +10,13 @@ don't boot Docker.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 
 import httpx
 import pytest
+from sqlalchemy import create_engine, text
+
+from src.config import Settings
 
 _KEYCLOAK_URL = "http://localhost:8080"
 _API_CLIENT_ID = "movielens-api"
@@ -40,6 +43,70 @@ if not _stack_reachable():
 
 
 TokenMinter = Callable[[str, str, str], str]
+
+CANARY_USER_ID = 987654321
+DEFAULT_HISTORY_TITLE = "RLS default history canary"
+DEMO_HISTORY_TITLE = "RLS demo history canary"
+DEFAULT_RECOMMENDATION_TITLE = "RLS default recommendation canary"
+DEMO_RECOMMENDATION_TITLE = "RLS demo recommendation canary"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def tenant_canary_rows() -> Generator[None, None, None]:
+    """Seed distinct rows so endpoint isolation assertions test real data."""
+    engine = create_engine(Settings().database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM ratings "
+                'WHERE "movieId" IN (900000001, 900000002, 900000003, 900000004)'
+            ),
+        )
+        connection.execute(
+            text("""
+                INSERT INTO movies ("movieId", title, genres)
+                VALUES
+                    (900000001, :default_history_title, 'Test'),
+                    (900000002, :demo_history_title, 'Test'),
+                    (900000003, :default_recommendation_title, 'Test'),
+                    (900000004, :demo_recommendation_title, 'Test')
+                ON CONFLICT ("movieId") DO UPDATE SET title = EXCLUDED.title
+                """),
+            {
+                "default_history_title": DEFAULT_HISTORY_TITLE,
+                "demo_history_title": DEMO_HISTORY_TITLE,
+                "default_recommendation_title": DEFAULT_RECOMMENDATION_TITLE,
+                "demo_recommendation_title": DEMO_RECOMMENDATION_TITLE,
+            },
+        )
+        connection.execute(
+            text("""
+                INSERT INTO ratings ("userId", "movieId", rating, timestamp, tenant_id)
+                VALUES
+                    (:user_id, 900000001, 5.0, 2000000001, 'default'),
+                    (:user_id, 900000002, 5.0, 2000000002, 'demo'),
+                    (987654322, 900000003, 5.0, 2000000003, 'default'),
+                    (987654322, 900000004, 5.0, 2000000004, 'demo')
+                """),
+            {"user_id": CANARY_USER_ID},
+        )
+
+    yield
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM ratings "
+                'WHERE "movieId" IN (900000001, 900000002, 900000003, 900000004)'
+            ),
+        )
+        connection.execute(
+            text(
+                'DELETE FROM movies WHERE "movieId" '
+                "IN (900000001, 900000002, 900000003, 900000004)"
+            )
+        )
+    engine.dispose()
 
 
 @pytest.fixture
