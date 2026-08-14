@@ -54,7 +54,7 @@ DEMO_RECOMMENDATION_TITLE = "RLS demo recommendation canary"
 @pytest.fixture(scope="module", autouse=True)
 def tenant_canary_rows() -> Generator[None, None, None]:
     """Seed distinct rows so endpoint isolation assertions test real data."""
-    engine = create_engine(Settings().admin_user_database_url)
+    engine = create_engine(Settings().database_url)
     with engine.begin() as connection:
         connection.execute(
             text(
