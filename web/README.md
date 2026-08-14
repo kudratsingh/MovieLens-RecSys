@@ -7,15 +7,24 @@ See [ADR 0001](../docs/adr/frontend/0001-frontend-framework.md) for the framewor
 ## Local development
 
 ```bash
-cd web
-npm install
-npm run dev       # http://localhost:3001 (3000 is Grafana)
-npm run build
-npm run lint
-npm run typecheck
+make web-install
+make web-dev       # http://localhost:3001 (3000 is Grafana)
+make web-build
+make web-lint
+make web-typecheck
+```
+
+The server-side route handler proxies browser requests to FastAPI at
+`http://localhost:8000` by default. Override that without exposing the URL to
+the client bundle:
+
+```bash
+RECOMMENDATION_API_URL=http://api.internal:8000 make web-dev
 ```
 
 ## Status
 
-PR 1: scaffold + ADR (this PR). No real surfaces yet.
-Next: Makefile + CI integration, then the Phase 3 baseline UI (user selector → poster grid).
+The Phase 3 baseline UI is live: demo user selector, recommendation grid,
+watch-history view, policy/model metadata, and a server-side FastAPI proxy.
+TMDB poster images and Keycloak browser authentication are the next frontend
+increments.

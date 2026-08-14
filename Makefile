@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status keycloak-export-realms
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
 
 install:
 	pip install -e ".[dev]"
@@ -43,6 +43,21 @@ train-ranker:
 
 serve:
 	uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --reload
+
+web-install:
+	cd web && npm install
+
+web-dev:
+	cd web && npm run dev
+
+web-lint:
+	cd web && npm run lint
+
+web-typecheck:
+	cd web && npm run typecheck
+
+web-build:
+	cd web && npm run build
 
 infra-up:
 	docker-compose up -d
