@@ -300,11 +300,12 @@ Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Thos
 - ✅ **ADRs 0009–0011** — Feast feature-store architecture, k6 synthetic-load strategy, and cold-start coverage methodology are pinned before their implementation bundles.
 - ✅ **FastAPI serving skeleton** — `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
 - 🚧 **First online recommendation slice** — authenticated popularity recommendations and watch history establish the browser-to-API seam before learned-model serving.
-- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, synthetic personas and cold-start cohorts, k6 enforcement, multi-environment compose, and the functional Next.js demo surface.
+- ✅ **Phase 3 baseline frontend** — Next.js user selector, recommendation grid, watch-history panel, serving-policy metadata, and a server-side FastAPI proxy. Frontend lint, strict type checking, and production build run in CI.
+- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, synthetic personas and cold-start cohorts, k6 enforcement, multi-environment compose, TMDB posters, and browser-side Keycloak authentication.
 
 ### Current step
 
-**Complete the demo vertical slice without weakening Phase 3's boundaries.** The immediate sequence is: serve a tenant-scoped popularity baseline and history through FastAPI; connect the Next.js user selector and poster grid; seed demo personas; then replace the baseline's direct feature reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
+**Complete the demo vertical slice without weakening Phase 3's boundaries.** The authenticated tenant-scoped popularity API and the Next.js recommendation/history surface are connected. The immediate sequence is now: seed the demo tenant with controlled personas and catalog data; add TMDB poster proxying; then replace direct popularity reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
 
 ## How to work with Claude Code on this
 
