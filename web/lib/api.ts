@@ -36,6 +36,20 @@ export interface HistoryResponse {
 export interface UserDashboard {
   recommendations: RecommendationResponse;
   history: HistoryResponse;
+  catalog: CatalogResponse;
+}
+
+export interface CatalogItem {
+  movie_id: number;
+  title: string;
+  genres: string[];
+  rating: number | null;
+}
+
+export interface CatalogResponse {
+  tenant_id: string;
+  user_id: number;
+  items: CatalogItem[];
 }
 
 export interface PersonaItem {

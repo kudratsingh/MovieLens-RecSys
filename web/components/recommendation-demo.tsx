@@ -17,6 +17,7 @@ export function RecommendationDemo() {
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const loadUser = useCallback(async (nextUserId: number) => {
     try {
@@ -91,6 +92,40 @@ export function RecommendationDemo() {
     void loadUser(parsed);
   }
 
+  async function rateMovie(movieId: number, rating: number) {
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/users/${userId}/ratings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ movie_id: movieId, rating }),
+      });
+      const payload = (await response.json()) as { detail?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Could not save rating");
+      await loadUser(userId);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not save rating");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetRatings() {
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/users/${userId}/ratings`, { method: "DELETE" });
+      const payload = (await response.json()) as { detail?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Could not reset ratings");
+      await loadUser(userId);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not reset ratings");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section className="border-t border-white/10 pt-8">
       <div className="flex flex-col justify-between gap-5 xl:flex-row xl:items-end">
@@ -149,15 +184,38 @@ export function RecommendationDemo() {
         />
       ) : null}
       {loading ? <LoadingState /> : null}
-      {!loading && dashboard ? <Dashboard dashboard={dashboard} /> : null}
+      {!loading && dashboard ? (
+        <Dashboard
+          dashboard={dashboard}
+          onRate={rateMovie}
+          onReset={resetRatings}
+          saving={saving}
+        />
+      ) : null}
     </section>
   );
 }
 
-function Dashboard({ dashboard }: { dashboard: UserDashboard }) {
-  const { recommendations, history } = dashboard;
+function Dashboard({
+  dashboard,
+  onRate,
+  onReset,
+  saving,
+}: {
+  dashboard: UserDashboard;
+  onRate: (movieId: number, rating: number) => Promise<void>;
+  onReset: () => Promise<void>;
+  saving: boolean;
+}) {
+  const { recommendations, history, catalog } = dashboard;
   return (
     <div className="mt-10 grid gap-12 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <RatingStudio
+        items={catalog.items}
+        onRate={onRate}
+        onReset={onReset}
+        saving={saving}
+      />
       <div>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -217,6 +275,67 @@ function Dashboard({ dashboard }: { dashboard: UserDashboard }) {
         <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </div>
     </div>
+  );
+}
+
+function RatingStudio({
+  items,
+  onRate,
+  onReset,
+  saving,
+}: {
+  items: UserDashboard["catalog"]["items"];
+  onRate: (movieId: number, rating: number) => Promise<void>;
+  onReset: () => Promise<void>;
+  saving: boolean;
+}) {
+  return (
+    <section className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.04] p-5 xl:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-amber-300">Interactive profile</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">Rate movies, then watch the list react</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+            Pick 1–5 stars. Each rating is saved through tenant-scoped Postgres RLS and recommendations refresh immediately.
+          </p>
+        </div>
+        <button
+          className="rounded-lg border border-white/15 px-3 py-2 text-sm text-zinc-300 transition hover:border-red-300/40 hover:text-red-200 disabled:opacity-40"
+          disabled={saving}
+          onClick={() => void onReset()}
+          type="button"
+        >
+          Reset this profile
+        </button>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {items.slice(0, 18).map((movie) => (
+          <article className="rounded-xl border border-white/10 bg-black/20 p-4" key={movie.movie_id}>
+            <p className="truncate text-sm font-medium" title={movie.title}>{movie.title}</p>
+            <p className="mt-1 truncate text-xs text-zinc-500">{movie.genres.join(" · ") || "Unclassified"}</p>
+            <div className="mt-3 flex items-center gap-1" aria-label={`Rate ${movie.title}`}>
+              {[1, 2, 3, 4, 5].map((rating) => (
+                <button
+                  aria-label={`${rating} stars`}
+                  className={`grid size-8 place-items-center rounded-md text-sm transition ${
+                    movie.rating === rating
+                      ? "bg-amber-300 font-bold text-zinc-950"
+                      : "bg-white/[0.06] text-zinc-400 hover:bg-white/[0.12] hover:text-amber-200"
+                  }`}
+                  disabled={saving}
+                  key={rating}
+                  onClick={() => void onRate(movie.movie_id, rating)}
+                  type="button"
+                >
+                  {rating}
+                </button>
+              ))}
+              <span className="ml-2 text-xs text-zinc-500">{movie.rating ? `${movie.rating.toFixed(1)}★` : "Unrated"}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

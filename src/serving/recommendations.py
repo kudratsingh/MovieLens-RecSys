@@ -21,6 +21,8 @@ class RecommendedMovie:
     genres: list[str]
     tmdb_id: str | None
     interaction_count: int
+    score: float = 0.0
+    reason: str = "Popular with viewers in this tenant"
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,22 @@ class DemoPersona:
     slug: str
     display_name: str
     description: str
+
+
+@dataclass(frozen=True)
+class CatalogMovie:
+    movie_id: int
+    title: str
+    genres: list[str]
+    rating: float | None
+
+
+class UnknownDemoPersonaError(ValueError):
+    """The requested user is not writable through the demo surface."""
+
+
+class UnknownMovieError(ValueError):
+    """The requested movie does not exist in the shared catalog."""
 
 
 class RecommendationService:
@@ -86,9 +104,45 @@ class RecommendationService:
                 genres=_split_genres(str(row.genres)),
                 tmdb_id=str(row.tmdb_id) if row.tmdb_id is not None else None,
                 interaction_count=int(row.interaction_count),
+                score=float(row.interaction_count),
             )
             for row in rows
         ]
+
+    def personalized_for_user(
+        self,
+        connection: Connection,
+        *,
+        user_id: int,
+        limit: int,
+    ) -> tuple[str, list[RecommendedMovie]]:
+        """Rank unseen popular candidates using positive/negative genre feedback."""
+        candidates = self.popular_for_user(connection, user_id=user_id, limit=max(50, limit * 10))
+        history = self.recent_history(connection, user_id=user_id, limit=100)
+        if not history:
+            return "popularity", candidates[:limit]
+
+        genre_weights: dict[str, float] = {}
+        for movie in history:
+            preference = movie.rating - 3.0
+            for genre in movie.genres:
+                genre_weights[genre] = genre_weights.get(genre, 0.0) + preference
+
+        personalized = [
+            RecommendedMovie(
+                movie_id=movie.movie_id,
+                title=movie.title,
+                genres=movie.genres,
+                tmdb_id=movie.tmdb_id,
+                interaction_count=movie.interaction_count,
+                score=float(movie.interaction_count)
+                + sum(genre_weights.get(genre, 0.0) for genre in movie.genres),
+                reason=_affinity_reason(movie.genres, genre_weights),
+            )
+            for movie in candidates
+        ]
+        personalized.sort(key=lambda movie: (-movie.score, movie.movie_id))
+        return "genre-affinity", personalized[:limit]
 
     def recent_history(
         self,
@@ -143,8 +197,93 @@ class RecommendationService:
             for row in rows
         ]
 
+    def catalog_for_user(self, connection: Connection, *, user_id: int) -> list[CatalogMovie]:
+        """Return the compact catalog and this tenant user's current ratings."""
+        self._require_demo_persona(connection, user_id=user_id)
+        rows = connection.execute(
+            text("""
+                SELECT m."movieId" AS movie_id, m.title, m.genres, current.rating
+                FROM movies AS m
+                LEFT JOIN ratings AS current
+                  ON current."movieId" = m."movieId"
+                 AND current."userId" = :user_id
+                ORDER BY m."movieId" ASC
+                LIMIT 100
+                """),
+            {"user_id": user_id},
+        )
+        return [
+            CatalogMovie(
+                movie_id=int(row.movie_id),
+                title=str(row.title),
+                genres=_split_genres(str(row.genres)),
+                rating=float(row.rating) if row.rating is not None else None,
+            )
+            for row in rows
+        ]
+
+    def rate_movie(
+        self,
+        connection: Connection,
+        *,
+        tenant_id: str,
+        user_id: int,
+        movie_id: int,
+        rating: float,
+        timestamp: int,
+    ) -> None:
+        """Replace one demo persona rating inside the request's RLS scope."""
+        self._require_demo_persona(connection, user_id=user_id)
+        exists = connection.execute(
+            text('SELECT 1 FROM movies WHERE "movieId" = :movie_id'),
+            {"movie_id": movie_id},
+        ).scalar_one_or_none()
+        if exists is None:
+            raise UnknownMovieError(f"movie {movie_id} does not exist")
+        connection.execute(
+            text('DELETE FROM ratings WHERE "userId" = :user_id AND "movieId" = :movie_id'),
+            {"user_id": user_id, "movie_id": movie_id},
+        )
+        connection.execute(
+            text("""
+                INSERT INTO ratings (tenant_id, "userId", "movieId", rating, timestamp)
+                VALUES (:tenant_id, :user_id, :movie_id, :rating, :timestamp)
+                """),
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "movie_id": movie_id,
+                "rating": rating,
+                "timestamp": timestamp,
+            },
+        )
+
+    def reset_ratings(self, connection: Connection, *, user_id: int) -> int:
+        """Clear only this demo persona's ratings in the active tenant."""
+        self._require_demo_persona(connection, user_id=user_id)
+        result = connection.execute(
+            text('DELETE FROM ratings WHERE "userId" = :user_id'),
+            {"user_id": user_id},
+        )
+        return int(result.rowcount)
+
+    def _require_demo_persona(self, connection: Connection, *, user_id: int) -> None:
+        exists = connection.execute(
+            text("SELECT 1 FROM demo_personas WHERE user_id = :user_id AND synthetic IS TRUE"),
+            {"user_id": user_id},
+        ).scalar_one_or_none()
+        if exists is None:
+            raise UnknownDemoPersonaError(f"user {user_id} is not a writable demo persona")
+
 
 def _split_genres(value: str) -> list[str]:
     if not value or value == "(no genres listed)":
         return []
     return value.split("|")
+
+
+def _affinity_reason(genres: list[str], weights: dict[str, float]) -> str:
+    matched = sorted(genres, key=lambda genre: weights.get(genre, 0.0), reverse=True)
+    if matched and weights.get(matched[0], 0.0) > 0:
+        return f"Matches your {matched[0]} ratings"
+    return "Popular unseen movie in this tenant"

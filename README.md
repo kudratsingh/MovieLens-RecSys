@@ -174,15 +174,16 @@ The portfolio walkthrough uses an isolated Compose project and a reviewed mini
 catalog, so the 25M dataset is not required:
 
 ```bash
-make install
 cp .env.example .env
 make demo-up
 make demo-seed
 make demo-smoke
 ```
 
-Open <http://localhost:3001>. Use `make demo-down` to stop while preserving
-state, `make demo-reset` to recreate only the demo-owned volumes, and
+Open <http://localhost:3001>. Select a persona, rate movies from 1–5 stars, and
+watch its history and rating-weighted genre recommendations refresh. Use
+`make demo-down` to stop while preserving state, `make demo-reset` to recreate
+only the demo-owned volumes, and
 `make demo-logs` when a dependency fails. See the
 [complete demo runbook](docs/demo-runbook.md) for the walkthrough and recovery
 steps.

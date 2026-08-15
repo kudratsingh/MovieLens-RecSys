@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import Connection, create_engine, text
 
-from src.serving.recommendations import RecommendationService
+from src.serving.recommendations import RecommendationService, UnknownDemoPersonaError
 
 
 def _connection() -> Connection:
@@ -20,7 +21,7 @@ def _connection() -> Connection:
     connection.execute(text('CREATE TABLE links ("movieId" INTEGER PRIMARY KEY, "tmdbId" TEXT)'))
     connection.execute(
         text(
-            'CREATE TABLE ratings ("userId" INTEGER, "movieId" INTEGER, '
+            'CREATE TABLE ratings (tenant_id TEXT, "userId" INTEGER, "movieId" INTEGER, '
             "rating FLOAT, timestamp INTEGER)"
         )
     )
@@ -43,9 +44,9 @@ def _connection() -> Connection:
     connection.execute(
         text(
             "INSERT INTO ratings VALUES "
-            "(10, 1, 4.5, 100), (11, 1, 4.0, 110), "
-            "(10, 2, 3.5, 200), (12, 2, 5.0, 210), "
-            "(11, 3, 3.0, 120)"
+            "('demo', 10, 1, 4.5, 100), ('demo', 11, 1, 4.0, 110), "
+            "('demo', 10, 2, 3.5, 200), ('demo', 12, 2, 5.0, 210), "
+            "('demo', 11, 3, 3.0, 120)"
         )
     )
     return connection
@@ -76,6 +77,36 @@ def test_popular_for_cold_user_returns_global_order() -> None:
     assert items[0].tmdb_id == "101"
 
 
+def test_personalized_ranking_uses_rating_weighted_genres() -> None:
+    connection = _connection()
+    try:
+        connection.execute(text("INSERT INTO movies VALUES (4, 'Action Four', 'Action')"))
+        connection.execute(text("INSERT INTO links VALUES (4, NULL)"))
+        connection.execute(text("INSERT INTO ratings VALUES ('demo', 13, 4, 4.0, 220)"))
+        policy, items = RecommendationService().personalized_for_user(
+            connection, user_id=10, limit=2
+        )
+    finally:
+        connection.close()
+
+    assert policy == "genre-affinity"
+    assert [item.movie_id for item in items] == [4, 3]
+    assert items[0].reason == "Matches your Action ratings"
+
+
+def test_personalized_ranking_keeps_cold_start_popularity_fallback() -> None:
+    connection = _connection()
+    try:
+        policy, items = RecommendationService().personalized_for_user(
+            connection, user_id=999, limit=2
+        )
+    finally:
+        connection.close()
+
+    assert policy == "popularity"
+    assert [item.movie_id for item in items] == [1, 2]
+
+
 def test_recent_history_is_descending_and_limited() -> None:
     connection = _connection()
     try:
@@ -98,3 +129,58 @@ def test_list_demo_personas_uses_stable_display_order() -> None:
 
     assert [persona.slug for persona in personas] == ["action-fan", "drama-fan"]
     assert personas[0].user_id == 900000101
+
+
+def test_catalog_shows_current_rating_for_demo_persona() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().catalog_for_user(connection, user_id=900000101)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [1, 2, 3]
+    assert all(item.rating is None for item in items)
+
+
+def test_rate_movie_replaces_rating_and_reset_clears_only_persona() -> None:
+    connection = _connection()
+    service = RecommendationService()
+    try:
+        service.rate_movie(
+            connection,
+            tenant_id="demo",
+            user_id=900000101,
+            movie_id=2,
+            rating=5.0,
+            timestamp=300,
+        )
+        service.rate_movie(
+            connection,
+            tenant_id="demo",
+            user_id=900000101,
+            movie_id=2,
+            rating=4.0,
+            timestamp=301,
+        )
+        rows = connection.execute(
+            text('SELECT rating FROM ratings WHERE "userId" = 900000101')
+        ).all()
+        changed = service.reset_ratings(connection, user_id=900000101)
+        unrelated = connection.execute(
+            text('SELECT COUNT(*) FROM ratings WHERE "userId" = 10')
+        ).scalar_one()
+    finally:
+        connection.close()
+
+    assert rows == [(4.0,)]
+    assert changed == 1
+    assert unrelated == 2
+
+
+def test_rating_rejects_non_persona_user() -> None:
+    connection = _connection()
+    try:
+        with pytest.raises(UnknownDemoPersonaError):
+            RecommendationService().reset_ratings(connection, user_id=10)
+    finally:
+        connection.close()

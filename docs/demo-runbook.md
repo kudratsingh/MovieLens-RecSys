@@ -64,7 +64,10 @@ Open <http://localhost:3001>.
 3. Select **Eclectic Viewer**. Show the broader multi-genre taste signal.
 4. Select **Cold Start**. Confirm the history panel explicitly identifies the
    zero-history state while recommendations still load.
-5. If a TMDB token is configured, point out the real posters and release years.
+5. Give several movies 1–5 stars. Show the history update, the
+   `genre-affinity` policy, and the refreshed unseen recommendations.
+6. Use **Reset this profile** to return the selected persona to cold start.
+7. If a TMDB token is configured, point out the real posters and release years.
    Otherwise show that the fallback artwork keeps the same flow usable.
 
 The API container deliberately enables the guarded development impersonation

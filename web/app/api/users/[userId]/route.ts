@@ -15,7 +15,7 @@ export async function GET(
   const headers = authorization ? { Authorization: authorization } : undefined;
 
   try {
-    const [recommendationsResponse, historyResponse] = await Promise.all([
+    const [recommendationsResponse, historyResponse, catalogResponse] = await Promise.all([
       fetch(`${API_BASE_URL}/users/${userId}/recommendations?limit=8`, {
         cache: "no-store",
         headers,
@@ -24,10 +24,18 @@ export async function GET(
         cache: "no-store",
         headers,
       }),
+      fetch(`${API_BASE_URL}/users/${userId}/catalog`, {
+        cache: "no-store",
+        headers,
+      }),
     ]);
 
-    if (!recommendationsResponse.ok || !historyResponse.ok) {
-      const failed = !recommendationsResponse.ok ? recommendationsResponse : historyResponse;
+    if (!recommendationsResponse.ok || !historyResponse.ok || !catalogResponse.ok) {
+      const failed = !recommendationsResponse.ok
+        ? recommendationsResponse
+        : !historyResponse.ok
+          ? historyResponse
+          : catalogResponse;
       const body = (await failed.json().catch(() => null)) as { detail?: string } | null;
       return Response.json(
         { detail: body?.detail ?? `Recommendation API returned ${failed.status}` },
@@ -38,6 +46,7 @@ export async function GET(
     const dashboard: UserDashboard = {
       recommendations: await recommendationsResponse.json(),
       history: await historyResponse.json(),
+      catalog: await catalogResponse.json(),
     };
     return Response.json(dashboard);
   } catch {

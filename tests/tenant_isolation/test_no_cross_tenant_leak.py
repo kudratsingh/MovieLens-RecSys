@@ -152,3 +152,34 @@ def test_persona_endpoint_never_crosses_tenant_boundary(
     assert DEMO_PERSONA_NAME not in default_response.text
     assert DEMO_PERSONA_NAME in demo_response.text
     assert DEFAULT_PERSONA_NAME not in demo_response.text
+
+
+def test_rating_write_is_confined_to_active_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_token = mint_token("default", "alice", "alice")
+    demo_token = mint_token("demo", "demo", "demo")
+
+    blocked = client.put(
+        "/users/987654324/ratings/900000004",
+        json={"rating": 5},
+        headers={"Authorization": f"Bearer {default_token}"},
+    )
+    written = client.put(
+        "/users/987654324/ratings/900000004",
+        json={"rating": 5},
+        headers={"Authorization": f"Bearer {demo_token}"},
+    )
+    default_history = client.get(
+        "/users/987654324/history",
+        headers={"Authorization": f"Bearer {default_token}"},
+    )
+    demo_history = client.get(
+        "/users/987654324/history",
+        headers={"Authorization": f"Bearer {demo_token}"},
+    )
+
+    assert blocked.status_code == 404
+    assert written.status_code == 200
+    assert DEMO_RECOMMENDATION_TITLE not in default_history.text
+    assert DEMO_RECOMMENDATION_TITLE in demo_history.text
