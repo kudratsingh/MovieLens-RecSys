@@ -1,4 +1,6 @@
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-seed keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
+DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
+
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-smoke demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
 
 install:
 	pip install -e ".[dev]"
@@ -60,10 +62,10 @@ web-build:
 	cd web && npm run build
 
 infra-up:
-	docker-compose up -d
+	docker compose up -d
 
 infra-down:
-	docker-compose down
+	docker compose down
 
 data-download:
 	python -m src.data.download
@@ -97,8 +99,29 @@ db-migrate-down:
 db-migrate-status:
 	alembic current
 
+# --- Repeatable portfolio demo ----------------------------------------------
+# The explicit project name isolates demo volumes from the normal dev stack.
+# `demo-reset` is therefore destructive only to movielens-demo resources.
+demo-up:
+	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak
+	python -m synthetic.smoke.demo --readiness-only
+
 demo-seed:
-	python -m synthetic.personas.seed
+	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.personas.seed
+
+demo-smoke:
+	python -m synthetic.smoke.demo
+
+demo-down:
+	$(DEMO_COMPOSE) down --remove-orphans
+
+demo-reset:
+	$(DEMO_COMPOSE) down --volumes --remove-orphans
+	$(MAKE) demo-up
+	$(MAKE) demo-seed
+
+demo-logs:
+	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup postgres pgbouncer keycloak
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)

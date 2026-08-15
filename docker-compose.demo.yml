@@ -1,0 +1,77 @@
+services:
+  demo-setup:
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    image: movielens-recsys/api:demo
+    command: ["python", "-m", "src.data.demo_setup"]
+    environment:
+      POSTGRES_HOST: postgres
+      ADMIN_USER_DB_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    image: movielens-recsys/api:demo
+    environment:
+      ENVIRONMENT: dev
+      POSTGRES_HOST: postgres
+      APP_USER_DB_HOST: pgbouncer
+      APP_USER_DB_PORT: 5432
+      ADMIN_USER_DB_HOST: postgres
+      KEYCLOAK_BASE_URL: http://keycloak:8080
+      DEV_AUTH_BYPASS: "true"
+      DEV_BYPASS_TENANT: demo
+      DEV_BYPASS_USER: portfolio-demo
+      TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      demo-setup:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: movielens-recsys/web:demo
+    environment:
+      RECOMMENDATION_API_URL: http://api:8000
+    ports:
+      - "3001:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

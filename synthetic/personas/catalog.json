@@ -1,7 +1,29 @@
 {
-  "movie_ids": [
-    1, 6, 10, 16, 17, 21, 32, 47, 50, 110, 296, 318, 356, 527,
-    593, 858, 1193, 1207, 1247, 2028, 2571, 2959, 4993, 7153
+  "movies": [
+    {"movie_id": 1, "title": "Toy Story (1995)", "genres": "Adventure|Animation|Children|Comedy|Fantasy", "tmdb_id": "862"},
+    {"movie_id": 6, "title": "Heat (1995)", "genres": "Action|Crime|Thriller", "tmdb_id": "949"},
+    {"movie_id": 10, "title": "GoldenEye (1995)", "genres": "Action|Adventure|Thriller", "tmdb_id": "710"},
+    {"movie_id": 16, "title": "Casino (1995)", "genres": "Crime|Drama", "tmdb_id": "524"},
+    {"movie_id": 17, "title": "Sense and Sensibility (1995)", "genres": "Drama|Romance", "tmdb_id": "4584"},
+    {"movie_id": 21, "title": "Get Shorty (1995)", "genres": "Comedy|Crime|Thriller", "tmdb_id": "8012"},
+    {"movie_id": 32, "title": "Twelve Monkeys (1995)", "genres": "Mystery|Sci-Fi|Thriller", "tmdb_id": "63"},
+    {"movie_id": 47, "title": "Seven (1995)", "genres": "Mystery|Thriller", "tmdb_id": "807"},
+    {"movie_id": 50, "title": "The Usual Suspects (1995)", "genres": "Crime|Mystery|Thriller", "tmdb_id": "629"},
+    {"movie_id": 110, "title": "Braveheart (1995)", "genres": "Action|Drama|War", "tmdb_id": "197"},
+    {"movie_id": 296, "title": "Pulp Fiction (1994)", "genres": "Comedy|Crime|Drama|Thriller", "tmdb_id": "680"},
+    {"movie_id": 318, "title": "The Shawshank Redemption (1994)", "genres": "Crime|Drama", "tmdb_id": "278"},
+    {"movie_id": 356, "title": "Forrest Gump (1994)", "genres": "Comedy|Drama|Romance|War", "tmdb_id": "13"},
+    {"movie_id": 527, "title": "Schindler's List (1993)", "genres": "Drama|War", "tmdb_id": "424"},
+    {"movie_id": 593, "title": "The Silence of the Lambs (1991)", "genres": "Crime|Horror|Thriller", "tmdb_id": "274"},
+    {"movie_id": 858, "title": "The Godfather (1972)", "genres": "Crime|Drama", "tmdb_id": "238"},
+    {"movie_id": 1193, "title": "One Flew Over the Cuckoo's Nest (1975)", "genres": "Drama", "tmdb_id": "510"},
+    {"movie_id": 1207, "title": "To Kill a Mockingbird (1962)", "genres": "Drama", "tmdb_id": "595"},
+    {"movie_id": 1247, "title": "The Graduate (1967)", "genres": "Comedy|Drama|Romance", "tmdb_id": "37247"},
+    {"movie_id": 2028, "title": "Saving Private Ryan (1998)", "genres": "Action|Drama|War", "tmdb_id": "857"},
+    {"movie_id": 2571, "title": "The Matrix (1999)", "genres": "Action|Sci-Fi|Thriller", "tmdb_id": "603"},
+    {"movie_id": 2959, "title": "Fight Club (1999)", "genres": "Action|Crime|Drama|Thriller", "tmdb_id": "550"},
+    {"movie_id": 4993, "title": "The Lord of the Rings: The Fellowship of the Ring (2001)", "genres": "Adventure|Fantasy", "tmdb_id": "120"},
+    {"movie_id": 7153, "title": "The Lord of the Rings: The Return of the King (2003)", "genres": "Action|Adventure|Drama|Fantasy", "tmdb_id": "122"}
   ],
   "background_user_ids": [900000201, 900000202, 900000203, 900000204, 900000205]
 }

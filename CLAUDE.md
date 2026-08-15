@@ -307,11 +307,12 @@ Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Thos
 - ✅ **Phase 3 baseline frontend** — Next.js user selector, recommendation grid, watch-history panel, serving-policy metadata, and a server-side FastAPI proxy. Frontend lint, strict type checking, and production build run in CI.
 - ✅ **Durable demo personas** — four named, tenant-scoped synthetic users (Action Fan, Drama Fan, Eclectic Viewer, and Cold Start), checked-in catalog/history fixtures, an idempotent `make demo-seed` path, authenticated persona discovery, and RLS isolation coverage.
 - ✅ **TMDB metadata and posters** — recommendation responses resolve MovieLens `tmdbId` values server-side through a bounded TTL/LRU cache, degrade to MovieLens metadata when the token or upstream is unavailable, and render optimized posters with accessible visual fallbacks and required attribution.
+- ✅ **Repeatable demo environment** — a layered Compose stack builds FastAPI and standalone Next.js images, bootstraps base tables plus Alembic migrations, loads a self-contained reviewed catalog/persona fixture, verifies readiness and warm/cold behavior, and supports isolated down/reset/log operations.
 - ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, programmatic cold-start cohorts, k6 enforcement, multi-environment compose, and browser-side Keycloak authentication.
 
 ### Current step
 
-**Complete the demo vertical slice without weakening Phase 3's boundaries.** The authenticated tenant-scoped popularity API, controlled demo personas, and TMDB-enriched Next.js surface are connected. The immediate sequence is now: build the one-command demo environment; then replace direct popularity reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
+**Move the repeatable demo onto the target online architecture.** The first portfolio walkthrough is now packaged end to end with authenticated tenant-scoped popularity serving, controlled personas, optional TMDB enrichment, deterministic startup/reset, and behavioral smoke checks. The immediate sequence is now: replace direct feature reads with Feast/Redis; load learned candidate + ranker artifacts behind the same response contract; then add audit persistence and the k6 latency gate. Every endpoint stays authenticated and uses the RLS-bound request connection.
 
 ## How to work with Claude Code on this
 

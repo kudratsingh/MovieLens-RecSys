@@ -259,7 +259,7 @@ Explicitly deferred to later phases:
 - [x] Frontend CI and production build.
 - [x] Durable demo personas and idempotent seeding.
 - [x] TMDB metadata/poster proxy.
-- [ ] One-command demo environment and smoke test.
+- [x] One-command demo environment and smoke test.
 - [ ] Feast/Redis feature path and parity test.
 - [ ] Learned two-stage model serving.
 - [ ] Audit logging and k6 latency gate.
@@ -267,6 +267,6 @@ Explicitly deferred to later phases:
 
 ## Immediate next step
 
-Implement Bundle D3. Package Postgres, Keycloak, pgBouncer, FastAPI, and Next.js
-into a deterministic demo stack with explicit migrate, seed, reset, readiness,
-and smoke-test commands.
+Implement Bundle D4. Define the Feast repository and materialize tenant-scoped
+features into Redis, with strict offline/online parity and isolation tests while
+preserving the current recommendation response contract.

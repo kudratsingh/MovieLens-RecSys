@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.dvc/cache
+.dvc/tmp
+data
+web
+notebooks
+tests
+docs
+*.log
+__pycache__
+**/__pycache__
+**/*.pyc
