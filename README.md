@@ -37,7 +37,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo now includes tenant-keyed Feast/Postgres/Redis feature parity; learned serving, audit logs, and k6 remain |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo now serves item-item candidates through Feast + LightGBM; audit persistence and the enforced k6 gate remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -52,7 +52,8 @@ Most public recsys repos are notebooks that train a model and report a number. T
 - **Time-respecting evaluation** — temporal train/holdout/test split with a fixed cutoff timestamp. No random splits on time-series data, ever.
 - **Stage-specific metrics** — the candidate stage is scored on recall over its full retrieval window (recall@500), the ranker on NDCG@10 over its output. Both metrics flow through one harness with `EvalResult.k` stamped on every result so they can't be confused.
 - **Per-policy MLflow attribution** — every candidate model embeds a popularity fallback for cold users; per-policy metrics partition the holdout by which routing branch actually served each user. So you know whether the learned model is doing work or the fallback is.
-- **A `phase-2-candidates` MLflow experiment** with directly comparable runs across popularity, CF/ALS, item-item, and (soon) two-tower — same harness, same holdout, same K.
+- **A `phase-2-candidates` MLflow experiment** with directly comparable runs across popularity, CF/ALS, item-item, and two-tower — same harness, same holdout, same K.
+- **Versioned learned serving artifacts** — a SHA-256-pinned manifest binds the item-item index, LightGBM booster, tenant, and ordered Feast feature contract. The model sidecar loads that bundle once at startup; requests never fit or rebuild models.
 - **Reproducibility-by-default** — `make train-*` on a fixed seed produces the same model artifact hash. Non-determinism is treated as a bug to find, not tolerate.
 
 ## Design decisions
@@ -65,7 +66,8 @@ ADRs live under [`docs/adr/`](docs/adr/). Backend ADRs use a flat numeric line; 
 | [0002](docs/adr/0002-implicit-feedback-label.md) | Every rating is a positive interaction; no rating-value threshold | Aligns with production implicit-feedback practice; throws away no signal |
 | [0003](docs/adr/0003-two-stage-architecture.md) | Two-stage architecture: candidate generator + ranker | Single-model global scoring blows the p99 < 100ms SLO by 1–2 orders of magnitude |
 | [0004](docs/adr/0004-item-item-before-two-tower.md) | Item-item ships before two-tower as the zero-learned-parameters baseline | A learned model needs a baseline to beat or its recall numbers don't mean anything |
-| 0005 *(in flight)* | LightGBM over a neural ranker — tabular features are GBDT's home turf | Drafted; ships in the LightGBM ranker PR |
+| [0005](docs/adr/0005-lightgbm-over-neural-ranker.md) | LightGBM over a neural ranker — tabular features are GBDT's home turf | LambdaRank directly optimizes the per-user ordering the serving stage needs |
+| [0009](docs/adr/0009-feature-store-feast.md) | Feast over direct SQL or a hand-rolled online feature cache | Pins point-in-time historical reads and tenant-keyed Redis serving behind one schema |
 | [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js + Tailwind for the portfolio frontend | Real Server Components, route handlers, image optimization for poster grids |
 
 ADRs are written as substantive documents (typical length 100–180 lines), each treating alternatives with analysis rather than a single rejection sentence and including consequences and second-order effects.
@@ -115,7 +117,7 @@ The full plan with lessons-per-phase lives in the project's design notes. The sh
 
 - **Phase 1 — Foundation** *(complete)*. Postgres + DVC + MLflow + docker-compose, temporal split per ADR 0001, evaluation harness as single source of truth, popularity + CF/ALS baselines.
 - **Phase 2 — Two-stage architecture, offline** *(complete)*. Item-item and two-tower candidate generators, provisional feature module, LightGBM ranker, and stage-specific metrics (recall@500 / NDCG@10) through the same harness.
-- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, and the FastAPI demo are in place. Learned-model serving, audit logging, and synthetic load remain to be built.
+- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, and the FastAPI demo are in place. Audit logging and the enforced synthetic-load gate remain.
 - **Phase 4 — Orchestration + promotion gate.** Prefect DAGs, automated evaluation-gated promotion against the incumbent champion.
 - **Phase 5 — Monitoring + drift.** Per-tenant Grafana dashboards, Evidently drift detection, synthetic drift simulation that proves the alert path fires.
 - **Phase 6 — A/B + shadow deploys.** Tenant-aware champion/challenger routing, shadow-mode logging, statistical significance for online experiments.
@@ -131,9 +133,11 @@ src/
   data/                 # ingestion, schemas, temporal split
   evaluation/           # single source of truth for metrics (recall@K, NDCG@K, warm/cold slicing)
   models/
-    candidates/         # popularity, CF/ALS, item-item, two-tower (in progress)
-    ranker/             # LightGBM (in progress)
-  training/             # per-model training pipelines, each logs to MLflow
+    candidates/         # popularity, CF/ALS, item-item, two-tower
+    ranker/             # LightGBM LambdaRank
+    artifacts.py        # serving manifest + deterministic item-item index
+  serving/              # authenticated API, orchestration, feature/model clients
+  training/             # offline evaluation plus demo artifact packaging
 tests/
   unit/                 # model contracts, eval-protocol coverage
   integration/          # to be expanded in Phase 3
@@ -181,7 +185,9 @@ make demo-smoke
 ```
 
 Open <http://localhost:3001>. Select a persona, rate movies from 1–5 stars, and
-watch its history and rating-weighted genre recommendations refresh. Use
+watch its history and unseen recommendations refresh. Warm personas show the
+`item-item-cosine+lightgbm` policy and checksum-pinned model versions; Cold
+Start shows the explicit `popularity` fallback. Use
 `make demo-down` to stop while preserving state, `make demo-reset` to recreate
 only the demo-owned volumes, and
 `make demo-logs` when a dependency fails. See the

@@ -32,6 +32,8 @@ services:
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_REPO_PATH: src/features/feast_repo
       FEAST_FEATURE_SERVER_URL: http://feature-server:6566
+      MODEL_SERVER_URL: http://model-server:6570
+      MODEL_SERVER_AUTH_TOKEN: dev-model-server-token
     ports:
       - "8000:8000"
     depends_on:
@@ -61,12 +63,15 @@ services:
       context: .
       dockerfile: infra/features/Dockerfile
     image: movielens-recsys/features:demo
-    command: ["python", "-m", "src.features.materialize"]
+    command: ["python", "-m", "src.training.demo_artifacts"]
     environment:
       ADMIN_USER_DB_HOST: postgres
       REDIS_CONNECTION_STRING: redis:6379
+      MODEL_ARTIFACT_DIR: /app/models/serving
+      MODEL_TENANT_ID: demo
     volumes:
       - feast_registry:/app/src/features/feast_repo/data
+      - model_artifacts:/app/models/serving
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,6 +95,38 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6566/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  model-server:
+    image: movielens-recsys/features:demo
+    command:
+      [
+        "uvicorn",
+        "src.serving.model_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "6570",
+      ]
+    environment:
+      REDIS_CONNECTION_STRING: redis:6379
+      FEAST_POSTGRES_HOST: postgres
+      FEAST_POSTGRES_PORT: 5432
+      FEAST_POSTGRES_DB: movielens
+      FEAST_POSTGRES_USER: admin_user
+      FEAST_POSTGRES_PASSWORD: admin_user
+      MODEL_ARTIFACT_DIR: /app/models/serving
+      MODEL_SERVER_AUTH_TOKEN: dev-model-server-token
+    volumes:
+      - feast_registry:/app/src/features/feast_repo/data:ro
+      - model_artifacts:/app/models/serving:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6570/healthz', timeout=2)"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -121,3 +158,4 @@ services:
 
 volumes:
   feast_registry:
+  model_artifacts:

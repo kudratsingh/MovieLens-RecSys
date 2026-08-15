@@ -39,33 +39,41 @@ generated poster artwork, or set a TMDB API Read Access Token before
    applies every Alembic migration.
 4. Starts FastAPI only after schema setup succeeds and pgBouncer is healthy.
 5. Starts Next.js only after FastAPI is healthy.
-6. Verifies FastAPI, Next.js, and the Keycloak demo realm from inside the demo
+6. Restarts the feature/model sidecars when a previously seeded artifact
+   volume exists; a first clean start leaves them for `make demo-seed`.
+7. Verifies FastAPI, Next.js, and the Keycloak demo realm from inside the demo
    network.
 
 `make demo-seed` can be run repeatedly. It preserves an existing full-ingest
 catalog, inserts only missing demo catalog rows, and replaces the controlled
-demo persona/background interactions with the same deterministic fixture.
+demo persona/background interactions with the same deterministic fixture. It
+then materializes the tenant's Feast features, trains the deterministic
+item-item and LightGBM demo artifacts, and starts the private feature/model
+sidecars after their registry and artifact volumes are ready.
 
 `make demo-smoke` fails unless all of these contracts hold:
 
 - FastAPI, Next.js, and the Keycloak demo realm are reachable.
 - Action Fan, Drama Fan, Eclectic Viewer, and Cold Start are discoverable.
 - Action Fan has history and recommendations with no seen-item overlap.
-- Cold Start has no history and receives popularity fallback recommendations.
+- Action Fan reports `item-item-cosine+lightgbm` with versioned artifacts.
+- Cold Start has no history and reports the `popularity` fallback.
 
 ## Walkthrough
 
 Open <http://localhost:3001>.
 
 1. Select **Action Fan**. Show the recent action/thriller history, top-eight
-   unseen recommendations, popularity policy, and model version.
+   unseen recommendations, `item-item-cosine+lightgbm` policy, and the
+   `demo-itemitem-v1/demo-lgbm-v1` model version.
 2. Select **Drama Fan**. Point out the contrasting drama/romance history and
    changed unseen set.
 3. Select **Eclectic Viewer**. Show the broader multi-genre taste signal.
 4. Select **Cold Start**. Confirm the history panel explicitly identifies the
    zero-history state while recommendations still load.
-5. Give several movies 1–5 stars. Show the history update, the
-   `genre-affinity` policy, and the refreshed unseen recommendations.
+5. Give several movies 1–5 stars. Show the immediate history update, learned
+   policy, and refreshed unseen recommendations. Candidate generation consumes
+   the live history, so the newly seen movie is excluded without retraining.
 6. Use **Reset this profile** to return the selected persona to cold start.
 7. If a TMDB token is configured, point out the real posters and release years.
    Otherwise show that the fallback artwork keeps the same flow usable.
@@ -97,6 +105,9 @@ permanently delete the isolated demo Postgres and Keycloak data.
 - **FastAPI is unhealthy:** inspect `api` and `pgbouncer` logs. Startup checks
   reject a BYPASSRLS application role or non-transaction pooling.
 - **Personas are missing:** run `make demo-seed`, then `make demo-smoke`.
+- **Warm personas show `popularity`:** inspect `model-server`, `feature-server`,
+  and `api` with `make demo-logs`, then rerun `make demo-seed`. The API falls
+  back deliberately when artifacts, online features, or the sidecar are invalid.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
   configured, restart with `make demo-down && make demo-up` so FastAPI reads the
   new environment.

@@ -5,8 +5,8 @@ The authenticated surface currently includes:
   * ``GET /healthz`` — unauthenticated, always 200.
   * ``GET /whoami`` — authenticated, returns the resolved
     ``(tenant_id, user_id)`` plus tenant metadata.
-  * ``GET /users/{user_id}/recommendations`` — tenant-scoped online
-    popularity baseline.
+  * ``GET /users/{user_id}/recommendations`` — tenant-scoped item-item
+    candidate retrieval, Feast features, and LightGBM ranking with fallback.
   * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
   * ``GET /personas`` — tenant-scoped named demo identities.
   * ``GET /users/{user_id}/catalog`` — rateable demo catalog.
@@ -38,6 +38,8 @@ from sqlalchemy import Connection, create_engine
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
 from src.serving.features import FeatureServerClient
+from src.serving.models import ModelServerClient
+from src.serving.orchestration import RecommendationCoordinator
 from src.serving.recommendations import (
     RecommendationService,
     UnknownDemoPersonaError,
@@ -84,6 +86,12 @@ _jwks = JwksCache(
 _tenant_router = TenantRouter(_admin_engine)
 _recommendations = RecommendationService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
+_model_server = ModelServerClient(
+    base_url=_settings.model_server_url,
+    auth_token=_settings.model_server_auth_token.get_secret_value(),
+    timeout_seconds=_settings.model_server_timeout_seconds,
+)
+_recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _tmdb = TmdbMetadataClient(
     read_access_token=(
         _settings.tmdb_read_access_token.get_secret_value()
@@ -197,6 +205,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     yield
     await _feature_server.aclose()
+    await _model_server.aclose()
     await _tmdb.aclose()
     _app_engine.dispose()
     _admin_engine.dispose()
@@ -259,16 +268,34 @@ async def recommendations(
     request: Request,
     limit: int = Query(default=10, ge=1, le=50),
 ) -> RecommendationResponse:
-    """Return the first online recommendation policy for a tenant user."""
+    """Run learned two-stage serving or an explicit popularity fallback."""
     principal = request.state.principal
     connection: Connection = request.state.db
-    policy, items = _recommendations.personalized_for_user(connection, user_id=user_id, limit=limit)
+    decision = await _recommendation_coordinator.recommend(
+        connection,
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        limit=limit,
+    )
+    items = decision.items
+    logger.info(
+        "recommendations tenant_id=%s user_id=%s policy=%s candidate_version=%s "
+        "ranker_version=%s feature_version=%s model_latency_ms=%.3f fallback_reason=%s",
+        principal.tenant_id,
+        user_id,
+        decision.policy,
+        decision.candidate_version,
+        decision.ranker_version,
+        decision.feature_version,
+        decision.model_latency_ms,
+        decision.fallback_reason,
+    )
     metadata_by_id = await _tmdb.get_many(item.tmdb_id for item in items)
     return RecommendationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
-        model_version="feedback-baseline-v1",
-        policy=policy,
+        model_version=decision.model_version,
+        policy=decision.policy,
         items=[
             RecommendationItem(
                 movie_id=item.movie_id,

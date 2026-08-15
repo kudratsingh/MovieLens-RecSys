@@ -1,17 +1,16 @@
-"""Tenant-scoped read path for the first end-to-end serving slice.
+"""Tenant-scoped metadata, history, fallback, and learned-result hydration.
 
-The Phase 2 models remain offline modules. This service provides the first
-online baseline by ranking movies directly from the interaction table, using
-the request-bound SQLAlchemy connection created by ``AuthMiddleware``. That
-connection has ``SET LOCAL app.tenant_id`` applied, so both the popularity
-counts and the selected user's history are constrained by Postgres RLS.
+Every method uses the request-bound SQLAlchemy connection created by
+``AuthMiddleware``. That connection has ``SET LOCAL app.tenant_id`` applied,
+so popularity, history, candidate hydration, and feedback remain constrained
+by Postgres RLS even when the caller supplies IDs from the model sidecar.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, bindparam, text
 
 
 @dataclass(frozen=True)
@@ -143,6 +142,67 @@ class RecommendationService:
         ]
         personalized.sort(key=lambda movie: (-movie.score, movie.movie_id))
         return "genre-affinity", personalized[:limit]
+
+    def hydrate_ranked_movies(
+        self,
+        connection: Connection,
+        *,
+        user_id: int,
+        ranked_items: list[tuple[int, float]],
+        reason: str,
+    ) -> list[RecommendedMovie]:
+        """Hydrate sidecar IDs through RLS and preserve its learned ordering."""
+        if not ranked_items:
+            return []
+        movie_ids = [movie_id for movie_id, _ in ranked_items]
+        query = text("""
+                SELECT
+                    m."movieId" AS movie_id,
+                    m.title,
+                    m.genres,
+                    l."tmdbId" AS tmdb_id,
+                    COUNT(r."movieId") AS interaction_count
+                FROM movies AS m
+                LEFT JOIN links AS l ON l."movieId" = m."movieId"
+                LEFT JOIN ratings AS r ON r."movieId" = m."movieId"
+                WHERE m."movieId" IN :movie_ids
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM ratings AS seen
+                    WHERE seen."userId" = :user_id
+                      AND seen."movieId" = m."movieId"
+                  )
+                GROUP BY m."movieId", m.title, m.genres, l."tmdbId"
+                """).bindparams(bindparam("movie_ids", expanding=True))
+        rows = connection.execute(
+            query,
+            {"movie_ids": movie_ids, "user_id": user_id},
+        )
+        by_id = {
+            int(row.movie_id): RecommendedMovie(
+                movie_id=int(row.movie_id),
+                title=str(row.title),
+                genres=_split_genres(str(row.genres)),
+                tmdb_id=str(row.tmdb_id) if row.tmdb_id is not None else None,
+                interaction_count=int(row.interaction_count),
+                score=0.0,
+                reason=reason,
+            )
+            for row in rows
+        }
+        return [
+            RecommendedMovie(
+                movie_id=by_id[movie_id].movie_id,
+                title=by_id[movie_id].title,
+                genres=by_id[movie_id].genres,
+                tmdb_id=by_id[movie_id].tmdb_id,
+                interaction_count=by_id[movie_id].interaction_count,
+                score=score,
+                reason=reason,
+            )
+            for movie_id, score in ranked_items
+            if movie_id in by_id
+        ]
 
     def recent_history(
         self,

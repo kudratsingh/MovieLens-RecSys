@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     feast_repo_path: Path = Path("src/features/feast_repo")
     feast_feature_server_url: str = "http://localhost:6566"
 
+    # --- Learned model sidecar ---------------------------------------------
+
+    model_server_url: str = "http://localhost:6570"
+    model_server_timeout_seconds: float = Field(default=0.5, gt=0)
+    model_server_auth_token: SecretStr = SecretStr("dev-model-server-token")
+    model_artifact_dir: Path = Path("models/serving")
+    model_manifest_name: str = "manifest.json"
+    model_tenant_id: str = "demo"
+
     # --- Derived --------------------------------------------------------------
 
     @property
@@ -151,4 +160,12 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 f"dev_auth_bypass=True is only permitted when environment='dev'; "
                 f"got environment={self.environment!r}. Refusing to construct Settings."
+            )
+        if (
+            self.environment != "dev"
+            and self.model_server_auth_token.get_secret_value() == "dev-model-server-token"
+        ):
+            raise RuntimeError(
+                "the default model-server token is only permitted in development; "
+                "set MODEL_SERVER_AUTH_TOKEN for this environment"
             )

@@ -30,6 +30,7 @@ rows. Matches the ranker's cold-start behavior noted in ADR 0005.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import lightgbm as lgb
@@ -180,3 +181,26 @@ class LGBMRanker:
         assert self._booster is not None, "call fit() before feature_importances()"
         raw = self._booster.feature_importance(importance_type=importance_type)
         return dict(zip(FEATURE_COLUMNS, (float(v) for v in raw), strict=False))
+
+    def save_model(self, path: Path) -> None:
+        """Persist the fitted booster in LightGBM's portable text format."""
+        assert self._booster is not None, "call fit() before save_model()"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._booster.save_model(str(path))
+
+    @classmethod
+    def load_model(
+        cls,
+        path: Path,
+        *,
+        config: LGBMRankerConfig | None = None,
+    ) -> LGBMRanker:
+        """Load a trained booster without fitting during process startup."""
+        ranker = cls(config=config or LGBMRankerConfig())
+        ranker._booster = lgb.Booster(model_file=str(path))
+        if ranker._booster.num_feature() != len(FEATURE_COLUMNS):
+            raise ValueError(
+                f"ranker has {ranker._booster.num_feature()} features; "
+                f"serving contract requires {len(FEATURE_COLUMNS)}"
+            )
+        return ranker

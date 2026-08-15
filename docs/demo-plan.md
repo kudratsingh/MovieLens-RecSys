@@ -27,8 +27,8 @@ tenant cannot access the demo tenant's interactions or results.
 
 ## Current state
 
-The first demo milestone, interactive feedback extension, and feature-store path are merged
-or in delivery:
+The first demo milestone, interactive feedback extension, feature-store path,
+and learned serving path are implemented:
 
 - Authenticated, tenant-scoped FastAPI recommendation and history endpoints.
 - An online popularity policy with seen-item filtering and explicit cold-start behavior.
@@ -44,11 +44,16 @@ or in delivery:
   rating-weighted genre-affinity baseline.
 - A pinned Feast repository with Postgres historical snapshots, Redis online
   materialization, a dedicated feature-server container, and parity/isolation CI.
+- A deterministic item-item cosine index and LightGBM LambdaRank booster packaged
+  behind a tenant/version/checksum manifest.
+- An authenticated internal model sidecar that loads artifacts once, batch-reads
+  all eight online Feast features, and returns scored candidate IDs.
+- API-side RLS hydration, live seen-item filtering, and explicit popularity
+  fallback for cold users, unavailable infrastructure, or invalid model output.
 
-The walkthrough is now repeatable and the feature-store seam is live. The
-remaining gap to the Phase 3-complete demo is learned two-stage serving, audit
-logging, and the enforced k6 latency gate; recommendations still use the
-interactive genre-affinity bridge until Bundle D5 loads model artifacts.
+The walkthrough now demonstrates the actual two-stage architecture. The
+remaining gap to the Phase 3-complete demo is durable audit logging and the
+enforced k6 latency gate in Bundle D6.
 
 ## Definition of done
 
@@ -186,6 +191,28 @@ Acceptance proof:
 - The handler does not refit a model or rebuild an index per request.
 - Results exclude already-seen movies.
 
+Implementation notes:
+
+- The first online candidate champion is item-item cosine, not the two-tower.
+  This follows ADR 0004 and is honest for the 24-movie demo snapshot; two-tower
+  remains a compatible later artifact type once its offline recall clears the
+  promotion gate.
+- The slim authenticated API does not import Feast, pandas, or LightGBM. A
+  private service-token-protected model sidecar owns those heavy dependencies,
+  preserving the API image-size budget and isolating model startup failures.
+- `make demo-seed` materializes one as-of snapshot, trains both stages offline,
+  writes the candidate and ranker files, then publishes the manifest last. The
+  manifest pins tenant, artifact types/versions, ordered feature columns, and
+  SHA-256 checksums.
+- Ranker labels are assembled as chronological interaction queries. Every
+  training feature uses only events strictly earlier than that query's label
+  timestamp, each observed rating remains one positive per ADR 0002, and
+  negatives come from the same item-item index shape used online.
+- The model sidecar validates and loads the manifest once during lifespan
+  startup. Per request it only retrieves candidates, reads tenant-keyed Redis
+  features, and predicts. The API sends the current RLS-scoped history so a
+  newly rated item is excluded immediately even before the next materialization.
+
 ### Bundle D6 — Audit logging and synthetic load gate
 
 Goal: prove the online path is observable and meets its latency contract.
@@ -253,8 +280,6 @@ Required for the first repeatable demo:
 
 Required for Phase 3 completion, but not the first walkthrough:
 
-- Feast/Redis feature reads.
-- Learned two-tower plus LightGBM serving.
 - Audit persistence.
 - Enforced k6 latency gate.
 
@@ -286,12 +311,12 @@ Explicitly deferred to later phases:
 - [x] TMDB metadata/poster proxy.
 - [x] One-command demo environment and smoke test.
 - [x] Feast/Redis feature path and parity test.
-- [ ] Learned two-stage model serving.
+- [x] Learned two-stage model serving.
 - [ ] Audit logging and k6 latency gate.
 - [ ] Recorded, repeatable portfolio walkthrough.
 
 ## Immediate next step
 
-Implement Bundle D5. Load versioned candidate and ranker artifacts once at
-startup, use the Feast online features during ranking, and retain popularity as
-the explicit cold-start/failure fallback.
+Implement Bundle D6. Persist tenant-scoped audit rows for every recommendation
+request, then enforce the warm/cold/mixed k6 workload and its p99 latency gate in
+CI.

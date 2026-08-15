@@ -29,7 +29,10 @@ def _response(request: httpx.Request) -> httpx.Response:
             200,
             json={
                 "history": {"items": [{"movie_id": 1}]},
-                "recommendations": {"items": [{"movie_id": 2}]},
+                "recommendations": {
+                    "policy": "item-item-cosine+lightgbm",
+                    "items": [{"movie_id": 2}],
+                },
             },
         )
     if path == "/api/users/104":
@@ -37,7 +40,7 @@ def _response(request: httpx.Request) -> httpx.Response:
             200,
             json={
                 "history": {"items": []},
-                "recommendations": {"items": [{"movie_id": 1}]},
+                "recommendations": {"policy": "popularity", "items": [{"movie_id": 1}]},
             },
         )
     return httpx.Response(404)
@@ -90,7 +93,10 @@ def test_behavior_smoke_rejects_seen_recommendations() -> None:
                 200,
                 json={
                     "history": {"items": [{"movie_id": 1}]},
-                    "recommendations": {"items": [{"movie_id": 1}]},
+                    "recommendations": {
+                        "policy": "item-item-cosine+lightgbm",
+                        "items": [{"movie_id": 1}],
+                    },
                 },
             )
         return response

@@ -181,3 +181,30 @@ def test_feature_importances_schema_matches_features() -> None:
     ranker.fit(features, [5] * 20, labels)
     importances = ranker.feature_importances()
     assert set(importances.keys()) == set(FEATURE_COLUMNS)
+
+
+def test_saved_ranker_loads_without_refitting(tmp_path) -> None:
+    features = _synthetic_features(n_groups=20, group_size=5, seed=8)
+    labels = _labels_from_signal_column(features, group_size=5, signal_col=FEATURE_COLUMNS[0])
+    ranker = LGBMRanker(config=LGBMRankerConfig(num_boost_round=10, seed=0)).fit(
+        features, [5] * 20, labels
+    )
+    path = tmp_path / "ranker.txt"
+
+    ranker.save_model(path)
+    loaded = LGBMRanker.load_model(path)
+
+    np.testing.assert_array_equal(ranker.predict(features), loaded.predict(features))
+
+
+def test_fixed_seed_produces_identical_ranker_artifact_bytes(tmp_path) -> None:
+    features = _synthetic_features(n_groups=20, group_size=5, seed=9)
+    labels = _labels_from_signal_column(features, group_size=5, signal_col=FEATURE_COLUMNS[0])
+    config = LGBMRankerConfig(num_boost_round=10, seed=0)
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+
+    LGBMRanker(config=config).fit(features, [5] * 20, labels).save_model(first)
+    LGBMRanker(config=config).fit(features, [5] * 20, labels).save_model(second)
+
+    assert first.read_bytes() == second.read_bytes()

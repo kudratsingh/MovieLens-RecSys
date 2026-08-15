@@ -91,3 +91,18 @@ def test_tmdb_token_loads_from_environment_as_secret(
     assert settings.tmdb_read_access_token is not None
     assert settings.tmdb_read_access_token.get_secret_value() == "server-secret"
     assert "server-secret" not in repr(settings)
+
+
+def test_non_dev_rejects_default_model_server_token(clean_env: None) -> None:
+    with pytest.raises(RuntimeError, match="MODEL_SERVER_AUTH_TOKEN"):
+        Settings(_env_file=None, environment="production")
+
+
+def test_non_dev_accepts_explicit_model_server_token(clean_env: None) -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        model_server_auth_token="production-secret",
+    )
+
+    assert settings.model_server_auth_token.get_secret_value() == "production-secret"
