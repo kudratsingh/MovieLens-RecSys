@@ -29,6 +29,9 @@ services:
       DEV_BYPASS_TENANT: demo
       DEV_BYPASS_USER: portfolio-demo
       TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:-}
+      REDIS_CONNECTION_STRING: redis:6379
+      FEAST_REPO_PATH: src/features/feast_repo
+      FEAST_FEATURE_SERVER_URL: http://feature-server:6566
     ports:
       - "8000:8000"
     depends_on:
@@ -38,6 +41,8 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -50,6 +55,44 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+
+  feature-setup:
+    build:
+      context: .
+      dockerfile: infra/features/Dockerfile
+    image: movielens-recsys/features:demo
+    command: ["python", "-m", "src.features.materialize"]
+    environment:
+      ADMIN_USER_DB_HOST: postgres
+      REDIS_CONNECTION_STRING: redis:6379
+    volumes:
+      - feast_registry:/app/src/features/feast_repo/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  feature-server:
+    image: movielens-recsys/features:demo
+    environment:
+      REDIS_CONNECTION_STRING: redis:6379
+      FEAST_POSTGRES_HOST: postgres
+      FEAST_POSTGRES_PORT: 5432
+      FEAST_POSTGRES_DB: movielens
+      FEAST_POSTGRES_USER: admin_user
+      FEAST_POSTGRES_PASSWORD: admin_user
+    volumes:
+      - feast_registry:/app/src/features/feast_repo/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6566/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   web:
     build:
@@ -75,3 +118,6 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+
+volumes:
+  feast_registry:

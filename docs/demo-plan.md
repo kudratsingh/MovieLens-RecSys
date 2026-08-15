@@ -27,7 +27,8 @@ tenant cannot access the demo tenant's interactions or results.
 
 ## Current state
 
-The first demo milestone and its interactive feedback extension are merged or in delivery:
+The first demo milestone, interactive feedback extension, and feature-store path are merged
+or in delivery:
 
 - Authenticated, tenant-scoped FastAPI recommendation and history endpoints.
 - An online popularity policy with seen-item filtering and explicit cold-start behavior.
@@ -41,11 +42,13 @@ The first demo milestone and its interactive feedback extension are merged or in
   behavioral smoke commands.
 - An interactive rating loop that immediately refreshes a tenant-safe,
   rating-weighted genre-affinity baseline.
+- A pinned Feast repository with Postgres historical snapshots, Redis online
+  materialization, a dedicated feature-server container, and parity/isolation CI.
 
-The UI is structurally demonstrable, but the walkthrough is not yet repeatable:
-the demo tenant has no durable personas/catalog fixture, posters are
-placeholders, and the endpoint still performs direct popularity aggregation
-rather than the target feature/model serving path.
+The walkthrough is now repeatable and the feature-store seam is live. The
+remaining gap to the Phase 3-complete demo is learned two-stage serving, audit
+logging, and the enforced k6 latency gate; recommendations still use the
+interactive genre-affinity bridge until Bundle D5 loads model artifacts.
 
 ## Definition of done
 
@@ -282,13 +285,13 @@ Explicitly deferred to later phases:
 - [x] Durable demo personas and idempotent seeding.
 - [x] TMDB metadata/poster proxy.
 - [x] One-command demo environment and smoke test.
-- [ ] Feast/Redis feature path and parity test.
+- [x] Feast/Redis feature path and parity test.
 - [ ] Learned two-stage model serving.
 - [ ] Audit logging and k6 latency gate.
 - [ ] Recorded, repeatable portfolio walkthrough.
 
 ## Immediate next step
 
-Implement Bundle D4. Define the Feast repository and materialize tenant-scoped
-features into Redis, with strict offline/online parity and isolation tests while
-preserving the current recommendation response contract.
+Implement Bundle D5. Load versioned candidate and ranker artifacts once at
+startup, use the Feast online features during ranking, and retain popularity as
+the explicit cold-start/failure fallback.

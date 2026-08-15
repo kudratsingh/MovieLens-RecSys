@@ -1,6 +1,6 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-smoke demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
 
 install:
 	pip install -e ".[dev]"
@@ -103,11 +103,17 @@ db-migrate-status:
 # The explicit project name isolates demo volumes from the normal dev stack.
 # `demo-reset` is therefore destructive only to movielens-demo resources.
 demo-up:
-	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak
+	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak redis
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --readiness-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-seed:
 	$(DEMO_COMPOSE) run --rm demo-setup python -c "from synthetic.personas.seed import main; main()"
+	$(MAKE) demo-materialize
+
+demo-materialize:
+	$(DEMO_COMPOSE) build feature-setup
+	$(DEMO_COMPOSE) run --rm feature-setup
+	$(DEMO_COMPOSE) up -d --wait --wait-timeout 60 feature-server
 
 demo-smoke:
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
@@ -121,7 +127,7 @@ demo-reset:
 	$(MAKE) demo-seed
 
 demo-logs:
-	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup postgres pgbouncer keycloak
+	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server postgres pgbouncer keycloak redis
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)
