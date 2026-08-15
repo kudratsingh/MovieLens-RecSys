@@ -37,7 +37,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — Keycloak, RLS, tenant router, online popularity baseline, and durable demo personas shipped |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — Keycloak, RLS, tenant router, online popularity baseline, durable demo personas, and TMDB-enriched posters shipped |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -167,3 +167,20 @@ make train-itemitem       # Phase 2 candidate → MLflow phase-2-candidates
 ```
 
 MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>.
+
+### Optional TMDB posters
+
+The demo works without TMDB credentials and falls back to its MovieLens titles,
+genres, and generated artwork. To enable real posters and additional metadata,
+create a TMDB API Read Access Token in your TMDB account settings and expose it
+only to FastAPI:
+
+```bash
+export TMDB_READ_ACCESS_TOKEN="your-read-access-token"
+make serve
+```
+
+The token is sent to TMDB as a server-side Bearer credential. It is never
+included in recommendation responses or the browser bundle. Successful and
+failed lookups are held in a bounded six-hour in-process cache so an upstream
+failure does not make recommendations unavailable or trigger repeated calls.

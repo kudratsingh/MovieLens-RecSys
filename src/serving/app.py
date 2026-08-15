@@ -35,6 +35,7 @@ from src.config import Settings
 from src.serving.recommendations import RecommendationService
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
+from src.serving.tmdb import TmdbMetadataClient
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -72,6 +73,18 @@ _jwks = JwksCache(
 
 _tenant_router = TenantRouter(_admin_engine)
 _recommendations = RecommendationService()
+_tmdb = TmdbMetadataClient(
+    read_access_token=(
+        _settings.tmdb_read_access_token.get_secret_value()
+        if _settings.tmdb_read_access_token is not None
+        else None
+    ),
+    api_base_url=_settings.tmdb_api_base_url,
+    image_base_url=_settings.tmdb_image_base_url,
+    timeout_seconds=_settings.tmdb_timeout_seconds,
+    cache_ttl_seconds=_settings.tmdb_cache_ttl_seconds,
+    cache_max_entries=_settings.tmdb_cache_max_entries,
+)
 
 
 class RecommendationItem(BaseModel):
@@ -81,6 +94,10 @@ class RecommendationItem(BaseModel):
     tmdb_id: str | None
     score: float
     reason: str
+    poster_url: str | None
+    overview: str | None
+    release_year: int | None
+    metadata_source: str
 
 
 class RecommendationResponse(BaseModel):
@@ -135,6 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _settings.dev_auth_bypass,
     )
     yield
+    await _tmdb.aclose()
     _app_engine.dispose()
     _admin_engine.dispose()
 
@@ -200,6 +218,7 @@ async def recommendations(
     principal = request.state.principal
     connection: Connection = request.state.db
     items = _recommendations.popular_for_user(connection, user_id=user_id, limit=limit)
+    metadata_by_id = await _tmdb.get_many(item.tmdb_id for item in items)
     return RecommendationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -213,6 +232,22 @@ async def recommendations(
                 tmdb_id=item.tmdb_id,
                 score=float(item.interaction_count),
                 reason="Popular with viewers in this tenant",
+                poster_url=(
+                    metadata_by_id[item.tmdb_id].poster_url
+                    if item.tmdb_id in metadata_by_id
+                    else None
+                ),
+                overview=(
+                    metadata_by_id[item.tmdb_id].overview
+                    if item.tmdb_id in metadata_by_id
+                    else None
+                ),
+                release_year=(
+                    metadata_by_id[item.tmdb_id].release_year
+                    if item.tmdb_id in metadata_by_id
+                    else None
+                ),
+                metadata_source="tmdb" if item.tmdb_id in metadata_by_id else "movielens",
             )
             for item in items
         ],

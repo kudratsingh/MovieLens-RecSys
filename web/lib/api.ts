@@ -5,6 +5,10 @@ export interface RecommendationItem {
   tmdb_id: string | null;
   score: number;
   reason: string;
+  poster_url: string | null;
+  overview: string | null;
+  release_year: number | null;
+  metadata_source: string;
 }
 
 export interface RecommendationResponse {

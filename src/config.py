@@ -26,6 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +88,15 @@ class Settings(BaseSettings):
     dev_auth_bypass: bool = False
     dev_bypass_tenant: str = "default"
     dev_bypass_user: str = "dev-user"
+
+    # --- Movie metadata (TMDB, server-side only) ----------------------------
+
+    tmdb_read_access_token: SecretStr | None = None
+    tmdb_api_base_url: str = "https://api.themoviedb.org/3"
+    tmdb_image_base_url: str = "https://image.tmdb.org/t/p"
+    tmdb_timeout_seconds: float = Field(default=2.0, gt=0)
+    tmdb_cache_ttl_seconds: int = Field(default=21_600, gt=0)
+    tmdb_cache_max_entries: int = Field(default=2_048, gt=0)
 
     # --- Data / DVC ----------------------------------------------------------
 
