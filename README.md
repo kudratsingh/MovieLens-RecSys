@@ -37,7 +37,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — Keycloak, RLS, tenant router, online popularity baseline, durable demo personas, and TMDB-enriched posters shipped |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the authenticated, tenant-isolated popularity demo is repeatable from a clean checkout; Feast, learned serving, audit logs, and k6 remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -48,6 +48,7 @@ Most public recsys repos are notebooks that train a model and report a number. T
 
 - **[Design decisions (ADRs)](docs/adr/)** — every significant choice is written down with alternatives and consequences. Recruiters: [ADR 0001 (evaluation protocol)](docs/adr/0001-evaluation-protocol.md) is the strongest single entry point.
 - **[Working demo plan](docs/demo-plan.md)** — the concrete Phase 3 vertical-slice sequence, definition of done, walkthrough, and remaining delivery bundles.
+- **[Local demo runbook](docs/demo-runbook.md)** — clean-checkout startup, seeding, smoke validation, walkthrough, reset, and troubleshooting.
 - **Time-respecting evaluation** — temporal train/holdout/test split with a fixed cutoff timestamp. No random splits on time-series data, ever.
 - **Stage-specific metrics** — the candidate stage is scored on recall over its full retrieval window (recall@500), the ranker on NDCG@10 over its output. Both metrics flow through one harness with `EvalResult.k` stamped on every result so they can't be confused.
 - **Per-policy MLflow attribution** — every candidate model embeds a popularity fallback for cold users; per-policy metrics partition the holdout by which routing branch actually served each user. So you know whether the learned model is doing work or the fallback is.
@@ -155,7 +156,6 @@ make infra-up             # docker-compose up: postgres, redis, mlflow, prom, gr
 make data-download        # downloads MovieLens 25M
 make data-ingest          # ingests into Postgres
 make db-migrate           # applies tenant and demo-persona schema
-make demo-seed            # idempotently loads the demo tenant personas
 
 # routine
 make lint                 # ruff + black --check
@@ -168,12 +168,32 @@ make train-itemitem       # Phase 2 candidate → MLflow phase-2-candidates
 
 MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>.
 
+## Working demo
+
+The portfolio walkthrough uses an isolated Compose project and a reviewed mini
+catalog, so the 25M dataset is not required:
+
+```bash
+make install
+cp .env.example .env
+make demo-up
+make demo-seed
+make demo-smoke
+```
+
+Open <http://localhost:3001>. Use `make demo-down` to stop while preserving
+state, `make demo-reset` to recreate only the demo-owned volumes, and
+`make demo-logs` when a dependency fails. See the
+[complete demo runbook](docs/demo-runbook.md) for the walkthrough and recovery
+steps.
+
 ### Optional TMDB posters
 
 The demo works without TMDB credentials and falls back to its MovieLens titles,
 genres, and generated artwork. To enable real posters and additional metadata,
-create a TMDB API Read Access Token in your TMDB account settings and expose it
-only to FastAPI:
+create a TMDB API Read Access Token in your TMDB account settings. For the
+containerized demo, put it in `.env` before `make demo-up`. For direct FastAPI
+development, expose it only to the backend process:
 
 ```bash
 export TMDB_READ_ACCESS_TOKEN="your-read-access-token"

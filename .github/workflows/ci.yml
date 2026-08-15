@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  demo-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate merged demo Compose model
+        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
+      - name: Verify required demo services
+        run: |
+          services=$(docker compose -f docker-compose.yml -f docker-compose.demo.yml config --services)
+          for service in postgres pgbouncer keycloak-postgres keycloak demo-setup api web; do
+            grep -qx "$service" <<< "$services" || {
+              echo "Missing required demo service: $service"
+              exit 1
+            }
+          done
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

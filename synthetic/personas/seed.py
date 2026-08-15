@@ -25,6 +25,14 @@ class Persona:
 
 
 @dataclass(frozen=True)
+class CatalogMovie:
+    movie_id: int
+    title: str
+    genres: str
+    tmdb_id: str
+
+
+@dataclass(frozen=True)
 class SeedResult:
     tenant_id: str
     persona_count: int
@@ -69,6 +77,27 @@ def _validate_personas(personas: list[Persona]) -> None:
             raise ValueError(f"persona {persona.slug!r} contains duplicate history entries")
 
 
+def load_demo_catalog(
+    path: Path = _FIXTURE_DIR / "catalog.json",
+) -> tuple[list[CatalogMovie], tuple[int, ...]]:
+    payload = _read_json(path)
+    movies = [
+        CatalogMovie(
+            movie_id=int(item["movie_id"]),
+            title=str(item["title"]),
+            genres=str(item["genres"]),
+            tmdb_id=str(item["tmdb_id"]),
+        )
+        for item in payload["movies"]
+    ]
+    background_user_ids = tuple(int(user_id) for user_id in payload["background_user_ids"])
+    if not movies or not background_user_ids:
+        raise ValueError("demo catalog and background user lists must not be empty")
+    if len({movie.movie_id for movie in movies}) != len(movies):
+        raise ValueError("demo catalog movie IDs must be unique")
+    return movies, background_user_ids
+
+
 def seed_demo_personas(
     engine: Engine,
     *,
@@ -76,11 +105,8 @@ def seed_demo_personas(
     catalog_path: Path = _FIXTURE_DIR / "catalog.json",
 ) -> SeedResult:
     tenant_id, personas = load_personas(persona_path)
-    catalog = _read_json(catalog_path)
-    movie_ids = tuple(int(movie_id) for movie_id in catalog["movie_ids"])
-    background_user_ids = tuple(int(user_id) for user_id in catalog["background_user_ids"])
-    if not movie_ids or not background_user_ids:
-        raise ValueError("demo catalog and background user lists must not be empty")
+    catalog_movies, background_user_ids = load_demo_catalog(catalog_path)
+    movie_ids = tuple(movie.movie_id for movie in catalog_movies)
 
     persona_rows = [
         {
@@ -119,7 +145,7 @@ def seed_demo_personas(
     ]
 
     with engine.begin() as connection:
-        _assert_catalog_exists(connection, movie_ids)
+        _ensure_demo_catalog(connection, catalog_movies)
         _replace_seed_rows(
             connection,
             tenant_id=tenant_id,
@@ -137,17 +163,27 @@ def seed_demo_personas(
     )
 
 
-def _assert_catalog_exists(connection: Connection, movie_ids: tuple[int, ...]) -> None:
-    statement = text('SELECT "movieId" FROM movies WHERE "movieId" IN :movie_ids').bindparams(
-        bindparam("movie_ids", expanding=True)
+def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> None:
+    """Insert missing snapshot rows without overwriting a full MovieLens ingest."""
+    connection.execute(
+        text("""
+            INSERT INTO movies ("movieId", title, genres)
+            VALUES (:movie_id, :title, :genres)
+            ON CONFLICT ("movieId") DO NOTHING
+            """),
+        [
+            {"movie_id": movie.movie_id, "title": movie.title, "genres": movie.genres}
+            for movie in movies
+        ],
     )
-    found = {int(row[0]) for row in connection.execute(statement, {"movie_ids": movie_ids})}
-    missing = sorted(set(movie_ids) - found)
-    if missing:
-        raise RuntimeError(
-            "demo catalog movies are missing from Postgres; run `make data-ingest` first. "
-            f"Missing movie IDs: {missing}"
-        )
+    connection.execute(
+        text("""
+            INSERT INTO links ("movieId", "tmdbId")
+            VALUES (:movie_id, :tmdb_id)
+            ON CONFLICT ("movieId") DO NOTHING
+            """),
+        [{"movie_id": movie.movie_id, "tmdb_id": movie.tmdb_id} for movie in movies],
+    )
 
 
 def _replace_seed_rows(
