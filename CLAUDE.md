@@ -82,6 +82,10 @@ browser → Next.js app → auth → FastAPI (recommendations, features, model m
 
 Each phase earns a specific set of mid-level muscles. Don't skip ahead — the lessons compound.
 
+The execution sequence and definition of done for the working Phase 3 demo live
+in [`docs/demo-plan.md`](docs/demo-plan.md). This file remains authoritative for
+architecture and phase scope; the demo plan tracks the vertical-slice milestone.
+
 ### Phase 1 — Baseline and data foundation
 - Load MovieLens into Postgres
 - Exploratory data analysis (sanity checks, distributions, sparsity)
