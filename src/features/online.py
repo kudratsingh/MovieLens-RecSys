@@ -16,6 +16,17 @@ USER_FEATURES = [
     "user_features:user_days_since_last_interaction",
 ]
 
+RANKER_FEATURES = [
+    "user_features:user_interaction_count",
+    "user_features:user_days_active",
+    "user_features:user_days_since_last_interaction",
+    "item_features:item_popularity_all_time",
+    "item_features:item_popularity_30d",
+    "item_features:item_popularity_7d",
+    "item_features:item_age_days",
+    "user_item_features:user_genre_affinity",
+]
+
 
 def configure_feast_environment(settings: Settings) -> None:
     """Populate only Feast's documented environment-backed config values."""

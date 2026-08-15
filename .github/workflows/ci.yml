@@ -16,7 +16,7 @@ jobs:
       - name: Verify required demo services
         run: |
           services=$(docker compose -f docker-compose.yml -f docker-compose.demo.yml config --services)
-          for service in postgres redis pgbouncer keycloak-postgres keycloak demo-setup feature-setup feature-server api web; do
+          for service in postgres redis pgbouncer keycloak-postgres keycloak demo-setup feature-setup feature-server model-server api web; do
             grep -qx "$service" <<< "$services" || {
               echo "Missing required demo service: $service"
               exit 1
@@ -33,6 +33,11 @@ jobs:
             echo "API runtime image exceeds 400 MB: $size bytes"
             exit 1
           }
+      - name: Build and verify model runtime image
+        run: |
+          docker build --tag movielens-model-ci --file infra/features/Dockerfile .
+          docker run --rm movielens-model-ci python -c \
+            "import fastapi, feast, lightgbm, pandas, uvicorn; import src.serving.model_server"
 
   frontend:
     runs-on: ubuntu-latest
@@ -89,12 +94,12 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Start feature stores
         run: docker compose up -d --wait postgres redis
-      - name: Prepare and materialize demo features
+      - name: Prepare features and learned serving artifacts
         run: |
           python -m src.data.demo_setup
           python -c "from synthetic.personas.seed import main; main()"
-          python -m src.features.materialize
-      - run: pytest tests/feature_parity/ -v
+          python -m src.training.demo_artifacts
+      - run: pytest tests/feature_parity/ tests/learned_serving/ -v
 
   # Non-negotiable #9: no code path may return one tenant's data in
   # response to another tenant's request. This job boots the full

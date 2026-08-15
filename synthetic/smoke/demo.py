@@ -85,6 +85,12 @@ def run_behavior_smoke(client: httpx.Client, *, web_url: str) -> SmokeSummary:
         raise DemoSmokeError("Cold Start unexpectedly has interaction history")
     if not cold_recommendations:
         raise DemoSmokeError("Cold Start has no popularity fallback recommendations")
+    action_policy = _recommendation_policy(action)
+    cold_policy = _recommendation_policy(cold)
+    if action_policy != "item-item-cosine+lightgbm":
+        raise DemoSmokeError(f"Action Fan did not use learned two-stage serving: {action_policy}")
+    if cold_policy != "popularity":
+        raise DemoSmokeError(f"Cold Start did not use popularity fallback: {cold_policy}")
 
     seen_ids = {int(item["movie_id"]) for item in action_history}
     recommended_ids = {int(item["movie_id"]) for item in action_recommendations}
@@ -110,6 +116,16 @@ def _dashboard_items(payload: dict[str, Any], section: str) -> list[dict[str, An
     if not isinstance(value, dict):
         raise DemoSmokeError(f"dashboard response has no {section!r} object")
     return _require_list(value, "items", f"dashboard {section}")
+
+
+def _recommendation_policy(payload: dict[str, Any]) -> str:
+    recommendations = payload.get("recommendations")
+    if not isinstance(recommendations, dict):
+        raise DemoSmokeError("dashboard response has no 'recommendations' object")
+    policy = recommendations.get("policy")
+    if not isinstance(policy, str):
+        raise DemoSmokeError("dashboard recommendations have no policy")
+    return policy
 
 
 def _require_list(payload: dict[str, Any], key: str, source: str) -> list[dict[str, Any]]:

@@ -104,6 +104,11 @@ db-migrate-status:
 # `demo-reset` is therefore destructive only to movielens-demo resources.
 demo-up:
 	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak redis
+	@if docker run --rm -v movielens-demo_model_artifacts:/artifacts \
+		movielens-recsys/api:demo python -c \
+		"from pathlib import Path; raise SystemExit(not Path('/artifacts/manifest.json').is_file())"; then \
+		$(DEMO_COMPOSE) up -d --wait --wait-timeout 60 feature-server model-server; \
+	fi
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --readiness-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-seed:
@@ -113,7 +118,7 @@ demo-seed:
 demo-materialize:
 	$(DEMO_COMPOSE) build feature-setup
 	$(DEMO_COMPOSE) run --rm feature-setup
-	$(DEMO_COMPOSE) up -d --wait --wait-timeout 60 feature-server
+	$(DEMO_COMPOSE) up -d --wait --wait-timeout 60 feature-server model-server
 
 demo-smoke:
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
@@ -127,7 +132,7 @@ demo-reset:
 	$(MAKE) demo-seed
 
 demo-logs:
-	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server postgres pgbouncer keycloak redis
+	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server model-server postgres pgbouncer keycloak redis
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)

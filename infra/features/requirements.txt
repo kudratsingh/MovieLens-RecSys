@@ -1,4 +1,7 @@
 feast[postgres,redis]==0.65.0
+fastapi
+lightgbm
 psycopg2-binary
 pydantic-settings
 sqlalchemy>=2.0
+uvicorn[standard]

@@ -107,6 +107,23 @@ def test_personalized_ranking_keeps_cold_start_popularity_fallback() -> None:
     assert [item.movie_id for item in items] == [1, 2]
 
 
+def test_hydrate_ranked_movies_preserves_scores_and_excludes_seen() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().hydrate_ranked_movies(
+            connection,
+            user_id=10,
+            ranked_items=[(3, 0.9), (1, 0.8), (2, 0.7)],
+            reason="learned",
+        )
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [3]
+    assert items[0].score == 0.9
+    assert items[0].reason == "learned"
+
+
 def test_recent_history_is_descending_and_limited() -> None:
     connection = _connection()
     try:
