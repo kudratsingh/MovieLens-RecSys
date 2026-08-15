@@ -1,0 +1,12 @@
+# Dependencies imported by the API, auth, schema bootstrap, and demo seed paths.
+# Training, orchestration, tracking, and DVC dependencies do not belong in the
+# serving image.
+alembic>=1.13
+fastapi
+httpx
+prometheus-client
+psycopg2-binary
+pydantic-settings
+pyjwt[crypto]>=2.8
+sqlalchemy>=2.0
+uvicorn[standard]

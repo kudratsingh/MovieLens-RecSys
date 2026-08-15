@@ -22,6 +22,17 @@ jobs:
               exit 1
             }
           done
+      - name: Build API runtime image
+        run: docker build --tag movielens-api-ci --file infra/api/Dockerfile .
+      - name: Verify API runtime imports and size budget
+        run: |
+          docker run --rm movielens-api-ci python -c \
+            "import alembic, fastapi, httpx, jwt, psycopg2, pydantic_settings, sqlalchemy"
+          size=$(docker image inspect movielens-api-ci --format '{{.Size}}')
+          test "$size" -lt 400000000 || {
+            echo "API runtime image exceeds 400 MB: $size bytes"
+            exit 1
+          }
 
   frontend:
     runs-on: ubuntu-latest

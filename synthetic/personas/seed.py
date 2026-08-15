@@ -224,7 +224,10 @@ def _replace_seed_rows(
 
 
 def main() -> None:
-    engine = create_engine(Settings().admin_user_database_url, future=True)
+    # The self-contained demo may need to add its compact global movie catalog.
+    # That bootstrap is intentionally owner-only; admin_user remains limited to
+    # tenant-scoped materialization and cannot mutate movies or links.
+    engine = create_engine(Settings().database_url, future=True)
     try:
         result = seed_demo_personas(engine)
     finally:
