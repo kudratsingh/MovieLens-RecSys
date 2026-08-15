@@ -27,7 +27,7 @@ tenant cannot access the demo tenant's interactions or results.
 
 ## Current state
 
-The first two demo bundles are merged:
+The first demo milestone and its interactive feedback extension are merged or in delivery:
 
 - Authenticated, tenant-scoped FastAPI recommendation and history endpoints.
 - An online popularity policy with seen-item filtering and explicit cold-start behavior.
@@ -37,6 +37,10 @@ The first two demo bundles are merged:
   cross-tenant CI canaries.
 - Frontend and backend linting, type checking, unit tests, production builds,
   and tenant-isolation checks in GitHub Actions.
+- A Docker-only clean-checkout environment with schema bootstrap, seed, and
+  behavioral smoke commands.
+- An interactive rating loop that immediately refreshes a tenant-safe,
+  rating-weighted genre-affinity baseline.
 
 The UI is structurally demonstrable, but the walkthrough is not yet repeatable:
 the demo tenant has no durable personas/catalog fixture, posters are
@@ -121,10 +125,28 @@ Goal: remove manual startup and configuration steps.
 
 Acceptance proof:
 
-- A clean machine with Docker, Python 3.11, and Node 22 can reach the UI using
-  only the documented setup commands.
+- A clean machine with Docker Compose v2 can reach the UI using only the
+  documented setup commands.
 - Restarting the stack preserves expected data; resetting recreates it.
 - Startup failures identify the unhealthy dependency.
+
+### Bundle D3.5 — Interactive rating feedback
+
+Goal: turn the portfolio surface from a read-only list into a usable recommender demo.
+
+- Expose a compact rateable catalog for registered demo personas.
+- Save 1–5 star feedback through the request-scoped RLS connection.
+- Re-rank unseen candidates using rating-weighted genre affinity.
+- Refresh history and recommendations immediately after each rating.
+- Allow a selected demo profile to be reset to cold start.
+- Reject writes for arbitrary non-persona user IDs.
+
+Acceptance proof:
+
+- A Cold Start profile can rate a movie and immediately gain history.
+- Warm feedback reports the genre-affinity policy; reset returns to popularity.
+- Rating and reset writes cannot cross tenant boundaries.
+- A real production container build and browser-facing API flow pass.
 
 ### Bundle D4 — Feast and Redis feature parity
 

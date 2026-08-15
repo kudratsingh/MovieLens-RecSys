@@ -9,6 +9,9 @@ The authenticated surface currently includes:
     popularity baseline.
   * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
   * ``GET /personas`` — tenant-scoped named demo identities.
+  * ``GET /users/{user_id}/catalog`` — rateable demo catalog.
+  * ``PUT /users/{user_id}/ratings/{movie_id}`` — RLS-scoped feedback write.
+  * ``DELETE /users/{user_id}/ratings`` — reset one demo profile.
 
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
@@ -23,6 +26,7 @@ and the process exits non-zero.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -32,7 +36,11 @@ from sqlalchemy import Connection, create_engine
 
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
-from src.serving.recommendations import RecommendationService
+from src.serving.recommendations import (
+    RecommendationService,
+    UnknownDemoPersonaError,
+    UnknownMovieError,
+)
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
 from src.serving.tmdb import TmdbMetadataClient
@@ -134,6 +142,29 @@ class PersonaResponse(BaseModel):
     items: list[PersonaItem]
 
 
+class CatalogItem(BaseModel):
+    movie_id: int
+    title: str
+    genres: list[str]
+    rating: float | None
+
+
+class CatalogResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[CatalogItem]
+
+
+class RatingRequest(BaseModel):
+    rating: float
+
+
+class RatingMutationResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    changed: int
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup assertions before accepting traffic. Failure raises
@@ -217,21 +248,21 @@ async def recommendations(
     """Return the first online recommendation policy for a tenant user."""
     principal = request.state.principal
     connection: Connection = request.state.db
-    items = _recommendations.popular_for_user(connection, user_id=user_id, limit=limit)
+    policy, items = _recommendations.personalized_for_user(connection, user_id=user_id, limit=limit)
     metadata_by_id = await _tmdb.get_many(item.tmdb_id for item in items)
     return RecommendationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
-        model_version="popularity-db-v1",
-        policy="popularity",
+        model_version="feedback-baseline-v1",
+        policy=policy,
         items=[
             RecommendationItem(
                 movie_id=item.movie_id,
                 title=item.title,
                 genres=item.genres,
                 tmdb_id=item.tmdb_id,
-                score=float(item.interaction_count),
-                reason="Popular with viewers in this tenant",
+                score=item.score,
+                reason=item.reason,
                 poster_url=(
                     metadata_by_id[item.tmdb_id].poster_url
                     if item.tmdb_id in metadata_by_id
@@ -300,4 +331,68 @@ async def personas(request: Request) -> PersonaResponse:
             )
             for item in items
         ],
+    )
+
+
+@app.get("/users/{user_id}/catalog", response_model=CatalogResponse)
+async def catalog(user_id: int, request: Request) -> CatalogResponse:
+    """Return rateable movies and current ratings for one demo persona."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        items = _recommendations.catalog_for_user(connection, user_id=user_id)
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CatalogResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        items=[CatalogItem(**item.__dict__) for item in items],
+    )
+
+
+@app.put("/users/{user_id}/ratings/{movie_id}", response_model=RatingMutationResponse)
+async def rate_movie(
+    user_id: int,
+    movie_id: int,
+    payload: RatingRequest,
+    request: Request,
+) -> RatingMutationResponse:
+    """Create or replace one rating for a tenant-scoped demo persona."""
+    if payload.rating < 0.5 or payload.rating > 5 or payload.rating * 2 % 1 != 0:
+        raise HTTPException(status_code=422, detail="rating must be 0.5–5.0 in half-star steps")
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        _recommendations.rate_movie(
+            connection,
+            tenant_id=principal.tenant_id,
+            user_id=user_id,
+            movie_id=movie_id,
+            rating=payload.rating,
+            timestamp=int(time.time()),
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UnknownMovieError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RatingMutationResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        changed=1,
+    )
+
+
+@app.delete("/users/{user_id}/ratings", response_model=RatingMutationResponse)
+async def reset_ratings(user_id: int, request: Request) -> RatingMutationResponse:
+    """Clear a demo persona so the cold-start experience can be rebuilt."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        changed = _recommendations.reset_ratings(connection, user_id=user_id)
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RatingMutationResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        changed=changed,
     )
