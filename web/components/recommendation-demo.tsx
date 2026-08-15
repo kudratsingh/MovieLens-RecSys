@@ -1,8 +1,14 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 
-import type { PersonaItem, PersonaResponse, UserDashboard } from "@/lib/api";
+import type {
+  PersonaItem,
+  PersonaResponse,
+  RecommendationItem,
+  UserDashboard,
+} from "@/lib/api";
 
 export function RecommendationDemo() {
   const [userId, setUserId] = useState(1);
@@ -173,22 +179,7 @@ function Dashboard({ dashboard }: { dashboard: UserDashboard }) {
           <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {recommendations.items.map((movie, index) => (
               <article className="group" key={movie.movie_id}>
-                <div
-                  className="relative aspect-[2/3] overflow-hidden rounded-xl border border-white/10 p-4"
-                  style={{
-                    background: `linear-gradient(145deg, hsl(${(movie.movie_id * 47) % 360} 35% 24%), #111214 70%)`,
-                  }}
-                >
-                  <span className="font-mono text-xs text-white/45">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <div className="absolute inset-x-4 bottom-4">
-                    <p className="text-lg font-semibold leading-tight">{movie.title}</p>
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-white/55">
-                      {movie.genres.join(" · ") || "Unclassified"}
-                    </p>
-                  </div>
-                </div>
+                <PosterArtwork movie={movie} rank={index + 1} />
                 <p className="mt-3 text-xs leading-5 text-zinc-500">{movie.reason}</p>
               </article>
             ))}
@@ -219,6 +210,52 @@ function Dashboard({ dashboard }: { dashboard: UserDashboard }) {
           </ol>
         )}
       </aside>
+      <div className="flex flex-wrap items-center gap-3 text-xs leading-5 text-zinc-600 xl:col-span-2">
+        <a href="https://www.themoviedb.org" rel="noreferrer" target="_blank">
+          <Image alt="TMDB" height={13} src="/tmdb-logo.svg" width={100} />
+        </a>
+        <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      </div>
+    </div>
+  );
+}
+
+function PosterArtwork({ movie, rank }: { movie: RecommendationItem; rank: number }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const showPoster = Boolean(movie.poster_url) && !imageFailed;
+
+  return (
+    <div
+      className="relative aspect-[2/3] overflow-hidden rounded-xl border border-white/10 bg-zinc-900 p-4"
+      style={
+        showPoster
+          ? undefined
+          : {
+              background: `linear-gradient(145deg, hsl(${(movie.movie_id * 47) % 360} 35% 24%), #111214 70%)`,
+            }
+      }
+    >
+      {showPoster && movie.poster_url ? (
+        <Image
+          alt=""
+          className="object-cover transition duration-300 group-hover:scale-[1.02]"
+          fill
+          onError={() => setImageFailed(true)}
+          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+          src={movie.poster_url}
+        />
+      ) : null}
+      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-black/25" />
+      <span className="relative font-mono text-xs text-white/70">
+        {String(rank).padStart(2, "0")}
+      </span>
+      <div className="absolute inset-x-4 bottom-4">
+        <p className="text-lg font-semibold leading-tight drop-shadow">{movie.title}</p>
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-white/70">
+          {movie.release_year ? `${movie.release_year} · ` : ""}
+          {movie.genres.join(" · ") || "Unclassified"}
+        </p>
+      </div>
     </div>
   );
 }

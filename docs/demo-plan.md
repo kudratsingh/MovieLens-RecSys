@@ -103,7 +103,7 @@ Goal: turn the recommendation grid into a recognizable movie experience.
 
 Acceptance proof:
 
-- Demo cards show real posters when a TMDB key is configured.
+- Demo cards show real posters when a TMDB read credential is configured.
 - The demo remains usable without a key or during an upstream failure.
 - No TMDB secret appears in browser responses or the client bundle.
 
@@ -258,7 +258,7 @@ Explicitly deferred to later phases:
 - [x] Next.js recommendation/history demo surface.
 - [x] Frontend CI and production build.
 - [x] Durable demo personas and idempotent seeding.
-- [ ] TMDB metadata/poster proxy.
+- [x] TMDB metadata/poster proxy.
 - [ ] One-command demo environment and smoke test.
 - [ ] Feast/Redis feature path and parity test.
 - [ ] Learned two-stage model serving.
@@ -267,6 +267,6 @@ Explicitly deferred to later phases:
 
 ## Immediate next step
 
-Implement Bundle D2. The stable demo catalog now gives the TMDB integration a
-reviewed set of IDs to target. Add server-side metadata/poster resolution with
-caching and a useful no-key or upstream-failure fallback.
+Implement Bundle D3. Package Postgres, Keycloak, pgBouncer, FastAPI, and Next.js
+into a deterministic demo stack with explicit migrate, seed, reset, readiness,
+and smoke-test commands.

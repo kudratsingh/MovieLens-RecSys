@@ -17,6 +17,12 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "RAW_DATA_DIR",
         "MLFLOW_TRACKING_URI",
         "MLFLOW_EXPERIMENT",
+        "TMDB_READ_ACCESS_TOKEN",
+        "TMDB_API_BASE_URL",
+        "TMDB_IMAGE_BASE_URL",
+        "TMDB_TIMEOUT_SECONDS",
+        "TMDB_CACHE_TTL_SECONDS",
+        "TMDB_CACHE_MAX_ENTRIES",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -69,3 +75,19 @@ def test_mlflow_env_overrides(clean_env: None, monkeypatch) -> None:
     s = Settings(_env_file=None)
     assert s.mlflow_tracking_uri == "https://mlflow.prod.example.com"
     assert s.mlflow_experiment == "challenger-runs"
+
+
+def test_tmdb_is_disabled_by_default_and_token_is_secret(clean_env: None) -> None:
+    settings = _defaults(clean_env)
+    assert settings.tmdb_read_access_token is None
+
+
+def test_tmdb_token_loads_from_environment_as_secret(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TMDB_READ_ACCESS_TOKEN", "server-secret")
+    settings = Settings(_env_file=None)
+
+    assert settings.tmdb_read_access_token is not None
+    assert settings.tmdb_read_access_token.get_secret_value() == "server-secret"
+    assert "server-secret" not in repr(settings)
