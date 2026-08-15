@@ -8,22 +8,19 @@ remains the source for training and offline evaluation.
 ## Prerequisites
 
 - Docker Desktop or another Docker Engine with Compose v2.
-- Python 3.11 or newer.
 - Enough free disk space for the Python, Next.js, Postgres, Keycloak, and
-  pgBouncer images. The first API build installs the project ML dependencies and
-  is substantially slower than later cached starts.
+  pgBouncer images. The first start downloads base images and is substantially
+  slower than later cached starts.
 - Ports 3001, 5432, 6432, 8000, and 8080 available on localhost.
 
-Node.js is not required on the host for the containerized walkthrough. It is
-only required for direct frontend development through `make web-install` and
-`make web-dev`.
+Python and Node.js are not required on the host for the containerized
+walkthrough. They are only required for direct backend or frontend development.
 
 ## First start
 
 From the repository root:
 
 ```bash
-make install
 cp .env.example .env
 make demo-up
 make demo-seed
@@ -42,7 +39,8 @@ generated poster artwork, or set a TMDB API Read Access Token before
    applies every Alembic migration.
 4. Starts FastAPI only after schema setup succeeds and pgBouncer is healthy.
 5. Starts Next.js only after FastAPI is healthy.
-6. Verifies FastAPI, Next.js, and the Keycloak demo realm from the host.
+6. Verifies FastAPI, Next.js, and the Keycloak demo realm from inside the demo
+   network.
 
 `make demo-seed` can be run repeatedly. It preserves an existing full-ingest
 catalog, inserts only missing demo catalog rows, and replaces the controlled

@@ -104,13 +104,13 @@ db-migrate-status:
 # `demo-reset` is therefore destructive only to movielens-demo resources.
 demo-up:
 	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak
-	python -m synthetic.smoke.demo --readiness-only
+	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --readiness-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-seed:
-	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.personas.seed
+	$(DEMO_COMPOSE) run --rm demo-setup python -c "from synthetic.personas.seed import main; main()"
 
 demo-smoke:
-	python -m synthetic.smoke.demo
+	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-down:
 	$(DEMO_COMPOSE) down --remove-orphans
