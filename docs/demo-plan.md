@@ -257,7 +257,7 @@ Explicitly deferred to later phases:
 - [x] Authenticated recommendation/history API baseline.
 - [x] Next.js recommendation/history demo surface.
 - [x] Frontend CI and production build.
-- [ ] Durable demo personas and idempotent seeding.
+- [x] Durable demo personas and idempotent seeding.
 - [ ] TMDB metadata/poster proxy.
 - [ ] One-command demo environment and smoke test.
 - [ ] Feast/Redis feature path and parity test.
@@ -267,6 +267,6 @@ Explicitly deferred to later phases:
 
 ## Immediate next step
 
-Implement Bundle D1. It unlocks useful local validation of the existing API and
-UI, gives TMDB integration a stable catalog to target, and supplies deterministic
-users for later cold-start, load, drift, and A/B fixtures.
+Implement Bundle D2. The stable demo catalog now gives the TMDB integration a
+reviewed set of IDs to target. Add server-side metadata/poster resolution with
+caching and a useful no-key or upstream-failure fallback.

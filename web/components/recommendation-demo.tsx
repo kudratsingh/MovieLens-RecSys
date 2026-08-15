@@ -2,17 +2,12 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
-import type { UserDashboard } from "@/lib/api";
-
-const PERSONAS = [
-  { label: "User 1", userId: 1 },
-  { label: "User 42", userId: 42 },
-  { label: "User 135", userId: 135 },
-];
+import type { PersonaItem, PersonaResponse, UserDashboard } from "@/lib/api";
 
 export function RecommendationDemo() {
   const [userId, setUserId] = useState(1);
   const [inputValue, setInputValue] = useState("1");
+  const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,7 +40,30 @@ export function RecommendationDemo() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => void loadUser(1));
+    async function initializeDemo() {
+      try {
+        const response = await fetch("/api/personas", { cache: "no-store" });
+        const payload = (await response.json()) as PersonaResponse | { detail?: string };
+        if (!response.ok) {
+          throw new Error(
+            "detail" in payload && payload.detail
+              ? payload.detail
+              : "Persona API unavailable",
+          );
+        }
+        const available = (payload as PersonaResponse).items;
+        setPersonas(available);
+        const initialUserId = available[0]?.user_id ?? 1;
+        setInputValue(String(initialUserId));
+        await loadUser(initialUserId);
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error ? requestError.message : "Persona API unavailable",
+        );
+        setLoading(false);
+      }
+    }
+    queueMicrotask(() => void initializeDemo());
   }, [loadUser]);
 
   function selectPersona(nextUserId: number) {
@@ -75,18 +93,19 @@ export function RecommendationDemo() {
             Demo identity
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {PERSONAS.map((persona) => (
+            {personas.map((persona) => (
               <button
                 className={`rounded-full border px-4 py-2 text-sm transition ${
-                  userId === persona.userId
+                  userId === persona.user_id
                     ? "border-amber-300 bg-amber-300 text-zinc-950"
                     : "border-white/10 bg-white/[0.035] text-zinc-300 hover:border-white/25"
                 }`}
-                key={persona.userId}
-                onClick={() => selectPersona(persona.userId)}
+                key={persona.user_id}
+                onClick={() => selectPersona(persona.user_id)}
+                title={persona.description}
                 type="button"
               >
-                {persona.label}
+                {persona.display_name}
               </button>
             ))}
           </div>

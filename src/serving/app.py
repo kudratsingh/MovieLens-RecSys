@@ -8,6 +8,7 @@ The authenticated surface currently includes:
   * ``GET /users/{user_id}/recommendations`` — tenant-scoped online
     popularity baseline.
   * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
+  * ``GET /personas`` — tenant-scoped named demo identities.
 
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
@@ -102,6 +103,18 @@ class HistoryResponse(BaseModel):
     tenant_id: str
     user_id: int
     items: list[HistoryItem]
+
+
+class PersonaItem(BaseModel):
+    user_id: int
+    slug: str
+    display_name: str
+    description: str
+
+
+class PersonaResponse(BaseModel):
+    tenant_id: str
+    items: list[PersonaItem]
 
 
 @asynccontextmanager
@@ -229,6 +242,26 @@ async def history(
                 genres=item.genres,
                 rating=item.rating,
                 timestamp=item.timestamp,
+            )
+            for item in items
+        ],
+    )
+
+
+@app.get("/personas", response_model=PersonaResponse)
+async def personas(request: Request) -> PersonaResponse:
+    """Return stable synthetic identities for the current tenant's demo."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _recommendations.list_demo_personas(connection)
+    return PersonaResponse(
+        tenant_id=principal.tenant_id,
+        items=[
+            PersonaItem(
+                user_id=item.user_id,
+                slug=item.slug,
+                display_name=item.display_name,
+                description=item.description,
             )
             for item in items
         ],

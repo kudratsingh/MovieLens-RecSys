@@ -36,9 +36,9 @@ jobs:
       # `ignore_missing_imports` makes them Any, and strict mode's
       # `disallow_subclassing_any` fires on every legitimate subclass.
       - run: pip install -e ".[dev]"
-      - run: ruff check src/ tests/ notebooks/
-      - run: black --check src/ tests/ notebooks/
-      - run: mypy src/ notebooks/
+      - run: ruff check src/ synthetic/ tests/ notebooks/
+      - run: black --check src/ synthetic/ tests/ notebooks/
+      - run: mypy src/ synthetic/ notebooks/
 
   test:
     runs-on: ubuntu-latest

@@ -32,6 +32,14 @@ class HistoryMovie:
     timestamp: int
 
 
+@dataclass(frozen=True)
+class DemoPersona:
+    user_id: int
+    slug: str
+    display_name: str
+    description: str
+
+
 class RecommendationService:
     """Read recommendations and history through an RLS-scoped connection."""
 
@@ -113,6 +121,24 @@ class RecommendationService:
                 genres=_split_genres(str(row.genres)),
                 rating=float(row.rating),
                 timestamp=int(row.timestamp),
+            )
+            for row in rows
+        ]
+
+    def list_demo_personas(self, connection: Connection) -> list[DemoPersona]:
+        """Return the named personas visible to the request tenant."""
+        rows = connection.execute(text("""
+                SELECT user_id, slug, display_name, description
+                FROM demo_personas
+                WHERE synthetic IS TRUE
+                ORDER BY sort_order ASC, user_id ASC
+                """))
+        return [
+            DemoPersona(
+                user_id=int(row.user_id),
+                slug=str(row.slug),
+                display_name=str(row.display_name),
+                description=str(row.description),
             )
             for row in rows
         ]
