@@ -49,6 +49,8 @@ DEFAULT_HISTORY_TITLE = "RLS default history canary"
 DEMO_HISTORY_TITLE = "RLS demo history canary"
 DEFAULT_RECOMMENDATION_TITLE = "RLS default recommendation canary"
 DEMO_RECOMMENDATION_TITLE = "RLS demo recommendation canary"
+DEFAULT_PERSONA_NAME = "RLS Default Persona Canary"
+DEMO_PERSONA_NAME = "RLS Demo Persona Canary"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -56,6 +58,9 @@ def tenant_canary_rows() -> Generator[None, None, None]:
     """Seed distinct rows so endpoint isolation assertions test real data."""
     engine = create_engine(Settings().database_url)
     with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM demo_personas " "WHERE user_id IN (987654323, 987654324)")
+        )
         connection.execute(
             text(
                 "DELETE FROM ratings "
@@ -90,10 +95,23 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                 """),
             {"user_id": CANARY_USER_ID},
         )
+        connection.execute(
+            text("""
+                INSERT INTO demo_personas
+                    (tenant_id, user_id, slug, display_name, description, sort_order, synthetic)
+                VALUES
+                    ('default', 987654323, 'default-canary', :default_name, 'Test', 1, TRUE),
+                    ('demo', 987654324, 'demo-canary', :demo_name, 'Test', 1, TRUE)
+                """),
+            {"default_name": DEFAULT_PERSONA_NAME, "demo_name": DEMO_PERSONA_NAME},
+        )
 
     yield
 
     with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM demo_personas " "WHERE user_id IN (987654323, 987654324)")
+        )
         connection.execute(
             text(
                 "DELETE FROM ratings "

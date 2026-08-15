@@ -268,7 +268,7 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-08-13.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs and auth/tenancy foundation have landed, and the first online recommendation path is now the concrete step.
+**Updated 2026-08-14.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs, auth/tenancy foundation, online recommendation path, and durable demo personas are implemented.
 
 ### Phase 1 — complete
 
@@ -305,11 +305,12 @@ Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Thos
 - ✅ **FastAPI serving skeleton** — `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
 - 🚧 **First online recommendation slice** — authenticated popularity recommendations and watch history establish the browser-to-API seam before learned-model serving.
 - ✅ **Phase 3 baseline frontend** — Next.js user selector, recommendation grid, watch-history panel, serving-policy metadata, and a server-side FastAPI proxy. Frontend lint, strict type checking, and production build run in CI.
-- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, synthetic personas and cold-start cohorts, k6 enforcement, multi-environment compose, TMDB posters, and browser-side Keycloak authentication.
+- ✅ **Durable demo personas** — four named, tenant-scoped synthetic users (Action Fan, Drama Fan, Eclectic Viewer, and Cold Start), checked-in catalog/history fixtures, an idempotent `make demo-seed` path, authenticated persona discovery, and RLS isolation coverage.
+- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, programmatic cold-start cohorts, k6 enforcement, multi-environment compose, TMDB posters, and browser-side Keycloak authentication.
 
 ### Current step
 
-**Complete the demo vertical slice without weakening Phase 3's boundaries.** The authenticated tenant-scoped popularity API and the Next.js recommendation/history surface are connected. The immediate sequence is now: seed the demo tenant with controlled personas and catalog data; add TMDB poster proxying; then replace direct popularity reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
+**Complete the demo vertical slice without weakening Phase 3's boundaries.** The authenticated tenant-scoped popularity API, the Next.js recommendation/history surface, and controlled demo personas are connected. The immediate sequence is now: add TMDB poster proxying; build the one-command demo environment; then replace direct popularity reads with Feast/Redis and load the learned candidate + ranker artifacts behind the same response contract. Every endpoint stays authenticated and uses the RLS-bound request connection from the first implementation onward.
 
 ## How to work with Claude Code on this
 

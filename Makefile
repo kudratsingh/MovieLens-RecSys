@@ -1,18 +1,18 @@
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-seed keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
 
 install:
 	pip install -e ".[dev]"
 
 lint:
-	ruff check src/ tests/
-	black --check src/ tests/
+	ruff check src/ synthetic/ tests/
+	black --check src/ synthetic/ tests/
 
 format:
-	ruff check --fix src/ tests/
-	black src/ tests/
+	ruff check --fix src/ synthetic/ tests/
+	black src/ synthetic/ tests/
 
 typecheck:
-	mypy src/
+	mypy src/ synthetic/
 
 test:
 	pytest tests/ -v
@@ -96,6 +96,9 @@ db-migrate-down:
 
 db-migrate-status:
 	alembic current
+
+demo-seed:
+	python -m synthetic.personas.seed
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)

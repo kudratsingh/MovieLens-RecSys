@@ -33,3 +33,15 @@ export interface UserDashboard {
   recommendations: RecommendationResponse;
   history: HistoryResponse;
 }
+
+export interface PersonaItem {
+  user_id: number;
+  slug: string;
+  display_name: string;
+  description: string;
+}
+
+export interface PersonaResponse {
+  tenant_id: string;
+  items: PersonaItem[];
+}

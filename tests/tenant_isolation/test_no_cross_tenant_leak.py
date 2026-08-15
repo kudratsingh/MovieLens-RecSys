@@ -20,8 +20,10 @@ from src.serving.app import app
 from tests.tenant_isolation.conftest import (
     CANARY_USER_ID,
     DEFAULT_HISTORY_TITLE,
+    DEFAULT_PERSONA_NAME,
     DEFAULT_RECOMMENDATION_TITLE,
     DEMO_HISTORY_TITLE,
+    DEMO_PERSONA_NAME,
     DEMO_RECOMMENDATION_TITLE,
     TokenMinter,
 )
@@ -133,3 +135,20 @@ def test_user_endpoints_never_cross_tenant_boundary(
         assert DEMO_HISTORY_TITLE in demo_response.text
     else:
         assert DEMO_RECOMMENDATION_TITLE in demo_response.text
+
+
+def test_persona_endpoint_never_crosses_tenant_boundary(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_token = mint_token("default", "alice", "alice")
+    demo_token = mint_token("demo", "demo", "demo")
+
+    default_response = client.get("/personas", headers={"Authorization": f"Bearer {default_token}"})
+    demo_response = client.get("/personas", headers={"Authorization": f"Bearer {demo_token}"})
+
+    assert default_response.status_code == 200
+    assert demo_response.status_code == 200
+    assert DEFAULT_PERSONA_NAME in default_response.text
+    assert DEMO_PERSONA_NAME not in default_response.text
+    assert DEMO_PERSONA_NAME in demo_response.text
+    assert DEFAULT_PERSONA_NAME not in demo_response.text

@@ -11,11 +11,24 @@ def _connection() -> Connection:
     connection.execute(
         text('CREATE TABLE movies ("movieId" INTEGER PRIMARY KEY, title TEXT, genres TEXT)')
     )
+    connection.execute(
+        text(
+            "CREATE TABLE demo_personas (user_id INTEGER, slug TEXT, display_name TEXT, "
+            "description TEXT, sort_order INTEGER, synthetic BOOLEAN)"
+        )
+    )
     connection.execute(text('CREATE TABLE links ("movieId" INTEGER PRIMARY KEY, "tmdbId" TEXT)'))
     connection.execute(
         text(
             'CREATE TABLE ratings ("userId" INTEGER, "movieId" INTEGER, '
             "rating FLOAT, timestamp INTEGER)"
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO demo_personas VALUES "
+            "(900000102, 'drama-fan', 'Drama Fan', 'Drama profile', 2, TRUE), "
+            "(900000101, 'action-fan', 'Action Fan', 'Action profile', 1, TRUE)"
         )
     )
     connection.execute(
@@ -74,3 +87,14 @@ def test_recent_history_is_descending_and_limited() -> None:
     assert items[0].movie_id == 2
     assert items[0].rating == 3.5
     assert items[0].timestamp == 200
+
+
+def test_list_demo_personas_uses_stable_display_order() -> None:
+    connection = _connection()
+    try:
+        personas = RecommendationService().list_demo_personas(connection)
+    finally:
+        connection.close()
+
+    assert [persona.slug for persona in personas] == ["action-fan", "drama-fan"]
+    assert personas[0].user_id == 900000101
