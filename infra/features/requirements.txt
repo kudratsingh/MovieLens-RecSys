@@ -1,0 +1,4 @@
+feast[postgres,redis]==0.65.0
+psycopg2-binary
+pydantic-settings
+sqlalchemy>=2.0

@@ -60,5 +60,8 @@ Thumbs.db
 *.log
 logs/
 
+# Feast registry is derived by `feast apply` / the materializer.
+src/features/feast_repo/data/registry.db
+
 # Docker
 *.override.yml

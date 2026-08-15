@@ -30,12 +30,14 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import Connection, create_engine
 
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
+from src.serving.features import FeatureServerClient
 from src.serving.recommendations import (
     RecommendationService,
     UnknownDemoPersonaError,
@@ -81,6 +83,7 @@ _jwks = JwksCache(
 
 _tenant_router = TenantRouter(_admin_engine)
 _recommendations = RecommendationService()
+_feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _tmdb = TmdbMetadataClient(
     read_access_token=(
         _settings.tmdb_read_access_token.get_secret_value()
@@ -165,6 +168,16 @@ class RatingMutationResponse(BaseModel):
     changed: int
 
 
+class OnlineUserFeaturesResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    source: str
+    feature_timestamp: str
+    user_interaction_count: int | None
+    user_days_active: float | None
+    user_days_since_last_interaction: float | None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup assertions before accepting traffic. Failure raises
@@ -183,6 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _settings.dev_auth_bypass,
     )
     yield
+    await _feature_server.aclose()
     await _tmdb.aclose()
     _app_engine.dispose()
     _admin_engine.dispose()
@@ -331,6 +345,24 @@ async def personas(request: Request) -> PersonaResponse:
             )
             for item in items
         ],
+    )
+
+
+@app.get("/users/{user_id}/features", response_model=OnlineUserFeaturesResponse)
+async def online_user_features(user_id: int, request: Request) -> OnlineUserFeaturesResponse:
+    """Expose the tenant-keyed Redis-backed Feast read used by online ranking."""
+    principal = request.state.principal
+    try:
+        values = await _feature_server.get_user_features(
+            tenant_id=principal.tenant_id, user_id=user_id
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="online feature store unavailable") from exc
+    return OnlineUserFeaturesResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        source="feast-redis",
+        **values,
     )
 
 

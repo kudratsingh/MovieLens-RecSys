@@ -20,7 +20,7 @@ dependencies = [
     "implicit",
     "faiss-cpu",
     # Feature store
-    "feast[redis]>=0.40",
+    "feast[postgres,redis]==0.65.0",
     # Tracking
     "mlflow",
     # Orchestration

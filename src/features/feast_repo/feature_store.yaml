@@ -1,0 +1,16 @@
+project: movielens_recsys
+provider: local
+registry: data/registry.db
+offline_store:
+  type: postgres
+  host: ${FEAST_POSTGRES_HOST}
+  port: ${FEAST_POSTGRES_PORT}
+  database: ${FEAST_POSTGRES_DB}
+  db_schema: feature_store
+  user: ${FEAST_POSTGRES_USER}
+  password: ${FEAST_POSTGRES_PASSWORD}
+  sslmode: disable
+online_store:
+  type: redis
+  connection_string: ${REDIS_CONNECTION_STRING}
+entity_key_serialization_version: 3

@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     mlflow_tracking_uri: str = "http://localhost:5000"
     mlflow_experiment: str = "phase-1-baselines"
 
+    # --- Feast / online features -------------------------------------------
+
+    redis_connection_string: str = "localhost:6379"
+    feast_repo_path: Path = Path("src/features/feast_repo")
+    feast_feature_server_url: str = "http://localhost:6566"
+
     # --- Derived --------------------------------------------------------------
 
     @property

@@ -16,7 +16,7 @@ jobs:
       - name: Verify required demo services
         run: |
           services=$(docker compose -f docker-compose.yml -f docker-compose.demo.yml config --services)
-          for service in postgres pgbouncer keycloak-postgres keycloak demo-setup api web; do
+          for service in postgres redis pgbouncer keycloak-postgres keycloak demo-setup feature-setup feature-server api web; do
             grep -qx "$service" <<< "$services" || {
               echo "Missing required demo service: $service"
               exit 1
@@ -87,7 +87,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: pytest tests/feature_parity/ -v || [ $? -eq 5 ]
+      - name: Start feature stores
+        run: docker compose up -d --wait postgres redis
+      - name: Prepare and materialize demo features
+        run: |
+          python -m src.data.demo_setup
+          python -c "from synthetic.personas.seed import main; main()"
+          python -m src.features.materialize
+      - run: pytest tests/feature_parity/ -v
 
   # Non-negotiable #9: no code path may return one tenant's data in
   # response to another tenant's request. This job boots the full
