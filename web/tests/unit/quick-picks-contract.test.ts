@@ -161,14 +161,17 @@ describe("action-to-request mapping", () => {
 
 describe("progress and policy copy", () => {
   it("adds locally committed signals to the count the policy last reported", () => {
+    const reported = fallbackServingPolicy.positive_signal_count;
+    const threshold = fallbackServingPolicy.threshold;
+
     expect(quickPickProgress(fallbackServingPolicy, 0)).toMatchObject({
-      count: 2,
+      count: reported,
       learned: false,
-      remaining: 3,
+      remaining: threshold - reported,
       thresholdReached: false,
     });
-    expect(quickPickProgress(fallbackServingPolicy, 3)).toMatchObject({
-      count: 5,
+    expect(quickPickProgress(fallbackServingPolicy, threshold - reported)).toMatchObject({
+      count: threshold,
       learned: false,
       remaining: 0,
       thresholdReached: true,

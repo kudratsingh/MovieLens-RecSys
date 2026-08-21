@@ -17,10 +17,12 @@ describe("matching evidence to the queue it explains", () => {
   it("uses the correlation ID the recommendations response carried", () => {
     const evidence = quickPickEvidence(auditResponse, correlationId);
 
-    expect(evidence[101]).toEqual({
-      candidateSource: "item-item-similarity",
-      seedMovieId: 103,
+    const prediction = auditResponse.items[0].predictions[0];
+    expect(evidence[prediction.movie_id]).toEqual({
+      candidateSource: prediction.candidate_source,
+      seedMovieId: prediction.seed_movie_id,
     });
+    expect(prediction.seed_movie_id).toBeGreaterThan(0);
   });
 
   it("returns nothing when the audit belongs to a different request", () => {
