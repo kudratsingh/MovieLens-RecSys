@@ -71,9 +71,19 @@ services:
         "--port",
         "8000",
         "--workers",
-        "4",
+        "${API_LOAD_WORKERS:-4}",
         "--no-access-log",
       ]
+    # CFS weight, not a cap: it only decides who wins when the host is
+    # oversubscribed, so it cannot change an uncontended measurement.
+    #
+    # Only the measured services are promoted; nothing is demoted. Shares
+    # arbitrate between *runnable* tasks, so an idle neighbour consumes nothing
+    # whatever its weight and demoting it buys the gate nothing — while it does
+    # starve the sibling `browser-auth-e2e` job, which drives `api`, `web`, and
+    # Keycloak through these same Compose files. Raising the four processes the
+    # gate measures gets the ordering that matters without that cost.
+    cpu_shares: 4096
     environment:
       ENVIRONMENT: dev
       POSTGRES_HOST: postgres
@@ -116,20 +126,32 @@ services:
     profiles: ["load"]
     image: grafana/k6:${K6_VERSION:-2.1.0}
     command: ["run", "/scripts/recommendations.js"]
+    # The generator being descheduled is itself a measurement error — it shows
+    # up as dropped arrivals — so it is scheduled alongside the services it
+    # measures rather than behind them.
+    cpu_shares: 2048
     environment:
       BASE_URL: http://api-load:8000
       KEYCLOAK_URL: http://keycloak:8080
       LOAD_PROFILE: ${LOAD_PROFILE:-smoke}
-      K6_OUT: experimental-prometheus-rw
+      API_WORKERS: ${API_LOAD_WORKERS:-4}
+      # Where handleSummary drops the machine-readable summary, and where the
+      # raw sample stream lands. The wrapper points both at a per-window
+      # subdirectory so a re-measured run keeps both windows side by side.
+      RESULTS_DIR: ${K6_RESULTS_DIR:-/results}
+      # The 60-second smoke writes evidence to the artifact instead of pushing
+      # it: remote-write is a trend feature (ADR 0010) and Prometheus is one
+      # more process competing for the runner's four vCPUs during the only
+      # minute that matters. `demo-load-nightly` adds it back.
+      K6_OUT: ${K6_OUTPUTS:-json=/results/raw-metrics.json.gz}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_PUSH_INTERVAL: ${K6_PROMETHEUS_RW_PUSH_INTERVAL:-2m}
     volumes:
       - ./synthetic/load:/scripts:ro
+      - ${LOAD_RESULTS_DIR:-./artifacts/load-smoke}:/results
     depends_on:
       api-load:
         condition: service_healthy
-      prometheus:
-        condition: service_started
 
   feature-setup:
     build:
@@ -154,6 +176,7 @@ services:
 
   feature-server:
     image: movielens-recsys/features:demo
+    cpu_shares: 2048
     environment:
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_POSTGRES_HOST: postgres
@@ -174,6 +197,7 @@ services:
 
   model-server:
     image: movielens-recsys/features:demo
+    cpu_shares: 4096
     command:
       [
         "uvicorn",
@@ -240,6 +264,12 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+
+  # The k6 remote-write receiver, which only the nightly profile starts and
+  # which nothing else in these Compose files depends on. Safe to demote; see
+  # the note on the promoted services above for why nothing else is.
+  prometheus:
+    cpu_shares: 256
 
 volumes:
   feast_registry:

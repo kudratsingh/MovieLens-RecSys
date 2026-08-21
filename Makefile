@@ -1,7 +1,25 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+# Where the load gate leaves its evidence: the k6 summary, the raw sample
+# stream, the per-second latency table, and container CPU snapshots from either
+# side of the measured window. CI uploads it whether the gate passed or failed,
+# because a passing run is the baseline the next failure gets compared against.
+# Keep the leading `./` — Compose reads a bind-mount source without one as a
+# named volume.
+LOAD_RESULTS_DIR ?= ./artifacts/load-smoke
+# Uvicorn workers on the load-serving process, in one place because the k6
+# warm-up sizes itself from the same value. A warm-up that primes fewer
+# processes than exist leaves cold ones inside the measured window.
+API_LOAD_WORKERS ?= 4
+# The gate itself lives in synthetic/load/run_gate.sh: one k6 window, the
+# evidence around it, and the documented re-measure rule. It is a script rather
+# than a recipe because "run, decide, maybe run once more" reads badly as
+# nested make.
+LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
+	DEMO_COMPOSE="$(DEMO_COMPOSE)" sh synthetic/load/run_gate.sh
+
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -145,15 +163,20 @@ demo-smoke:
 demo-audits:
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --audits-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
+# Stop everything the load gate does not measure. The browser demo's `api`
+# and `web` processes and the one-shot setup jobs are not on the measured
+# path, but on a shared CI runner they compete for the same CPU as the
+# processes that are — and CPU starvation there arrives as tail latency here.
+# Containers are stopped, not removed, so `demo-logs` still explains a
+# failure afterwards. Run between `demo-seed` and `demo-load-smoke`.
+demo-load-quiesce:
+	$(DEMO_COMPOSE) stop --timeout 20 web api demo-setup feature-setup
+
 demo-load-smoke:
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=smoke K6_PROMETHEUS_RW_PUSH_INTERVAL=2m $(DEMO_COMPOSE) --profile load up -d --force-recreate --wait --wait-timeout 120 feature-server model-server api-load
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=smoke K6_PROMETHEUS_RW_PUSH_INTERVAL=2m $(DEMO_COMPOSE) --profile load up -d --wait --wait-timeout 120 prometheus
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=smoke K6_PROMETHEUS_RW_PUSH_INTERVAL=2m $(DEMO_COMPOSE) --profile load run --rm k6
+	@LOAD_PROFILE=smoke K6_PUSH_INTERVAL=2m LOAD_RESULTS_DIR=$(LOAD_RESULTS_DIR) $(LOAD_GATE)
 
 demo-load-nightly:
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=nightly K6_PROMETHEUS_RW_PUSH_INTERVAL=30s $(DEMO_COMPOSE) --profile load up -d --force-recreate --wait --wait-timeout 120 feature-server model-server api-load
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=nightly K6_PROMETHEUS_RW_PUSH_INTERVAL=30s $(DEMO_COMPOSE) --profile load up -d --wait --wait-timeout 120 prometheus
-	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=nightly K6_PROMETHEUS_RW_PUSH_INTERVAL=30s $(DEMO_COMPOSE) --profile load run --rm k6
+	@LOAD_PROFILE=nightly K6_PUSH_INTERVAL=30s LOAD_RESULTS_DIR=./artifacts/load-nightly $(LOAD_GATE)
 
 demo-down:
 	$(DEMO_COMPOSE) down --remove-orphans

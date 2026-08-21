@@ -12,8 +12,9 @@ remains the source for training and offline evaluation.
   pgBouncer images. The first start downloads base images and is substantially
   slower than later cached starts.
 - Ports 3001, 5432, 6379, 6432, 8000, and 8080 available on localhost, plus
-  9090 if you run the load gate (it starts Prometheus as the k6 remote-write
-  receiver). The demo does not start MLflow or Grafana.
+  9090 if you run the nightly load profile (it starts Prometheus as the k6
+  remote-write receiver; the 60-second smoke does not). The demo does not start
+  MLflow or Grafana.
 
 Python and Node.js are not required on the host for the containerized
 walkthrough. They are only required for direct backend or frontend development.
@@ -102,25 +103,77 @@ feature, ranker, model, and total latency fields. Cold Start records
 Run the authenticated smoke gate:
 
 ```bash
+make demo-load-quiesce
 make demo-load-smoke
 ```
 
-This starts an internal `api-load` process with development impersonation
-disabled and recreates the feature/model/load processes so each run begins at
-the same process-cache boundary. It obtains a real Keycloak token, concurrently
-warms and validates all four personas across the worker pool, and
-then targets 55 recommendation arrivals/second for 60 seconds with 10 VUs. The
-measured traffic follows a deterministic 7/2/3 warm/cold/mixed ratio. The
-command fails unless all recommendation checks pass, request errors are zero,
-p99 is below 100 ms, and achieved throughput is above 50 requests/second.
+`make demo-load-quiesce` stops the services the gate does not measure — the
+browser demo's `api` and `web` plus the one-shot setup containers — so they
+stop competing for CPU with the ones it does. It stops rather than removes
+them, so `make demo-logs` still explains a failure afterwards, and
+`make demo-up` brings them back. Skipping it is fine on a roomy laptop and is
+the difference between measuring the service and measuring the host on a
+shared CI runner.
 
-The final JSON object is the compact evidence artifact. It includes p50, p95,
-p99, achieved throughput, request count, error/check rates, and dropped
-iterations. Dropped iterations are kept visible as a capacity signal; the gate
-is based on achieved throughput together with latency, correctness, and error
-thresholds. The accepted 2026-08-20 implementation baseline reported p50 6.31
-ms, p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
+`make demo-load-smoke` starts an internal `api-load` process with development
+impersonation disabled and recreates the feature/model/load processes so each
+run begins at the same process-cache boundary. It obtains a real Keycloak
+token, then primes every uvicorn worker for every persona with real
+authenticated requests — the sidecar's feature cache is keyed by user *and*
+candidate set, so this is the only warm-up that pays for itself — and refuses
+to start measuring if the stack is not serving the seeded personas. It then
+targets 55 recommendation arrivals/second for 60 seconds with 10 preallocated
+VUs and a ceiling of 40. The measured traffic follows a deterministic 7/2/3
+warm/cold/mixed ratio. The command fails unless all recommendation checks pass,
+request errors are zero, p99 is below 100 ms, and achieved throughput is above
+50 requests/second. Warm personas must additionally report
+`serving_policy.learned`: a request that quietly degrades to the popularity
+fallback answers HTTP 200, and a latency gate that accepts it is timing the
+wrong answer.
+
+The final JSON object is the compact evidence summary. It includes p50, p95,
+p99, achieved throughput, request count, total test-run duration, error/check
+rates, warm-up cost, dropped iterations, and silent learned fallbacks. Dropped
+iterations are kept visible as a capacity signal; the gate is based on achieved
+throughput together with latency, correctness, and error thresholds. Note that
+k6 divides the request count by the *whole* test-run duration, warm-up
+included, so the reported warm-up cost is spent out of the achieved-rate
+margin. The accepted 2026-08-20 implementation baseline reported p50 6.31 ms,
+p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
 errors, and zero dropped iterations across 3,301 measured requests.
+
+Everything the run produced lands under `artifacts/load-smoke/`, which CI
+uploads on pass and fail alike:
+
+```
+artifacts/load-smoke/
+├── docker-stats-{before,after}.txt   # CPU/memory and the effective CFS weights
+├── cpu-stat-{before,after}.txt       # cgroup throttling counters per service
+└── window-1/
+    ├── summary.json                  # the JSON printed above
+    ├── per-second.txt / .json        # p50/p95/p99/max per second, with steal
+    ├── host-cpu.jsonl                # /proc/stat deltas, one line per second
+    ├── raw-metrics.json.gz           # every k6 sample, for re-deriving anything
+    ├── decision.json                 # the measurement-validity verdict
+    └── k6-stdout.txt, k6-exit, breakdown.txt
+```
+
+The per-second table is the thing to read first when the gate fails. A slow
+opening second is a cold cache; a tail smeared across the middle is contention;
+a tail that follows one traffic class is a serving regression. Each second also
+carries the host's CPU **steal** — time the hypervisor spent elsewhere while
+this kernel had work to run — and its run-queue depth. The ten slowest seconds
+are printed into the log so a failure is readable without downloading anything.
+
+**The re-measure rule.** A breached window is re-measured exactly once, and only
+when at least three of its ten slowest seconds recorded 10% or more CPU steal:
+that combination means the machine was not scheduled, which is a measurement to
+redo rather than a result to report. The repeat reuses the warm stack, its
+verdict is final however its own steal looks, and the decision is labelled in
+the log ("re-measured after hypervisor steal: N%"). A breach with low steal is
+never re-measured — it is the service's and fails immediately. This is a
+validity rule about when a number counts, not a threshold: no threshold,
+arrival rate, run length, or traffic mix changes.
 
 Both local and CI runs use the exact k6 image version pinned in
 `infra/ci/k6-version` and remote-write their measurements to the local
@@ -148,7 +201,7 @@ non-development environment.
 ```bash
 make demo-logs   # tail the services that explain startup/runtime failures
 make demo-down   # stop containers and preserve demo volumes
-make demo-up     # restart while preserving the database
+make demo-up     # restart while preserving the database (also undoes a quiesce)
 make demo-reset  # delete only movielens-demo volumes, rebuild, migrate, and reseed
 ```
 
@@ -172,10 +225,18 @@ permanently delete the isolated demo Postgres and Keycloak data.
   Fan first. If the request succeeded but no row appears, inspect `api`; audit
   persistence is part of the request transaction and should fail the request
   rather than silently dropping a row.
-- **The load gate fails:** use the emitted JSON to separate response errors,
-  bad policy/check results, throughput saturation, and a p99 regression. Then
-  inspect `api-load`, `model-server`, `feature-server`, `pgbouncer`, and
-  `postgres` with `make demo-logs`.
+- **The load gate fails:** read `artifacts/load-smoke/window-1/per-second.txt`
+  first, then use the emitted JSON to separate response errors,
+  bad policy/check results, throughput saturation, and a p99 regression. A
+  non-zero `silent_learned_fallbacks` means warm personas were served by the
+  popularity fallback — look for `model-server-unavailable` in `model-server`
+  and `api-load`. A non-zero `dropped_iterations` means the load generator
+  could not start every arrival, so the percentiles understate the tail; treat
+  the run as capacity-limited rather than as evidence either way. A flat p50
+  with a moved p99 is contention, not a regression: check what else is running
+  on the host and confirm `make demo-load-quiesce` ran. Then inspect
+  `api-load`, `model-server`, `feature-server`, `pgbouncer`, and `postgres`
+  with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
   configured, restart with `make demo-down && make demo-up` so FastAPI reads the
   new environment.

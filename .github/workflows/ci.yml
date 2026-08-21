@@ -230,8 +230,25 @@ jobs:
       - name: Seed personas, Feast features, and learned artifacts
         run: make demo-seed
 
+      # The runner's 4 vCPUs are shared by every container in the stack. Stop
+      # the ones the gate does not measure so the measured p99 describes the
+      # service rather than contention with the browser demo.
+      - name: Free runner CPU for the measured services
+        run: make demo-load-quiesce
+
       - name: Run 60-second authenticated k6 SLO gate
         run: make demo-load-smoke
+
+      # Uploaded on success too: a passing run is the baseline the next
+      # failure gets compared against, and the per-second breakdown only means
+      # something next to one.
+      - name: Upload load-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-load-smoke
+          path: artifacts/load-smoke/
+          if-no-files-found: warn
 
       - name: Dump serving logs on failure
         if: failure()
