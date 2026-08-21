@@ -118,6 +118,9 @@ function isRecommendationItem(value: unknown): boolean {
  * score being rendered as a match percentage. A response that cannot answer
  * those questions cannot be described truthfully, so it fails the boundary
  * rather than rendering with a guess.
+ *
+ * Quick Picks also states which filter ran and how many titles it removed, so
+ * those two are checked here rather than read hopefully at the call site.
  */
 function isServingPolicy(value: unknown): boolean {
   return (
@@ -127,7 +130,9 @@ function isServingPolicy(value: unknown): boolean {
     isNumber(value.positive_signal_count) &&
     isNumber(value.threshold) &&
     isString(value.score_scale) &&
-    isString(value.reason)
+    isString(value.reason) &&
+    isString(value.filter_policy) &&
+    isNumber(value.excluded_count)
   );
 }
 
@@ -274,6 +279,9 @@ function isRecommendationAuditItem(value: unknown): boolean {
   return (
     isRecord(value) &&
     isString(value.request_id) &&
+    // The caller-supplied correlation ID is how a UI matches an audit row to
+    // the exact recommendation response it is explaining.
+    isString(value.correlation_id) &&
     isString(value.policy) &&
     isString(value.model_version) &&
     isString(value.candidate_version) &&
