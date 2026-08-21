@@ -45,13 +45,30 @@ while keeping the ML system inspectable through progressive disclosure.
 
 The movie-discovery product is what `/` serves. The pre-redesign dashboard is
 still deployed at `/legacy`, and pointing the front door back at it is one
-change in one file:
+file, `web/app/page.tsx`. Written out in full, because a rollback that has
+never been read is not a rollback — the destination is one line, and the other
+two hunks are only the parameter and the import it stops needing:
 
 ```diff
---- a/web/app/page.tsx
-+++ b/web/app/page.tsx
+ import { auth, signIn } from "@/auth";
+-import { frontDoorHref } from "@/lib/navigation";
+ import "./sign-in.css";
+
+-export default async function Home({
+-  searchParams,
+-}: {
+-  searchParams: Promise<{ user?: string | string[]; userId?: string | string[] }>;
+-}) {
+-  const [params, session] = await Promise.all([searchParams, auth()]);
++export default async function Home() {
++  const session = await auth();
+   if (!session?.user || session.error) {
+     return <SignInPage expired={session?.error === "RefreshAccessTokenError"} />;
+   }
+
 -  redirect(frontDoorHref(params));
 +  redirect("/legacy");
+ }
 ```
 
 Nothing else has to move. `/legacy` renders the dashboard on its own, behind
