@@ -16,7 +16,8 @@
     "api:types:check": "node scripts/check-api-types.mjs",
     "test:watch": "vitest",
     "test:e2e:update": "playwright test --update-snapshots",
-    "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs"
+    "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs",
+    "evidence:bundle5d": "node scripts/capture-bundle5d-evidence.mjs"
   },
   "dependencies": {
     "next": "16.2.6",

@@ -43,6 +43,14 @@ const REASON_DETAIL: Record<ResourceFailure["reason"], string> = {
   "invalid-payload": "The response did not match the published API contract.",
 };
 
+/**
+ * Exposed so a region that writes its own headline — a failed mutation, say —
+ * can still explain the cause in the same words a failed read would use.
+ */
+export function resourceReasonDetail(failure: ResourceFailure): string {
+  return REASON_DETAIL[failure.reason];
+}
+
 export function resourceProblemHeadline(
   failure: ResourceFailure,
   label: string,

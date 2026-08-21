@@ -28,12 +28,6 @@ export type EvidenceRecord = {
   fallbackReason: string | null;
 };
 
-export type LibraryCollection = {
-  rated: readonly MovieCard[];
-  watchlist: readonly MovieCard[];
-  history: readonly MovieCard[];
-};
-
 export type ResourceName =
   | "recommendations"
   | "catalog"
