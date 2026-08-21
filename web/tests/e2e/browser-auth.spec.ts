@@ -41,15 +41,18 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
       headers,
       body: JSON.stringify({ movie_id: 1, rating: 4 }),
     });
-    const immediateRead = await fetch(`/api/users/${userId}`, { cache: "no-store" }).then(
-      (response) => response.json(),
-    );
+    const [movieDetail, immediateRead] = await Promise.all([
+      fetch(`/api/users/${userId}/movies/1`, { cache: "no-store" }).then((response) =>
+        response.json(),
+      ),
+      fetch(`/api/users/${userId}`, { cache: "no-store" }).then((response) =>
+        response.json(),
+      ),
+    ]);
     await fetch(`/api/users/${userId}/ratings`, { method: "DELETE", headers });
     return {
       mutationStatus: mutation.status,
-      rating: immediateRead.catalog.items.find(
-        (item: { movie_id: number; rating: number | null }) => item.movie_id === 1,
-      )?.rating,
+      rating: movieDetail.item.state?.rating,
       historyContainsMovie: immediateRead.history.items.some(
         (item: { movie_id: number }) => item.movie_id === 1,
       ),

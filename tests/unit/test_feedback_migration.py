@@ -3,13 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_feedback_migration_is_the_linear_head() -> None:
+def test_catalog_migration_is_the_linear_head_after_feedback() -> None:
     source = Path("alembic/versions/0010_create_user_movie_state.py").read_text()
+    catalog_source = Path("alembic/versions/0011_catalog_metadata.py").read_text()
 
     assert 'revision: str = "0010"' in source
     assert 'down_revision: str | None = "0009"' in source
+    assert 'revision: str = "0011_catalog_metadata"' in catalog_source
+    assert 'down_revision: str | None = "0010"' in catalog_source
     assert "def upgrade() -> None:" in source
     assert "def downgrade() -> None:" in source
+    assert "def upgrade() -> None:" in catalog_source
+    assert "def downgrade() -> None:" in catalog_source
 
 
 def test_backfill_reads_but_never_rewrites_raw_ratings() -> None:

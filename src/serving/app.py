@@ -9,7 +9,8 @@ The authenticated surface currently includes:
     candidate retrieval, Feast features, and LightGBM ranking with fallback.
   * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
   * ``GET /personas`` — tenant-scoped named demo identities.
-  * ``GET /users/{user_id}/catalog`` — rateable demo catalog.
+  * ``GET /users/{user_id}/catalog`` — searchable, cursor-paginated local catalog.
+  * ``GET /users/{user_id}/movies/{movie_id}`` — local detail plus durable state.
   * ``GET /users/{user_id}/library`` — cursor-paginated durable movie state.
   * ``GET /users/{user_id}/taste-profile`` — live, non-model rating summary.
   * ``PUT|DELETE /users/{user_id}/movies/{movie_id}/*`` — idempotent watched,
@@ -50,6 +51,12 @@ from src.serving.audit import (
     RecommendationAuditMiddleware,
     RecommendationAuditService,
 )
+from src.serving.catalog import (
+    CatalogMovie,
+    CatalogQuery,
+    CatalogService,
+    InvalidCatalogCursorError,
+)
 from src.serving.features import FeatureServerClient
 from src.serving.feedback import (
     FeedbackAction,
@@ -71,7 +78,6 @@ from src.serving.recommendations import (
 )
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
-from src.serving.tmdb import TmdbMetadataClient
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -119,18 +125,7 @@ _model_server = ModelServerClient(
     timeout_seconds=_settings.model_server_timeout_seconds,
 )
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
-_tmdb = TmdbMetadataClient(
-    read_access_token=(
-        _settings.tmdb_read_access_token.get_secret_value()
-        if _settings.tmdb_read_access_token is not None
-        else None
-    ),
-    api_base_url=_settings.tmdb_api_base_url,
-    image_base_url=_settings.tmdb_image_base_url,
-    timeout_seconds=_settings.tmdb_timeout_seconds,
-    cache_ttl_seconds=_settings.tmdb_cache_ttl_seconds,
-    cache_max_entries=_settings.tmdb_cache_max_entries,
-)
+_catalog = CatalogService()
 
 
 class RecommendationItem(BaseModel):
@@ -143,7 +138,11 @@ class RecommendationItem(BaseModel):
     poster_url: str | None
     overview: str | None
     release_year: int | None
-    metadata_source: str
+    metadata_source: Literal["reviewed-fixture", "tmdb-snapshot", "movielens"]
+
+
+class ErrorResponse(BaseModel):
+    detail: str
 
 
 class RecommendationResponse(BaseModel):
@@ -180,29 +179,6 @@ class PersonaResponse(BaseModel):
     items: list[PersonaItem]
 
 
-class CatalogItem(BaseModel):
-    movie_id: int
-    title: str
-    genres: list[str]
-    rating: float | None
-
-
-class CatalogResponse(BaseModel):
-    tenant_id: str
-    user_id: int
-    items: list[CatalogItem]
-
-
-class RatingRequest(BaseModel):
-    rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5, allow_inf_nan=False)
-
-
-class RatingMutationResponse(BaseModel):
-    tenant_id: str
-    user_id: int
-    changed: int
-
-
 class MovieStateResponse(BaseModel):
     tenant_id: str
     user_id: int
@@ -214,6 +190,48 @@ class MovieStateResponse(BaseModel):
     dismissed_at: datetime | None
     revision: int
     updated_at: datetime
+
+
+class CatalogItem(BaseModel):
+    movie_id: int
+    title: str
+    genres: list[str]
+    tmdb_id: str | None
+    release_year: int | None
+    poster_url: str | None
+    overview: str | None
+    metadata_source: Literal["reviewed-fixture", "tmdb-snapshot", "movielens"]
+    source_status: Literal["complete", "partial", "unavailable"]
+    state: MovieStateResponse | None
+    interaction_count: int
+
+
+class CatalogPageInfo(BaseModel):
+    next_cursor: str | None
+    has_more: bool
+
+
+class CatalogResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[CatalogItem]
+    page: CatalogPageInfo
+
+
+class MovieDetailResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    item: CatalogItem
+
+
+class RatingRequest(BaseModel):
+    rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5, allow_inf_nan=False)
+
+
+class RatingMutationResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    changed: int
 
 
 class FeedbackMutationResponse(BaseModel):
@@ -344,7 +362,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await _feature_server.aclose()
     await _model_server.aclose()
-    await _tmdb.aclose()
     _app_engine.dispose()
     _admin_engine.dispose()
 
@@ -521,7 +538,11 @@ async def recommendations(
         decision.model_latency_ms,
         decision.fallback_reason,
     )
-    metadata_by_id = await _tmdb.get_many(item.tmdb_id for item in items)
+    metadata_by_id = await run_in_threadpool(
+        _catalog.metadata_for_movies,
+        connection,
+        movie_ids=[item.movie_id for item in items],
+    )
     return RecommendationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -536,21 +557,25 @@ async def recommendations(
                 score=item.score,
                 reason=item.reason,
                 poster_url=(
-                    metadata_by_id[item.tmdb_id].poster_url
-                    if item.tmdb_id in metadata_by_id
+                    metadata_by_id[item.movie_id].poster_url
+                    if item.movie_id in metadata_by_id
                     else None
                 ),
                 overview=(
-                    metadata_by_id[item.tmdb_id].overview
-                    if item.tmdb_id in metadata_by_id
+                    metadata_by_id[item.movie_id].overview
+                    if item.movie_id in metadata_by_id
                     else None
                 ),
                 release_year=(
-                    metadata_by_id[item.tmdb_id].release_year
-                    if item.tmdb_id in metadata_by_id
+                    metadata_by_id[item.movie_id].release_year
+                    if item.movie_id in metadata_by_id
                     else None
                 ),
-                metadata_source="tmdb" if item.tmdb_id in metadata_by_id else "movielens",
+                metadata_source=(
+                    metadata_by_id[item.movie_id].metadata_source
+                    if item.movie_id in metadata_by_id
+                    else "movielens"
+                ),
             )
             for item in items
         ],
@@ -658,20 +683,86 @@ async def online_user_features(user_id: int, request: Request) -> OnlineUserFeat
     "/users/{user_id}/catalog",
     response_model=CatalogResponse,
     operation_id="listDemoCatalog",
+    responses={
+        400: {"model": ErrorResponse, "description": "Cursor is invalid for this query"},
+        404: {"model": ErrorResponse, "description": "Demo persona was not found"},
+    },
 )
-async def catalog(user_id: int, request: Request) -> CatalogResponse:
-    """Return rateable movies and current ratings for one demo persona."""
+async def catalog(
+    user_id: int,
+    request: Request,
+    q: str | None = Query(default=None, max_length=120),
+    genre: str | None = Query(default=None, max_length=40),
+    year_from: int | None = Query(default=None, ge=1878, le=2100),
+    year_to: int | None = Query(default=None, ge=1878, le=2100),
+    sort: Literal["title", "newest", "popular"] = "title",
+    limit: int = Query(default=24, ge=1, le=48),
+    cursor: str | None = Query(default=None, max_length=1024),
+) -> CatalogResponse:
+    """Return deterministic local metadata with the persona's durable state overlay."""
     _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     try:
-        items = _recommendations.catalog_for_user(connection, user_id=user_id)
+        page = await run_in_threadpool(
+            _catalog.list_for_user,
+            connection,
+            user_id=user_id,
+            query=CatalogQuery(
+                search=q,
+                genre=genre,
+                year_from=year_from,
+                year_to=year_to,
+                sort=sort,
+                limit=limit,
+                cursor=cursor,
+            ),
+        )
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidCatalogCursorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return CatalogResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
-        items=[CatalogItem(**item.__dict__) for item in items],
+        items=[_catalog_item_response(item) for item in page.items],
+        page=CatalogPageInfo(
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+        ),
+    )
+
+
+@app.get(
+    "/users/{user_id}/movies/{movie_id}",
+    response_model=MovieDetailResponse,
+    operation_id="getMovieDetail",
+    responses={404: {"model": ErrorResponse, "description": "Movie or demo persona was not found"}},
+)
+async def movie_detail(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+) -> MovieDetailResponse:
+    """Return persisted detail metadata and the persona's durable movie state."""
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        item = await run_in_threadpool(
+            _catalog.get_for_user,
+            connection,
+            user_id=user_id,
+            movie_id=movie_id,
+        )
+    except (UnknownDemoPersonaError, UnknownMovieError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MovieDetailResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        item=_catalog_item_response(item),
     )
 
 
@@ -1079,6 +1170,22 @@ def _movie_state_response(state: MovieState) -> MovieStateResponse:
         dismissed_at=state.dismissed_at,
         revision=state.state_version,
         updated_at=state.updated_at,
+    )
+
+
+def _catalog_item_response(item: CatalogMovie) -> CatalogItem:
+    return CatalogItem(
+        movie_id=item.movie_id,
+        title=item.title,
+        genres=item.genres,
+        tmdb_id=item.tmdb_id,
+        release_year=item.release_year,
+        poster_url=item.poster_url,
+        overview=item.overview,
+        metadata_source=item.metadata_source,
+        source_status=item.source_status,
+        state=_movie_state_response(item.state) if item.state is not None else None,
+        interaction_count=item.interaction_count,
     )
 
 

@@ -47,8 +47,9 @@ generated poster artwork, or set a TMDB API Read Access Token before
    network.
 
 `make demo-seed` can be run repeatedly. It preserves an existing full-ingest
-catalog, inserts only missing demo catalog rows, and replaces the controlled
-demo persona/background interactions with the same deterministic fixture. It
+catalog, inserts only missing demo catalog rows, refreshes the 120-title local
+metadata snapshot, and replaces the controlled demo persona/background
+interactions with the same deterministic fixture. It
 then materializes the tenant's Feast features, trains the deterministic
 item-item and LightGBM demo artifacts, and starts the private feature/model
 sidecars after their registry and artifact volumes are ready. Re-running the

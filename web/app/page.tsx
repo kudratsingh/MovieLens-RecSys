@@ -23,12 +23,11 @@ export default async function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Link
-              className="text-sm text-zinc-400 transition hover:text-amber-200"
-              href="/library?userId=900000101"
-            >
-              Library
-            </Link>
+            <nav className="hidden items-center gap-1 text-sm md:flex" aria-label="Primary navigation">
+              <Link aria-current="page" className="rounded-lg bg-white/[0.07] px-3 py-2" href="/">Discover</Link>
+              <Link className="rounded-lg px-3 py-2 text-zinc-400 transition hover:text-white" href="/browse?user=900000101">Browse</Link>
+              <Link className="rounded-lg px-3 py-2 text-zinc-400 transition hover:text-white" href="/library?userId=900000101">Library</Link>
+            </nav>
             <div className="hidden text-right sm:block">
               <p className="text-xs font-medium text-zinc-200">
                 {session.user.name ?? session.user.email ?? "Signed-in actor"}

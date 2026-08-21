@@ -15,6 +15,7 @@ from src.config import Settings
 
 _FIXTURE_DIR = Path(__file__).parent
 _BASE_TIMESTAMP = 1_700_000_000
+_CATALOG_SNAPSHOT_AT = "2026-08-21T00:00:00+00:00"
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,10 @@ class CatalogMovie:
     movie_id: int
     title: str
     genres: str
-    tmdb_id: str
+    tmdb_id: str | None
+    release_year: int | None
+    poster_url: str | None
+    overview: str | None
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,9 @@ class SeedResult:
     persona_count: int
     persona_rating_count: int
     background_rating_count: int
+    visible_movie_count: int
+    recommendable_movie_count: int
+    poster_movie_count: int
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -88,7 +95,14 @@ def load_demo_catalog(
             movie_id=int(item["movie_id"]),
             title=str(item["title"]),
             genres=str(item["genres"]),
-            tmdb_id=str(item["tmdb_id"]),
+            tmdb_id=(str(item["tmdb_id"]) if item.get("tmdb_id") is not None else None),
+            release_year=(
+                int(item["release_year"])
+                if item.get("release_year") is not None
+                else _release_year_from_title(str(item["title"]))
+            ),
+            poster_url=(str(item["poster_url"]) if item.get("poster_url") is not None else None),
+            overview=(str(item["overview"]) if item.get("overview") is not None else None),
         )
         for item in payload["movies"]
     ]
@@ -132,8 +146,11 @@ def seed_demo_personas(
         for persona_index, persona in enumerate(personas)
         for position, movie_id in enumerate(persona.history)
     ]
-    # A small deterministic cohort gives the popularity policy enough signal
-    # to return a stable catalog order without pretending these users are personas.
+    # A deterministic background cohort gives every title popularity and
+    # candidate-graph support without pretending these users are personas.
+    # Every visible movie receives four deterministic background interactions.
+    # Browse coverage and recommendation eligibility are therefore measured
+    # independently but intentionally equal in the reviewed demo fixture.
     background_ratings = [
         {
             "tenant_id": tenant_id,
@@ -143,7 +160,8 @@ def seed_demo_personas(
             "timestamp": _BASE_TIMESTAMP - 100_000 + user_index * 1_000 + movie_index,
         }
         for user_index, user_id in enumerate(background_user_ids)
-        for movie_index, movie_id in enumerate(movie_ids[: 16 - user_index * 2])
+        for movie_index, movie_id in enumerate(movie_ids)
+        if (movie_index + user_index) % len(background_user_ids) != 0
     ]
 
     with engine.begin() as connection:
@@ -162,6 +180,9 @@ def seed_demo_personas(
         persona_count=len(persona_rows),
         persona_rating_count=len(persona_ratings),
         background_rating_count=len(background_ratings),
+        visible_movie_count=len(catalog_movies),
+        recommendable_movie_count=len({row["movie_id"] for row in background_ratings}),
+        poster_movie_count=sum(movie.poster_url is not None for movie in catalog_movies),
     )
 
 
@@ -185,6 +206,37 @@ def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> 
             ON CONFLICT ("movieId") DO NOTHING
             """),
         [{"movie_id": movie.movie_id, "tmdb_id": movie.tmdb_id} for movie in movies],
+    )
+    connection.execute(
+        text("""
+            INSERT INTO movie_catalog_metadata
+                (movie_id, sort_title, release_year, poster_url, overview,
+                 metadata_source, source_status, visible, source_updated_at)
+            VALUES
+                (:movie_id, :sort_title, :release_year, :poster_url, :overview,
+                 'reviewed-fixture', :source_status, TRUE, :source_updated_at)
+            ON CONFLICT (movie_id) DO UPDATE SET
+                sort_title = EXCLUDED.sort_title,
+                release_year = EXCLUDED.release_year,
+                poster_url = EXCLUDED.poster_url,
+                overview = EXCLUDED.overview,
+                metadata_source = EXCLUDED.metadata_source,
+                source_status = EXCLUDED.source_status,
+                visible = EXCLUDED.visible,
+                source_updated_at = EXCLUDED.source_updated_at
+            """),
+        [
+            {
+                "movie_id": movie.movie_id,
+                "sort_title": _sort_title(movie.title),
+                "release_year": movie.release_year,
+                "poster_url": movie.poster_url,
+                "overview": movie.overview,
+                "source_status": ("complete" if movie.poster_url and movie.overview else "partial"),
+                "source_updated_at": _CATALOG_SNAPSHOT_AT,
+            }
+            for movie in movies
+        ],
     )
 
 
@@ -311,6 +363,21 @@ def main() -> None:
         f"Seeded {result.persona_count} personas, {result.persona_rating_count} persona ratings, "
         f"and {result.background_rating_count} background ratings into tenant {result.tenant_id!r}."
     )
+
+
+def _release_year_from_title(title: str) -> int | None:
+    if len(title) >= 6 and title.endswith(")") and title[-5:-1].isdigit():
+        return int(title[-5:-1])
+    return None
+
+
+def _sort_title(title: str) -> str:
+    value = title[:-7] if _release_year_from_title(title) is not None else title
+    normalized = " ".join(value.casefold().split())
+    for article in ("the ", "an ", "a "):
+        if normalized.startswith(article):
+            return f"{normalized[len(article):]}, {article.strip()}"
+    return normalized
 
 
 if __name__ == "__main__":

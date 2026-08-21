@@ -24,8 +24,11 @@ RECOMMENDATION_API_URL=http://api.internal:8000 make web-dev
 
 ## Status
 
-The Phase 3 baseline UI now uses a real Keycloak authorization-code + PKCE
-login, encrypted HttpOnly server session, token refresh and logout propagation,
-mutation Origin/CSRF checks, and role-gated demo-persona access. The existing
-recommendation, history, rating, policy, and poster experience remains available
-behind that browser boundary while the route-level redesign is integrated.
+The Phase 3 product uses a real Keycloak authorization-code + PKCE login,
+encrypted HttpOnly server session, server-side token refresh and logout,
+mutation Origin/CSRF checks, and role-gated demo-persona access. It includes
+the recommendation loop, durable Rated/Watchlist/History Library, and a
+searchable, filterable, cursor-paginated Browse route with local movie detail.
+Grid metadata comes from FastAPI's persisted snapshot and overlays canonical
+movie state, so Browse never fans out to TMDB or exposes access tokens to the
+browser.

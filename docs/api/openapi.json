@@ -36,33 +36,130 @@
             "title": "Genres",
             "type": "array"
           },
+          "interaction_count": {
+            "title": "Interaction Count",
+            "type": "integer"
+          },
+          "metadata_source": {
+            "enum": [
+              "reviewed-fixture",
+              "tmdb-snapshot",
+              "movielens"
+            ],
+            "title": "Metadata Source",
+            "type": "string"
+          },
           "movie_id": {
             "title": "Movie Id",
             "type": "integer"
           },
-          "rating": {
+          "overview": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Rating"
+            "title": "Overview"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
+          "release_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Year"
+          },
+          "source_status": {
+            "enum": [
+              "complete",
+              "partial",
+              "unavailable"
+            ],
+            "title": "Source Status",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovieStateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "tmdb_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tmdb Id"
           }
         },
         "required": [
           "movie_id",
           "title",
           "genres",
-          "rating"
+          "tmdb_id",
+          "release_year",
+          "poster_url",
+          "overview",
+          "metadata_source",
+          "source_status",
+          "state",
+          "interaction_count"
         ],
         "title": "CatalogItem",
+        "type": "object"
+      },
+      "CatalogPageInfo": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "CatalogPageInfo",
         "type": "object"
       },
       "CatalogResponse": {
@@ -73,6 +170,9 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/CatalogPageInfo"
           },
           "tenant_id": {
             "title": "Tenant Id",
@@ -86,7 +186,8 @@
         "required": [
           "tenant_id",
           "user_id",
-          "items"
+          "items",
+          "page"
         ],
         "title": "CatalogResponse",
         "type": "object"
@@ -405,6 +506,28 @@
           "items"
         ],
         "title": "LibraryResponse",
+        "type": "object"
+      },
+      "MovieDetailResponse": {
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/CatalogItem"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "user_id",
+          "item"
+        ],
+        "title": "MovieDetailResponse",
         "type": "object"
       },
       "MovieStateResponse": {
@@ -813,6 +936,11 @@
             "type": "array"
           },
           "metadata_source": {
+            "enum": [
+              "reviewed-fixture",
+              "tmdb-snapshot",
+              "movielens"
+            ],
             "title": "Metadata Source",
             "type": "string"
           },
@@ -1294,7 +1422,7 @@
     },
     "/users/{user_id}/catalog": {
       "get": {
-        "description": "Return rateable movies and current ratings for one demo persona.",
+        "description": "Return deterministic local metadata with the persona's durable state overlay.",
         "operationId": "listDemoCatalog",
         "parameters": [
           {
@@ -1304,6 +1432,120 @@
             "schema": {
               "title": "User Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "genre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1878,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1878,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "title",
+              "enum": [
+                "title",
+                "newest",
+                "popular"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 48,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -1326,7 +1568,7 @@
                 }
               }
             },
-            "description": "Request parameters are invalid or cursor does not match query"
+            "description": "Cursor is invalid for this query"
           },
           "401": {
             "content": {
@@ -1356,7 +1598,7 @@
                 }
               }
             },
-            "description": "Requested persona or movie does not exist"
+            "description": "Demo persona was not found"
           },
           "409": {
             "content": {
@@ -1798,6 +2040,120 @@
           }
         ],
         "summary": "Library"
+      }
+    },
+    "/users/{user_id}/movies/{movie_id}": {
+      "get": {
+        "description": "Return persisted detail metadata and the persona's durable movie state.",
+        "operationId": "getMovieDetail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "movie_id",
+            "required": true,
+            "schema": {
+              "title": "Movie Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovieDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request parameters are invalid or cursor does not match query"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated actor is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Movie or demo persona was not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Idempotency, state revision, or transition conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request transaction failed"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Movie Detail"
       }
     },
     "/users/{user_id}/movies/{movie_id}/dismissal": {
