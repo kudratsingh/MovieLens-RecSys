@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from src.feature_contract import FEATURE_COLUMNS
+
 
 class ModelServerContractError(ValueError):
     """The sidecar response is unsafe or incompatible with this API."""
@@ -17,6 +19,7 @@ class ModelServerContractError(ValueError):
 class RankedModelItem:
     movie_id: int
     score: float
+    features: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,9 @@ class ModelRankingResult:
     candidate_version: str
     ranker_version: str
     feature_version: str
+    candidate_latency_ms: float
+    feature_latency_ms: float
+    ranker_latency_ms: float
     latency_ms: float
     items: list[RankedModelItem]
 
@@ -115,18 +121,36 @@ def _parse_result(
             raise ModelServerContractError(f"model-server returned duplicate movie {movie_id}")
         if not math.isfinite(score):
             raise ModelServerContractError(f"model-server returned non-finite score for {movie_id}")
+        raw_features = raw.get("features")
+        if not isinstance(raw_features, dict) or set(raw_features) != set(FEATURE_COLUMNS):
+            raise ModelServerContractError(
+                f"model-server returned incompatible features for movie {movie_id}"
+            )
+        features: dict[str, float] = {}
+        for column in FEATURE_COLUMNS:
+            try:
+                feature_value = float(raw_features[column])
+            except (TypeError, ValueError) as exc:
+                raise ModelServerContractError(
+                    f"model-server returned invalid {column!r} for movie {movie_id}"
+                ) from exc
+            if not math.isfinite(feature_value):
+                raise ModelServerContractError(
+                    f"model-server returned non-finite {column!r} for movie {movie_id}"
+                )
+            features[column] = feature_value
         returned_ids.add(movie_id)
-        items.append(RankedModelItem(movie_id=movie_id, score=score))
-    latency_ms = float(value["latency_ms"])
-    if not math.isfinite(latency_ms) or latency_ms < 0:
-        raise ModelServerContractError("model-server returned invalid latency")
+        items.append(RankedModelItem(movie_id=movie_id, score=score, features=features))
     return ModelRankingResult(
         tenant_id=tenant_id,
         candidate_policy=_nonempty_string(value, "candidate_policy"),
         candidate_version=_nonempty_string(value, "candidate_version"),
         ranker_version=_nonempty_string(value, "ranker_version"),
         feature_version=_nonempty_string(value, "feature_version"),
-        latency_ms=latency_ms,
+        candidate_latency_ms=_nonnegative_float(value, "candidate_latency_ms"),
+        feature_latency_ms=_nonnegative_float(value, "feature_latency_ms"),
+        ranker_latency_ms=_nonnegative_float(value, "ranker_latency_ms"),
+        latency_ms=_nonnegative_float(value, "latency_ms"),
         items=items,
     )
 
@@ -135,4 +159,14 @@ def _nonempty_string(value: dict[str, Any], key: str) -> str:
     result = value.get(key)
     if not isinstance(result, str) or not result:
         raise ModelServerContractError(f"model-server response has no valid {key!r}")
+    return result
+
+
+def _nonnegative_float(value: dict[str, Any], key: str) -> float:
+    try:
+        result = float(value[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ModelServerContractError(f"model-server response has no valid {key!r}") from exc
+    if not math.isfinite(result) or result < 0:
+        raise ModelServerContractError(f"model-server returned invalid {key!r}")
     return result

@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from src.features import FEATURE_COLUMNS
 from src.serving.models import ModelRankingResult, RankedModelItem
 from src.serving.orchestration import RecommendationCoordinator
 from src.serving.recommendations import RecommendationService
@@ -17,8 +18,17 @@ class _LearnedModels:
             candidate_version="candidate-v1",
             ranker_version="ranker-v1",
             feature_version="features-v1",
+            candidate_latency_ms=0.2,
+            feature_latency_ms=2.5,
+            ranker_latency_ms=0.4,
             latency_ms=3.2,
-            items=[RankedModelItem(movie_id=3, score=0.75)],
+            items=[
+                RankedModelItem(
+                    movie_id=3,
+                    score=0.75,
+                    features={column: 1.0 for column in FEATURE_COLUMNS},
+                )
+            ],
         )
 
 
@@ -40,7 +50,9 @@ async def test_warm_user_routes_through_learned_two_stage_policy() -> None:
     assert decision.policy == "item-item-cosine+lightgbm"
     assert decision.model_version == "candidate-v1/ranker-v1"
     assert decision.fallback_reason is None
+    assert decision.feature_latency_ms == 2.5
     assert [item.movie_id for item in decision.items] == [3]
+    assert decision.predictions[0].features == {column: 1.0 for column in FEATURE_COLUMNS}
 
 
 @pytest.mark.asyncio
@@ -55,7 +67,9 @@ async def test_cold_user_routes_to_popularity_without_calling_models() -> None:
 
     assert decision.policy == "popularity"
     assert decision.fallback_reason == "cold-start"
+    assert decision.feature_latency_ms == 0.0
     assert [item.movie_id for item in decision.items] == [1, 2]
+    assert [prediction.features for prediction in decision.predictions] == [{}, {}]
 
 
 @pytest.mark.asyncio

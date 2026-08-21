@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     model_artifact_dir: Path = Path("models/serving")
     model_manifest_name: str = "manifest.json"
     model_tenant_id: str = "demo"
+    model_feature_cache_max_entries: int = Field(default=256, gt=0)
 
     # --- Derived --------------------------------------------------------------
 

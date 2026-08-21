@@ -5,6 +5,8 @@ views + an online store. Function signatures are kept stable so Feast can
 be a drop-in without touching the ranker training script.
 """
 
-from .pipeline import FEATURE_COLUMNS, FeatureIndex, build_features
+from src.feature_contract import FEATURE_COLUMNS
+
+from .pipeline import FeatureIndex, build_features
 
 __all__ = ["FEATURE_COLUMNS", "FeatureIndex", "build_features"]

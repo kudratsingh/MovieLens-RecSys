@@ -47,19 +47,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-# Ordered feature column names — used both by the ranker's fit/predict
-# path (to select columns from the DataFrame) and by the test suite (to
-# assert the schema doesn't drift silently).
-FEATURE_COLUMNS: list[str] = [
-    "user_interaction_count",
-    "user_days_active",
-    "user_days_since_last_interaction",
-    "item_popularity_all_time",
-    "item_popularity_30d",
-    "item_popularity_7d",
-    "item_age_days",
-    "user_genre_affinity",
-]
+from src.feature_contract import FEATURE_COLUMNS
 
 _SECONDS_PER_DAY = 24 * 3600
 _THIRTY_DAYS = 30 * _SECONDS_PER_DAY

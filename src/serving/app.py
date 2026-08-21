@@ -29,6 +29,8 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -37,6 +39,11 @@ from sqlalchemy import Connection, create_engine
 
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
+from src.serving.audit import (
+    RecommendationAuditContext,
+    RecommendationAuditMiddleware,
+    RecommendationAuditService,
+)
 from src.serving.features import FeatureServerClient
 from src.serving.models import ModelServerClient
 from src.serving.orchestration import RecommendationCoordinator
@@ -51,6 +58,7 @@ from src.serving.tmdb import TmdbMetadataClient
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _settings = Settings()
 
@@ -85,6 +93,7 @@ _jwks = JwksCache(
 
 _tenant_router = TenantRouter(_admin_engine)
 _recommendations = RecommendationService()
+_audits = RecommendationAuditService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _model_server = ModelServerClient(
     base_url=_settings.model_server_url,
@@ -186,6 +195,41 @@ class OnlineUserFeaturesResponse(BaseModel):
     user_days_since_last_interaction: float | None
 
 
+class AuditPredictionItem(BaseModel):
+    movie_id: int
+    score: float
+    features: dict[str, float]
+
+
+class RecommendationAuditItem(BaseModel):
+    request_id: UUID
+    tenant_id: str
+    actor_user_id: str
+    user_id: int
+    endpoint: str
+    http_status: int
+    outcome: str
+    policy: str
+    model_version: str
+    candidate_version: str
+    ranker_version: str
+    feature_version: str
+    fallback_reason: str | None
+    candidate_latency_ms: float
+    feature_latency_ms: float
+    ranker_latency_ms: float
+    model_latency_ms: float
+    latency_ms: float
+    predictions: list[AuditPredictionItem]
+    created_at: datetime
+
+
+class RecommendationAuditResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[RecommendationAuditItem]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup assertions before accepting traffic. Failure raises
@@ -218,8 +262,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware is added at module import, before the first request.
-# Starlette forbids add_middleware after the app has started.
+# Middleware is added at module import, before the first request. Starlette
+# evaluates the last-added middleware first: AuthMiddleware opens the RLS
+# transaction, then the audit middleware persists before that transaction
+# commits.
+app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
 app.add_middleware(
     AuthMiddleware,
     jwks=_jwks,
@@ -277,8 +324,21 @@ async def recommendations(
         user_id=user_id,
         limit=limit,
     )
+    request.state.recommendation_audit_context = RecommendationAuditContext(
+        policy=decision.policy,
+        model_version=decision.model_version,
+        candidate_version=decision.candidate_version,
+        ranker_version=decision.ranker_version,
+        feature_version=decision.feature_version,
+        fallback_reason=decision.fallback_reason,
+        candidate_latency_ms=decision.candidate_latency_ms,
+        feature_latency_ms=decision.feature_latency_ms,
+        ranker_latency_ms=decision.ranker_latency_ms,
+        model_latency_ms=decision.model_latency_ms,
+        predictions=decision.predictions,
+    )
     items = decision.items
-    logger.info(
+    logger.debug(
         "recommendations tenant_id=%s user_id=%s policy=%s candidate_version=%s "
         "ranker_version=%s feature_version=%s model_latency_ms=%.3f fallback_reason=%s",
         principal.tenant_id,
@@ -323,6 +383,26 @@ async def recommendations(
             )
             for item in items
         ],
+    )
+
+
+@app.get(
+    "/users/{user_id}/audits",
+    response_model=RecommendationAuditResponse,
+)
+async def recommendation_audits(
+    user_id: int,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RecommendationAuditResponse:
+    """Return newest prediction audits visible inside the request tenant."""
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _audits.list_for_user(connection, user_id=user_id, limit=limit)
+    return RecommendationAuditResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        items=[RecommendationAuditItem(**item.__dict__) for item in items],
     )
 
 

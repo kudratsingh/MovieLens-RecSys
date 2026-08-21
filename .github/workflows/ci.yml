@@ -12,16 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate merged demo Compose model
-        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
+        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile load config --quiet
       - name: Verify required demo services
         run: |
-          services=$(docker compose -f docker-compose.yml -f docker-compose.demo.yml config --services)
-          for service in postgres redis pgbouncer keycloak-postgres keycloak demo-setup feature-setup feature-server model-server api web; do
+          services=$(docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile load config --services)
+          for service in postgres redis pgbouncer keycloak-postgres keycloak demo-setup feature-setup feature-server model-server api api-load k6 web; do
             grep -qx "$service" <<< "$services" || {
               echo "Missing required demo service: $service"
               exit 1
             }
           done
+      - name: Verify pinned k6 image
+        run: |
+          version=$(tr -d '[:space:]' < infra/ci/k6-version)
+          image=$(K6_VERSION="$version" docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile load config --images | grep '^grafana/k6:')
+          test "$image" = "grafana/k6:$version"
       - name: Build API runtime image
         run: docker build --tag movielens-api-ci --file infra/api/Dockerfile .
       - name: Verify API runtime imports and size budget
@@ -165,3 +170,25 @@ jobs:
           docker compose logs postgres || true
           docker compose logs pgbouncer || true
           docker compose logs keycloak || true
+
+  # Non-negotiables #4 and #11: enforce the end-to-end p99 SLO against
+  # real Keycloak auth, RLS audit persistence, learned warm traffic, and the
+  # cold-start fallback. k6 thresholds are the job's pass/fail contract.
+  synthetic-load-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start repeatable demo dependencies
+        run: make demo-up
+
+      - name: Seed personas, Feast features, and learned artifacts
+        run: make demo-seed
+
+      - name: Run 60-second authenticated k6 SLO gate
+        run: make demo-load-smoke
+
+      - name: Dump serving logs on failure
+        if: failure()
+        run: make demo-logs

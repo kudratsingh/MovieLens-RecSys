@@ -11,7 +11,8 @@ remains the source for training and offline evaluation.
 - Enough free disk space for the Python, Next.js, Postgres, Keycloak, and
   pgBouncer images. The first start downloads base images and is substantially
   slower than later cached starts.
-- Ports 3001, 5432, 6432, 8000, and 8080 available on localhost.
+- Ports 3000, 3001, 5000, 5432, 6379, 6432, 8000, 8080, and 9090
+  available on localhost.
 
 Python and Node.js are not required on the host for the containerized
 walkthrough. They are only required for direct backend or frontend development.
@@ -49,7 +50,9 @@ catalog, inserts only missing demo catalog rows, and replaces the controlled
 demo persona/background interactions with the same deterministic fixture. It
 then materializes the tenant's Feast features, trains the deterministic
 item-item and LightGBM demo artifacts, and starts the private feature/model
-sidecars after their registry and artifact volumes are ready.
+sidecars after their registry and artifact volumes are ready. Re-running the
+command recreates both sidecars so their in-process registry, model bundle, and
+version-scoped feature cache cannot retain the previous snapshot.
 
 `make demo-smoke` fails unless all of these contracts hold:
 
@@ -77,6 +80,61 @@ Open <http://localhost:3001>.
 6. Use **Reset this profile** to return the selected persona to cold start.
 7. If a TMDB token is configured, point out the real posters and release years.
    Otherwise show that the fallback artwork keeps the same flow usable.
+
+## Audit and latency proof
+
+After generating at least one recommendation, print its three newest durable
+audits:
+
+```bash
+make demo-audits
+```
+
+The response is read through the same authenticated, RLS-bound application
+connection used by the rest of the API. For a warm result, point out the
+request ID, exact ranked movie IDs and scores, eight online feature values per
+prediction, candidate/ranker/feature versions, and the separate candidate,
+feature, ranker, model, and total latency fields. Cold Start records
+`popularity`, `fallback_reason: cold-start`, and no fabricated ranker features.
+
+Run the authenticated smoke gate:
+
+```bash
+make demo-load-smoke
+```
+
+This starts an internal `api-load` process with development impersonation
+disabled and recreates the feature/model/load processes so each run begins at
+the same process-cache boundary. It obtains a real Keycloak token, concurrently
+warms and validates all four personas across the worker pool, and
+then targets 55 recommendation arrivals/second for 60 seconds with 10 VUs. The
+measured traffic follows a deterministic 7/2/3 warm/cold/mixed ratio. The
+command fails unless all recommendation checks pass, request errors are zero,
+p99 is below 100 ms, and achieved throughput is above 50 requests/second.
+
+The final JSON object is the compact evidence artifact. It includes p50, p95,
+p99, achieved throughput, request count, error/check rates, and dropped
+iterations. Dropped iterations are kept visible as a capacity signal; the gate
+is based on achieved throughput together with latency, correctness, and error
+thresholds. The accepted 2026-08-20 implementation baseline reported p50 6.31
+ms, p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
+errors, and zero dropped iterations across 3,301 measured requests.
+
+Both local and CI runs use the exact k6 image version pinned in
+`infra/ci/k6-version` and remote-write their measurements to the local
+Prometheus receiver. The 60-second smoke holds its remote-write batch until the
+scenario has ended, then k6's final flush publishes the samples. This prevents
+the load generator's own five-second exporter batches from contaminating the
+p99 it is measuring. The larger profile is available separately:
+
+```bash
+make demo-load-nightly
+```
+
+That profile targets 600 requests/second for five minutes with 100 VUs. Treat
+it as a capacity probe: a laptop may fail to generate or serve that target. A
+scheduled staging run remains deferred until the environment-specific Compose
+stack is implemented.
 
 The API container deliberately enables the guarded development impersonation
 mode for tenant `demo`; the browser therefore needs no manual token during this
@@ -108,6 +166,14 @@ permanently delete the isolated demo Postgres and Keycloak data.
 - **Warm personas show `popularity`:** inspect `model-server`, `feature-server`,
   and `api` with `make demo-logs`, then rerun `make demo-seed`. The API falls
   back deliberately when artifacts, online features, or the sidecar are invalid.
+- **`make demo-audits` returns no rows:** generate a recommendation for Action
+  Fan first. If the request succeeded but no row appears, inspect `api`; audit
+  persistence is part of the request transaction and should fail the request
+  rather than silently dropping a row.
+- **The load gate fails:** use the emitted JSON to separate response errors,
+  bad policy/check results, throughput saturation, and a p99 regression. Then
+  inspect `api-load`, `model-server`, `feature-server`, `pgbouncer`, and
+  `postgres` with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
   configured, restart with `make demo-down && make demo-up` so FastAPI reads the
   new environment.

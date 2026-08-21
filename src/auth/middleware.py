@@ -18,13 +18,18 @@ rows — the middleware is the one thing that could break that invariant.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import jwt
 from fastapi import Request, Response
 from sqlalchemy import Engine, text
+from starlette.background import BackgroundTasks
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
@@ -32,6 +37,8 @@ from starlette.types import ASGIApp
 from src.auth.jwks import JwksCache, JwksFetchError
 
 logger = logging.getLogger(__name__)
+
+_COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="request-commit")
 
 
 # Endpoints that skip auth. `/healthz` per ADR 0007's decision — every
@@ -102,7 +109,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            principal = self._resolve_principal(request)
+            # Token parsing can perform RSA signature verification and a
+            # cache-miss JWKS fetch. Neither belongs on the event loop: under
+            # concurrent recommendation traffic it would otherwise delay
+            # unrelated requests handled by the same worker.
+            principal = await run_in_threadpool(self._resolve_principal, request)
         except UnauthenticatedError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=401)
         except UnauthorizedError as exc:
@@ -120,14 +131,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # run SET LOCAL app.tenant_id. Every query the handler runs on
         # request.state.db is scoped to the tenant. Rollback on any
         # exception; commit on clean return.
-        with self._engine.begin() as conn:
-            conn.execute(
+        # psycopg2 is synchronous. Keep the same request transaction and RLS
+        # semantics, but move connection setup and rollback off the event loop.
+        # A successful response attaches commit to Starlette's background
+        # boundary: the audit insert must succeed before the response exists,
+        # while WAL fsync runs immediately after the body is flushed instead of
+        # consuming the recommendation latency budget.
+        transaction_context = self._engine.begin()
+        conn = await run_in_threadpool(transaction_context.__enter__)
+        try:
+            await run_in_threadpool(
+                conn.execute,
                 text("SET LOCAL app.tenant_id = :tid"),
                 {"tid": principal.tenant_id},
             )
             request.state.db = conn
             response = await call_next(request)
-            return response
+        except BaseException as exc:
+            await run_in_threadpool(
+                transaction_context.__exit__,
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            raise
+        background = BackgroundTasks()
+        background.add_task(_commit_transaction, transaction_context)
+        if response.background is not None:
+            background.tasks.append(response.background)
+        response.background = background
+        return response
 
     def _resolve_principal(self, request: Request) -> RequestPrincipal:
         if self._dev_bypass:
@@ -219,3 +252,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not realm or "/" in realm:
             raise UnauthenticatedError(f"unrecognized issuer format: {issuer}")
         return realm
+
+
+async def _commit_transaction(transaction_context: Any) -> None:
+    # Response-finalization commits must not consume Starlette's shared AnyIO
+    # thread tokens. Under sustained audit traffic, slow WAL flushes could
+    # otherwise queue the next request's connection setup, SET LOCAL, or audit
+    # insert behind work whose response has already been sent.
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(_COMMIT_EXECUTOR, _commit_transaction_sync, transaction_context)
+
+
+def _commit_transaction_sync(transaction_context: Any) -> None:
+    transaction_context.__exit__(None, None, None)

@@ -42,6 +42,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -132,11 +133,23 @@ class JwksCache:
             jwks_uri = discovery.json().get("jwks_uri")
             if not jwks_uri:
                 raise JwksFetchError(f"discovery document at {discovery_url} has no jwks_uri")
-            jwks_resp = self._http.get(jwks_uri)
+            # Keycloak advertises its browser-facing hostname in discovery.
+            # Containers still have to connect through the configured internal
+            # base URL, while retaining the realm-scoped path from discovery.
+            # Pinning the origin also prevents a compromised discovery document
+            # from turning JWKS refresh into an arbitrary outbound request.
+            jwks_path = urlsplit(str(jwks_uri)).path
+            expected_path = f"/realms/{realm}/protocol/openid-connect/certs"
+            if jwks_path != expected_path:
+                raise JwksFetchError(
+                    f"discovery document at {discovery_url} has unexpected jwks_uri path"
+                )
+            jwks_url = f"{self._base_url}{jwks_path}"
+            jwks_resp = self._http.get(jwks_url)
             jwks_resp.raise_for_status()
             jwks: dict[str, Any] = jwks_resp.json()
             if "keys" not in jwks:
-                raise JwksFetchError(f"JWKS at {jwks_uri} has no 'keys' array")
+                raise JwksFetchError(f"JWKS at {jwks_url} has no 'keys' array")
             return jwks
         except httpx.HTTPError as exc:
             raise JwksFetchError(f"failed to fetch JWKS for realm={realm}: {exc}") from exc

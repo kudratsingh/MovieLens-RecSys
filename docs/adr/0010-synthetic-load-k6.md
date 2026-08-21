@@ -12,7 +12,7 @@ The forcing constraints:
 - **Runs in CI on every serving PR.** The smoke variant has to boot fast, produce enough load to make p99 measurable, and pass/fail deterministically within a CI job's time budget.
 - **Runs against the authenticated multi-tenant API.** [ADR 0007](0007-auth-provider-keycloak.md) pinned Keycloak; every synthetic virtual user needs a real Bearer token minted via the direct password grant, scoped to a specific tenant. The load-testing tool must handle stateful auth flows, not just fire canned HTTP requests.
 - **Metrics land in the project's Prometheus + Grafana.** The stack table has both from Phase 1; the load tester should push its measurements to the same Prometheus so latency histograms are inspectable in the same dashboards operators use for production observability.
-- **Cold-start coverage** ([ADR-pending 0011](.)) requires the load test to hit programmatically-generated new-user profiles alongside warm ones — the tool has to script arbitrary request shapes, not just uniform random traffic.
+- **Cold-start coverage** ([ADR 0011](0011-cold-start-coverage.md)) requires the load test to hit programmatically-generated new-user profiles alongside warm ones — the tool has to script arbitrary request shapes, not just uniform random traffic.
 - **Drift simulation** (Phase 5) and **A/B fixtures** (Phase 6) reuse the load harness. Whatever we pick here we live with for the whole load-testing surface.
 
 The two families a design review will actually raise:
@@ -26,13 +26,48 @@ Plus a few we'll dismiss quickly: **wrk / wrk2** (no scripting, no auth flow sup
 
 The synthetic-load harness is **k6** (`grafana/k6` OSS distribution), with the following shape:
 
-- **Scripts live in `synthetic/load/`.** One JavaScript file per surface being exercised — `recommendations.js`, `features.js`, `healthz_baseline.js`. Scripts are small (~50–100 lines each) and use the k6 stdlib rather than custom abstractions.
-- **Auth via Keycloak direct password grant.** Each script's `setup()` mints a Bearer token for a synthetic user in the `demo` tenant (or `synth_load` tenant if we want it dedicated), and the token is passed to VUs via the `data` return. Token refresh mid-run is handled by a helper in `synthetic/load/lib/auth.js`.
-- **Declarative thresholds define pass/fail.** `thresholds` object per script: `http_req_duration{expected_response:true}: p(99)<100`, `http_req_failed: rate<0.01`, `http_reqs: rate>50` for the smoke variant. Threshold violations are the CI job's failure signal — no separate assertion layer.
+- **Scripts live in `synthetic/load/`.** `recommendations.js` owns the first SLO surface, with focused helpers for Keycloak auth and shared threshold declarations. Additional endpoint workloads get separate entry points only when they have a distinct traffic contract.
+- **Auth via Keycloak direct password grant.** `setup()` mints a real Bearer token for the reviewed demo tenant and passes it to VUs. The same tenant is intentional: its stable warm and cold personas let the harness verify serving policy as well as HTTP status. `synthetic/load/lib/auth.js` refreshes the token before expiry during longer runs.
+- **Declarative thresholds define pass/fail.** The recommendation-tagged contract is `p(99)<100`, request failure rate `==0`, response check rate `==1`, and achieved request rate `>50` for the smoke variant. Threshold violations are the CI job's failure signal — no separate assertion layer.
 - **Prometheus remote-write.** k6 pushes metrics to the project's Prometheus via the `k6 run --out experimental-prometheus-rw` output. Labels kept low-cardinality: `endpoint`, `method`, `status`, `tenant`. Latency histograms show up in the same Prometheus tsdb as production metrics.
-- **CI smoke variant.** GitHub Actions job runs a 60-second, 10-VU script on every PR touching `src/serving/`, `src/auth/`, `src/features/`, or `synthetic/load/`. Fails the job on any threshold breach.
-- **Nightly larger variant.** A separate scheduled workflow runs a longer, higher-concurrency scenario against a staging compose stack — surfaces trends the 60-second smoke can't see.
-- **k6 binary version pinned.** `infra/ci/k6-version` file pins the exact release (starting at whatever the current stable is when the code PR ships); the CI runner installs from that pin, not `latest`.
+- **CI smoke variant.** GitHub Actions runs a 60-second constant-arrival workload targeting 55 requests/second with 10 preallocated VUs. The target leaves measurable headroom above the contractual achieved-rate threshold without turning ordinary runner jitter into a different capacity test. It currently runs on every PR, which is stricter than the minimum serving-path trigger, and fails on any threshold breach.
+- **Larger profile.** `make demo-load-nightly` exposes a five-minute, 600-request/second, 100-VU capacity profile against the same stack. Scheduling it against staging is deferred until the staging Compose environment exists.
+- **k6 version pinned in Docker.** `infra/ci/k6-version` pins the exact `grafana/k6` image tag used by both Make and CI, avoiding a separate host binary installation and eliminating local/CI version drift.
+
+## Implemented baseline
+
+The accepted local Docker Desktop implementation run on 2026-08-20 used k6
+2.1.0, four slim API workers, four model-sidecar workers, and the defined
+55-request/second arrival target. The recommendation-only summary (setup
+validation excluded) reported:
+
+- p50: 6.31 ms
+- p95: 14.27 ms
+- p99: 41.30 ms
+- achieved throughput: 54.08 requests/second across 3,301 requests
+- request error rate: 0; response check rate: 1
+- dropped iterations: 0
+
+The arrival target is 55 requests/second, while the contractual throughput
+threshold is the achieved rate above 50. Dropped iterations remain visible in
+the JSON summary as capacity evidence; they do not replace the achieved-rate,
+latency, correctness, or error thresholds.
+
+Implementation tuning exposed two independent tail-latency problems. First,
+k6's default five-second Prometheus batches stalled enough in Docker Desktop
+to inflate its own p99. The smoke profile therefore uses a two-minute push
+interval. That is longer than the scenario, and k6's `PeriodicFlusher`
+[performs one final flush on shutdown](https://pkg.go.dev/go.k6.io/k6/output#PeriodicFlusher),
+so the full batch still reaches Prometheus after measurement without pausing
+in-flight VUs. The higher-volume profile uses 30-second batches to bound memory
+without letting exporter work dominate its much larger p99 sample.
+
+Second, synchronous JWT verification and PostgreSQL reads were running on the
+API workers' event loops. Durable stage audits showed learned-request p99 at
+87.84 ms while the model sidecar was only 18.68 ms, isolating the orchestration
+overhead. Moving those blocking operations to the request thread pool reduced
+end-to-end p99 from 117.40 ms to the accepted 41.30 ms without changing the
+arrival target, traffic mix, audit durability, or thresholds.
 
 ## Rationale
 
@@ -60,21 +95,21 @@ The synthetic-load harness is **k6** (`grafana/k6` OSS distribution), with the f
 
 ## Consequences
 
-- **New source tree.** `synthetic/load/` — JavaScript scripts (`recommendations.js`, `features.js`, `healthz_baseline.js`), a `lib/` subdirectory for shared helpers (auth token minting, tenant fixture selection), and a `thresholds.js` module that exports the per-endpoint SLO declarations so a threshold change is one file edit.
-- **CI job additions.** A new GitHub Actions job `synthetic-load-smoke` triggers on paths matching `src/serving/**`, `src/auth/**`, `src/features/**`, `synthetic/load/**`. Boots the docker-compose stack (Postgres + Redis + Keycloak + MLflow + FastAPI), waits for readiness, runs `k6 run synthetic/load/recommendations.js --out experimental-prometheus-rw`, and fails on threshold breach.
-- **Nightly job.** A separate `synthetic-load-nightly` scheduled workflow runs a longer scenario (5 minutes, 100 VUs) against staging. Results push to Prometheus with a `run_type=nightly` label so they can be sliced apart from smoke runs in Grafana.
-- **k6 binary in dev-tools.** Locally, `make load-smoke` runs the same script the CI job runs. `brew install k6` (macOS) or the Docker image (`grafana/k6`) — Makefile calls out both paths. Binary version pinned in `infra/ci/k6-version`.
+- **New source tree.** `synthetic/load/` contains `recommendations.js`, `lib/auth.js`, and `thresholds.js`. The workload mixes warm, cold, and mixed traffic in a deterministic 7/2/3 ratio per 12 arrivals and validates policy, non-empty results, and an auditable request ID.
+- **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, and invokes `make demo-load-smoke`. That target recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary. k6 threshold exit status is the job result; serving logs are uploaded on failure.
+- **Larger run.** `make demo-load-nightly` selects the five-minute, 100-VU profile locally. A scheduled staging workflow remains pending on the environment-specific Compose bundle, so this ADR does not claim a scheduler that does not yet exist.
+- **k6 container in dev tools.** `make demo-load-smoke` and CI both resolve the image tag from `infra/ci/k6-version`; no host `brew install` is required.
 - **Prometheus config.** Prometheus's `remote_write` receiver is enabled in the compose stack; k6's `experimental-prometheus-rw` output points at it. The receiver is *not* enabled in production compose stacks — synthetic-load metrics are dev/CI-only, and mixing them with production metrics would pollute the tsdb.
-- **Auth fixture.** A `synth_load` tenant + user pair is provisioned in the seeded Keycloak realm JSON (`infra/keycloak/realms/dev-realm.json`), used exclusively by load scripts. Keeping load fixtures out of the `demo` tenant means demo walkthroughs aren't polluted by synthetic traffic.
+- **Auth fixture.** The workload authenticates a dedicated Keycloak client user in the `demo` realm, then reads the stable demo persona IDs. Recommendation traffic is read-only; the resulting prediction audits are intentionally visible in the demo walkthrough.
 - **Deferred to Phase 5 / Phase 6.** Drift simulation scripts (`synthetic/drift/`) reuse this harness for programmatically shifted user preferences. A/B fixtures (`synthetic/ab_fixtures/`) reuse it for deterministic tenant+user combos in integration tests.
 
 ## Risks
 
 - **Single CI runner can't produce enough load for meaningful measurement.** The 2-vCPU/7GB GitHub Actions runner puts a ceiling on VU concurrency. At 10 VUs for 60 seconds this is a non-issue; if we ever want the smoke test to exercise higher concurrency, the CI job would need a larger runner (paid) or the smoke variant stays deliberately small and the nightly does the heavy lifting. Mitigation: keep smoke small on purpose; the smoke's job is "did we regress the p99 SLO," not "what's the max throughput."
-- **k6 binary version drift between local and CI.** A developer running an older k6 locally might get different behavior than CI. Mitigation: `infra/ci/k6-version` file pins the exact release; the Makefile's `load-smoke` target checks the installed version against the pin and fails loud if it drifts. Automated version bumps land as their own PR with the CI run demonstrating no threshold regression.
-- **JS scripts as a reader-tax for a Python codebase.** Anyone touching the load scripts has to context-switch from Python to JavaScript. Mitigation: keep scripts small (~50–100 lines), one entry point per surface, use the k6 stdlib rather than clever patterns. If script complexity outgrows this constraint, that's rationale #5's escape-hatch signal.
+- **k6 version drift between local and CI.** A floating container tag could change behavior without a code diff. Mitigation: `infra/ci/k6-version` pins the exact image tag and both local Make targets and CI consume that file. Version bumps must demonstrate the same thresholds before merge.
+- **JS scripts as a reader-tax for a Python codebase.** Anyone touching the load scripts has to context-switch from Python to JavaScript. Mitigation: keep each entry point direct, use the k6 stdlib rather than clever patterns, and isolate reusable auth and threshold code. If user-state logic becomes the majority of a workload, that's rationale #5's escape-hatch signal.
 - **Threshold tuning as an ongoing skill.** Initial thresholds might be wrong — too tight (flakiness) or too loose (miss regressions). Mitigation: baseline thresholds on the actual measured latencies from the first serving PR, then tighten if we observe consistently better performance. Failed CI runs on threshold breach get the same investigation cycle as any other CI failure.
-- **k6 Prometheus remote-write cardinality blowup.** k6's default label set includes `expected_response`, `name`, `status`, `method`, `url`, `scenario`, `group`, and per-VU labels. Left unchecked, cardinality explodes and pollutes the Prometheus tsdb. Mitigation: k6 script explicitly names each request (`http.get(url, { tags: { endpoint: '/recommendations' } })`) so `name` collapses to a small set, and the remote-write output config drops the high-cardinality labels (`url`, `scenario`, `group`) via `keep`/`drop` rules.
+- **k6 Prometheus remote-write cardinality blowup.** Dynamic user, request, or model identifiers in metric tags would pollute the Prometheus tsdb. Mitigation: the workload tags only the bounded endpoint and traffic class, and exercises exactly four stable recommendation URLs. Request IDs and model versions remain in Postgres audits rather than metric labels.
 - **k6 Cloud vs OSS divergence.** k6 Cloud has features (test result comparison, hosted runs, notifications) that don't exist in OSS. Mitigation: this ADR pins OSS-only, and no script relies on Cloud-specific features. If we ever want Cloud, it's an additive change on the same scripts.
 
 ## How we'd know we're wrong

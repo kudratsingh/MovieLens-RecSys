@@ -268,7 +268,7 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-08-14.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs, auth/tenancy foundation, online recommendation path, and durable demo personas are implemented.
+**Updated 2026-08-15.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs, auth/tenancy foundation, learned online recommendation path, durable demo personas, prediction audits, and measured latency gate are implemented.
 
 ### Phase 1 — complete
 
@@ -303,16 +303,19 @@ Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Thos
 - ✅ **ADR 0008 + tenancy foundation** — tenant registry, Postgres row-level security, pgBouncer transaction pooling, per-request tenant context, tenant router, and cross-tenant CI canaries.
 - ✅ **ADRs 0009–0011** — Feast feature-store architecture, k6 synthetic-load strategy, and cold-start coverage methodology are pinned before their implementation bundles.
 - ✅ **FastAPI serving skeleton** — `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
-- 🚧 **First online recommendation slice** — authenticated popularity recommendations and watch history establish the browser-to-API seam before learned-model serving.
+- ✅ **Online recommendation path** — authenticated warm requests retrieve item-item candidates, batch-read Feast/Redis features, rank with LightGBM, and filter live RLS-scoped history; cold or unavailable model paths fall back explicitly to popularity.
 - ✅ **Phase 3 baseline frontend** — Next.js user selector, recommendation grid, watch-history panel, serving-policy metadata, and a server-side FastAPI proxy. Frontend lint, strict type checking, and production build run in CI.
 - ✅ **Durable demo personas** — four named, tenant-scoped synthetic users (Action Fan, Drama Fan, Eclectic Viewer, and Cold Start), checked-in catalog/history fixtures, an idempotent `make demo-seed` path, authenticated persona discovery, and RLS isolation coverage.
 - ✅ **TMDB metadata and posters** — recommendation responses resolve MovieLens `tmdbId` values server-side through a bounded TTL/LRU cache, degrade to MovieLens metadata when the token or upstream is unavailable, and render optimized posters with accessible visual fallbacks and required attribution.
 - ✅ **Repeatable demo environment** — a layered Compose stack builds FastAPI and standalone Next.js images, bootstraps base tables plus Alembic migrations, loads a self-contained reviewed catalog/persona fixture, verifies readiness and warm/cold behavior, and supports isolated down/reset/log operations.
-- ⏳ **Remaining Phase 3** — Feast definitions and materialization, Redis online reads, learned candidate/ranker artifact loading, audit logs, programmatic cold-start cohorts, k6 enforcement, multi-environment compose, and browser-side Keycloak authentication.
+- ✅ **Feast/Redis feature path** — a pinned Feast repository materializes point-in-time-correct, tenant-keyed online features into Redis; offline/online parity and cross-tenant reads are enforced in CI.
+- ✅ **Versioned learned serving** — checksum-pinned item-item and LightGBM artifacts are loaded once by an authenticated model sidecar, with a slim FastAPI client preserving the API image budget.
+- ✅ **Prediction audit + k6 gate** — every recommendation persists its exact predictions, feature values, model versions, fallback reason, and stage timings behind RLS. A pinned k6 container drives real-Keycloak warm/cold/mixed traffic and gates p99 < 100 ms, zero errors, correct responses, and >50 requests/second.
+- ⏳ **Remaining Phase 3** — programmatic cold-start cohorts, generic audit coverage for authenticated non-prediction endpoints, multi-environment Compose, and browser-side Keycloak authentication.
 
 ### Current step
 
-**Move the repeatable demo onto the target online architecture.** The first portfolio walkthrough is now packaged end to end with authenticated tenant-scoped popularity serving, controlled personas, optional TMDB enrichment, deterministic startup/reset, and behavioral smoke checks. The immediate sequence is now: replace direct feature reads with Feast/Redis; load learned candidate + ranker artifacts behind the same response contract; then add audit persistence and the k6 latency gate. Every endpoint stays authenticated and uses the RLS-bound request connection.
+**Record the learned, measured portfolio walkthrough, then close the remaining Phase 3 platform gaps.** The repeatable demo now exercises authenticated tenant routing, RLS, Feast/Redis, versioned item-item + LightGBM serving, durable prediction audits, and the enforced k6 latency contract. The immediate sequence is: record the walkthrough from `docs/demo-runbook.md`; add ADR 0011's programmatic cold-start cohorts; then add generic request-audit coverage, environment-specific Compose stacks, and browser-side Keycloak authentication. Every endpoint stays authenticated and uses the RLS-bound request connection.
 
 ## How to work with Claude Code on this
 

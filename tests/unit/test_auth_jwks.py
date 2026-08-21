@@ -93,6 +93,51 @@ def test_get_jwks_populates_cache_on_first_call() -> None:
     assert counts[f"{_BASE_URL}/realms/default/protocol/openid-connect/certs"] == 1
 
 
+def test_get_jwks_uses_configured_origin_for_external_discovery_hostname() -> None:
+    counts: dict[str, int] = {}
+    discovery_url = f"{_BASE_URL}/realms/default/.well-known/openid-configuration"
+    certs_url = f"{_BASE_URL}/realms/default/protocol/openid-connect/certs"
+    http = _make_mock_http_client(
+        {
+            discovery_url: (
+                200,
+                {
+                    "issuer": "http://localhost:8080/realms/default",
+                    "jwks_uri": (
+                        "http://localhost:8080/realms/default/" "protocol/openid-connect/certs"
+                    ),
+                },
+            ),
+            certs_url: (200, _jwks_response(["k1"])),
+        },
+        counts,
+    )
+
+    jwks = JwksCache(_BASE_URL, ttl_seconds=300, http_client=http).get_jwks("default")
+
+    assert jwks["keys"][0]["kid"] == "k1"
+    assert counts[certs_url] == 1
+
+
+def test_get_jwks_rejects_unexpected_discovery_path() -> None:
+    counts: dict[str, int] = {}
+    discovery_url = f"{_BASE_URL}/realms/default/.well-known/openid-configuration"
+    http = _make_mock_http_client(
+        {
+            discovery_url: (
+                200,
+                {"jwks_uri": "http://attacker.test/not-the-keycloak-certs-path"},
+            )
+        },
+        counts,
+    )
+
+    cache = JwksCache(_BASE_URL, ttl_seconds=300, http_client=http)
+
+    with pytest.raises(JwksFetchError, match="unexpected jwks_uri path"):
+        cache.get_jwks("default")
+
+
 def test_get_jwks_serves_from_cache_within_ttl() -> None:
     counts: dict[str, int] = {}
     http = _make_mock_http_client(
