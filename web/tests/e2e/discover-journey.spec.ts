@@ -100,7 +100,24 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
   });
 
   try {
-    await page.getByRole("button", { name: "Mark watched" }).first().click();
+    const markWatched = page.getByRole("button", { name: "Mark watched" }).first();
+    const flowStatus = page.locator("#discover-status");
+    await markWatched.click();
+
+    // A recommendation carries no revision, so a first write can only assert
+    // "no state yet". Removing a watched interaction leaves the state row
+    // behind with a higher revision, so the second run of this journey — or
+    // any run after another journey has touched the same title — is refused
+    // until the route re-reads the canonical record. Retrying once is what
+    // makes the file re-runnable against a stack that is not brand new; it is
+    // also the correction path the deck relies on, so exercising it is not a
+    // workaround.
+    await expect
+      .poll(async () => (await flowStatus.textContent()) ?? "")
+      .toMatch(/Refreshing recommendations|changed somewhere else/);
+    if (((await flowStatus.textContent()) ?? "").includes("changed somewhere else")) {
+      await markWatched.click();
+    }
 
     await expect(page.getByText(/Refreshing recommendations/)).toBeVisible();
     await expect(page.getByText(/Recommendations refreshed/)).toHaveCount(0);

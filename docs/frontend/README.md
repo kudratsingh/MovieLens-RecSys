@@ -28,6 +28,12 @@ while keeping the ML system inspectable through progressive disclosure.
   transition, pagination, idempotency, and truthful taste-summary contracts.
 - [Testing strategy](testing-strategy.md) — research protocol, automated test
   pyramid, responsive evidence matrix, and the final PASS/HOLD finish gate.
+- [Finish-gate review](finish-gate-review.md) — the written gate applied to the
+  running product: what was run, the five-second and moderated-task
+  walkthroughs, a verdict per criterion, and the recorded decision. **Currently
+  HOLD**, with the blocking items and what clears each. Its screenshot matrix,
+  with per-file provenance, is in
+  [`evidence/bundle-7a/`](evidence/bundle-7a/README.md).
 - [Baseline evidence](baseline-evidence.md) — current implementation evidence and
   the screenshot matrix that must be captured against the seeded demo.
 

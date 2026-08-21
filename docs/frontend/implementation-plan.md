@@ -369,12 +369,38 @@ traceable; gesture and non-gesture paths have identical outcomes.
   Rate limiting is recorded as not implemented. ADR 0010's page-shaped note
   carries the budgets and the advisory-versus-enforced split.
 
+- [x] 7a — finish gate: the handoff's ten-step journey run end to end against
+  the seeded Compose stack with `DEV_AUTH_BYPASS=false`
+  (`web/tests/e2e/finish-gate-journey.spec.ts`, appended to the serialized
+  `npm run test:e2e` set in `browser-auth-e2e`); the visual and accessibility
+  gate over the named state matrix at 390/768/1440 plus a 320px sweep
+  (`web/e2e/finish-gate.spec.ts`, in the `frontend` job's existing
+  `test:e2e:ui` flow); the screenshot matrix with per-file provenance in
+  `docs/frontend/evidence/bundle-7a/`; and the written review in
+  `docs/frontend/finish-gate-review.md`, which records **HOLD**. Two defects
+  were found and fixed rather than filed: `--text-muted` failed WCAG AA on every
+  surface darker than the page canvas, and the Library filter row overflowed a
+  320px viewport wherever the system font was wide enough — which is why the
+  narrow sweep now also runs against forced wide font metrics.
+
 Remaining:
 
-- [ ] the required desktop/tablet/mobile state matrix;
-- [ ] moderated movie-viewer and technical-reviewer tasks;
-- [ ] the written UI Finish-Gate review, recorded as PASS or HOLD;
-- [ ] legacy dashboard removal, only after the new end-to-end loop passes.
+- [x] the required desktop/tablet/mobile state matrix, captured with per-file
+  provenance in [`evidence/bundle-7a/`](evidence/bundle-7a/README.md);
+- [x] the written UI Finish-Gate review, recorded as **HOLD** in
+  [`finish-gate-review.md`](finish-gate-review.md);
+- [ ] moderated movie-viewer and technical-reviewer tasks — the review walks all
+  seven discovery tasks and records that one reviewer is an expert walkthrough
+  rather than validation data, so participants are still required;
+- [ ] the cutover that clears the review's three blocking items: make
+  `/discover` the authenticated front door and retire the stale
+  serving-contract panel, give `/discover` an inbound link from every surface,
+  and promote the product shell onto Browse and movie detail;
+- [ ] a rate-limiting decision — 7b's reliability facts record it as not
+  implemented, so it needs either per-tenant limits against the Phase 3
+  tenant-config row or an ADR that records the omission;
+- [ ] legacy dashboard removal, only after the re-run gate records PASS, with a
+  documented rollback to the preceding release.
 
 **Scope:**
 

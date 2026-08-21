@@ -11,7 +11,16 @@
   --border-strong: #464037;
   --text-primary: #f4ede3;
   --text-secondary: #bdb3a6;
-  --text-muted: #81796f;
+  /*
+   * Raised from #81796f for the Bundle 7A accessibility gate. The old value
+   * cleared 4.5:1 against the canvas but not against the surfaces the muted
+   * role is actually used on — 4.40 on `--surface-base`, 4.13 behind a Library
+   * tab count, 3.55 on a poster-fallback thumbnail — so request IDs, tab
+   * counts, and freshness notes were failing AA wherever they sat on anything
+   * lighter than the page itself. This value clears 4.5:1 against every
+   * surface token below it, `--poster-fallback` included.
+   */
+  --text-muted: #9a9186;
   --text-inverse: #171411;
   --accent: #ee7657;
   --accent-strong: #ff8968;
