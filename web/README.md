@@ -34,17 +34,28 @@ npm run test:e2e # real Keycloak stack only
 ```
 
 Install the pinned browser runtime once with `npx playwright install chromium`.
-The isolated UI Playwright configuration uses port 3104 so it can run beside
-the normal development server. `MOVIELENS_UI_FIXTURE_MODE=1` is accepted only
-outside production; normal `/ui-preview/*` requests require a real Auth.js
+The isolated UI Playwright configuration defaults to port 3104 so it can run
+beside the normal development server. `MOVIELENS_UI_FIXTURE_MODE=1` is accepted
+only outside production; normal `/ui-preview/*` requests require a real Auth.js
 session.
 
-The server-side route handler proxies browser requests to FastAPI at
-`http://localhost:8000` by default. Override that without exposing the URL to
-the client bundle:
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RECOMMENDATION_API_URL` | `http://localhost:8000` | Server-side FastAPI origin. Never exposed to the client bundle. |
+| `KEYCLOAK_PUBLIC_ISSUER` | `http://localhost:8080/realms/demo` | Issuer the browser is redirected to. |
+| `KEYCLOAK_INTERNAL_ISSUER` | public issuer | Container-internal discovery/token endpoint. |
+| `KEYCLOAK_CLIENT_ID` | `movielens-web` | Public PKCE browser client. |
+| `AUTH_SECRET` | — | Encrypts the Auth.js session and backs the CSRF double submit. |
+| `APP_ORIGIN` | request origin | Expected `Origin` for mutations. |
+| `MOVIELENS_UI_FIXTURE_MODE` | unset | `1` enables the fixture-backed `/ui-preview/*` harness. Ignored in production builds. |
+| `MOVIELENS_UI_PORT` | `3104` | Port for `npm run test:e2e:ui`, so parallel worktrees can each run the UI suite. CI leaves it unset. |
+| `PLAYWRIGHT_BASE_URL` | `http://localhost:3001` | Target for the service-backed browser-auth suite. |
 
 ```bash
 RECOMMENDATION_API_URL=http://api.internal:8000 make web-dev
+MOVIELENS_UI_PORT=3204 npm run test:e2e:ui
 ```
 
 ## Status
@@ -62,3 +73,25 @@ Bundle 4 adds the tested semantic visual system and an authenticated,
 fixture-isolated `/ui-preview` route family for review. The live root, Browse,
 Library, and movie-detail routes continue to use the real session-protected BFF
 and canonical Bundle 2–3 APIs until Bundle 5 integrates the new primitives.
+
+## Live-resource boundary
+
+`lib/resources/` is the single boundary every live product region reads
+through, added in Bundle 5A:
+
+- `server.ts` — the server-owned client. It is the only place an access token
+  reaches FastAPI, applies a per-resource timeout, sends and echoes
+  `X-Request-ID`, and imports no fixture.
+- `browser.ts` — the same state model for client components, over the
+  same-origin BFF. It refuses a caller-supplied `Authorization` header rather
+  than silently dropping one.
+- `bff.ts` — route-handler helpers: credential refusal, correlation ID, and the
+  resource-state-to-HTTP translation, all `private, no-store`.
+- `validate.ts` / `definitions.ts` — narrow runtime guards over the generated
+  OpenAPI types, plus the per-resource label, timeout, and emptiness rule.
+- `state.ts` — `loading`, `retry`, `ready`, `empty`, `forbidden`,
+  `auth-expired`, `not-found`, and `upstream-error`, rendered by
+  `components/ui/resource-region.tsx`.
+- `fixture-gate.ts` — the only door recorded fixtures come through. Outside
+  `MOVIELENS_UI_FIXTURE_MODE`, and always in production, asking for one throws
+  instead of returning data.
