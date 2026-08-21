@@ -5,11 +5,11 @@ re-renders are captured here. Browse, the poster grid, and every Discover state
 that does not involve a control are unchanged; their Bundle 5 captures still
 stand.
 
-What is new is that movie detail and the Library now show the *same*
-confirmation, the same destructive treatment, and the same star editor, because
-they render the same component with different control sets — and that Quick
-Picks has a deliberate entry point from Discover rather than a fourth navigation
-slot.
+What is new is that movie detail, the Library, and Quick Picks now show the
+*same* confirmation, the same destructive treatment, and the same star editor,
+because they render the same component with different control sets — and that
+Quick Picks has a deliberate entry point from Discover rather than a fourth
+navigation slot.
 
 Capture command (Next.js running in fixture mode):
 
@@ -31,14 +31,16 @@ MOVIELENS_UI_PORT=3110 npm run evidence:bundle7c
 | `detail-remove-confirm-desktop` | 1440 | Removing watched history on detail, in the confirmation shape the Library already used |
 | `library-remove-confirm-desktop` | 1440 | The same confirmation on a Library History row, with `Remove rating` still visibly a different action |
 | `library-rated-mobile` | 390 | A Rated row's half-star editor and 44px targets, unchanged by the move onto the shared family |
+| `quick-picks-rating-desktop` | 1440 | Quick Picks on the shared star editor: the same star names and sizing, its own panel chrome, and the note that says one press is one write |
 
 Automated coverage for these states — the confirm/cancel focus path, the
 `aria-disabled` in-flight semantics, the Quick Picks entry href and touch
 target, horizontal overflow, and zero critical or serious axe violations — lives
 in `web/components/movie/movie-state-controls.test.tsx`,
 `web/components/movie/movie-detail-view.test.tsx`,
-`web/components/library/library-experience.test.tsx`, and
-`web/e2e/discover.spec.ts`.
+`web/components/library/library-experience.test.tsx`,
+`web/components/quick-picks/quick-picks-deck.test.tsx`, and
+`web/e2e/discover.spec.ts` / `web/e2e/quick-picks.spec.ts`.
 
 Service-backed proof that the write path still commits, reconciles, and survives
 a round trip is unchanged: `web/tests/e2e/browser-auth.spec.ts` and

@@ -42,6 +42,8 @@ const captures = [
     action: openDetailConfirmation,
   },
   { name: "library-rated-mobile", path: "/ui-preview/library", ...MOBILE },
+  // Quick Picks renders the shared star editor now, so the fold is evidenced too.
+  { name: "quick-picks-rating-desktop", path: "/ui-preview/quick-picks", ...DESKTOP },
   {
     name: "library-remove-confirm-desktop",
     path: "/ui-preview/library?tab=history",

@@ -115,6 +115,7 @@ its documented hierarchy:
 | Library — Rated | `dismissal: undo` + half-star rating editor | Editing or clearing a star value is the collection's job. |
 | Library — Watchlist | `watched: mark`, `watchlist: remove`, `dismissal: toggle` | The row leads with the action that moves the movie forward. |
 | Library — History | `watched: confirm`, `dismissal: undo` + rating editor | History owns the one destructive action in the route, and `Remove rating` stays visibly different from `Remove from history`. |
+| Quick Picks | Its own three decision buttons + the shared star editor | The deck's buttons are queue decisions with keyboard hints, gesture parity, and an `undo-dismiss` that has no card or row equivalent, so they stay with the machine that drives them. The rating is the same control everywhere else uses. |
 | `/ui-preview` | `watchlist: toggle`, `watched: toggle`, no writes | Recorded surfaces toggle locally and announce `Preview only`. |
 
 Three properties are load-bearing:
@@ -134,8 +135,9 @@ Three properties are load-bearing:
 
 ## The write path
 
-Every watched, rating, watchlist, and dismissal change from every surface goes
-through `lib/movie-state/`:
+Every watched, rating, watchlist, and dismissal change from every surface —
+Discover, Browse, movie detail, Library, and Quick Picks — goes through
+`lib/movie-state/`:
 
 ```text
 control reports intent (MovieStateAction)
