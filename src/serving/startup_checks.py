@@ -47,7 +47,7 @@ def run_startup_checks(
     app_engine: Engine,
     admin_engine: Engine,
 ) -> None:
-    """Run all Bundle #1b startup checks. Raises on the first failure."""
+    """Run every startup check. Raises on the first failure."""
     _check_app_engine_not_bypassrls(app_engine)
     _check_pgbouncer_transaction_mode(settings)
     _check_dev_bypass_only_in_dev(settings)

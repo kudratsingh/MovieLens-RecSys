@@ -119,8 +119,8 @@ def test_converges_on_synthetic_signal_column() -> None:
 
 
 def test_rank_candidates_returns_top_k_per_user() -> None:
-    """rank_candidates is the end-to-end shape the training script and
-    Phase 3 serving both use. Contract: dict[user_id, list[movie_id]]
+    """rank_candidates is the batch shape the training script's eval
+    loop uses. Contract: dict[user_id, list[movie_id]]
     with at most k entries per user, containing only ids from that
     user's candidate list.
     """

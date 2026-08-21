@@ -22,9 +22,11 @@ from sqlalchemy import (
 metadata = MetaData()
 
 # Base table shape — the four tables the MovieLens ingest path creates.
-# The Phase 3 tenant scaffolding (`public.tenants` registry, `tenant_id`
-# column on `ratings` and `tags`, RLS policies) is added by Alembic
-# migrations, not by `create_all`. Two reasons: (a) `create_all` runs on
+# Everything tenant-related — the `public.tenants` registry, `tenant_id`
+# on `ratings` and `tags`, RLS policies, and the later tenant-scoped
+# tables (demo personas, feature-store snapshots, recommendation audits)
+# — is added by Alembic migrations, not by `create_all`. Two reasons:
+# (a) `create_all` runs on
 # fresh ingests as a one-shot, whereas migrations run on both fresh and
 # existing DBs, so migrations are the natural home for the additive
 # tenant changes; (b) RLS policies can't be expressed in SQLAlchemy's

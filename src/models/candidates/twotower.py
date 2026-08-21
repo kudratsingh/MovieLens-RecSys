@@ -128,8 +128,8 @@ class TwoTowerModel:
 
     Same interface as PopularityModel / CFModel / ItemItemModel: ``fit``,
     ``recommend``, ``recommend_for_users``, and a ``was_served_by_twotower``
-    predicate for per-policy attribution. Phase 3's serving layer treats
-    these interchangeably.
+    predicate for per-policy attribution. The training scripts and the
+    eval harness treat these interchangeably.
     """
 
     config: TwoTowerConfig = field(default_factory=TwoTowerConfig)

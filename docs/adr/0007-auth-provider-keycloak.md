@@ -3,9 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-07-03
 
+_Implementation note (2026-08-21): the `synthetic/auth/` token-minting helper described below never became its own package — the direct-password-grant helper lives in `synthetic/load/lib/auth.js` for the k6 harness and in `tests/tenant_isolation/conftest.py` for the isolation suite. Everything else here (realm-per-tenant, issuer-derived tenant, JWKS cache with force-refresh, the dev-bypass guard in `Settings`) landed as written in `src/auth/`._
+
 ## Context
 
-Phase 3 introduces real auth on every API endpoint except `/healthz` (non-negotiable #10). Every authenticated request must resolve to a tenant, and the tenant must be trustworthy — token-carried, not client-declared — because [ADR-pending] multi-tenancy isolation will use it to select champion models, Redis key prefixes, and rate limits. Cross-tenant data leakage is the highest-severity bug class (non-negotiable #9), and the tenant-resolution surface is where that class of bug lives.
+Phase 3 introduces real auth on every API endpoint except `/healthz` (non-negotiable #10). Every authenticated request must resolve to a tenant, and the tenant must be trustworthy — token-carried, not client-declared — because multi-tenancy isolation ([ADR 0008](0008-multi-tenancy-rls.md)) will use it to select champion models, Redis key prefixes, and rate limits. Cross-tenant data leakage is the highest-severity bug class (non-negotiable #9), and the tenant-resolution surface is where that class of bug lives.
 
 This is the *first* Phase 3 ADR by design. CLAUDE.md's recommended order pins auth first because the multi-tenancy isolation ADR that follows depends on how tenants are named and how the tenant claim reaches the middleware. Getting auth wrong ripples into every downstream Phase 3 decision — feature-store key prefixes, audit-log schema, A/B routing per Phase 6, and the synthetic-user harness that has to programmatically mint tokens for CI.
 
@@ -27,7 +29,7 @@ The criteria that decide the choice:
 
 The auth provider is **Keycloak, self-hosted via docker-compose**, with the following shape:
 
-- **Realm-per-tenant.** Each tenant is a distinct Keycloak realm. Realms are the strongest isolation boundary Keycloak offers — separate user store, client store, key material, and admin surface per realm. This maps 1:1 to CLAUDE.md's "a tenant is a logical isolation boundary" and constrains the [ADR-pending] multi-tenancy isolation decision to *how the app enforces isolation given a resolved tenant*, not *how tenants are named*.
+- **Realm-per-tenant.** Each tenant is a distinct Keycloak realm. Realms are the strongest isolation boundary Keycloak offers — separate user store, client store, key material, and admin surface per realm. This maps 1:1 to CLAUDE.md's "a tenant is a logical isolation boundary" and constrains the multi-tenancy isolation decision ([ADR 0008](0008-multi-tenancy-rls.md)) to *how the app enforces isolation given a resolved tenant*, not *how tenants are named*.
 - **OIDC discovery.** FastAPI reads the OIDC discovery document at each realm's `/.well-known/openid-configuration` and caches the JWKS with a 5-minute TTL. Signature verification is against JWKS, not a shared secret.
 - **Tenant resolution via issuer, not claim.** The middleware extracts `tenant_id` from the **issuer** of the token (`iss` claim, which for Keycloak is `<host>/realms/<realm-name>`). A client cannot self-declare a tenant by editing a claim — the tenant is derived from *which realm's private key signed the token*.
 - **Auth flows.** Authorization Code with PKCE for the Next.js frontend; direct password grant (or client credentials) for the synthetic-user harness and CI; client credentials for service-to-service calls.

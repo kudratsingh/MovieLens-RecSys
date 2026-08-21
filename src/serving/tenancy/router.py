@@ -44,9 +44,9 @@ class UnknownTenantError(Exception):
 class TenantRouter:
     """Reads tenant configuration from ``public.tenants``.
 
-    Bundle #1b ships the resolve path only. Later bundles extend
-    ``TenantConfig`` with the champion model version and per-tenant
-    rate-limit knobs — same read path, additional columns.
+    Resolves id, display name, and Redis prefix today. The per-tenant
+    champion model version and rate-limit knobs are still to come on
+    ``TenantConfig`` — same read path, additional columns.
     """
 
     def __init__(self, admin_engine: Engine) -> None:

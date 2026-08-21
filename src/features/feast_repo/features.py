@@ -1,4 +1,4 @@
-"""Feast declarations for the Phase 2 ranker feature contract."""
+"""Feast declarations for the ranker feature contract in ``src/feature_contract.py``."""
 
 from datetime import timedelta
 
