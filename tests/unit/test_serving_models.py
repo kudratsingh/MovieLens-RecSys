@@ -44,12 +44,19 @@ async def test_model_client_sends_tenant_history_and_service_token() -> None:
         headers={"Authorization": "Bearer secret"},
     )
     try:
-        result = await client.rank(tenant_id="demo", user_id=10, history_movie_ids=[1, 2], limit=5)
+        result = await client.rank(
+            tenant_id="demo",
+            user_id=10,
+            positive_history_movie_ids=[1, 2],
+            excluded_movie_ids=[7],
+            limit=5,
+        )
     finally:
         await client.aclose()
 
     assert observed["tenant_id"] == "demo"
-    assert observed["history_movie_ids"] == [1, 2]
+    assert observed["positive_history_movie_ids"] == [1, 2]
+    assert observed["excluded_movie_ids"] == [7]
     assert observed["authorization"] == "Bearer secret"
     assert result.items[0].movie_id == 3
     assert result.items[0].features == _features()
@@ -81,7 +88,12 @@ async def test_model_client_rejects_seen_item_from_sidecar() -> None:
     )
     try:
         with pytest.raises(ModelServerContractError, match="seen movie"):
-            await client.rank(tenant_id="demo", user_id=10, history_movie_ids=[1, 2], limit=5)
+            await client.rank(
+                tenant_id="demo",
+                user_id=10,
+                positive_history_movie_ids=[1, 2],
+                limit=5,
+            )
     finally:
         await client.aclose()
 
@@ -112,6 +124,11 @@ async def test_model_client_rejects_incomplete_feature_snapshot() -> None:
     )
     try:
         with pytest.raises(ModelServerContractError, match="incompatible features"):
-            await client.rank(tenant_id="demo", user_id=10, history_movie_ids=[1], limit=5)
+            await client.rank(
+                tenant_id="demo",
+                user_id=10,
+                positive_history_movie_ids=[1],
+                limit=5,
+            )
     finally:
         await client.aclose()

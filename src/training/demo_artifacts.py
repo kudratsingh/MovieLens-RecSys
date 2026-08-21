@@ -74,7 +74,7 @@ def build_ranker_training_data(
         candidates = candidate_index.retrieve(
             live_history,
             limit=negatives_per_positive + 1,
-        )
+        ).movie_ids
         if positive_id not in candidates:
             live_history.append(positive_id)
             continue

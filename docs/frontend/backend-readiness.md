@@ -1,7 +1,9 @@
 # Movie-discovery frontend: backend readiness
 
 **Status:** Bundles 0–3 implemented: source audit, Auth.js boundary, durable Library,
-and scalable local catalog/detail
+and scalable local catalog/detail. The Bundle 6 backend prerequisite —
+separate positive-history and excluded-ID serving inputs plus audit evidence —
+is implemented (PR #54).
 
 **Last updated:** 2026-08-21
 
@@ -18,7 +20,7 @@ parts of the route design are implementation claims.
 
 | Concern | What works now | Boundary or gap |
 |---|---|---|
-| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback | Static artifacts and snapshot features still do not update on each rating |
+| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy | Static artifacts and snapshot features still do not update on each rating |
 | Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
 | Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, and a truthful `live-ratings-v1` summary | The resources remain selected-persona mode until `/me` ownership mapping lands |
@@ -27,9 +29,9 @@ parts of the route design are implementation claims.
 | Metadata | Shared persisted read model supplies Browse, detail, and recommendation hydration with complete/partial/unavailable status | Snapshot enrichment is offline; partial titles intentionally render deterministic fallbacks |
 | Browser auth | Keycloak gives both callers the API audience; FastAPI pins issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly sessions, server-side token refresh/logout, BFF authorization, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
 | BFF loading | The current dashboard proxy fetches recommendations, history, and catalog concurrently; TypeScript types are now generated from committed OpenAPI | One failed request still fails the entire dashboard and BFF bodies are not yet runtime validated |
-| Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit | Other reads and mutations have no generic request audit or retention policy |
+| Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit. Each audit records the input-state revision, positive-history and exclusion digests, positive/excluded counts, feature event time, filter policy, per-source candidate contributions, and a structured reason, all exposed on `GET /users/{user_id}/audits` | Other reads and mutations have no generic request audit or retention policy |
 | Performance | Authenticated recommendation k6 gate enforces p99 below 100 ms for its pinned workload | It does not measure page-shaped BFF fan-out, real poster enrichment, catalog paging, or mutation-plus-refresh |
-| Observability | Load results and health checks exist | There is no working FastAPI metrics surface, page-route instrumentation, DB-pool visibility, or separate readiness contract |
+| Observability | Load results and health checks exist. Every response echoes `X-Request-ID`, adopting a well-formed caller-supplied value so a BFF request id survives the hop, and recommendation audits store it as `correlation_id` | There is no working FastAPI metrics surface, page-route instrumentation, DB-pool visibility, or separate readiness contract |
 
 ### Source anchors
 
@@ -178,14 +180,23 @@ request ID. A response is never sent before its transaction can succeed.
 
 ### Recommendation inputs and explanations
 
-Serving must accept positive watched history and excluded/dismissed IDs as
-different inputs. A dismissed title is filtered from popularity, candidate,
-hydration, and final results and is never used to retrieve similar titles.
+**Implemented (PR #54).** Serving accepts positive watched history and excluded/dismissed
+IDs as different inputs. Positives come from watched-and-not-dismissed
+`user_movie_state`; exclusions are dismissals plus already-seen titles. A
+dismissed title is filtered from popularity, candidate retrieval, hydration,
+and final validation, is never used to retrieve similar titles, and is never
+written back as a rating or training negative. The final check fails closed:
+an excluded ID that reaches the outgoing list is dropped and the block is
+logged and audited rather than served.
 
 Histories below five use fallback; histories of five or more may use the
-learned path. Prediction audits record the feedback-state revision or input
-hash, excluded-state hash, feature timestamp, filtering policy, candidate
-source contributions, and structured reason.
+learned path. The response reports this through `serving_policy`
+(`name`, `learned`, `positive_signal_count`, `threshold`, `reason`,
+`score_scale`, `filter_policy`, `excluded_count`); the flat `policy` string is
+retained and always equals `serving_policy.name`. Prediction audits record the
+input-state revision, positive-history hash, exclusion hash, feature event
+time, filtering policy, per-source candidate contributions, and a structured
+reason.
 
 The first honest learned reason is `Similar to movies in this persona's watched
 history`, backed by source-item similarity contributions. `Because you liked`
@@ -233,7 +244,7 @@ may claim comparable recommendation coverage. CI should assert both:
 | `/browse` | Yes: cursor catalog, local metadata, durable state overlay, filters, load more, fallbacks, and scroll restoration | Run seeded browser/visual gates and profile full-catalog queries before expanding beyond the reviewed fixture |
 | `/library` | Yes: durable tabs, counts, state controls, filtering, and canonical reconciliation | `/me` ownership mapping and shared poster-card integration remain follow-up work |
 | `/movies/[id]` | Yes: local detail, source status, durable state, CSRF-protected rating action, and fallbacks | Add structured explanation and the broader shared state-control component later |
-| `/quick-picks` | Prototype only | Watched/watchlist/dismissal resources, undo, five-signal routing, separate positive/excluded inputs |
+| `/quick-picks` | Yes: the serving prerequisite is implemented (PR #54) | Watched/watchlist/dismissal resources, undo, and the Quick Picks state machine remain frontend work; separate positive/excluded inputs, five-signal routing, and audit evidence are in place |
 | Real signed-in product | Role-gated persona mode is signed in through Auth.js | `/me` mapping remains required before claiming a private end-user profile |
 
 ## Verification gates
@@ -241,7 +252,8 @@ may claim comparable recommendation coverage. CI should assert both:
 Backend changes are not ready until they pass:
 
 - migration upgrade/downgrade, constraints, grants, and RLS tests;
-- cross-tenant and same-tenant cross-user authorization tests;
+- cross-tenant and same-tenant cross-user authorization tests, now including
+  `/users/{id}/features`, `/users/{id}/catalog`, and `DELETE /users/{id}/ratings`;
 - immediate read-after-write and commit-failure tests;
 - cursor stability, filter composition, and maximum-page tests;
 - OpenAPI generation/drift and generated-TypeScript checks;

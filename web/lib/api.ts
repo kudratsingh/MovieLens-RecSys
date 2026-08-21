@@ -2,6 +2,7 @@ import type { components } from "./api.generated";
 
 export type RecommendationItem = components["schemas"]["RecommendationItem"];
 export type RecommendationResponse = components["schemas"]["RecommendationResponse"];
+export type ServingPolicy = components["schemas"]["ServingPolicyResponse"];
 export type HistoryItem = components["schemas"]["HistoryItem"];
 export type HistoryResponse = components["schemas"]["HistoryResponse"];
 export type CatalogItem = components["schemas"]["CatalogItem"];

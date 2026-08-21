@@ -366,6 +366,11 @@ export interface components {
     schemas: {
         /** AuditPredictionItem */
         AuditPredictionItem: {
+            /**
+             * Candidate Source
+             * @default unknown
+             */
+            candidate_source: string;
             /** Features */
             features: {
                 [key: string]: number;
@@ -374,6 +379,8 @@ export interface components {
             movie_id: number;
             /** Score */
             score: number;
+            /** Seed Movie Id */
+            seed_movie_id?: number | null;
         };
         /** CatalogItem */
         CatalogItem: {
@@ -624,8 +631,14 @@ export interface components {
             actor_user_id: string;
             /** Candidate Latency Ms */
             candidate_latency_ms: number;
+            /** Candidate Sources */
+            candidate_sources: {
+                [key: string]: number;
+            };
             /** Candidate Version */
             candidate_version: string;
+            /** Correlation Id */
+            correlation_id: string;
             /**
              * Created At
              * Format: date-time
@@ -633,14 +646,26 @@ export interface components {
             created_at: string;
             /** Endpoint */
             endpoint: string;
+            /** Excluded Count */
+            excluded_count: number;
+            /** Exclusion Hash */
+            exclusion_hash: string;
             /** Fallback Reason */
             fallback_reason: string | null;
+            /** Feature Event Time */
+            feature_event_time: string | null;
             /** Feature Latency Ms */
             feature_latency_ms: number;
             /** Feature Version */
             feature_version: string;
+            /** Filter Policy */
+            filter_policy: string;
             /** Http Status */
             http_status: number;
+            /** Input State Hash */
+            input_state_hash: string;
+            /** Input State Revision */
+            input_state_revision: number;
             /** Latency Ms */
             latency_ms: number;
             /** Model Latency Ms */
@@ -651,12 +676,16 @@ export interface components {
             outcome: string;
             /** Policy */
             policy: string;
+            /** Positive Signal Count */
+            positive_signal_count: number;
             /** Predictions */
             predictions: components["schemas"]["AuditPredictionItem"][];
             /** Ranker Latency Ms */
             ranker_latency_ms: number;
             /** Ranker Version */
             ranker_version: string;
+            /** Reason */
+            reason: string;
             /**
              * Request Id
              * Format: uuid
@@ -710,10 +739,38 @@ export interface components {
             model_version: string;
             /** Policy */
             policy: string;
+            serving_policy: components["schemas"]["ServingPolicyResponse"];
             /** Tenant Id */
             tenant_id: string;
             /** User Id */
             user_id: number;
+        };
+        /**
+         * ServingPolicyResponse
+         * @description Machine-readable proof of which policy served this response.
+         *
+         *     ``positive_signal_count`` and ``threshold`` are what let a client show
+         *     progress toward learned serving without guessing at the rule, and
+         *     ``score_scale`` names what ``RecommendationItem.score`` actually is so it
+         *     is never rendered as a probability or a match percentage (ADR 0012).
+         */
+        ServingPolicyResponse: {
+            /** Excluded Count */
+            excluded_count: number;
+            /** Filter Policy */
+            filter_policy: string;
+            /** Learned */
+            learned: boolean;
+            /** Name */
+            name: string;
+            /** Positive Signal Count */
+            positive_signal_count: number;
+            /** Reason */
+            reason: string;
+            /** Score Scale */
+            score_scale: string;
+            /** Threshold */
+            threshold: number;
         };
         /** TasteGenreResponse */
         TasteGenreResponse: {

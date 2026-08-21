@@ -124,6 +124,19 @@ function recommend(auth, userId, expectedPolicy, traffic) {
     {
       "HTTP 200": (value) => value.status === 200,
       "expected serving policy": (value) => value.json("policy") === expectedPolicy,
+      // The policy object is what the UI uses to claim fallback or learned
+      // serving, so the load gate holds it to the same truth as the flat field.
+      "serving policy object agrees with the flat policy": (value) => {
+        const policy = value.json("serving_policy");
+        return (
+          !!policy &&
+          policy.name === expectedPolicy &&
+          policy.threshold === 5 &&
+          policy.learned === (expectedPolicy !== "popularity") &&
+          typeof policy.score_scale === "string" &&
+          policy.score_scale.length > 0
+        );
+      },
       "non-empty recommendation list": (value) => {
         const items = value.json("items");
         return Array.isArray(items) && items.length > 0;

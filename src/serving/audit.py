@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -17,6 +17,9 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
+
+from src.serving.policy import FILTER_POLICY_NOT_RUN
+from src.serving.request_id import REQUEST_ID_ADOPTED_STATE_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +32,16 @@ class PredictionAudit:
     movie_id: int
     score: float
     features: dict[str, float]
+    candidate_source: str = "not-run"
+    seed_movie_id: int | None = None
 
     def as_json(self) -> dict[str, object]:
         return {
             "movie_id": self.movie_id,
             "score": self.score,
             "features": self.features,
+            "candidate_source": self.candidate_source,
+            "seed_movie_id": self.seed_movie_id,
         }
 
 
@@ -51,11 +58,24 @@ class RecommendationAuditContext:
     ranker_latency_ms: float
     model_latency_ms: float
     predictions: list[PredictionAudit]
+    # Bundle 6 evidence: what state the decision was made against, what was
+    # filtered out of it, and how fresh the features were. Without these a
+    # stored audit cannot be replayed or compared against a later request.
+    input_state_revision: int = 0
+    input_state_hash: str = ""
+    exclusion_hash: str = ""
+    positive_signal_count: int = 0
+    excluded_count: int = 0
+    filter_policy: str = FILTER_POLICY_NOT_RUN
+    feature_event_time: datetime | None = None
+    candidate_sources: dict[str, int] = field(default_factory=dict)
+    reason: str = ""
 
 
 @dataclass(frozen=True)
 class RecommendationAuditRecord:
     request_id: UUID
+    correlation_id: str
     tenant_id: str
     actor_user_id: str
     user_id: int
@@ -75,11 +95,21 @@ class RecommendationAuditRecord:
     latency_ms: float
     predictions: list[dict[str, Any]]
     created_at: datetime
+    input_state_revision: int
+    input_state_hash: str
+    exclusion_hash: str
+    positive_signal_count: int
+    excluded_count: int
+    filter_policy: str
+    feature_event_time: datetime | None
+    candidate_sources: dict[str, int]
+    reason: str
 
 
 _INSERT_AUDIT = text("""
     INSERT INTO recommendation_audits (
         request_id,
+        correlation_id,
         tenant_id,
         actor_user_id,
         user_id,
@@ -97,9 +127,19 @@ _INSERT_AUDIT = text("""
         ranker_latency_ms,
         model_latency_ms,
         latency_ms,
-        predictions
+        predictions,
+        input_state_revision,
+        input_state_hash,
+        exclusion_hash,
+        positive_signal_count,
+        excluded_count,
+        filter_policy,
+        feature_event_time,
+        candidate_sources,
+        reason
     ) VALUES (
         :request_id,
+        :correlation_id,
         :tenant_id,
         :actor_user_id,
         :user_id,
@@ -117,9 +157,21 @@ _INSERT_AUDIT = text("""
         :ranker_latency_ms,
         :model_latency_ms,
         :latency_ms,
-        :predictions
+        :predictions,
+        :input_state_revision,
+        :input_state_hash,
+        :exclusion_hash,
+        :positive_signal_count,
+        :excluded_count,
+        :filter_policy,
+        :feature_event_time,
+        :candidate_sources,
+        :reason
     )
-    """).bindparams(bindparam("predictions", type_=JSON))
+    """).bindparams(
+    bindparam("predictions", type_=JSON),
+    bindparam("candidate_sources", type_=JSON),
+)
 
 
 class RecommendationAuditService:
@@ -130,6 +182,7 @@ class RecommendationAuditService:
         connection: Connection,
         *,
         request_id: UUID,
+        correlation_id: str,
         tenant_id: str,
         actor_user_id: str,
         user_id: int,
@@ -151,11 +204,13 @@ class RecommendationAuditService:
             ranker_latency_ms=0.0,
             model_latency_ms=0.0,
             predictions=[],
+            reason="not-run",
         )
         connection.execute(
             _INSERT_AUDIT,
             {
                 "request_id": request_id,
+                "correlation_id": correlation_id,
                 "tenant_id": tenant_id,
                 "actor_user_id": actor_user_id,
                 "user_id": user_id,
@@ -174,6 +229,15 @@ class RecommendationAuditService:
                 "model_latency_ms": resolved.model_latency_ms,
                 "latency_ms": latency_ms,
                 "predictions": [prediction.as_json() for prediction in resolved.predictions],
+                "input_state_revision": resolved.input_state_revision,
+                "input_state_hash": resolved.input_state_hash,
+                "exclusion_hash": resolved.exclusion_hash,
+                "positive_signal_count": resolved.positive_signal_count,
+                "excluded_count": resolved.excluded_count,
+                "filter_policy": resolved.filter_policy,
+                "feature_event_time": resolved.feature_event_time,
+                "candidate_sources": dict(resolved.candidate_sources),
+                "reason": resolved.reason,
             },
         )
 
@@ -188,6 +252,7 @@ class RecommendationAuditService:
             text("""
                 SELECT
                     request_id,
+                    correlation_id,
                     tenant_id,
                     actor_user_id,
                     user_id,
@@ -206,7 +271,16 @@ class RecommendationAuditService:
                     model_latency_ms,
                     latency_ms,
                     predictions,
-                    created_at
+                    created_at,
+                    input_state_revision,
+                    input_state_hash,
+                    exclusion_hash,
+                    positive_signal_count,
+                    excluded_count,
+                    filter_policy,
+                    feature_event_time,
+                    candidate_sources,
+                    reason
                 FROM recommendation_audits
                 WHERE user_id = :user_id
                 ORDER BY created_at DESC, request_id DESC
@@ -217,6 +291,7 @@ class RecommendationAuditService:
         return [
             RecommendationAuditRecord(
                 request_id=UUID(str(row.request_id)),
+                correlation_id=str(row.correlation_id),
                 tenant_id=str(row.tenant_id),
                 actor_user_id=str(row.actor_user_id),
                 user_id=int(row.user_id),
@@ -238,6 +313,15 @@ class RecommendationAuditService:
                 latency_ms=float(row.latency_ms),
                 predictions=list(row.predictions),
                 created_at=row.created_at,
+                input_state_revision=int(row.input_state_revision),
+                input_state_hash=str(row.input_state_hash),
+                exclusion_hash=str(row.exclusion_hash),
+                positive_signal_count=int(row.positive_signal_count),
+                excluded_count=int(row.excluded_count),
+                filter_policy=str(row.filter_policy),
+                feature_event_time=row.feature_event_time,
+                candidate_sources=dict(row.candidate_sources or {}),
+                reason=str(row.reason),
             )
             for row in rows
         ]
@@ -266,7 +350,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         started = time.perf_counter()
-        request_id = uuid4()
+        request_id, correlation_id = _audit_identity(request)
         request.state.recommendation_audit_context = None
         user_id = int(match.group("user_id"))
         try:
@@ -276,28 +360,32 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
                 self._record,
                 request,
                 request_id=request_id,
+                correlation_id=correlation_id,
                 user_id=user_id,
                 http_status=500,
                 outcome="server-error",
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
-            logger.exception("recommendation request failed request_id=%s", request_id)
+            logger.exception(
+                "recommendation request failed request_id=%s correlation_id=%s",
+                request_id,
+                correlation_id,
+            )
             return JSONResponse(
                 {"detail": "recommendation request failed"},
                 status_code=500,
-                headers={"X-Request-ID": str(request_id)},
             )
 
         await run_in_threadpool(
             self._record,
             request,
             request_id=request_id,
+            correlation_id=correlation_id,
             user_id=user_id,
             http_status=response.status_code,
             outcome=_outcome(response.status_code),
             latency_ms=(time.perf_counter() - started) * 1000,
         )
-        response.headers["X-Request-ID"] = str(request_id)
         return response
 
     def _record(
@@ -305,6 +393,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
         request: Request,
         *,
         request_id: UUID,
+        correlation_id: str,
         user_id: int,
         http_status: int,
         outcome: str,
@@ -316,6 +405,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
         self._audits.record(
             connection,
             request_id=request_id,
+            correlation_id=correlation_id,
             tenant_id=principal.tenant_id,
             actor_user_id=principal.user_id,
             user_id=user_id,
@@ -325,6 +415,24 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             latency_ms=latency_ms,
             context=context,
         )
+
+
+def _audit_identity(request: Request) -> tuple[UUID, str]:
+    """Return the audit row's primary key and the caller-visible correlation id.
+
+    When we minted the correlation id ourselves it is already a UUID, so the
+    two stay identical and an audit remains findable by the id handed back in
+    ``X-Request-ID``. An *adopted* id gets a freshly minted key instead: a
+    caller that replays the same correlation header must not be able to
+    collide with an existing audit's primary key.
+    """
+    correlation = getattr(request.state, "request_id", None)
+    if not isinstance(correlation, str) or not correlation:
+        minted = uuid4()
+        return minted, str(minted)
+    if getattr(request.state, REQUEST_ID_ADOPTED_STATE_KEY, False):
+        return uuid4(), correlation
+    return UUID(correlation), correlation
 
 
 def _outcome(status_code: int) -> str:

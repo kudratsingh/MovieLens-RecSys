@@ -18,6 +18,10 @@ The authenticated surface currently includes:
   * ``PUT /users/{user_id}/ratings/{movie_id}`` — RLS-scoped feedback write.
   * ``DELETE /users/{user_id}/ratings`` — reset one demo profile.
 
+Every response carries ``X-Request-ID``. A well-formed inbound value is
+adopted so a caller's correlation id survives the hop; otherwise one is
+minted. Recommendation audits store it alongside their own row identity.
+
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
 locks its middleware stack (Starlette forbids ``add_middleware`` after
@@ -76,6 +80,7 @@ from src.serving.recommendations import (
     UnknownDemoPersonaError,
     UnknownMovieError,
 )
+from src.serving.request_id import RequestIdMiddleware
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
 
@@ -145,11 +150,32 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+class ServingPolicyResponse(BaseModel):
+    """Machine-readable proof of which policy served this response.
+
+    ``positive_signal_count`` and ``threshold`` are what let a client show
+    progress toward learned serving without guessing at the rule, and
+    ``score_scale`` names what ``RecommendationItem.score`` actually is so it
+    is never rendered as a probability or a match percentage (ADR 0012).
+    """
+
+    name: str
+    learned: bool
+    positive_signal_count: int
+    threshold: int
+    reason: str
+    score_scale: str
+    filter_policy: str
+    excluded_count: int
+
+
 class RecommendationResponse(BaseModel):
     tenant_id: str
     user_id: int
     model_version: str
+    # Retained as the flat legacy field; it always equals serving_policy.name.
     policy: str
+    serving_policy: ServingPolicyResponse
     items: list[RecommendationItem]
 
 
@@ -311,10 +337,16 @@ class AuditPredictionItem(BaseModel):
     movie_id: int
     score: float
     features: dict[str, float]
+    # Audits written before Bundle 6 have no attribution in their JSON payload.
+    candidate_source: str = "unknown"
+    seed_movie_id: int | None = None
 
 
 class RecommendationAuditItem(BaseModel):
     request_id: UUID
+    # The X-Request-ID echoed to the caller: the caller's value when it sent a
+    # usable one, otherwise the id this service minted.
+    correlation_id: str
     tenant_id: str
     actor_user_id: str
     user_id: int
@@ -334,6 +366,15 @@ class RecommendationAuditItem(BaseModel):
     latency_ms: float
     predictions: list[AuditPredictionItem]
     created_at: datetime
+    input_state_revision: int
+    input_state_hash: str
+    exclusion_hash: str
+    positive_signal_count: int
+    excluded_count: int
+    filter_policy: str
+    feature_event_time: datetime | None
+    candidate_sources: dict[str, int]
+    reason: str
 
 
 class RecommendationAuditResponse(BaseModel):
@@ -430,9 +471,11 @@ def _openapi_schema() -> dict[str, Any]:
 app.openapi = _openapi_schema  # type: ignore[method-assign]
 
 # Middleware is added at module import, before the first request. Starlette
-# evaluates the last-added middleware first: AuthMiddleware opens the RLS
+# evaluates the last-added middleware first: RequestIdMiddleware resolves the
+# correlation id and owns the response header, AuthMiddleware opens the RLS
 # transaction, then the audit middleware persists before that transaction
-# commits.
+# commits. Request-id resolution is outermost so even a 401 carries the header
+# the caller can correlate on.
 app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
 app.add_middleware(
     AuthMiddleware,
@@ -445,6 +488,7 @@ app.add_middleware(
     dev_bypass_tenant=_settings.dev_bypass_tenant,
     dev_bypass_user=_settings.dev_bypass_user,
 )
+app.add_middleware(RequestIdMiddleware)
 
 
 def _require_demo_persona_access(request: Request) -> None:
@@ -524,11 +568,21 @@ async def recommendations(
         ranker_latency_ms=decision.ranker_latency_ms,
         model_latency_ms=decision.model_latency_ms,
         predictions=decision.predictions,
+        input_state_revision=decision.input_state_revision,
+        input_state_hash=decision.input_state_hash,
+        exclusion_hash=decision.exclusion_hash,
+        positive_signal_count=decision.positive_signal_count,
+        excluded_count=decision.excluded_count,
+        filter_policy=decision.filter_policy,
+        feature_event_time=decision.feature_event_time,
+        candidate_sources=decision.candidate_sources,
+        reason=decision.reason,
     )
     items = decision.items
     logger.debug(
         "recommendations tenant_id=%s user_id=%s policy=%s candidate_version=%s "
-        "ranker_version=%s feature_version=%s model_latency_ms=%.3f fallback_reason=%s",
+        "ranker_version=%s feature_version=%s model_latency_ms=%.3f fallback_reason=%s "
+        "positive_signal_count=%s excluded_count=%s exclusion_hash=%s request_id=%s",
         principal.tenant_id,
         user_id,
         decision.policy,
@@ -537,6 +591,10 @@ async def recommendations(
         decision.feature_version,
         decision.model_latency_ms,
         decision.fallback_reason,
+        decision.positive_signal_count,
+        decision.excluded_count,
+        decision.exclusion_hash,
+        getattr(request.state, "request_id", None),
     )
     metadata_by_id = await run_in_threadpool(
         _catalog.metadata_for_movies,
@@ -548,6 +606,16 @@ async def recommendations(
         user_id=user_id,
         model_version=decision.model_version,
         policy=decision.policy,
+        serving_policy=ServingPolicyResponse(
+            name=decision.serving_policy.name,
+            learned=decision.serving_policy.learned,
+            positive_signal_count=decision.serving_policy.positive_signal_count,
+            threshold=decision.serving_policy.threshold,
+            reason=decision.serving_policy.reason,
+            score_scale=decision.serving_policy.score_scale,
+            filter_policy=decision.serving_policy.filter_policy,
+            excluded_count=decision.serving_policy.excluded_count,
+        ),
         items=[
             RecommendationItem(
                 movie_id=item.movie_id,

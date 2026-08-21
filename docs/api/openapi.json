@@ -3,6 +3,11 @@
     "schemas": {
       "AuditPredictionItem": {
         "properties": {
+          "candidate_source": {
+            "default": "unknown",
+            "title": "Candidate Source",
+            "type": "string"
+          },
           "features": {
             "additionalProperties": {
               "type": "number"
@@ -17,6 +22,17 @@
           "score": {
             "title": "Score",
             "type": "number"
+          },
+          "seed_movie_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Movie Id"
           }
         },
         "required": [
@@ -790,8 +806,19 @@
             "title": "Candidate Latency Ms",
             "type": "number"
           },
+          "candidate_sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Candidate Sources",
+            "type": "object"
+          },
           "candidate_version": {
             "title": "Candidate Version",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
             "type": "string"
           },
           "created_at": {
@@ -801,6 +828,14 @@
           },
           "endpoint": {
             "title": "Endpoint",
+            "type": "string"
+          },
+          "excluded_count": {
+            "title": "Excluded Count",
+            "type": "integer"
+          },
+          "exclusion_hash": {
+            "title": "Exclusion Hash",
             "type": "string"
           },
           "fallback_reason": {
@@ -814,6 +849,18 @@
             ],
             "title": "Fallback Reason"
           },
+          "feature_event_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature Event Time"
+          },
           "feature_latency_ms": {
             "title": "Feature Latency Ms",
             "type": "number"
@@ -822,8 +869,20 @@
             "title": "Feature Version",
             "type": "string"
           },
+          "filter_policy": {
+            "title": "Filter Policy",
+            "type": "string"
+          },
           "http_status": {
             "title": "Http Status",
+            "type": "integer"
+          },
+          "input_state_hash": {
+            "title": "Input State Hash",
+            "type": "string"
+          },
+          "input_state_revision": {
+            "title": "Input State Revision",
             "type": "integer"
           },
           "latency_ms": {
@@ -846,6 +905,10 @@
             "title": "Policy",
             "type": "string"
           },
+          "positive_signal_count": {
+            "title": "Positive Signal Count",
+            "type": "integer"
+          },
           "predictions": {
             "items": {
               "$ref": "#/components/schemas/AuditPredictionItem"
@@ -859,6 +922,10 @@
           },
           "ranker_version": {
             "title": "Ranker Version",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
             "type": "string"
           },
           "request_id": {
@@ -877,6 +944,7 @@
         },
         "required": [
           "request_id",
+          "correlation_id",
           "tenant_id",
           "actor_user_id",
           "user_id",
@@ -895,7 +963,16 @@
           "model_latency_ms",
           "latency_ms",
           "predictions",
-          "created_at"
+          "created_at",
+          "input_state_revision",
+          "input_state_hash",
+          "exclusion_hash",
+          "positive_signal_count",
+          "excluded_count",
+          "filter_policy",
+          "feature_event_time",
+          "candidate_sources",
+          "reason"
         ],
         "title": "RecommendationAuditItem",
         "type": "object"
@@ -1037,6 +1114,9 @@
             "title": "Policy",
             "type": "string"
           },
+          "serving_policy": {
+            "$ref": "#/components/schemas/ServingPolicyResponse"
+          },
           "tenant_id": {
             "title": "Tenant Id",
             "type": "string"
@@ -1051,9 +1131,59 @@
           "user_id",
           "model_version",
           "policy",
+          "serving_policy",
           "items"
         ],
         "title": "RecommendationResponse",
+        "type": "object"
+      },
+      "ServingPolicyResponse": {
+        "description": "Machine-readable proof of which policy served this response.\n\n``positive_signal_count`` and ``threshold`` are what let a client show\nprogress toward learned serving without guessing at the rule, and\n``score_scale`` names what ``RecommendationItem.score`` actually is so it\nis never rendered as a probability or a match percentage (ADR 0012).",
+        "properties": {
+          "excluded_count": {
+            "title": "Excluded Count",
+            "type": "integer"
+          },
+          "filter_policy": {
+            "title": "Filter Policy",
+            "type": "string"
+          },
+          "learned": {
+            "title": "Learned",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "positive_signal_count": {
+            "title": "Positive Signal Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "score_scale": {
+            "title": "Score Scale",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "learned",
+          "positive_signal_count",
+          "threshold",
+          "reason",
+          "score_scale",
+          "filter_policy",
+          "excluded_count"
+        ],
+        "title": "ServingPolicyResponse",
         "type": "object"
       },
       "TasteGenreResponse": {
