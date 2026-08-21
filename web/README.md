@@ -24,7 +24,9 @@ RECOMMENDATION_API_URL=http://api.internal:8000 make web-dev
 
 ## Status
 
-The Phase 3 baseline UI is live: demo user selector, recommendation grid,
-watch-history view, policy/model metadata, and a server-side FastAPI proxy.
-TMDB poster images and Keycloak browser authentication are the next frontend
-increments.
+The Phase 3 baseline UI is live: persona selector, recommendation grid,
+watch-history view, 1–5 star rating loop with per-profile reset, policy/model
+metadata, TMDB posters (proxied through FastAPI, with generated fallback
+artwork), and a server-side FastAPI proxy. Keycloak browser authentication is
+the next frontend increment; the demo currently relies on the API's guarded
+dev impersonation mode.

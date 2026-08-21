@@ -1,5 +1,7 @@
 # MovieLens Two-Stage Recommender
 
+[![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A two-stage movie recommender on MovieLens 25M, built end-to-end with the engineering discipline of a production ML platform — ADR-gated decisions, time-respecting splits, stage-specific evaluation, and per-policy attribution. The point is the engineering around the model, not the leaderboard.
 
 **Status:** Phase 1 (foundation) complete · Phase 2 (two-stage offline) complete · Phase 3 (serving, auth, multi-tenancy) in progress.
@@ -46,7 +48,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 
 Most public recsys repos are notebooks that train a model and report a number. This repo is structured to look like a system, not an experiment. The artifacts worth looking at first:
 
-- **[Design decisions (ADRs)](docs/adr/)** — every significant choice is written down with alternatives and consequences. Recruiters: [ADR 0001 (evaluation protocol)](docs/adr/0001-evaluation-protocol.md) is the strongest single entry point.
+- **[Design decisions (ADRs)](docs/adr/)** — every significant choice is written down with alternatives and consequences. If you read one document, read [ADR 0001 (evaluation protocol)](docs/adr/0001-evaluation-protocol.md) — it pins the contract everything else is scored against.
 - **[Working demo plan](docs/demo-plan.md)** — the concrete Phase 3 vertical-slice sequence, definition of done, walkthrough, and remaining delivery bundles.
 - **[Local demo runbook](docs/demo-runbook.md)** — clean-checkout startup, seeding, smoke validation, walkthrough, reset, and troubleshooting.
 - **[Movie-discovery frontend plan](docs/frontend/)** — product discovery,
@@ -93,7 +95,7 @@ These are bright-line rules the project is held to. Each maps to a real producti
 2. **Feature parity test in CI.** Offline-computed feature must match online-served feature for the same user/item. This is the bug that ruins most real recsys deployments.
 3. **Cold-start handling.** Explicit fallback for new users (no history) and new movies (no interactions); measured against synthetic cold-start cohorts, not assumed.
 4. **Latency SLO.** p99 < 100ms, measured under synthetic load.
-5. **Reproducibility test.** `make train` on a fixed seed produces the same model artifact hash. If it doesn't, find what's nondeterministic.
+5. **Reproducibility test.** `make train-<model>` on a fixed seed produces the same model artifact hash. If it doesn't, find what's nondeterministic.
 6. **ADRs.** One ADR per significant decision, substantive enough to defend in a design review.
 7. **Evaluation gate before promotion.** A model is never promoted without beating the incumbent on holdout — automated, not eyeballed.
 8. **Logged predictions and features.** Every online prediction logs the features used, the tenant, the model version, and the latency.
@@ -113,17 +115,17 @@ The broader Phase 3 work extends the same contracts to its remaining surfaces.
 | ANN retrieval | FAISS-CPU (IVF-Flat over cosine-normalized item embeddings) |
 | Data store | PostgreSQL |
 | Data versioning | DVC |
-| Feature store | Feast (Phase 3) |
+| Feature store | Feast (Postgres offline store, Redis online store) |
 | Tracking + registry | MLflow |
-| Orchestration | Prefect |
+| Orchestration | Prefect (Phase 4) |
 | Serving | FastAPI + Redis |
 | Auth provider | Keycloak OIDC, realm per tenant |
 | Multi-tenancy isolation | PostgreSQL row-level security |
 | Synthetic load | k6 |
 | Frontend | Next.js + TypeScript + Tailwind |
-| Monitoring | Prometheus + Grafana + Evidently |
+| Monitoring | Prometheus + Grafana; Evidently from Phase 5 |
 | Containers | Docker + docker-compose |
-| CI/CD | GitHub Actions (ruff, black, mypy `--strict`, pytest) |
+| CI/CD | GitHub Actions (ruff, black, strict mypy, pytest, feature parity, tenant isolation, k6 SLO gate, frontend lint/typecheck/build) |
 
 ## Phase plan (abbreviated)
 
@@ -139,54 +141,76 @@ The full plan with lessons-per-phase lives in the project's design notes. The sh
 ## Repo structure
 
 ```
+docker-compose.yml      # dev stack: Postgres, Redis, pgBouncer, Keycloak, MLflow, Prometheus, Grafana
+docker-compose.demo.yml # overlay for the one-command demo: API, model/feature sidecars, web, k6
+Makefile                # install, lint, test, train-*, serve, web-*, db-migrate, demo-*
+alembic/                # migrations: tenant roles + table, tenant_id columns, RLS, audits
 docs/
-  adr/                  # backend ADRs (flat numeric line)
+  adr/                  # backend ADRs (flat numeric line) + index
     frontend/           # frontend ADRs (own numeric line)
+  api/                  # committed OpenAPI contract (generated by scripts/generate_openapi.py)
+  frontend/             # movie-discovery product discovery, design contracts, plan, testing strategy
+  demo-plan.md          # Phase 3 vertical-slice plan and delivery bundles
+  demo-runbook.md       # clean-checkout demo startup, walkthrough, reset, troubleshooting
   eda.md                # MovieLens 25M exploratory analysis writeup
+notebooks/              # EDA as a script (SQL aggregations against Postgres), run via make eda
+pipelines/              # Prefect flows (Phase 4; empty package today)
+scripts/                # repo tooling: OpenAPI generation for the committed API contract
 src/
-  data/                 # ingestion, schemas, temporal split
+  auth/                 # Keycloak JWKS fetch/cache and JWT-validating middleware
+  data/                 # download, ingestion, schemas, temporal split, demo schema bootstrap
   evaluation/           # single source of truth for metrics (recall@K, NDCG@K, warm/cold slicing)
+  features/             # point-in-time feature module, Feast materialization, online reads
+    feast_repo/         # Feast repository: entities, feature views, feature_store.yaml
   models/
     candidates/         # popularity, CF/ALS, item-item, two-tower
     ranker/             # LightGBM LambdaRank
     artifacts.py        # serving manifest + deterministic item-item index
-  serving/              # authenticated API, orchestration, feature/model clients, prediction audit
-  training/             # offline evaluation plus demo artifact packaging
-tests/
-  unit/                 # model contracts, eval-protocol coverage
-  integration/          # to be expanded in Phase 3
-  feature_parity/       # offline/online consistency (Phase 3)
-web/                    # Next.js + Tailwind frontend
+  serving/              # FastAPI app, orchestration, feature/model clients, prediction audit, TMDB proxy
+    tenancy/            # tenant router: resolves the verified tenant to its config + Redis key prefix
+  training/             # offline training/evaluation entrypoints plus demo artifact packaging
 synthetic/
   personas/             # stable named demo users, catalog manifest, idempotent seeder
   load/                 # authenticated k6 warm/cold/mixed SLO workloads
-infra/                  # docker-compose configs, MLflow + Postgres init
+  smoke/                # behavioral smoke check the demo and CI run against the live stack
+tests/
+  unit/                 # model contracts, eval protocol, auth, tenancy, serving, demo fixtures
+  feature_parity/       # offline-computed feature == online-served feature
+  learned_serving/      # end-to-end two-stage path against the seeded stores
+  tenant_isolation/     # cross-tenant leakage canaries against Postgres RLS + Keycloak
+  integration/          # placeholder; expands with the rest of Phase 3
+web/                    # Next.js + TypeScript + Tailwind frontend (generated API types under web/lib)
+infra/                  # API + model Dockerfiles, Keycloak realms, pgBouncer, MLflow image, Postgres init, k6 pin
 ```
 
 ## Local development
 
-The stack runs on local docker-compose: Postgres, Redis, MLflow (with Postgres backend store), Prometheus, Grafana.
+The dev stack runs on local docker-compose: Postgres (+ pgBouncer), Redis, Keycloak (with its own Postgres), MLflow (with Postgres backend store), Prometheus, Grafana.
 
 ```bash
 # one-time
 make install              # python deps via pyproject
-make infra-up             # docker-compose up: postgres, redis, mlflow, prom, grafana
+make infra-up             # docker compose up: postgres, pgbouncer, redis, keycloak, mlflow, prometheus, grafana
 
 # fetch + ingest data (one-time, DVC-tracked)
 make data-download        # downloads MovieLens 25M
 make data-ingest          # ingests into Postgres
-make db-migrate           # applies tenant and demo-persona schema
+make db-migrate           # alembic upgrade head: tenant roles, tenant_id columns, RLS, audits
 
 # routine
 make lint                 # ruff + black --check
-make typecheck            # mypy --strict on src/
-make test                 # pytest
+make typecheck            # mypy (strict) on src/ and synthetic/
+make test                 # full pytest suite; make test-unit for the fast subset
 make train-popularity     # Phase 1 baseline → MLflow phase-1-baselines
 make train-cf             # Phase 1 baseline → MLflow phase-1-baselines
 make train-itemitem       # Phase 2 candidate → MLflow phase-2-candidates
+make train-twotower       # Phase 2 candidate → MLflow phase-2-candidates
+make train-ranker         # Phase 2 ranker    → MLflow phase-2-ranker
+make serve                # uvicorn on :8000 with reload (needs infra-up + db-migrate)
+make web-dev              # Next.js dev server on :3001 (make web-install first)
 ```
 
-MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>.
+MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>. Keycloak admin: <http://localhost:8080> (dev credentials live in `docker-compose.yml`). API: <http://localhost:8000>.
 
 ## Working demo
 
@@ -231,3 +255,7 @@ The token is sent to TMDB as a server-side Bearer credential. It is never
 included in recommendation responses or the browser bundle. Successful and
 failed lookups are held in a bounded six-hour in-process cache so an upstream
 failure does not make recommendations unavailable or trigger repeated calls.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

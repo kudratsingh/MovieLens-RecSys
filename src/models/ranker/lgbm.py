@@ -10,16 +10,18 @@ ADR 0001 pins as the recommender-end-to-end success criterion.
 Contract:
 
   - ``fit(features_df, group_sizes, labels)`` — features come from the
-    ``FEATURE_COLUMNS`` schema pinned in ``src/features/pipeline.py``.
+    ``FEATURE_COLUMNS`` schema pinned in ``src/feature_contract.py``.
     ``group_sizes`` is a list where each entry is the number of rows in
     that group (one group per (user, query-time) query). ``labels`` is
     1 for positives, 0 for negatives.
   - ``predict(features_df) -> np.ndarray`` — raw scores, higher = more
     relevant. Not calibrated probabilities.
   - ``rank_candidates(candidates_by_user, features_by_user, k)`` — the
-    shape both the training script's eval loop and Phase 3's serving
-    handler will call. Returns ``dict[int, list[int]]``: user id → top-K
-    movie ids.
+    batch shape the training script's eval loop uses. Returns
+    ``dict[int, list[int]]``: user id → top-K movie ids. The serving
+    sidecar (``src/serving/model_server.py``) scores one user per request
+    against Feast-served features, so it calls ``predict`` directly and
+    does its own top-K.
 
 Cold-start passes through cleanly — a user with no history gets features
 close to zero on the user-side dimensions, and the ranker learns to

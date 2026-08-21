@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-07-03
 
+_Implementation note (2026-08-21): the Feast repository landed in `src/features/feast_repo/` with `tenant` declared as its own entity joined onto every feature view, and the parity test in `tests/feature_parity/` runs in CI as planned. Two departures from the text below: the `FeatureIndex` prototype in `src/features/pipeline.py` was kept rather than retired (offline ranker training still reads it), and materialization is a direct `src/features/materialize.py` job rather than a Prefect task, since Prefect does not arrive until Phase 4._
+
 ## Context
 
 CLAUDE.md's stack table has locked "Feature store: Feast" from day one. This ADR does not reopen that decision; it defends it. Specifically, it defends *Feast versus the two alternatives a design-review will actually raise* — a custom Postgres-views + thin-loader stack, and a fully hand-rolled Redis loader with no framework — because both are cheaper on paper and both look tempting at this project's feature count.

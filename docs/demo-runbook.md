@@ -11,8 +11,9 @@ remains the source for training and offline evaluation.
 - Enough free disk space for the Python, Next.js, Postgres, Keycloak, and
   pgBouncer images. The first start downloads base images and is substantially
   slower than later cached starts.
-- Ports 3000, 3001, 5000, 5432, 6379, 6432, 8000, 8080, and 9090
-  available on localhost.
+- Ports 3001, 5432, 6379, 6432, 8000, and 8080 available on localhost, plus
+  9090 if you run the load gate (it starts Prometheus as the k6 remote-write
+  receiver). The demo does not start MLflow or Grafana.
 
 Python and Node.js are not required on the host for the containerized
 walkthrough. They are only required for direct backend or frontend development.

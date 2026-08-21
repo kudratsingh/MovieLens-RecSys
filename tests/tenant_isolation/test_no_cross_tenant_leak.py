@@ -5,9 +5,11 @@ highest-severity bug class. This test authenticates as tenants A and
 B against the live docker-compose stack and hits every authenticated
 endpoint, asserting the returned payload matches the caller's tenant.
 
-Bundle #1b's authenticated surface is just ``/whoami``. As Phase 3
-adds recommendations / features / model-metadata endpoints, each
-new endpoint gains coverage here — the test's job is to be the
+Covered today: ``/whoami``, ``/users/{id}/recommendations``,
+``/users/{id}/history``, ``/users/{id}/audits``, ``/personas``, and the
+rating write path. Not yet covered: ``/users/{id}/features``,
+``/users/{id}/catalog``, and ``DELETE /users/{id}/ratings``. Every new
+endpoint gains coverage here — the test's job is to be the
 tenant-isolation gate every serving PR passes through in CI.
 """
 
@@ -79,8 +81,8 @@ def test_alice_default_token_never_returns_demo_data(
 ) -> None:
     """Cross-tenant canary: authenticate as alice (tenant=default),
     hit /whoami, and assert no field in the response mentions the
-    demo tenant. As more endpoints land, they all get added to the
-    loop here.
+    demo tenant. The user-scoped endpoints get the same treatment in
+    the tests further down.
     """
     token = mint_token("default", "alice", "alice")
     resp = client.get("/whoami", headers={"Authorization": f"Bearer {token}"})

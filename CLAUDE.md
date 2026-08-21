@@ -20,18 +20,18 @@ A **multi-tenant, authenticated** two-stage movie recommender service:
 
 Around the online path: an offline training pipeline orchestrated by Prefect, a model registry with a promotion gate, monitoring for system and model metrics, drift detection, and an A/B / shadow-deploy framework. Champion-vs-challenger routing is **tenant-aware** — different tenants can be on different model versions.
 
-**Multi-tenancy.** A tenant is a logical isolation boundary. Cross-tenant data leakage is the highest-severity bug class (see non-negotiables). Phase 3 picks the isolation mechanism (per-tenant Postgres schema, row-level security, or per-tenant FastAPI instance — decided by ADR when Phase 3 begins). Champion-model assignment, API keys, rate limits, and audit logs are all scoped per-tenant.
+**Multi-tenancy.** A tenant is a logical isolation boundary. Cross-tenant data leakage is the highest-severity bug class (see non-negotiables). The isolation mechanism is Postgres row-level security (ADR 0008): every tenant-scoped table carries a `tenant_id`, RLS is forced, and the auth middleware sets `app.tenant_id` inside a per-request transaction so the database — not application filtering — is the enforcer of last resort. Champion-model assignment, API keys, rate limits, and audit logs are all scoped per-tenant.
 
-**Auth.** Phase 3 introduces real auth on every API endpoint except `/healthz`. Auth provider choice (OAuth2/OIDC via Auth0, Keycloak self-hosted, or a JWT-only flow against a Postgres-backed user store) is ADR'd in Phase 3. There is no unauthenticated production path.
+**Auth.** Every API endpoint except `/healthz` requires a valid token. The provider is self-hosted Keycloak with one realm per tenant (ADR 0007); the tenant is derived from the token's issuer, never from a client-declared claim. There is no unauthenticated production path.
 
 **Synthetic users.** A synthetic-user harness lives in `synthetic/` and serves narrow jobs, not one-size-fits-all generation:
-- **Load testing** (k6 or Locust, ADR'd in Phase 3) — verify the p99 < 100ms SLO under realistic concurrency.
+- **Load testing** (k6, ADR 0010) — verify the p99 < 100ms SLO under realistic concurrency, against real Keycloak-issued tokens.
 - **Cold-start coverage** — programmatically generated new-user states (history sizes 0, 1, 3, 10) to stress the cold-start fallback path beyond what MovieLens's natural distribution provides.
 - **Drift simulation** (Phase 5) — synthetic users with shifting taste distributions to verify Evidently alerts fire.
 - **A/B bucketing fixtures** (Phase 6) — deterministic tenant + user combinations for champion-vs-challenger tests.
 - **Demo personas** — handcrafted users for portfolio walkthroughs of the frontend.
 
-A **Next.js frontend** consumes the API. It is not an end-user product — it's a portfolio surface that makes the ML-engineering work visible. The frontend authenticates via the same auth provider as any other client and exposes the surfaces that exercise the system's interesting parts: feature-attribution panels, model/version selection, tenant switcher (for portfolio walkthroughs), and a champion-vs-challenger comparison view. A demo-impersonation mode is retained for portfolio showings — gated behind a dev/portfolio flag, never reachable from production deployments. Catalog search and full admin dashboards remain explicit non-goals (Grafana owns admin/operator views).
+A **Next.js frontend** consumes the API. It is not an end-user product — it's a portfolio surface that makes the ML-engineering work visible. The frontend authenticates via the same auth provider as any other client and exposes the surfaces that exercise the system's interesting parts: feature-attribution panels, model/version selection, tenant switcher (for portfolio walkthroughs), and a champion-vs-challenger comparison view. A demo-impersonation mode is retained for portfolio showings — gated behind an explicit `demo-impersonator` realm role (ADR 0012) or the dev-only bypass, never reachable from production deployments. The frontend is being reshaped into a poster-first movie-discovery product (Discover / Browse / Library / detail, frontend ADR 0002), so a browsable catalog is now in scope; full admin dashboards remain an explicit non-goal (Grafana owns admin/operator views).
 
 ## Dataset
 
@@ -117,24 +117,24 @@ This is the phase that most heavily absorbs the 2026-06-02 enterprise-scope shif
 - Containerize the full stack
 - **Feature parity test in CI** (offline-computed feature matches online-served feature for same key) — non-negotiable
 - Bootstrap the Next.js + TypeScript + Tailwind app alongside the API (already partially done — see PR #20)
-- Frontend surface (Phase 3 baseline): user selector → top-K poster grid + watch history view
+- Frontend surface (Phase 3 baseline): user selector → top-K poster grid + watch history view. Superseded as the end state by the movie-discovery redesign (frontend ADR 0002, cross-cutting ADR 0012, `docs/frontend/`)
 - TMDB integration via MovieLens `links.csv` → `tmdbId`; the API key lives server-side, proxied through FastAPI
 
 **Real auth (new):**
-- ADR: auth provider choice (Auth0 vs Keycloak self-hosted vs Postgres-backed JWT). Decision turns on: ease of multi-tenancy mapping, ability to rotate keys cleanly, local-dev story, and how much of the work is reusable when Phase 6's A/B routing layer comes online
+- ADR 0007 — auth provider choice (Auth0 vs Keycloak self-hosted vs Postgres-backed JWT). Decided: Keycloak, realm per tenant. Decision turned on: ease of multi-tenancy mapping, ability to rotate keys cleanly, local-dev story, and how much of the work is reusable when Phase 6's A/B routing layer comes online
 - Auth middleware on FastAPI — every endpoint except `/healthz` requires a valid token
 - Token claims include tenant id; downstream code never sees a request without a resolved tenant
 - Frontend authenticates via the same provider; a dev/portfolio impersonation mode is gated behind an explicit flag and *never* enabled in production builds
 - Audit log table — every authenticated request emits a row (`tenant_id`, `user_id`, `endpoint`, `model_version`, `latency_ms`, `outcome`)
 
 **Multi-tenancy (new):**
-- ADR: isolation mechanism (Postgres schema-per-tenant vs row-level security vs FastAPI-instance-per-tenant). Decision turns on: query complexity, blast radius of a bug, operational overhead, and whether tenants share a model registry or have their own
+- ADR 0008 — isolation mechanism (Postgres schema-per-tenant vs row-level security vs FastAPI-instance-per-tenant). Decided: row-level security, with pgBouncer in transaction-pool mode so `SET LOCAL` can't leak across requests. Decision turned on: query complexity, blast radius of a bug, operational overhead, and whether tenants share a model registry or have their own
 - Tenant router in `src/serving/tenancy/` — resolves `tenant_id` (from auth claim) to (a) the champion model version for that tenant, (b) the Redis key prefix for online features, (c) the per-tenant rate limit
 - Tenant configuration in Postgres — one row per tenant, columns include API quotas, current champion model versions per stage, A/B bucketing seed
 - Cross-tenant leakage test in CI — synthetic-data integration test that authenticates as tenant A, fires every endpoint, and asserts no response payload contains tenant B's data
 
 **Synthetic-user harness (new, primary scope):**
-- `synthetic/load/` — k6 or Locust scripts (ADR'd) that drive realistic concurrent traffic against the API and produce p99/p95/p50 reports. CI runs a small-scale version on every PR that touches `src/serving/`; nightly runs a larger one
+- `synthetic/load/` — k6 scripts (ADR 0010) that drive realistic concurrent traffic against the API and produce p99/p95/p50 reports. CI runs a small-scale version on every PR that touches `src/serving/`; nightly runs a larger one
 - `synthetic/cold_start/` — generator for programmatically created user profiles with controlled history sizes (0, 1, 3, 10 interactions) across the genre distribution. Output flows into the eval harness as an additional slice so cold-start recall has its own metric line in MLflow
 - `synthetic/personas/` — handcrafted demo users for portfolio walkthroughs (action fan, drama fan, eclectic, etc.). Loaded into a `demo` tenant
 - (Deferred to later phases) `synthetic/drift/` for Phase 5, `synthetic/ab_fixtures/` for Phase 6
@@ -146,13 +146,13 @@ This is the phase that most heavily absorbs the 2026-06-02 enterprise-scope shif
 
 **ADRs that gate Phase 3 work (each in its own bundled PR with the code it justifies):**
 - ADR 0006 — Two-tower retrieval architecture (history-based encoder, sampled softmax, FAISS) — *bundled with Phase 2's two-tower PR* (Phase 2 step #4, sits at the Phase 2/3 boundary because it pins FAISS as the ANN library that Phase 3 serving will inherit)
-- ADR for auth provider choice (Auth0 vs Keycloak vs Postgres-backed JWT)
-- ADR for multi-tenancy isolation mechanism (Postgres schema vs row-level security vs FastAPI-instance-per-tenant)
-- ADR for synthetic-load tool (k6 vs Locust)
-- ADR for Feast vs alternatives (custom Postgres views, hand-rolled key-value loader)
-- ADR for cold-start coverage methodology (how synthetic cold users are generated and what they prove)
+- ADR 0007 — auth provider choice (Auth0 vs Keycloak vs Postgres-backed JWT) → Keycloak, realm per tenant
+- ADR 0008 — multi-tenancy isolation mechanism (Postgres schema vs row-level security vs FastAPI-instance-per-tenant) → row-level security
+- ADR 0009 — Feast vs alternatives (custom Postgres views, hand-rolled key-value loader) → Feast, Postgres offline + Redis online
+- ADR 0010 — synthetic-load tool (k6 vs Locust) → k6, metrics via Prometheus remote-write
+- ADR 0011 — cold-start coverage methodology (how synthetic cold users are generated and what they prove) → fixed-seed cohort, history buckets {0, 1, 3, 10}
 
-Numbering for the unnumbered ADRs above is assigned at write time, in roughly the order they land. ADRs are namespaced — backend ADRs use the flat top-level numeric line at `docs/adr/`, frontend ADRs use their own line under `docs/adr/frontend/`.
+All five landed as docs-only PRs (#27–#31) ahead of the code that consumes them (#32 onward). ADRs are namespaced — backend ADRs use the flat top-level numeric line at `docs/adr/`, frontend ADRs use their own line under `docs/adr/frontend/`.
 
 **Lessons:** online/offline skew, feature freshness, feature store as source of truth, latency budgets per stage, designing an API against a real client (not a hypothetical one), the operational shape of multi-tenant ML serving, what auth touches inside an ML service (audit logs, model-version routing per tenant, key rotation), why synthetic load is not optional.
 
@@ -205,50 +205,67 @@ These are the things I'll hold the project to. Every one of them maps to a real 
 movielens-recsys/
 ├── CLAUDE.md                  # this file
 ├── README.md
-├── Makefile                   # train, serve, test, lint, env up/down, etc.
-├── docker-compose.yml         # default (dev)
-├── docker-compose.staging.yml # Phase 3+
-├── docker-compose.prod.yml    # Phase 3+
-├── .github/workflows/         # CI: lint, test, model tests, feature parity, synthetic-load smoke
+├── Makefile                   # train, serve, test, lint, db-migrate, demo-*, api-contract*, web-api-types* targets
+├── scripts/                   # generate_openapi.py — committed OpenAPI contract + CI drift check
+├── alembic.ini
+├── alembic/                   # Phase 3 — tenant roles, tenants registry, tenant_id + forced RLS, personas, feature tables, audits
+├── docker-compose.yml         # default dev stack: postgres, redis, mlflow, prometheus, grafana, pgbouncer, keycloak
+├── docker-compose.demo.yml    # layered on the default stack: api, web, feature-server, model-server, k6 (load profile)
+├── docker-compose.staging.yml # planned — Phase 3 multi-environment infra
+├── docker-compose.prod.yml    # planned — Phase 3 multi-environment infra
+├── .github/workflows/         # CI: lint, unit, feature parity, tenant isolation, synthetic-load smoke, frontend, compose validation
 ├── docs/
 │   ├── adr/                   # backend ADRs (flat numeric line) + cross-cutting
 │   │   └── frontend/          # frontend ADRs (own numeric line)
+│   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes
+│   ├── frontend/              # movie-discovery product docs: discovery, design contracts, implementation plan, readiness, testing, baseline evidence
 │   ├── eda.md
+│   ├── demo-plan.md           # Phase 3 vertical-slice milestone: bundles, definition of done, walkthrough
+│   ├── demo-runbook.md        # clean-checkout demo startup, seeding, smoke, reset, troubleshooting
 │   └── progress.md            # session-level progress log (frontend agent's; not authoritative)
 ├── data/                      # DVC-tracked
+├── notebooks/                 # EDA script (`make eda`); metrics still go through src/evaluation/
 ├── src/
-│   ├── data/                  # ingestion, splits, schemas
-│   ├── features/              # feature definitions (Feast in Phase 3)
+│   ├── config.py              # pydantic-settings; refuses to construct with dev-only flags outside dev
+│   ├── feature_contract.py    # ordered ranker feature columns shared by training, the manifest, and the sidecar
+│   ├── data/                  # ingestion, splits, schemas, demo schema bootstrap
+│   ├── features/              # point-in-time feature module, Feast repo (feast_repo/), materialization, online reads
 │   ├── models/
-│   │   ├── candidates/        # candidate generator(s)
-│   │   └── ranker/            # ranker(s)
-│   ├── training/              # training pipelines
+│   │   ├── artifacts.py       # SHA-256-pinned serving manifest + deterministic item-item index
+│   │   ├── candidates/        # popularity, CF/ALS, item-item, two-tower
+│   │   └── ranker/            # LightGBM LambdaRank
+│   ├── training/              # offline training entrypoints + demo artifact packaging
 │   ├── evaluation/            # offline metrics, evaluation gate
-│   ├── auth/                  # Phase 3 — auth middleware, token validation, claim resolution
+│   ├── auth/                  # Phase 3 — JWKS cache, auth middleware, tenant-scoped request transaction
 │   ├── serving/
 │   │   ├── app.py             # FastAPI entrypoint
 │   │   ├── tenancy/           # Phase 3 — tenant router, per-tenant config resolution
+│   │   ├── audit.py           # Phase 3 — RLS-scoped prediction audit writer
+│   │   ├── model_server.py    # Phase 3 — private Feast + LightGBM sidecar
 │   │   ├── routing/           # Phase 6 — champion/challenger split, shadow routing
-│   │   └── audit/             # Phase 3 — audit log writer
-│   └── monitoring/            # drift, dashboards
-├── pipelines/                 # Prefect flows
+│   │   └── ...                # recommendations, orchestration, online features, TMDB proxy, startup checks
+│   └── monitoring/            # Phase 5 — drift, dashboards
+├── pipelines/                 # Phase 4 — Prefect flows
 ├── synthetic/                 # Phase 3+ — synthetic-user harnesses (scoped per job)
-│   ├── load/                  # k6 / Locust scripts
-│   ├── cold_start/            # programmatic new-user generation
-│   ├── personas/              # handcrafted demo users
+│   ├── load/                  # k6 scripts (ADR 0010): authenticated warm/cold/mixed workloads + thresholds
+│   ├── personas/              # handcrafted demo users, catalog manifest, idempotent seeder
+│   ├── smoke/                 # demo readiness + behavioral smoke checks
+│   ├── cold_start/            # planned — programmatic new-user cohorts (ADR 0011)
 │   ├── drift/                 # Phase 5
 │   └── ab_fixtures/           # Phase 6
 ├── web/                       # Next.js + TS + Tailwind frontend
-│   ├── app/                   # routes (Next.js App Router)
+│   ├── app/                   # routes (Next.js App Router), incl. server-side route handlers that proxy FastAPI
 │   ├── components/
-│   ├── lib/                   # API client, types
+│   ├── lib/                   # API client + api.generated.ts (typed from docs/api/openapi.json)
+│   ├── scripts/               # check-api-types.mjs — CI drift check between OpenAPI and generated types
 │   └── public/
 ├── tests/
 │   ├── unit/
 │   ├── integration/
-│   ├── feature_parity/        # offline/online consistency
-│   └── tenant_isolation/      # Phase 3 — cross-tenant leakage canaries
-└── infra/                     # docker, postgres init, mlflow image, terraform if/when added
+│   ├── feature_parity/        # offline/online consistency (CI, against live Postgres + Redis)
+│   ├── learned_serving/       # manifest-backed two-stage serving against live stores
+│   └── tenant_isolation/      # Phase 3 — cross-tenant leakage canaries (CI, against the real compose stack)
+└── infra/                     # api + features Dockerfiles, keycloak realm seeds, pgbouncer, postgres init, mlflow image, ci pins
 ```
 
 ## Conventions
@@ -257,7 +274,7 @@ movielens-recsys/
 - **TypeScript:** 5+, strict mode, no implicit `any`, ESLint for lint, Prettier for format, `tsc --noEmit` in CI on `web/`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Do **not** add `Co-authored-by` trailers, "Generated with Claude Code" footers, or any attribution to Claude / Claude Code / any AI tool in commit messages, PR descriptions, code comments, docstrings, or the README. All commits are authored solely by me.
 - **Branches:** trunk-based, short-lived feature branches, PRs to main. Every piece of work — no matter how small — goes on a feature branch and merges via PR. No direct pushes to `main`.
-- **GitHub:** repo is **private**. Branch protection on `main` (PRs required, CI must pass, no direct pushes). Default to squash merges. MIT license. README states what the project is, the stack, and the current phase.
+- **GitHub:** repo is **public** (`kudratsingh/MovieLens-RecSys`), made public for portfolio visibility — so nothing secret ever lives in the tree; the dev-only credentials in compose and the realm seeds are labeled as such. Branch protection on `main` (PRs required, CI must pass, no direct pushes). Default to squash merges. MIT license. README states what the project is, the stack, and the current phase.
 - **Branch naming:** `feat/<short-description>`, `fix/<short-description>`, `docs/<short-description>`, `chore/<short-description>`. Keep branches short-lived; delete after merge.
 - **PR discipline:** small and reviewable, one coherent unit per PR. Bundle related work (an ADR with the code it justifies, code + the CLAUDE.md status update it triggers, multiple closely-related small docs) rather than splitting on every micro-concern — see "How to work with Claude Code" for the longer version. PR description explains *why*, not just what. Never merge a PR with failing CI.
 - **No AI attribution anywhere.** No mention of Claude, Claude Code, or any AI tool in: commit messages, PR titles, PR descriptions, code comments, docstrings, ADRs, the README, or any other file in the repo. All work is attributed solely to me.
@@ -268,7 +285,7 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-08-15.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs, auth/tenancy foundation, learned online recommendation path, durable demo personas, prediction audits, and measured latency gate are implemented.
+**Updated 2026-08-21.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs (0007–0012), the auth/tenancy foundation, the Feast-backed learned online recommendation path, durable demo personas, prediction audits, the measured k6 latency gate, and the movie-discovery product contract are all on `main` (PRs #27–#45). The current concrete step (the one to take next) is at the bottom of this section.
 
 ### Phase 1 — complete
 
@@ -299,25 +316,31 @@ Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Thos
 
 ### Phase 3 — in progress
 
-- ✅ **ADR 0007 + auth foundation** — Keycloak realm-per-tenant, JWT/JWKS validation, auth middleware, and a dev-only bypass guarded by environment assertions.
-- ✅ **ADR 0008 + tenancy foundation** — tenant registry, Postgres row-level security, pgBouncer transaction pooling, per-request tenant context, tenant router, and cross-tenant CI canaries.
-- ✅ **ADRs 0009–0011** — Feast feature-store architecture, k6 synthetic-load strategy, and cold-start coverage methodology are pinned before their implementation bundles.
-- ✅ **FastAPI serving skeleton** — `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
-- ✅ **Online recommendation path** — authenticated warm requests retrieve item-item candidates, batch-read Feast/Redis features, rank with LightGBM, and filter live RLS-scoped history; cold or unavailable model paths fall back explicitly to popularity.
+Serving, auth, multi-tenancy, feature store, and the synthetic-load harness. The platform decisions are pinned by ADRs 0007–0011 (PRs #27–#31); the code landed in PRs #32–#44; ADR 0012 and frontend ADR 0002 (PR #45) pin the browser-identity and movie-discovery contracts the remaining work builds on. The vertical-slice milestone and its definition of done are tracked in `docs/demo-plan.md`; the frontend redesign bundles in `docs/frontend/implementation-plan.md`. Status:
+
+- ✅ **ADR 0007 + auth foundation** (PRs #27, #32, #33) — Keycloak self-hosted, realm per tenant, with `default` and `demo` realms seeded from `infra/keycloak/realms/`. `src/auth/middleware.py` validates tokens against a TTL-cached JWKS (`src/auth/jwks.py`), derives the tenant from the token issuer, and attaches a `RequestPrincipal` to `request.state`. A dev-only bypass is refused by `Settings.__init__` outside `environment == "dev"`.
+- ✅ **ADR 0008 + tenancy foundation** (PRs #28, #32, #33) — Alembic migrations 0001–0009 under `alembic/versions/` create the `app_user` / `admin_user` roles, the `public.tenants` registry, `tenant_id` on every scoped table, and forced RLS policies. The middleware opens a per-request transaction with `SET LOCAL app.tenant_id`; pgBouncer (`infra/pgbouncer/`) runs in transaction-pool mode so the setting can't leak. `src/serving/tenancy/router.py` resolves a tenant to its config and Redis key prefix; `src/serving/startup_checks.py` refuses to boot if the app engine can bypass RLS or pgBouncer is in session mode. `tests/tenant_isolation/` runs in CI against the real compose stack.
+- ✅ **ADRs 0009–0011** (PRs #29–#31) — Feast (Postgres offline + Redis online), k6 with Prometheus remote-write, and the fixed-seed cold-start cohort methodology are pinned ahead of their implementation bundles.
+- ✅ **FastAPI serving skeleton** (PR #33) — `src/serving/app.py` with `/healthz` and authenticated `/whoami`, startup safety checks, and tenant-scoped database transactions.
+- ✅ **Online recommendation path** (PRs #34, #43, #45) — `src/serving/recommendations.py` + `src/serving/orchestration.py`: authenticated warm requests retrieve item-item candidates, batch-read Feast/Redis features, rank with LightGBM, and filter live RLS-scoped history; cold or unavailable model paths fall back explicitly to popularity. Routing uses unique watched movie IDs against ADR 0011's shared `COLD_START_THRESHOLD = 5` — histories of 0/1/3 are fallback, 5+ may take the learned path.
 - ✅ **Phase 3 baseline frontend** — Next.js user selector, recommendation grid, watch-history panel, serving-policy metadata, and a server-side FastAPI proxy. Frontend lint, strict type checking, and production build run in CI.
-- ✅ **Movie-discovery product contract** — source-audited discovery, route-level design contracts, backend-readiness matrix, testing/finish gate, and frontend ADR 0002 define a poster-first Discover/Browse/Library/detail experience with honest progressive ML disclosure. Cross-cutting ADR 0012 is accepted.
-- ✅ **Bundle 1 correctness and contract foundation** — authenticated request transactions commit before successful responses; the online coordinator uses unique watched movie IDs with the five-interaction fallback threshold; API and browser tokens validate an explicit API audience/calling client; browser persona selection is role-gated; unknown realms fail at the authenticated boundary; and OpenAPI/TypeScript drift checks run in CI.
-- ✅ **Durable demo personas** — four named, tenant-scoped synthetic users (Action Fan, Drama Fan, Eclectic Viewer, and Cold Start), checked-in catalog/history fixtures, an idempotent `make demo-seed` path, authenticated persona discovery, and RLS isolation coverage.
-- ✅ **TMDB metadata and posters** — recommendation responses resolve MovieLens `tmdbId` values server-side through a bounded TTL/LRU cache, degrade to MovieLens metadata when the token or upstream is unavailable, and render optimized posters with accessible visual fallbacks and required attribution.
-- ✅ **Repeatable demo environment** — a layered Compose stack builds FastAPI and standalone Next.js images, bootstraps base tables plus Alembic migrations, loads a self-contained reviewed catalog/persona fixture, verifies readiness and warm/cold behavior, and supports isolated down/reset/log operations.
-- ✅ **Feast/Redis feature path** — a pinned Feast repository materializes point-in-time-correct, tenant-keyed online features into Redis; offline/online parity and cross-tenant reads are enforced in CI.
-- ✅ **Versioned learned serving** — checksum-pinned item-item and LightGBM artifacts are loaded once by an authenticated model sidecar, with a slim FastAPI client preserving the API image budget.
-- ✅ **Prediction audit + k6 gate** — every recommendation persists its exact predictions, feature values, model versions, fallback reason, and stage timings behind RLS. A pinned k6 container drives real-Keycloak warm/cold/mixed traffic and gates p99 < 100 ms, zero errors, correct responses, and >50 requests/second.
-- ⏳ **Remaining Phase 3** — server-side browser session/refresh/logout and bypass-disabled E2E, durable watched/rating/watchlist/dismissal state, programmatic cold-start cohorts, generic audit coverage, multi-environment Compose, and the documented movie-discovery frontend slices.
+- ✅ **Movie-discovery product contract** (PR #45) — `docs/frontend/` (product discovery, route-level design contracts, backend-readiness matrix, implementation plan, testing strategy and finish gate, baseline evidence) and frontend ADR 0002 define a poster-first Discover / Browse / Library / detail experience with progressive disclosure of ML evidence. Cross-cutting ADR 0012 pins browser identity (actor vs. persona, `/me/...` resources, PKCE via a Next.js BFF session), the `user_movie_state` + `user_feedback_events` read model, feedback-transition semantics, commit-before-acknowledge durability, and what a rating does and does not change online.
+- ✅ **Bundle 1 correctness and contract foundation** (PR #45) — the auth middleware commits the request transaction *before* returning a successful response (no 2xx for a mutation or fail-closed audit that can still fail to become durable); tokens must carry `aud=movielens-api` and an `azp` in the explicit allow-list (`movielens-api`, `movielens-web`); arbitrary persona selection requires the confidential service client or the `demo-impersonator` realm role; a verified realm with no `public.tenants` row is rejected at the authenticated boundary. `scripts/generate_openapi.py` commits `docs/api/openapi.json`, `web/lib/api.generated.ts` is generated from it, and both drift checks run in CI (`make api-contract-check`, `make web-api-types-check`).
+- ✅ **Durable demo personas** (PR #37) — `synthetic/personas/`: four named, tenant-scoped synthetic users (Action Fan, Drama Fan, Eclectic Viewer, and Cold Start), checked-in catalog/history fixtures, an idempotent `make demo-seed` path, authenticated persona discovery (`/personas`), and RLS isolation coverage. Migration 0005 tags them `synthetic=true`.
+- ✅ **TMDB metadata and posters** (PR #38) — `src/serving/tmdb.py` resolves MovieLens `tmdbId` values server-side through a bounded TTL/LRU cache, degrades to MovieLens metadata when the token or upstream is unavailable, and the web app renders optimized posters with accessible visual fallbacks and required attribution. The token never leaves the backend.
+- ✅ **Repeatable demo environment** (PRs #39, #40) — `docker-compose.demo.yml` layered on `docker-compose.yml` builds the FastAPI (`infra/api/`) and standalone Next.js images, bootstraps base tables plus Alembic migrations (`src/data/demo_setup.py`), loads a self-contained reviewed catalog/persona fixture, verifies readiness and warm/cold behavior (`synthetic/smoke/demo.py`), and supports isolated down/reset/log operations via `make demo-*`. Runbook in `docs/demo-runbook.md`.
+- ✅ **Interactive rating loop** (PR #41) — `PUT /users/{id}/ratings/{movie_id}` and `DELETE /users/{id}/ratings` write through the RLS-bound request connection (migration 0006); history and recommendations are re-requested after the write commits. The star value is stored for display — the deployed learned path consumes the watched movie ID, not the rating magnitude (ADR 0012).
+- ✅ **Feast/Redis feature path** (PR #42) — `src/features/feast_repo/` declares `tenant` / `user` / `item` entities and three feature views over `feature_store.*` Postgres tables; `src/features/materialize.py` publishes tenant-keyed snapshots into Redis; `src/features/online.py` exposes no unscoped read. A dedicated feature-server container (`infra/features/`) serves online reads. `tests/feature_parity/` runs in CI against live Postgres + Redis (non-negotiable #2).
+- ✅ **Versioned learned serving** (PR #43) — `src/models/artifacts.py` defines a SHA-256-pinned `ServingManifest` binding the item-item index, the LightGBM booster, the tenant, and the ordered feature contract (`src/feature_contract.py`). `src/training/demo_artifacts.py` trains and publishes the bundle; `src/serving/model_server.py` is a private, token-protected sidecar that loads it once at startup so the slim API image never imports Feast, pandas, or LightGBM. `tests/learned_serving/` covers the manifest-backed path.
+- ✅ **Prediction audit + k6 gate** (PR #44) — `src/serving/audit.py` + migrations 0008/0009 persist every recommendation's exact predictions, feature values, model versions, fallback reason, and per-stage timings into forced-RLS `recommendation_audits`, readable via `GET /users/{id}/audits` (non-negotiable #8). `synthetic/load/` k6 scripts (version pinned in `infra/ci/k6-version`) drive real-Keycloak warm/cold/mixed traffic against a bypass-disabled `api-load` service and gate p99 < 100 ms, zero errors, correct responses, and >50 requests/second; the `synthetic-load-smoke` CI job runs the 60-second profile (non-negotiables #4, #11). Accepted 2026-08-20 baseline: p50 6.31 ms, p95 14.27 ms, p99 41.30 ms.
+- ⏳ **Remaining Phase 3 — product/identity track (ADR 0012, `docs/frontend/implementation-plan.md`)** — (a) the server-side browser session in the Next.js BFF (PKCE via `movielens-web`, HttpOnly session, refresh, logout, CSRF/origin checks) and a bypass-disabled Keycloak E2E — the demo's `api` service still runs with `DEV_AUTH_BYPASS=true`, while the load-tested `api-load` service does not; (b) durable watched / rating / watchlist / dismissal state — forced-RLS `user_movie_state` + append-only `user_feedback_events`, committed mutations returning the canonical state, and a tested backfill off the legacy `ratings` writes; (c) the scalable catalog + movie-detail APIs; (d) the Discover / Browse / Library / detail slices, Quick Picks, and the finish gate.
+- ⏳ **Remaining Phase 3 — platform track** — (e) `synthetic/cold_start/` cohorts per ADR 0011, plus the `EvalResult.synthetic_cold_slices` harness extension and per-bucket MLflow metrics; (f) the ranker training path still builds features with `FeatureIndex` rather than Feast's `get_historical_features` as ADR 0009 specifies — offline/online parity is proven on the served snapshot, not yet on training rows; (g) per-tenant champion model version, quotas, and A/B seed columns on `public.tenants` — the tenant router currently resolves only id, display name, and Redis prefix, and the model sidecar is pinned to one tenant via `MODEL_TENANT_ID`; (h) generic request-audit coverage for authenticated non-prediction endpoints (the audit middleware matches only `/users/{id}/recommendations`; ADR 0012 allows a best-effort/queued policy there only once the durability tradeoff is written down); (i) `docker-compose.{dev,staging,prod}.yml` with `make up-<env>` targets.
 
 ### Current step
 
-**Prove the real browser session, then add the durable movie-state and catalog foundations.** ADR 0012 is accepted; transaction durability, cold-start routing, token audience/calling-client validation, role-gated persona selection, tenant-registry gating, and generated API contracts are implemented and unit-tested. The immediate sequence is: add the server-side browser session with refresh/logout/CSRF and bypass-disabled Keycloak E2E; then add the catalog and durable movie-state APIs before building Discover, Browse, Library, and detail from `docs/frontend/implementation-plan.md`. Record the final walkthrough only after the new end-to-end loop passes its finish gate.
+**Prove the real browser session, then add the durable movie-state and catalog foundations.** ADR 0012 is accepted and its Bundle 1 correctness work (commit-before-response, cold-start threshold routing, audience/calling-client validation, role-gated persona selection, tenant-registry gating, generated API contracts) is on `main`. The immediate sequence is: add the server-side browser session with refresh/logout/CSRF and a bypass-disabled Keycloak E2E; then the catalog and durable movie-state APIs (`user_movie_state`, `user_feedback_events`, `/me/...`) before building Discover, Browse, Library, and detail from `docs/frontend/implementation-plan.md`. Record the final walkthrough only after the new end-to-end loop passes its finish gate.
+
+In parallel on the platform track, the next backend unit is **closing ADR 0011 — `synthetic/cold_start/`**: the fixed-seed 2 000-user cohort (500 per history bucket {0, 1, 3, 10}, popularity-weighted items, `synth_cold` tenant), `synthetic_cold_slices` on `EvalResult`, and per-bucket recall + fallback-attribution metrics in MLflow, shipped with the DVC-tracked parquet and a cohort-determinism test. After that, in order: per-tenant champion columns on `public.tenants` (unblocks Phase 6 routing), the Feast-backed ranker training refactor, generic request audits, and the multi-environment compose split. Every new endpoint stays authenticated and uses the RLS-bound request connection.
 
 ## How to work with Claude Code on this
 

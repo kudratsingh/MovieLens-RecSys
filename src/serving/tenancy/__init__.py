@@ -1,12 +1,13 @@
 """
 Tenant router per ADR 0008. Resolves a ``tenant_id`` (derived from the
 auth-provider realm by the middleware) to the tenant's metadata and
-scoping knobs — display name, Redis key prefix, and (in later bundles)
-champion model version + per-tenant rate limits.
+scoping knobs — display name and Redis key prefix.
 
-Bundle #1b ships the read path only. Champion model routing arrives
-with the serving bundles (Phase 3 code that consumes ADR 0007 + 0008);
-per-tenant rate limits arrive with the audit-log + rate-limit bundle.
+Per-tenant champion model version and rate limits are not columns on
+this row yet. Today the model sidecar loads a single tenant-pinned
+artifact manifest (``src/models/artifacts.py``) and rejects requests
+for any other tenant, and rate limiting is still outstanding. When
+those land they are additional columns on the same read path.
 """
 
 from src.serving.tenancy.router import TenantConfig, TenantRouter, UnknownTenantError

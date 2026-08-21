@@ -5,7 +5,7 @@
 
 ## Context
 
-Phase 1 closed with two complete recommenders — popularity ([PR #12](https://github.com/kudratsingh/MovieRecSys-MachineLearningProject/pull/12)) and CF/ALS ([PR #14](https://github.com/kudratsingh/MovieRecSys-MachineLearningProject/pull/14)) — that each score every (user, item) pair from a single model. Phase 2 needs to decide whether the production architecture inherits that shape (one model, scored globally) or splits into a *candidate generator → ranker* pipeline.
+Phase 1 closed with two complete recommenders — popularity ([PR #12](https://github.com/kudratsingh/MovieLens-RecSys/pull/12)) and CF/ALS ([PR #14](https://github.com/kudratsingh/MovieLens-RecSys/pull/14)) — that each score every (user, item) pair from a single model. Phase 2 needs to decide whether the production architecture inherits that shape (one model, scored globally) or splits into a *candidate generator → ranker* pipeline.
 
 [CLAUDE.md](../../CLAUDE.md) names two-stage as the locked-in choice and lists "two-stage over single-stage" as one of the ADR-deserving decisions; this document fills that slot, pinning *why* before the Phase 2 code arrives.
 
@@ -46,7 +46,7 @@ The Phase 1 baselines (popularity, CF) become legitimate candidate generators un
 
 - **Code layout.** `src/models/candidates/` and `src/models/ranker/` are the two stage homes. `PopularityModel` and `CFModel` already live in `candidates/`; in Phase 2 they're joined by item-item and two-tower implementations and remain valid candidate-stage options for comparison and A/B testing.
 - **Evaluation per stage.** `src/evaluation/protocol.py` already supports the metrics we need (recall@k for candidates, NDCG@k for ranker). Phase 2 needs a small extension: evaluate both stages in the same harness run — recall@K_candidates against holdout (does the candidate set contain the relevant items?) and NDCG@10 against the same holdout after ranking (are they ordered well?).
-- **Training pipelines.** Phase 2 introduces two new pipelines mirroring the Phase 1 shape (`src/training/itemitem.py`, `src/training/two_tower.py`, `src/training/ranker.py`), each logging to the same MLflow experiment family so candidate-stage models are comparable to each other and ranker runs are comparable to each other.
+- **Training pipelines.** Phase 2 introduces two new pipelines mirroring the Phase 1 shape (`src/training/itemitem.py`, `src/training/twotower.py`, `src/training/ranker.py`), each logging to the same MLflow experiment family so candidate-stage models are comparable to each other and ranker runs are comparable to each other.
 - **Serving (Phase 3).** The FastAPI handler becomes `request → candidates → feature store lookup → ranker → top-K`. The handler owns the orchestration; neither stage's model class knows about the other.
 - **Promotion gate (Phase 4).** Per-stage thresholds — candidate generators promoted on recall@K_candidates; rankers promoted on NDCG@10. The cross-stage interaction (does a better candidate generator make the ranker's job easier?) is measured but doesn't gate promotion of either side.
 - **Cold-start policy.** ADR 0001's popularity fallback is a stage-level concern, not architecture-level. The candidate generator falls back to popularity for cold users; the ranker passes the popularity list through unchanged. `CFModel`'s embedded fallback (ADR 0002 / PR #14) is the Phase 1 expression of this; Phase 3 may lift the fallback up to the orchestration layer.

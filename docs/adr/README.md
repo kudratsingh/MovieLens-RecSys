@@ -1,0 +1,44 @@
+# Architecture Decision Records
+
+Every significant design choice in this project is written down *before* the code that depends on it lands, so the alternatives get rejected while they are still live options rather than retrofitted as justification. An ADR is a historical record: once accepted, its rationale is not rewritten. When the implementation later diverges from the plan, the ADR gets a short dated *implementation note* under its header, and the original text stays as written.
+
+There are two namespaces. Backend and cross-cutting ADRs live on the flat numeric line in this directory (`docs/adr/NNNN-slug.md`). Frontend ADRs have their own numeric line under [`frontend/`](frontend/), because the frontend is a separate team surface with its own stack and cadence. Numbers are assigned when an ADR is written, in roughly the order decisions land; they are never reused. Two related design documents live outside the ADR line and are not decision records: [`docs/api/README.md`](../api/README.md) holds the generated OpenAPI contract for the authenticated FastAPI surface, and [`docs/frontend/README.md`](../frontend/README.md) holds the frontend product and delivery docs that frontend ADR 0002 points into.
+
+The standard each ADR is held to: substantive rather than checkbox — typically 120–180 lines — with every alternative analyzed rather than dismissed in a sentence, a consequences section that reaches for second-order effects, a risks section with mitigations, and a "how we'd know we're wrong" section that names the falsifiable signals that would reopen the decision. Each carries a `**Status:**` and `**Date:**` header.
+
+## Backend ADRs
+
+| # | ADR | Decision in one line | Status | Phase |
+|---|---|---|---|---|
+| 0001 | [Evaluation Protocol](0001-evaluation-protocol.md) | Temporal split at the 80% cutoff with a 28-day holdout; recall/NDCG@10 reported separately for warm and cold users; +3% relative NDCG@10 promotion gate. | Accepted | 1 |
+| 0002 | [Implicit-Feedback Label](0002-implicit-feedback-label.md) | Every rating is a positive interaction; the rating value is dropped from the modeling pipeline. | Accepted | 1 |
+| 0003 | [Two-Stage Architecture](0003-two-stage-architecture.md) | Candidate generator retrieves ~500 items, a LightGBM ranker orders them; single-model global scoring is rejected on latency math. | Accepted | 2 |
+| 0004 | [Item-Item Before Two-Tower](0004-item-item-before-two-tower.md) | Item-item cosine similarity ships first as the zero-learned-parameters baseline the two-tower must beat on recall@500. | Accepted | 2 |
+| 0005 | [LightGBM Over a Neural Ranker](0005-lightgbm-over-neural-ranker.md) | LambdaRank GBDT on tabular point-in-time features; negatives sampled from the candidate model's output, one group per (user, timestamp). | Accepted | 2 |
+| 0006 | [Two-Tower Retrieval Architecture](0006-two-tower-retrieval-architecture.md) | History-based user tower, id-only item tower, dim 64, sampled softmax with log-uniform correction, FAISS IVF-Flat retrieval, popularity fallback for zero-history users. | Accepted | 2 |
+| 0007 | [Auth Provider: Keycloak](0007-auth-provider-keycloak.md) | Self-hosted Keycloak, one realm per tenant; tenant is derived from the token issuer, never from a client-declared claim. | Accepted (see note) | 3 |
+| 0008 | [Multi-Tenancy: Postgres RLS](0008-multi-tenancy-rls.md) | Forced row-level security on every tenant-scoped table, `SET LOCAL app.tenant_id` per request, pgBouncer in transaction mode, separate `app_user` / `admin_user` roles. | Accepted | 3 |
+| 0009 | [Feature Store: Feast](0009-feature-store-feast.md) | Feast with Postgres offline and Redis online; `tenant_id` is a join key on every feature view; offline/online parity test runs in CI. | Accepted (see note) | 3 |
+| 0010 | [Synthetic Load Testing: k6](0010-synthetic-load-k6.md) | k6 with Prometheus remote-write; declarative `p(99)<100` threshold is the CI pass/fail gate on the authenticated recommendations path. | Accepted | 3 |
+| 0011 | [Cold-Start Coverage](0011-cold-start-coverage.md) | Fixed-seed synthetic cohort at history sizes 0/1/3/10, popularity-weighted items, isolated in a `synth_cold` tenant, scored per bucket in the eval harness. | Accepted (harness not yet built) | 3 |
+| 0012 | [Browser Identity, Feedback State, and Online Freshness](0012-browser-identity-feedback-and-online-freshness.md) | `/me/...` resources bound to the OIDC subject with persona access behind a `demo-impersonator` role; PKCE browser flow through the Next.js BFF; a forced-RLS `user_movie_state` projection plus an append-only feedback event log; mutations acknowledged only after commit. | Accepted | 3 |
+
+Phases map to the plan in [`CLAUDE.md`](../../CLAUDE.md): Phase 1 is baselines and the data foundation, Phase 2 is the offline two-stage architecture, Phase 3 is serving, auth, multi-tenancy, the feature store, and the synthetic-load harness.
+
+## Frontend ADRs
+
+| # | ADR | Decision in one line | Status |
+|---|---|---|---|
+| 0001 | [Frontend Framework](frontend/0001-frontend-framework.md) | Next.js (App Router) with TypeScript and Tailwind v4; dev server on port 3001 to stay clear of Grafana. | Accepted |
+| 0002 | [Movie-Discovery Experience and Progressive ML Disclosure](frontend/0002-movie-discovery-experience.md) | Movie discovery is the primary surface, on a route-based information architecture with poster-first interaction; ML evidence sits behind progressive disclosure; supersedes ADR 0001's "no search, no real auth" scope assumptions while leaving its framework choice intact. | Accepted |
+
+## Reading order
+
+For a reviewer in a hurry, four ADRs carry most of the weight and read well in sequence:
+
+1. [0001](0001-evaluation-protocol.md) — the evaluation contract everything else is scored against.
+2. [0003](0003-two-stage-architecture.md) — why the system is two stages at all.
+3. [0006](0006-two-tower-retrieval-architecture.md) — the most detailed modeling decision, including the point-in-time rules that keep offline metrics honest.
+4. [0008](0008-multi-tenancy-rls.md) — the isolation mechanism behind the highest-severity bug class.
+
+Then [0010](0010-synthetic-load-k6.md) for the measured SLO evidence (its "Implemented baseline" section has the actual p50/p95/p99 numbers), [0007](0007-auth-provider-keycloak.md) and [0009](0009-feature-store-feast.md) if the auth or feature-store plumbing is what you are reviewing, and [0012](0012-browser-identity-feedback-and-online-freshness.md) for how the browser client's identity and feedback semantics sit on top of all of it. The Phase 1 and Phase 2 ADRs form a lineage — 0003 → 0004 → 0006 on the candidate side, 0003 → 0005 on the ranker side — and each links back to its predecessors, so starting at 0003 and following the references works too.

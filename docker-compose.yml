@@ -73,9 +73,11 @@ services:
     depends_on:
       - prometheus
 
-  # pgBouncer sits in front of the movielens Postgres. Only Bundle #1b's
-  # FastAPI service uses it; offline training scripts continue connecting
-  # to postgres:5432 directly as admin_user (BYPASSRLS). Transaction pool
+  # pgBouncer sits in front of the movielens Postgres. Only the FastAPI
+  # service's app_user connections go through it; offline training
+  # scripts, Feast materialization, the feature server, and the model
+  # sidecar connect to postgres:5432 directly as admin_user (BYPASSRLS).
+  # Transaction pool
   # mode is required so `SET LOCAL app.tenant_id` inside the middleware's
   # per-request transaction cannot leak across requests — see ADR 0008.
   #
