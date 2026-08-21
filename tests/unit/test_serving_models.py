@@ -48,7 +48,8 @@ async def test_model_client_sends_tenant_history_and_service_token() -> None:
             tenant_id="demo",
             user_id=10,
             positive_history_movie_ids=[1, 2],
-            excluded_movie_ids=[7],
+            excluded_movie_ids=[1, 2, 7],
+            dismissed_movie_ids=[7],
             limit=5,
         )
     finally:
@@ -56,7 +57,10 @@ async def test_model_client_sends_tenant_history_and_service_token() -> None:
 
     assert observed["tenant_id"] == "demo"
     assert observed["positive_history_movie_ids"] == [1, 2]
-    assert observed["excluded_movie_ids"] == [7]
+    # The exclusion set carries the watched history; the dismissal set is the
+    # only one the sidecar may subtract from the seeds, so they travel apart.
+    assert observed["excluded_movie_ids"] == [1, 2, 7]
+    assert observed["dismissed_movie_ids"] == [7]
     assert observed["authorization"] == "Bearer secret"
     assert result.items[0].movie_id == 3
     assert result.items[0].features == _features()

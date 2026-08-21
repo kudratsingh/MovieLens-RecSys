@@ -13,14 +13,28 @@ from tests.unit.test_serving_recommendations import _connection
 
 
 class _LearnedModels:
-    """Sidecar stub that records exactly what the coordinator handed it."""
+    """Sidecar stub that records exactly what the coordinator handed it.
 
-    def __init__(self, movie_id: int | list[int] = 3) -> None:
+    The reported ``seed_count`` mirrors the real sidecar rule — positive
+    history minus dismissals — instead of echoing the offered history. A stub
+    that always echoed the history is what let a retrieval no seed reached keep
+    reporting itself as learned two-stage serving.
+    """
+
+    def __init__(self, movie_id: int | list[int] = 3, *, seed_count: int | None = None) -> None:
         self._movie_ids = [movie_id] if isinstance(movie_id, int) else list(movie_id)
+        self._seed_count = seed_count
         self.calls: list[dict[str, object]] = []
 
     async def rank(self, **kwargs) -> ModelRankingResult:  # type: ignore[no-untyped-def]
         self.calls.append(dict(kwargs))
+        positives = list(kwargs["positive_history_movie_ids"])
+        dismissed = set(kwargs.get("dismissed_movie_ids") or ())
+        seeds_used = (
+            self._seed_count
+            if self._seed_count is not None
+            else len([movie_id for movie_id in positives if movie_id not in dismissed])
+        )
         return ModelRankingResult(
             tenant_id=str(kwargs["tenant_id"]),
             candidate_policy="item-item-cosine",
@@ -42,7 +56,7 @@ class _LearnedModels:
                 for movie_id in self._movie_ids
             ],
             candidate_sources={"item-item-cosine": len(self._movie_ids)},
-            seed_count=len(list(kwargs["positive_history_movie_ids"])),
+            seed_count=seeds_used,
             excluded_count=len(list(kwargs["excluded_movie_ids"] or ())),
             filter_policy=EXCLUSION_FILTER_POLICY,
             feature_event_time=1_760_000_000.0,
@@ -281,6 +295,94 @@ async def test_positive_history_and_exclusions_reach_the_sidecar_separately() ->
     # Already-seen filtering stays part of the exclusion set, so the two inputs
     # overlap on watched titles without collapsing into one list.
     assert set(positives).issubset(set(excluded))
+
+
+@pytest.mark.asyncio
+async def test_watched_titles_hide_without_being_dropped_as_seeds() -> None:
+    """The exclusion set contains this user's watched titles by construction.
+
+    Handing it to the sidecar as the seed-suppression list emptied item-item
+    retrieval for every warm user while the response still claimed learned
+    two-stage serving. Dismissals travel on their own field for exactly this
+    reason.
+    """
+    connection = _connection()
+    models = _LearnedModels(movie_id=11)
+    try:
+        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
+            connection, tenant_id="demo", user_id=77, limit=2
+        )
+    finally:
+        connection.close()
+
+    call = models.calls[0]
+    positives = list(call["positive_history_movie_ids"])  # type: ignore[arg-type]
+    assert set(positives).issubset(set(list(call["excluded_movie_ids"])))  # type: ignore[arg-type]
+    assert list(call["dismissed_movie_ids"]) == []  # type: ignore[arg-type]
+    assert decision.serving_policy.learned is True
+    assert f"over {len(positives)} positive seeds" in decision.serving_policy.reason
+
+
+@pytest.mark.asyncio
+async def test_dismissals_reach_the_sidecar_on_their_own_field() -> None:
+    connection = _connection()
+    models = _LearnedModels(movie_id=11)
+    try:
+        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _dismiss(connection, user_id=77, movie_id=9, timestamp=4900)
+        await RecommendationCoordinator(RecommendationService(), models).recommend(
+            connection, tenant_id="demo", user_id=77, limit=2
+        )
+    finally:
+        connection.close()
+
+    call = models.calls[0]
+    assert list(call["dismissed_movie_ids"]) == [9]  # type: ignore[arg-type]
+    assert 9 in list(call["excluded_movie_ids"])  # type: ignore[arg-type]
+    assert 9 not in list(call["positive_history_movie_ids"])  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_a_retrieval_no_seed_reached_is_not_reported_as_learned() -> None:
+    connection = _connection()
+    try:
+        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _LearnedModels(movie_id=11, seed_count=0)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+    finally:
+        connection.close()
+
+    assert decision.serving_policy.learned is False
+    assert decision.serving_policy.name == "popularity-fill+lightgbm"
+    assert decision.policy == decision.serving_policy.name
+    assert decision.serving_policy.reason.startswith("unseeded-retrieval")
+    assert "6 positive watched signals" in decision.serving_policy.reason
+    assert decision.fallback_reason == "unseeded-retrieval"
+    # The ranker still ran, so the score is still an ordering score and the
+    # items are still served — only the claim about the first stage changes.
+    assert decision.serving_policy.score_scale == "lightgbm-rank-score"
+    assert [item.movie_id for item in decision.items] == [11]
+
+
+@pytest.mark.asyncio
+async def test_reported_seed_count_is_the_number_of_seeds_retrieval_used() -> None:
+    connection = _connection()
+    try:
+        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _LearnedModels(movie_id=11, seed_count=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+    finally:
+        connection.close()
+
+    # Six positive signals, two of which the index could retrieve from: the
+    # reason reports the seeds used and the signal count separately rather
+    # than letting one stand in for the other.
+    assert "over 2 positive seeds" in decision.serving_policy.reason
+    assert decision.serving_policy.positive_signal_count == 6
+    assert decision.serving_policy.learned is True
 
 
 @pytest.mark.asyncio

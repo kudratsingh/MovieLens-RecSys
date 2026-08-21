@@ -25,6 +25,7 @@ def test_real_feast_features_rank_warm_demo_persona() -> None:
         user_id=900000101,
         positive_history_movie_ids=_HISTORY,
         excluded_movie_ids=[],
+        dismissed_movie_ids=[],
         limit=5,
         candidate_limit=20,
     )
@@ -40,6 +41,30 @@ def test_real_feast_features_rank_warm_demo_persona() -> None:
     assert sum(result.candidate_sources.values()) > 0
 
 
+def test_serving_shaped_exclusions_still_seed_item_item_retrieval() -> None:
+    """The exact input shape the coordinator sends for a warm persona.
+
+    Serving excludes everything the user has already watched, so the exclusion
+    set is a superset of the positive history. Using it to filter seeds left
+    the demo's learned path retrieving nothing but its popularity fill while
+    the response still reported `learned: true` — the defect this pins.
+    """
+    result = _service().rank(
+        tenant_id="demo",
+        user_id=900000101,
+        positive_history_movie_ids=_HISTORY,
+        excluded_movie_ids=list(_HISTORY),
+        dismissed_movie_ids=[],
+        limit=5,
+        candidate_limit=20,
+    )
+
+    assert result.seed_count == len(_HISTORY)
+    assert result.candidate_sources.get("item-item-cosine", 0) > 0
+    assert any(item.candidate_source == "item-item-cosine" for item in result.items)
+    assert not {item.movie_id for item in result.items} & set(_HISTORY)
+
+
 def test_excluded_ids_never_reach_the_ranked_output_against_seeded_stores() -> None:
     service = _service()
     baseline = service.rank(
@@ -47,6 +72,7 @@ def test_excluded_ids_never_reach_the_ranked_output_against_seeded_stores() -> N
         user_id=900000101,
         positive_history_movie_ids=_HISTORY,
         excluded_movie_ids=[],
+        dismissed_movie_ids=[],
         limit=5,
         candidate_limit=20,
     )
@@ -57,6 +83,7 @@ def test_excluded_ids_never_reach_the_ranked_output_against_seeded_stores() -> N
         user_id=900000101,
         positive_history_movie_ids=_HISTORY,
         excluded_movie_ids=excluded,
+        dismissed_movie_ids=[],
         limit=5,
         candidate_limit=20,
     )
@@ -75,6 +102,7 @@ def test_a_dismissed_history_item_is_dropped_from_the_seed_set() -> None:
         user_id=900000101,
         positive_history_movie_ids=_HISTORY,
         excluded_movie_ids=[dismissed],
+        dismissed_movie_ids=[dismissed],
         limit=5,
         candidate_limit=20,
     )
@@ -90,6 +118,7 @@ def test_ranked_items_carry_candidate_attribution_for_the_audit() -> None:
         user_id=900000101,
         positive_history_movie_ids=_HISTORY,
         excluded_movie_ids=[],
+        dismissed_movie_ids=[],
         limit=5,
         candidate_limit=20,
     )

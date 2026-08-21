@@ -42,6 +42,8 @@ class ModelRankingResult:
     latency_ms: float
     items: list[RankedModelItem]
     candidate_sources: dict[str, int] = field(default_factory=dict)
+    # Seeds the sidecar actually retrieved from. Zero means the first stage
+    # contributed nothing, whatever the manifest calls the candidate policy.
     seed_count: int = 0
     excluded_count: int = 0
     filter_policy: str = FILTER_POLICY_NOT_RUN
@@ -69,10 +71,12 @@ class ModelServerClient:
         user_id: int,
         positive_history_movie_ids: list[int],
         excluded_movie_ids: list[int] | None = None,
+        dismissed_movie_ids: list[int] | None = None,
         limit: int,
         candidate_limit: int = 100,
     ) -> ModelRankingResult:
         excluded = list(excluded_movie_ids or ())
+        dismissed = list(dismissed_movie_ids or ())
         response = await self._client.post(
             "/rank",
             json={
@@ -80,6 +84,10 @@ class ModelServerClient:
                 "user_id": user_id,
                 "positive_history_movie_ids": positive_history_movie_ids,
                 "excluded_movie_ids": excluded,
+                # Only dismissals may narrow the seed set. ``excluded`` carries
+                # the user's own watched titles, so the sidecar must never take
+                # it as a reason to stop seeding retrieval.
+                "dismissed_movie_ids": dismissed,
                 "limit": limit,
                 "candidate_limit": candidate_limit,
             },

@@ -101,7 +101,7 @@ def test_retrieval_excludes_dismissed_ids_without_letting_them_seed() -> None:
     index = CandidateIndex.build(histories, max_neighbors=10)
 
     seeded = index.retrieve([4], limit=10)
-    dismissed = index.retrieve([4], limit=10, excluded_movie_ids=[4])
+    dismissed = index.retrieve([4], limit=10, dismissed_movie_ids=[4])
 
     assert {item.seed_movie_id for item in seeded.contributions if item.seed_movie_id} == {4}
     assert 5 in seeded.movie_ids
@@ -110,6 +110,39 @@ def test_retrieval_excludes_dismissed_ids_without_letting_them_seed() -> None:
     assert 4 not in dismissed.movie_ids
     assert dismissed.seed_count == 0
     assert dismissed.excluded_count == 1
+
+
+def test_watched_history_still_seeds_when_it_is_also_in_the_exclusion_set() -> None:
+    """Serving always excludes what the user has already watched.
+
+    Passing that set as the seed filter dropped every seed, so item-item
+    retrieval silently degenerated to its popularity fill for every warm user
+    while the response still called itself learned two-stage serving. Only a
+    dismissal may remove a seed.
+    """
+    histories = {1: {1, 2, 3}, 2: {1, 2, 4}, 3: {4, 5}}
+    index = CandidateIndex.build(histories, max_neighbors=10)
+    positives = [4, 2]
+
+    retrieval = index.retrieve(positives, limit=10, excluded_movie_ids=positives)
+
+    assert retrieval.seed_count == 2
+    assert retrieval.source_counts().get("item-item-cosine", 0) > 0
+    assert not set(retrieval.movie_ids) & set(positives)
+
+
+def test_seed_count_reports_the_seeds_retrieval_actually_used() -> None:
+    # 99 is not in the index at all and 4's only neighbor is dismissed away, so
+    # neither can contribute a candidate. Counting them would let the response
+    # claim retrieval it never performed.
+    index = CandidateIndex.build({1: {1, 2, 3}, 2: {1, 2}, 3: {4, 5}}, max_neighbors=10)
+
+    retrieval = index.retrieve([2, 99], limit=10)
+    unusable = index.retrieve([4, 99], limit=10, dismissed_movie_ids=[5])
+
+    assert retrieval.seed_count == 1
+    assert unusable.seed_count == 0
+    assert unusable.source_counts().get("item-item-cosine", 0) == 0
 
 
 def test_retrieval_never_returns_an_excluded_id_from_the_popularity_fill() -> None:

@@ -80,6 +80,7 @@ def test_ranking_uses_tenant_keyed_feast_rows_and_ranker_scores() -> None:
         user_id=100,
         positive_history_movie_ids=[1],
         excluded_movie_ids=[],
+        dismissed_movie_ids=[],
         limit=2,
         candidate_limit=2,
     )
@@ -121,6 +122,7 @@ def test_ranking_reuses_version_scoped_online_feature_snapshot() -> None:
             user_id=100,
             positive_history_movie_ids=[1],
             excluded_movie_ids=[],
+            dismissed_movie_ids=[],
             limit=2,
             candidate_limit=2,
         )
@@ -152,6 +154,7 @@ def test_ranking_rejects_cross_tenant_artifact_use_before_feature_read() -> None
             user_id=100,
             positive_history_movie_ids=[1],
             excluded_movie_ids=[],
+            dismissed_movie_ids=[],
             limit=1,
             candidate_limit=1,
         )
@@ -176,3 +179,55 @@ async def test_rank_endpoint_rejects_missing_service_credentials() -> None:
         )
 
     assert error.value.status_code == 401
+
+
+def test_watched_exclusions_do_not_stop_the_positive_history_from_seeding() -> None:
+    """Mirrors the coordinator's real call: exclusions include the watched id.
+
+    The sidecar has to keep seeding from positive history when the caller's
+    exclusion set repeats it, or every warm user's item-item stage collapses
+    into the index's popularity fill.
+    """
+    service = ModelRankingService(
+        ServingArtifactBundle(
+            manifest=ServingManifest(
+                tenant_id="demo",
+                candidate=ArtifactRef("item-item-cosine", "candidate-v1", "c.json", "hash"),
+                ranker=ArtifactRef("lightgbm-lambdarank", "ranker-v1", "r.txt", "hash"),
+                feature_version="features-v1",
+                trained_at="2026-08-15T00:00:00+00:00",
+            ),
+            candidates=CandidateIndex.build({1: {1, 2, 3}, 2: {1, 2}}),
+            ranker=_Ranker(),  # type: ignore[arg-type]
+        ),
+        _FeatureStore(),
+    )
+
+    result = service.rank(
+        tenant_id="demo",
+        user_id=100,
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[1],
+        dismissed_movie_ids=[],
+        limit=2,
+        candidate_limit=2,
+    )
+
+    assert result.seed_count == 1
+    assert result.candidate_sources == {"item-item-cosine": 2}
+    assert all(item.seed_movie_id == 1 for item in result.items)
+
+
+def test_rank_request_defaults_dismissals_to_empty_for_an_older_caller() -> None:
+    # An API that predates the split still gets seeded retrieval: its positive
+    # history already has dismissals filtered out at the query.
+    payload = RankRequest(
+        tenant_id="demo",
+        user_id=100,
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[1],
+        limit=1,
+        candidate_limit=1,
+    )
+
+    assert payload.dismissed_movie_ids == []

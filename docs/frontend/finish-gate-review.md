@@ -441,6 +441,8 @@ policy whose first stage is empty. It belongs in a serving follow-up: either the
 seeded personas' history is outside the item-item index, or the seeds are being
 dropped before retrieval.
 
+Resolved in PR #64 — the seeds were being dropped before retrieval.
+
 ### N3. The Discover empty state stacks awkwardly at 390px
 
 The empty state puts its icon in a left column and its copy in a narrow right
