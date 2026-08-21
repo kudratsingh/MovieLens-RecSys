@@ -1,20 +1,46 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-/** Bypass-disabled sign-in through the real Keycloak demo realm. */
-async function signInThroughKeycloak(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Continue with Keycloak" }).click();
+import { signInThroughKeycloak } from "./keycloak";
 
-  await page.locator("#username").fill("demo");
-  await page.locator("#password").fill("demo");
-  await page.locator("#kc-login").click();
-
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-}
+/**
+ * The service-backed browser journeys, run against the bypass-disabled demo
+ * Compose stack: real Keycloak, real FastAPI, real RLS, real committed state.
+ *
+ * **Persona ownership.** Every journey in the run shares one seeded database,
+ * so a journey writing to a persona another journey is asserting on is
+ * indistinguishable from a bug in the code under test. One journey, one
+ * persona:
+ *
+ * | Persona                   | Journey                               |
+ * | ------------------------- | ------------------------------------- |
+ * | 900000101 Action Fan      | Library — rating and watched history  |
+ * | 900000102 Drama Fan       | Discover — `discover-journey.spec.ts` |
+ * | 900000103 Eclectic Viewer | Browse — watchlist only               |
+ * | 900000104 Cold Start      | PKCE, then Quick Picks                |
+ *
+ * Cold Start is the one deliberate share, and the order matters. The PKCE
+ * journey's cleanup is a whole-persona reset — `DELETE /ratings` clears every
+ * state row the persona has — which is only safe on the one persona the seeder
+ * leaves empty. Running it first therefore hands Quick Picks exactly the
+ * zero-signal state its cold-start policy assertion needs. Nothing else may
+ * write to 900000104, and nothing may leave it at or above the five watched
+ * signals that end the cold-start policy.
+ *
+ * The destructive rating and history work lives on Action Fan for the same
+ * reason: it is a warm persona whose seeded history does not contain the movie
+ * these journeys create, so removing that movie again *is* the seeded state.
+ *
+ * Each journey below restores what it changed and tolerates finding the
+ * persona already changed, so the file can be re-run against a stack a
+ * previous run left mid-flight.
+ */
 
 test("real Keycloak PKCE session reaches the role-gated demo API and logs out", async ({
   page,
 }) => {
+  // Cold Start: see the ownership note above. This is the only journey allowed
+  // to run the whole-persona reset below.
+  const personaId = 900000104;
   await signInThroughKeycloak(page);
 
   await expect(page.getByRole("button", { name: "Action Fan" })).toBeVisible();
@@ -40,8 +66,7 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   await expect(page.getByText("Recorded persona")).toBeVisible();
   await page.goto("/");
 
-  const durableMutation = await page.evaluate(async () => {
-    const userId = 900000104;
+  const durableMutation = await page.evaluate(async (userId) => {
     const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
       .then((response) => response.json())
       .then((body: { csrfToken: string }) => body.csrfToken);
@@ -68,21 +93,26 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
         (item: { movie_id: number }) => item.movie_id === 1,
       ),
     };
-  });
+  }, personaId);
   expect(durableMutation).toEqual({
     mutationStatus: 200,
     rating: 4,
     historyContainsMovie: true,
   });
 
-  const rejectedMutation = await page.evaluate(async () => {
-    const response = await fetch("/api/users/900000101/ratings", {
+  // The same write as the one that just succeeded, minus the CSRF token. It is
+  // refused in the BFF before it can reach the API, so it is deliberately
+  // aimed at this journey's own persona: borrowing another journey's persona
+  // would suggest the refusal was about who is being written to, and would put
+  // a second writer on a row this file promises not to touch.
+  const rejectedMutation = await page.evaluate(async (userId) => {
+    const response = await fetch(`/api/users/${userId}/ratings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ movie_id: 1, rating: 4 }),
     });
     return response.status;
-  });
+  }, personaId);
   expect(rejectedMutation).toBe(403);
 
   await page.getByRole("button", { name: "Sign out" }).click();
@@ -101,22 +131,30 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
  * destructive actions are genuinely different — deleting the star leaves the
  * watched interaction in place, and only the confirmed history removal takes it
  * away.
+ *
+ * Action Fan is this journey's persona because it is warm — the route it
+ * exercises is about editing an existing collection — and because Toy Story is
+ * not in its seeded history. Creating that interaction and removing it again
+ * therefore lands back on exactly the seeded state.
  */
 test("a rating created on detail is findable, editable, and removable in Library", async ({
   page,
 }) => {
   test.slow();
-  const userId = 900000104;
+  const userId = 900000101;
   const movieId = 1;
+  // A row is identified by the anchor its title link carries, not by matching
+  // its text: a title is a substring of other rows' titles often enough that
+  // `hasText` is the wrong instrument for "this exact movie is gone".
+  const movieRow = page
+    .getByRole("listitem")
+    .filter({ has: page.locator(`#library-movie-${movieId}`) });
 
-  await page.goto("/");
-  await page.getByRole("button", { name: "Continue with Keycloak" }).click();
-  await page.locator("#username").fill("demo");
-  await page.locator("#password").fill("demo");
-  await page.locator("#kc-login").click();
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await signInThroughKeycloak(page);
 
-  // Start from a known state: the journey creates the interaction it asserts on.
+  // Start from a known state: the journey creates the interaction it asserts
+  // on, and must not inherit one a previous run left behind. Removing the
+  // watched interaction takes its rating with it, so this clears both.
   await page.evaluate(
     async ([user, movie]) => {
       const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
@@ -142,35 +180,33 @@ test("a rating created on detail is findable, editable, and removable in Library
     "aria-selected",
     "true",
   );
-  const ratedRow = page.getByRole("listitem").filter({ hasText: fullTitle });
-  await expect(ratedRow).toHaveCount(1);
-  await expect(ratedRow.getByText(/Rated 4\.0 of 5/)).toBeVisible();
+  await expect(movieRow).toHaveCount(1);
+  await expect(movieRow.getByText(/Rated 4\.0 of 5/)).toBeVisible();
 
-  await ratedRow.getByRole("combobox").selectOption("3");
-  await expect(ratedRow.getByText(/Rated 3\.0 of 5/)).toBeVisible();
+  await movieRow.getByRole("combobox").selectOption("3");
+  await expect(movieRow.getByText(/Rated 3\.0 of 5/)).toBeVisible();
 
   // History: the same interaction, reached from its own collection.
   await page.goto(`/library?userId=${userId}&tab=history&q=${encodeURIComponent(needle)}`);
-  const historyRow = page.getByRole("listitem").filter({ hasText: fullTitle });
-  await expect(historyRow).toHaveCount(1);
-  await expect(historyRow.getByText(/Rated 3\.0 of 5/)).toBeVisible();
+  await expect(movieRow).toHaveCount(1);
+  await expect(movieRow.getByText(/Rated 3\.0 of 5/)).toBeVisible();
 
   // Deleting the star is not removing the watched interaction.
-  await historyRow.getByRole("button", { name: "Remove rating" }).click();
-  await expect(historyRow.getByText(/Not rated/)).toBeVisible();
+  await movieRow.getByRole("button", { name: "Remove rating" }).click();
+  await expect(movieRow.getByText(/Not rated/)).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("listitem").filter({ hasText: fullTitle })).toHaveCount(1);
+  await expect(movieRow).toHaveCount(1);
 
   // Removing history is confirmed, and only then does the movie leave.
-  const survivingRow = page.getByRole("listitem").filter({ hasText: fullTitle });
-  await survivingRow.getByRole("button", { name: "Remove from history" }).click();
-  const confirm = page.getByRole("group", { name: /^Confirm removing/ });
+  await movieRow.getByRole("button", { name: "Remove from history" }).click();
+  const confirm = movieRow.getByRole("group", { name: /^Confirm removing/ });
   await expect(confirm).toContainText("deletes the watched interaction and its rating");
   await confirm.getByRole("button", { name: "Remove from history" }).click();
-  await expect(survivingRow.getByText(/No longer watched/)).toBeVisible();
+  await expect(movieRow.getByText(/No longer watched/)).toBeVisible();
 
+  // Back to the seeded state: Toy Story is not in Action Fan's history.
   await page.reload();
-  await expect(page.getByRole("listitem").filter({ hasText: fullTitle })).toHaveCount(0);
+  await expect(movieRow).toHaveCount(0);
 });
 
 /**
@@ -179,12 +215,15 @@ test("a rating created on detail is findable, editable, and removable in Library
  * cursor, open a movie, save it, and come back to the same query, the same
  * loaded window, and the same position.
  *
- * The persona is left as it was found, so the job can run repeatedly.
+ * Eclectic Viewer is this journey's persona. The only thing it writes is a
+ * watchlist entry, which it removes again before it finishes — a watchlist
+ * entry is not a watched signal and changes no model input, so this is the
+ * lightest write in the file and the persona is left as it was found.
  */
 test("search, cursor continuation, detail, and watchlist survive a round trip", async ({
   page,
 }) => {
-  const userId = 900000104;
+  const userId = 900000103;
   await signInThroughKeycloak(page);
 
   await page.goto(`/browse?user=${userId}`);
@@ -199,7 +238,22 @@ test("search, cursor continuation, detail, and watchlist survive a round trip", 
   await expect(page).toHaveURL(new RegExp(`user=${userId}`));
   await expect(grid).toBeVisible();
 
+  // The grid keeps the previous results mounted while the next query is in
+  // flight, so reading it straight after the click can capture the search
+  // results the clear was supposed to drop — which is how CI came to compare a
+  // filtered first page against an unfiltered window on 2026-08-21. Waiting
+  // for the unfiltered response and then for the status line to stop reporting
+  // a load pins both ends: the fetch has answered, and its results are the
+  // ones on screen.
+  const defaultCut = page.waitForResponse(
+    (response) =>
+      response.url().includes("/catalog") &&
+      !new URL(response.url()).searchParams.has("q") &&
+      response.ok(),
+  );
   await page.getByRole("button", { name: "Clear the title search" }).click();
+  await defaultCut;
+  await expect(page.getByText(/Loading the catalog/)).toHaveCount(0);
   await expect(grid).toBeVisible();
   const firstPage = await page.locator(".catalog-cell .poster-title").allInnerTexts();
   expect(firstPage.length).toBeGreaterThan(0);
