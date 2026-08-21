@@ -37,8 +37,10 @@ class _OnlineResponse:
 class _FeatureStore:
     def __init__(self) -> None:
         self.entity_rows: list[dict[str, object]] = []
+        self.call_count = 0
 
     def get_online_features(self, *, features, entity_rows):  # type: ignore[no-untyped-def]
+        self.call_count += 1
         self.entity_rows = entity_rows
         count = len(entity_rows)
         values = {column: [0.0] * count for column in FEATURE_COLUMNS}
@@ -79,6 +81,40 @@ def test_ranking_uses_tenant_keyed_feast_rows_and_ranker_scores() -> None:
         {"tenant_id": "demo", "user_id": 100, "item_id": 3},
     ]
     assert result.ranker_version == "ranker-v1"
+    assert result.items[0].features == {
+        **{column: 0.0 for column in FEATURE_COLUMNS},
+        "user_genre_affinity": 0.9,
+    }
+
+
+def test_ranking_reuses_version_scoped_online_feature_snapshot() -> None:
+    store = _FeatureStore()
+    service = ModelRankingService(
+        ServingArtifactBundle(
+            manifest=ServingManifest(
+                tenant_id="demo",
+                candidate=ArtifactRef("item-item-cosine", "candidate-v1", "c.json", "hash"),
+                ranker=ArtifactRef("lightgbm-lambdarank", "ranker-v1", "r.txt", "hash"),
+                feature_version="features-v1",
+                trained_at="2026-08-15T00:00:00+00:00",
+            ),
+            candidates=CandidateIndex.build({1: {1, 2, 3}}),
+            ranker=_Ranker(),  # type: ignore[arg-type]
+        ),
+        store,
+        feature_cache_max_entries=1,
+    )
+
+    for _ in range(2):
+        service.rank(
+            tenant_id="demo",
+            user_id=100,
+            history_movie_ids=[1],
+            limit=2,
+            candidate_limit=2,
+        )
+
+    assert store.call_count == 1
 
 
 def test_ranking_rejects_cross_tenant_artifact_use_before_feature_read() -> None:

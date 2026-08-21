@@ -37,7 +37,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo now serves item-item candidates through Feast + LightGBM; audit persistence and the enforced k6 gate remain |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item candidates through Feast + LightGBM, persists RLS-scoped prediction audits, and enforces an authenticated k6 p99 gate; programmatic cold-start cohorts, environment-specific Compose, and browser-side Keycloak auth remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -54,6 +54,8 @@ Most public recsys repos are notebooks that train a model and report a number. T
 - **Per-policy MLflow attribution** — every candidate model embeds a popularity fallback for cold users; per-policy metrics partition the holdout by which routing branch actually served each user. So you know whether the learned model is doing work or the fallback is.
 - **A `phase-2-candidates` MLflow experiment** with directly comparable runs across popularity, CF/ALS, item-item, and two-tower — same harness, same holdout, same K.
 - **Versioned learned serving artifacts** — a SHA-256-pinned manifest binds the item-item index, LightGBM booster, tenant, and ordered Feast feature contract. The model sidecar loads that bundle once at startup; requests never fit or rebuild models.
+- **Durable prediction audits** — every recommendation stores the exact ranked items, scores, online feature values, model versions, fallback reason, and candidate/feature/ranker/total latency behind the same Postgres RLS boundary as serving data.
+- **A measured latency contract** — a pinned k6 container drives authenticated warm, cold, and mixed traffic. The 60-second smoke profile gates p99 below 100 ms, zero request errors, correct responses, and more than 50 requests/second in CI.
 - **Reproducibility-by-default** — `make train-*` on a fixed seed produces the same model artifact hash. Non-determinism is treated as a bug to find, not tolerate.
 
 ## Design decisions
@@ -67,7 +69,12 @@ ADRs live under [`docs/adr/`](docs/adr/). Backend ADRs use a flat numeric line; 
 | [0003](docs/adr/0003-two-stage-architecture.md) | Two-stage architecture: candidate generator + ranker | Single-model global scoring blows the p99 < 100ms SLO by 1–2 orders of magnitude |
 | [0004](docs/adr/0004-item-item-before-two-tower.md) | Item-item ships before two-tower as the zero-learned-parameters baseline | A learned model needs a baseline to beat or its recall numbers don't mean anything |
 | [0005](docs/adr/0005-lightgbm-over-neural-ranker.md) | LightGBM over a neural ranker — tabular features are GBDT's home turf | LambdaRank directly optimizes the per-user ordering the serving stage needs |
+| [0006](docs/adr/0006-two-tower-retrieval-architecture.md) | History-based two-tower retrieval with FAISS | Avoids memorizing user IDs and pins the learned retrieval architecture |
+| [0007](docs/adr/0007-auth-provider-keycloak.md) | Keycloak OIDC with realm-per-tenant issuers | Makes tenant identity part of the verified token issuer boundary |
+| [0008](docs/adr/0008-multi-tenancy-rls.md) | Postgres row-level security | Makes the database reject cross-tenant reads and writes even when application filtering is wrong |
 | [0009](docs/adr/0009-feature-store-feast.md) | Feast over direct SQL or a hand-rolled online feature cache | Pins point-in-time historical reads and tenant-keyed Redis serving behind one schema |
+| [0010](docs/adr/0010-synthetic-load-k6.md) | k6 for synthetic load | Turns the p99 SLO into an authenticated CI pass/fail contract |
+| [0011](docs/adr/0011-cold-start-coverage.md) | Controlled synthetic cold-start cohorts | Makes zero- and short-history behavior measurable by cohort |
 | [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js + Tailwind for the portfolio frontend | Real Server Components, route handlers, image optimization for poster grids |
 
 ADRs are written as substantive documents (typical length 100–180 lines), each treating alternatives with analysis rather than a single rejection sentence and including consequences and second-order effects.
@@ -88,7 +95,8 @@ These are bright-line rules the project is held to. Each maps to a real producti
 10. **Auth on every endpoint except `/healthz`.** No internal unauthenticated paths.
 11. **Synthetic-load smoke test in CI.** Every serving PR runs a short load script; p99 over the SLO threshold fails the PR.
 
-Non-negotiables 9–11 land in Phase 3 alongside the serving and auth work; the others bind today.
+The online recommendation path now enforces non-negotiables 2, 4, and 8–11.
+The broader Phase 3 work extends the same contracts to its remaining surfaces.
 
 ## Stack
 
@@ -117,7 +125,7 @@ The full plan with lessons-per-phase lives in the project's design notes. The sh
 
 - **Phase 1 — Foundation** *(complete)*. Postgres + DVC + MLflow + docker-compose, temporal split per ADR 0001, evaluation harness as single source of truth, popularity + CF/ALS baselines.
 - **Phase 2 — Two-stage architecture, offline** *(complete)*. Item-item and two-tower candidate generators, provisional feature module, LightGBM ranker, and stage-specific metrics (recall@500 / NDCG@10) through the same harness.
-- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, and the FastAPI demo are in place. Audit logging and the enforced synthetic-load gate remain.
+- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, and the authenticated k6 SLO gate are in place. Programmatic cold-start cohorts, environment-specific Compose, and browser-side Keycloak auth remain.
 - **Phase 4 — Orchestration + promotion gate.** Prefect DAGs, automated evaluation-gated promotion against the incumbent champion.
 - **Phase 5 — Monitoring + drift.** Per-tenant Grafana dashboards, Evidently drift detection, synthetic drift simulation that proves the alert path fires.
 - **Phase 6 — A/B + shadow deploys.** Tenant-aware champion/challenger routing, shadow-mode logging, statistical significance for online experiments.
@@ -136,14 +144,16 @@ src/
     candidates/         # popularity, CF/ALS, item-item, two-tower
     ranker/             # LightGBM LambdaRank
     artifacts.py        # serving manifest + deterministic item-item index
-  serving/              # authenticated API, orchestration, feature/model clients
+  serving/              # authenticated API, orchestration, feature/model clients, prediction audit
   training/             # offline evaluation plus demo artifact packaging
 tests/
   unit/                 # model contracts, eval-protocol coverage
   integration/          # to be expanded in Phase 3
   feature_parity/       # offline/online consistency (Phase 3)
 web/                    # Next.js + Tailwind frontend
-synthetic/personas/     # stable named demo users, catalog manifest, idempotent seeder
+synthetic/
+  personas/             # stable named demo users, catalog manifest, idempotent seeder
+  load/                 # authenticated k6 warm/cold/mixed SLO workloads
 infra/                  # docker-compose configs, MLflow + Postgres init
 ```
 
@@ -182,12 +192,16 @@ cp .env.example .env
 make demo-up
 make demo-seed
 make demo-smoke
+make demo-audits
+make demo-load-smoke
 ```
 
 Open <http://localhost:3001>. Select a persona, rate movies from 1–5 stars, and
 watch its history and unseen recommendations refresh. Warm personas show the
 `item-item-cosine+lightgbm` policy and checksum-pinned model versions; Cold
-Start shows the explicit `popularity` fallback. Use
+Start shows the explicit `popularity` fallback. `make demo-audits` prints the
+latest exact predictions, features, versions, and stage timings, while
+`make demo-load-smoke` runs the 60-second authenticated p99 gate. Use
 `make demo-down` to stop while preserving state, `make demo-reset` to recreate
 only the demo-owned volumes, and
 `make demo-logs` when a dependency fails. See the

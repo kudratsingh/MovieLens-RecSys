@@ -27,6 +27,7 @@ import time
 from typing import Any
 
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI, Request
@@ -116,6 +117,7 @@ class _StubEngine:
 
     def __init__(self) -> None:
         self.set_local_calls: list[dict[str, Any]] = []
+        self.transaction_exits: list[tuple[Any, Any, Any]] = []
 
     def begin(self) -> _StubConnCtx:
         return _StubConnCtx(self)
@@ -129,6 +131,7 @@ class _StubConnCtx:
         return _StubConn(self._engine)
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self._engine.transaction_exits.append((exc_type, exc, tb))
         return None
 
 
@@ -166,6 +169,10 @@ def _build_app(
     async def whoami(request: Request) -> dict[str, str]:
         p = request.state.principal
         return {"tenant_id": p.tenant_id, "user_id": p.user_id, "realm": p.realm}
+
+    @app.get("/explode")
+    async def explode() -> None:
+        raise RuntimeError("handler failed")
 
     return app, engine
 
@@ -218,6 +225,23 @@ def test_valid_token_attaches_principal_and_sets_tenant() -> None:
     call = engine.set_local_calls[0]
     assert "SET LOCAL app.tenant_id" in call["stmt"]
     assert call["params"] == {"tid": "default"}
+    assert engine.transaction_exits == [(None, None, None)]
+
+
+def test_handler_exception_rolls_back_transaction() -> None:
+    key = _generate_keypair()
+    app, engine = _build_app(key=key)
+    token = _mint_token(key, realm="default", sub="alice")
+
+    client = TestClient(app)
+    with pytest.raises(RuntimeError, match="handler failed"):
+        client.get("/explode", headers={"Authorization": f"Bearer {token}"})
+
+    assert len(engine.transaction_exits) == 1
+    exc_type, exc, traceback = engine.transaction_exits[0]
+    assert exc_type is RuntimeError
+    assert isinstance(exc, RuntimeError)
+    assert traceback is not None
 
 
 def test_expired_token_returns_401() -> None:

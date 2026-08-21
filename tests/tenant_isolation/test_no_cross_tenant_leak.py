@@ -112,13 +112,14 @@ def test_user_endpoints_never_cross_tenant_boundary(
     """The same user lookup must be scoped independently for each tenant."""
     default_token = mint_token("default", "alice", "alice")
     demo_token = mint_token("demo", "demo", "demo")
+    query = "?limit=50" if endpoint == "recommendations" else ""
 
     default_response = client.get(
-        f"/users/{CANARY_USER_ID}/{endpoint}",
+        f"/users/{CANARY_USER_ID}/{endpoint}{query}",
         headers={"Authorization": f"Bearer {default_token}"},
     )
     demo_response = client.get(
-        f"/users/{CANARY_USER_ID}/{endpoint}",
+        f"/users/{CANARY_USER_ID}/{endpoint}{query}",
         headers={"Authorization": f"Bearer {demo_token}"},
     )
 
@@ -152,6 +153,43 @@ def test_persona_endpoint_never_crosses_tenant_boundary(
     assert DEMO_PERSONA_NAME not in default_response.text
     assert DEMO_PERSONA_NAME in demo_response.text
     assert DEFAULT_PERSONA_NAME not in demo_response.text
+
+
+def test_recommendation_audits_are_visible_only_inside_active_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_token = mint_token("default", "alice", "alice")
+    demo_token = mint_token("demo", "demo", "demo")
+    headers_by_tenant = {
+        "default": {"Authorization": f"Bearer {default_token}"},
+        "demo": {"Authorization": f"Bearer {demo_token}"},
+    }
+
+    for headers in headers_by_tenant.values():
+        response = client.get(
+            f"/users/{CANARY_USER_ID}/recommendations",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.headers["x-request-id"]
+
+    default_audits = client.get(
+        f"/users/{CANARY_USER_ID}/audits",
+        headers=headers_by_tenant["default"],
+    )
+    demo_audits = client.get(
+        f"/users/{CANARY_USER_ID}/audits",
+        headers=headers_by_tenant["demo"],
+    )
+
+    assert default_audits.status_code == 200
+    assert demo_audits.status_code == 200
+    assert default_audits.json()["items"]
+    assert demo_audits.json()["items"]
+    assert all(item["tenant_id"] == "default" for item in default_audits.json()["items"])
+    assert all(item["tenant_id"] == "demo" for item in demo_audits.json()["items"])
+    assert "900000004" not in default_audits.text
+    assert "900000003" not in demo_audits.text
 
 
 def test_rating_write_is_confined_to_active_tenant(

@@ -135,7 +135,14 @@ class LGBMRanker:
         # LGBM's predict return type is a union of ndarray / Any / list depending
         # on prediction mode; the LambdaRank objective returns dense scores, so
         # normalize to ndarray here.
-        return np.asarray(self._booster.predict(feature_matrix), dtype=np.float64)
+        # A serving worker may score several requests concurrently. Pinning one
+        # native thread per request prevents LightGBM's default all-core pool
+        # from oversubscribing the host and turning modest concurrency into
+        # long p95/p99 queueing tails.
+        return np.asarray(
+            self._booster.predict(feature_matrix, num_threads=1),
+            dtype=np.float64,
+        )
 
     def rank_candidates(
         self,

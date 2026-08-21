@@ -50,10 +50,18 @@ and learned serving path are implemented:
   all eight online Feast features, and returns scored candidate IDs.
 - API-side RLS hydration, live seen-item filtering, and explicit popularity
   fallback for cold users, unavailable infrastructure, or invalid model output.
+- A forced-RLS prediction audit that stores exact ranked items, online feature
+  values, artifact versions, fallback reason, and candidate/feature/ranker/total
+  latency for every recommendation.
+- A pinned k6 container and real-Keycloak warm/cold/mixed workload that enforces
+  p99 below 100 ms, zero errors, correct responses, and more than 50 requests
+  per second in CI.
 
-The walkthrough now demonstrates the actual two-stage architecture. The
-remaining gap to the Phase 3-complete demo is durable audit logging and the
-enforced k6 latency gate in Bundle D6.
+The Phase 3 demo milestone now demonstrates the actual two-stage architecture,
+its durable prediction evidence, and a measured latency contract. Broader
+Phase 3 platform work continues without blocking the recorded walkthrough:
+programmatic cold-start cohorts, generic non-prediction request audits,
+environment-specific Compose stacks, and browser-side Keycloak authentication.
 
 ## Definition of done
 
@@ -69,12 +77,14 @@ The first working demo is complete when all of the following are true:
 - The response displays tenant, policy, and model version.
 - Every endpoint except `/healthz` requires auth outside guarded dev mode.
 - Tenant-isolation CI exercises recommendations and history with real canaries.
+- Every recommendation can be retrieved as an RLS-scoped audit with its exact
+  predictions, features, model versions, and stage timing.
 - A smoke-load check records p50, p95, and p99 against the pinned workload.
 - The complete walkthrough can be reset and repeated from documented commands.
 
-The first demo may serve the popularity baseline. Learned two-tower and
-LightGBM serving improve the demo but do not block the first repeatable
-walkthrough. They become required for the Phase 3-complete demo.
+The initial popularity-only walkthrough has been superseded. The current demo
+requires versioned learned item-item + LightGBM serving for warm personas and
+the explicit popularity fallback for zero-history personas.
 
 ## Delivery bundles
 
@@ -232,6 +242,27 @@ Acceptance proof:
 - The pinned smoke workload passes p99 under 100 ms with zero unexpected
   errors, or produces an explicit performance blocker with stage timing.
 
+Implementation notes:
+
+- `recommendation_audits` is forced-RLS and written inside the same
+  tenant-scoped request transaction as serving reads. An insert failure fails
+  the request; the successful transaction commit runs immediately after the
+  response body is flushed so WAL fsync is not counted as network latency.
+- Learned audits retain each returned score and the exact eight online feature
+  values used by LightGBM. Cold and degraded paths record explicit fallback
+  reasons and empty feature snapshots rather than pretending the ranker ran.
+- The smoke workload uses a constant-arrival target of 55 requests/second for
+  60 seconds with 10 VUs and a deterministic 7/2/3 warm/cold/mixed ratio.
+  A concurrent setup batch warms every serving worker; measured responses must
+  have the expected policy, non-empty items, and a request ID.
+- The accepted 2026-08-15 implementation baseline used the initial
+  60-request/second target and reported p50 5.83 ms, p95 9.97 ms, p99 70.08
+  ms, 59.18 requests/second, and zero request errors across 3,570 measured
+  recommendations. Setup validation requests are excluded.
+- `make demo-load-nightly` exposes the larger five-minute/100-VU profile. A
+  scheduled staging run remains dependent on the environment-specific Compose
+  bundle and is not represented as complete here.
+
 ## Local walkthrough target
 
 The finished command sequence should be no longer than:
@@ -278,10 +309,10 @@ Required for the first repeatable demo:
 - Auth and tenant isolation already in place.
 - Popularity-based recommendations and history.
 
-Required for Phase 3 completion, but not the first walkthrough:
+Also required for the measured Phase 3 demo milestone and now implemented:
 
-- Audit persistence.
-- Enforced k6 latency gate.
+- RLS-scoped prediction audit persistence.
+- Enforced authenticated k6 latency gate.
 
 Explicitly deferred to later phases:
 
@@ -293,8 +324,9 @@ Explicitly deferred to later phases:
 
 ## Risks to manage
 
-- Direct aggregation over the full ratings table is a demo bridge, not the
-  latency-compliant final path. Measure it before claiming the SLO.
+- The SLO claim is tied to the pinned smoke workload and its achieved
+  throughput; a larger hardware-capacity claim requires a separately recorded
+  staging profile.
 - Demo data must never mutate the raw DVC-tracked MovieLens files.
 - Dev auth bypass must remain impossible in staging/production.
 - Poster availability is an external dependency; visual fallbacks are required.
@@ -312,11 +344,12 @@ Explicitly deferred to later phases:
 - [x] One-command demo environment and smoke test.
 - [x] Feast/Redis feature path and parity test.
 - [x] Learned two-stage model serving.
-- [ ] Audit logging and k6 latency gate.
+- [x] Audit logging and k6 latency gate.
 - [ ] Recorded, repeatable portfolio walkthrough.
 
 ## Immediate next step
 
-Implement Bundle D6. Persist tenant-scoped audit rows for every recommendation
-request, then enforce the warm/cold/mixed k6 workload and its p99 latency gate in
-CI.
+Record the repeatable portfolio walkthrough from `docs/demo-runbook.md`,
+including one learned response, its prediction audit, the cold-start fallback,
+and the smoke-load summary. Then continue Phase 3 with ADR 0011's programmatic
+cold-start cohorts.
