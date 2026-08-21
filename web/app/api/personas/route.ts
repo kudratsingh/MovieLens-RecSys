@@ -3,10 +3,13 @@ import type { NextAuthRequest } from "next-auth";
 import { auth } from "@/auth";
 import type { PersonaResponse } from "@/lib/api";
 import { apiAuthorization, requireApiAccessToken } from "@/lib/bff-auth";
+import { forwardedCredentialRefusal } from "@/lib/bff-security";
 
 const API_BASE_URL = process.env.RECOMMENDATION_API_URL ?? "http://localhost:8000";
 
 async function personas(request: NextAuthRequest) {
+  const refusal = forwardedCredentialRefusal(request);
+  if (refusal) return refusal;
   const accessToken = requireApiAccessToken(request.auth);
   if (!accessToken) {
     return Response.json({ detail: "Sign in to choose a demo persona" }, { status: 401 });

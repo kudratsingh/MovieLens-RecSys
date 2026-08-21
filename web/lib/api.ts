@@ -16,7 +16,17 @@ export type FeedbackMutationResponse =
   components["schemas"]["FeedbackMutationResponse"];
 export type LibraryMovie = components["schemas"]["LibraryMovieResponse"];
 export type LibraryResponse = components["schemas"]["LibraryResponse"];
+export type LibraryCounts = components["schemas"]["LibraryCountsResponse"];
+export type CursorPage = components["schemas"]["CursorPageResponse"];
 export type TasteSummaryResponse = components["schemas"]["TasteSummaryResponse"];
+export type TasteGenre = components["schemas"]["TasteGenreResponse"];
+export type AuditPredictionItem = components["schemas"]["AuditPredictionItem"];
+export type RecommendationAuditItem =
+  components["schemas"]["RecommendationAuditItem"];
+export type RecommendationAuditResponse =
+  components["schemas"]["RecommendationAuditResponse"];
+export type OnlineUserFeatures =
+  components["schemas"]["OnlineUserFeaturesResponse"];
 
 export interface UserDashboard {
   recommendations: RecommendationResponse;

@@ -3,11 +3,15 @@ import type { NextAuthRequest } from "next-auth";
 import { auth } from "@/auth";
 import { proxyRecommendationApi, validPositiveId } from "@/lib/backend";
 import { requireApiAccessToken } from "@/lib/bff-auth";
+import { forwardedCredentialRefusal } from "@/lib/bff-security";
+import { resourceRequestId } from "@/lib/resources/bff";
 
 async function detail(
   request: NextAuthRequest,
   context: { params: Promise<Record<string, string | string[] | undefined>> },
 ) {
+  const refusal = forwardedCredentialRefusal(request);
+  if (refusal) return refusal;
   const { userId, movieId } = await context.params;
   if (
     typeof userId !== "string" ||
@@ -21,7 +25,12 @@ async function detail(
   if (!accessToken) {
     return Response.json({ detail: "Your session has expired. Sign in again." }, { status: 401 });
   }
-  return proxyRecommendationApi(accessToken, `/users/${userId}/movies/${movieId}`);
+  return proxyRecommendationApi(
+    accessToken,
+    `/users/${userId}/movies/${movieId}`,
+    {},
+    resourceRequestId(request),
+  );
 }
 
 export const GET = auth(detail);
