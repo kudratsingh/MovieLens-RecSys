@@ -74,6 +74,8 @@ class RankingResult:
     ranker_latency_ms: float
     latency_ms: float
     candidate_sources: dict[str, int]
+    # Positive seeds that actually reached a candidate, not the number offered.
+    # The caller decides whether it may claim learned retrieval from this.
     seed_count: int
     excluded_count: int
     filter_policy: str
@@ -118,6 +120,7 @@ class ModelRankingService:
         user_id: int,
         positive_history_movie_ids: list[int],
         excluded_movie_ids: list[int],
+        dismissed_movie_ids: list[int],
         limit: int,
         candidate_limit: int,
     ) -> RankingResult:
@@ -136,6 +139,7 @@ class ModelRankingService:
             positive_history_movie_ids,
             limit=max(limit, candidate_limit),
             excluded_movie_ids=excluded,
+            dismissed_movie_ids=dismissed_movie_ids,
         )
         candidate_ids = retrieval.movie_ids
         candidate_latency_ms = (time.perf_counter() - candidate_started) * 1000
@@ -183,8 +187,8 @@ class ModelRankingService:
         logger.debug(
             "learned_rank tenant_id=%s user_id=%s candidate_policy=%s "
             "candidate_version=%s ranker_version=%s feature_version=%s "
-            "candidate_count=%s result_count=%s seed_count=%s excluded_count=%s "
-            "candidate_latency_ms=%.3f feature_latency_ms=%.3f "
+            "candidate_count=%s result_count=%s positive_count=%s seed_count=%s "
+            "excluded_count=%s candidate_latency_ms=%.3f feature_latency_ms=%.3f "
             "ranker_latency_ms=%.3f latency_ms=%.3f",
             tenant_id,
             user_id,
@@ -194,6 +198,9 @@ class ModelRankingService:
             manifest.feature_version,
             len(candidate_ids),
             len(items),
+            # Offered next to used: a gap between the two is how an index that
+            # has never scored this user's titles shows up in the logs.
+            len(positive_history_movie_ids),
             retrieval.seed_count,
             retrieval.excluded_count,
             candidate_latency_ms,
@@ -272,6 +279,13 @@ class RankRequest(BaseModel):
         serialization_alias="positive_history_movie_ids",
     )
     excluded_movie_ids: list[int] = Field(default_factory=list)
+    # Dismissals are the only ids that also remove a seed. They arrive on their
+    # own field because ``excluded_movie_ids`` is the caller's whole "never show
+    # this" set and therefore contains the watched history — using it to filter
+    # seeds is what silently emptied item-item retrieval. Defaulted so an API
+    # that predates this field still gets seeded retrieval: the caller's
+    # positive history already excludes dismissals at the query.
+    dismissed_movie_ids: list[int] = Field(default_factory=list)
     limit: int = Field(default=10, ge=1, le=50)
     candidate_limit: int = Field(default=100, ge=1, le=500)
 
@@ -365,6 +379,7 @@ async def rank(
             user_id=payload.user_id,
             positive_history_movie_ids=payload.positive_history_movie_ids,
             excluded_movie_ids=payload.excluded_movie_ids,
+            dismissed_movie_ids=payload.dismissed_movie_ids,
             limit=payload.limit,
             candidate_limit=payload.candidate_limit,
         )

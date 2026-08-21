@@ -134,7 +134,14 @@ class CandidateContribution:
 
 @dataclass(frozen=True)
 class CandidateRetrieval:
-    """Retrieved candidates plus the provenance needed to explain them."""
+    """Retrieved candidates plus the provenance needed to explain them.
+
+    ``seed_count`` is the number of positive seeds that actually reached at
+    least one candidate, not the number the caller offered. A seed the index
+    has never scored, or one whose every neighbor is filtered out, contributed
+    nothing to this result, and counting it would let a response claim a
+    retrieval it never performed.
+    """
 
     contributions: tuple[CandidateContribution, ...]
     seed_count: int
@@ -194,21 +201,32 @@ class CandidateIndex:
         *,
         limit: int,
         excluded_movie_ids: Iterable[int] = (),
+        dismissed_movie_ids: Iterable[int] = (),
     ) -> CandidateRetrieval:
         """Walk neighbors from positive history only, suppressing exclusions.
 
-        The two inputs are deliberately not interchangeable. Positive history
-        both seeds the walk and hides its own items; an excluded id only hides.
-        A dismissal must never pull in more of the same thing, so a dismissed
-        id is dropped from the seed set even if it also carries watched state
-        (ADR 0012).
+        The three inputs are deliberately not interchangeable, and the
+        difference between the last two is what this method gets wrong if they
+        are merged. Positive history both seeds the walk and hides its own
+        items. ``excluded_movie_ids`` is the caller's complete "never show
+        this" set — it necessarily *contains* the watched history, so it may
+        only hide, never narrow the seed set. ``dismissed_movie_ids`` is the
+        one input that also drops a seed: a "not for me" must never pull in
+        more of the same thing, even when the same title also carries watched
+        state (ADR 0012).
         """
         excluded = set(excluded_movie_ids)
+        dismissed = set(dismissed_movie_ids)
+        hidden = excluded | dismissed
         if limit <= 0:
-            return CandidateRetrieval(contributions=(), seed_count=0, excluded_count=len(excluded))
-        seeds = [movie_id for movie_id in positive_history_movie_ids if movie_id not in excluded]
-        blocked = excluded | set(positive_history_movie_ids)
+            return CandidateRetrieval(contributions=(), seed_count=0, excluded_count=len(hidden))
+        seeds = [movie_id for movie_id in positive_history_movie_ids if movie_id not in dismissed]
+        blocked = hidden | set(positive_history_movie_ids)
         scores: dict[int, float] = {}
+        # Seeds that reached at least one candidate. Reported instead of the
+        # offered count so the audit and the response reason can never claim a
+        # retrieval that no seed actually drove.
+        used_seeds: set[int] = set()
         # Callers pass seeds newest-first, so the first seed to reach a
         # candidate is the most recently watched title behind it — the honest
         # answer to "why am I seeing this". Recording it here costs one branch
@@ -220,6 +238,7 @@ class CandidateIndex:
             for candidate_id, similarity in self.neighbors.get(source_id, ()):
                 if candidate_id in blocked:
                     continue
+                used_seeds.add(source_id)
                 previous = scores.get(candidate_id)
                 if previous is None:
                     scores[candidate_id] = similarity
@@ -253,8 +272,8 @@ class CandidateIndex:
             selected_set.add(item_id)
         return CandidateRetrieval(
             contributions=tuple(contributions),
-            seed_count=len(seeds),
-            excluded_count=len(excluded),
+            seed_count=len(used_seeds),
+            excluded_count=len(hidden),
         )
 
     @classmethod

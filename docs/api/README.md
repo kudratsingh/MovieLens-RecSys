@@ -53,6 +53,23 @@ The Bundle 6 serving prerequisite extends two operations additively:
   `seed_movie_id`. Audits written before this change report `unknown`
   attribution rather than a fabricated source.
 
+## `serving_policy` reason vocabulary
+
+`reason` is free text after a stable prefix. Group on the prefix; read the rest
+only when looking at a single row. The response schema is unchanged — these are
+the values the existing fields take.
+
+| Prefix | `name` | `learned` | Meaning |
+|---|---|---|---|
+| `learned-two-stage` | `item-item-cosine+lightgbm` | `true` | Both stages ran. The reason reports the number of positive seeds retrieval **used**, which can be lower than `positive_signal_count` when a watched title is absent from the deployed candidate index. |
+| `unseeded-retrieval` | `popularity-fill+lightgbm` | `false` | The user was above the cold-start threshold and the ranker ran, but no positive seed reached a candidate, so the list came from the index's popularity fill. A seedless retrieval is never reported as learned. |
+| `cold-start` | `popularity` | `false` | Below `threshold` positive watched signals. |
+| `model-server-unavailable` | `popularity` | `false` | The sidecar failed or breached its contract. |
+| `empty-learned-result` / `excluded-id-blocked` | `popularity` | `false` | Nothing survived hydration or exclusion enforcement. |
+
+`excluded-id-blocked` also appears appended to another reason, after a `;`, when
+some — but not all — ids were dropped on the way out.
+
 Request correlation applies to the whole surface rather than one operation, so
 it is not modelled in the schema: every response carries `X-Request-ID`. A
 caller-supplied value is adopted when it is 1–128 printable ASCII characters

@@ -1,11 +1,18 @@
 """Candidate → feature → ranker orchestration with explicit safe fallbacks.
 
-The coordinator owns the split that ADR 0012 requires: positive watched history
-and excluded ids are read as separate inputs and stay separate all the way to
-the sidecar. Exclusions are re-applied at every stage that can introduce an id
-— fallback, retrieval, hydration, and a final check on the outgoing list — so
-a dismissed title has to survive four independent filters to leak, and the one
+The coordinator owns the split that ADR 0012 requires: positive watched
+history, the full exclusion set, and dismissals are read as separate inputs
+and stay separate all the way to the sidecar. The last two are not the same
+list — exclusions contain the user's own watched titles and may only hide,
+while a dismissal is the one signal that also stops a title from seeding
+retrieval. Exclusions are re-applied at every stage that can introduce an id —
+fallback, retrieval, hydration, and a final check on the outgoing list — so a
+dismissed title has to survive four independent filters to leak, and the one
 place that could still return it fails closed with an audited reason instead.
+
+The policy this module reports is held to what actually ran: a two-stage call
+whose retrieval no seed reached is reported as ``unseeded-retrieval`` with
+``learned`` false, never as learned two-stage serving.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from src.serving.models import (
 )
 from src.serving.policy import (
     CANDIDATE_SOURCE_POPULARITY_FALLBACK,
+    CANDIDATE_SOURCE_POPULARITY_FILL,
     EXCLUSION_FILTER_POLICY,
     POLICY_POPULARITY,
     SCORE_SCALE_INTERACTION_COUNT,
@@ -50,6 +58,13 @@ REASON_MODEL_UNAVAILABLE = "model-server-unavailable"
 REASON_EMPTY_LEARNED = "empty-learned-result"
 REASON_EXCLUDED_BLOCKED = "excluded-id-blocked"
 REASON_LEARNED = "learned-two-stage"
+# A two-stage call whose retrieval stage no seed reached. The ranker still ran,
+# so the response is not a popularity fallback — but it is not learned
+# retrieval either, and it gets its own prefix rather than borrowing one.
+REASON_UNSEEDED = "unseeded-retrieval"
+
+# The honest policy name when retrieval degenerated to its fill order.
+POLICY_UNSEEDED = f"{CANDIDATE_SOURCE_POPULARITY_FILL}+lightgbm"
 
 LEARNED_REASON = "Similar to movies in this persona's watched history"
 
@@ -62,6 +77,7 @@ class ModelRanker(Protocol):
         user_id: int,
         positive_history_movie_ids: list[int],
         excluded_movie_ids: list[int] | None = None,
+        dismissed_movie_ids: list[int] | None = None,
         limit: int,
         candidate_limit: int = 100,
     ) -> ModelRankingResult: ...
@@ -151,6 +167,10 @@ class RecommendationCoordinator:
                 user_id=user_id,
                 positive_history_movie_ids=state.positive_movie_ids,
                 excluded_movie_ids=state.excluded_movie_ids,
+                # Sent apart from the exclusion set, which contains this user's
+                # own watched titles: only a dismissal may stop a title from
+                # seeding retrieval (ADR 0012).
+                dismissed_movie_ids=state.dismissed_movie_ids,
                 limit=limit,
                 candidate_limit=max(100, limit * 10),
             )
@@ -195,10 +215,26 @@ class RecommendationCoordinator:
                 ),
             )
         served_ids = {movie.movie_id for movie in items}
-        policy_name = f"{learned.candidate_policy}+lightgbm"
+        # The response may only claim learned two-stage serving when the
+        # retrieval stage actually ran on this user's positive history. A
+        # result no seed reached is the index's fill order with a ranker
+        # applied to it, and calling that "learned" is the defect the Bundle 7
+        # finish-gate review caught (N2). ``seed_count`` is the sidecar's count
+        # of seeds that reached a candidate, so this is the seeds *used*.
+        seeded = learned.seed_count > 0
+        policy_name = f"{learned.candidate_policy}+lightgbm" if seeded else POLICY_UNSEEDED
         reason = (
-            f"{REASON_LEARNED}: {learned.candidate_policy} retrieval over "
-            f"{learned.seed_count} positive seeds, ranked by {learned.ranker_version}"
+            (
+                f"{REASON_LEARNED}: {learned.candidate_policy} retrieval over "
+                f"{learned.seed_count} positive seeds, ranked by {learned.ranker_version}"
+            )
+            if seeded
+            else (
+                f"{REASON_UNSEEDED}: none of {state.positive_signal_count} positive watched "
+                f"signals seeded {learned.candidate_policy} retrieval; "
+                f"{CANDIDATE_SOURCE_POPULARITY_FILL} candidates ranked by "
+                f"{learned.ranker_version}"
+            )
         )
         if blocked:
             reason = f"{reason}; {REASON_EXCLUDED_BLOCKED}: {sorted(blocked)}"
@@ -206,7 +242,7 @@ class RecommendationCoordinator:
             policy=policy_name,
             serving_policy=ServingPolicy(
                 name=policy_name,
-                learned=True,
+                learned=seeded,
                 positive_signal_count=state.positive_signal_count,
                 threshold=COLD_START_THRESHOLD,
                 reason=reason,
@@ -222,7 +258,10 @@ class RecommendationCoordinator:
             feature_latency_ms=learned.feature_latency_ms,
             ranker_latency_ms=learned.ranker_latency_ms,
             model_latency_ms=learned.latency_ms,
-            fallback_reason=None,
+            # A degraded first stage is audited like any other degradation, so
+            # `fallback_reason IS NOT NULL` still finds every request that did
+            # not get the policy it was routed to.
+            fallback_reason=None if seeded else REASON_UNSEEDED,
             items=items,
             predictions=[
                 PredictionAudit(
