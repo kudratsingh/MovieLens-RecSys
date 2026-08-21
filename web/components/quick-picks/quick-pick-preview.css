@@ -1,0 +1,85 @@
+.quick-pick-card {
+  align-items: center;
+  display: grid;
+  gap: clamp(2rem, 7vw, 6rem);
+  grid-template-columns: minmax(14rem, 24rem) minmax(0, 1fr);
+  margin: 0 auto;
+  max-width: 74rem;
+  min-height: calc(100dvh - 12rem);
+}
+
+.quick-pick-poster .poster-card-copy,
+.quick-pick-poster .poster-reason {
+  display: none;
+}
+
+.quick-pick-copy > p:not(.eyebrow) {
+  color: var(--text-secondary);
+}
+
+.quick-pick-copy h1,
+.quick-pick-copy .eyebrow {
+  margin: 0;
+}
+
+.quick-pick-copy h1 {
+  margin-top: 1rem;
+}
+
+.quick-pick-overview {
+  line-height: 1.6;
+  max-width: 38rem;
+}
+
+.quick-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 2rem;
+}
+
+.quick-pick-actions kbd {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 0.3rem;
+  font-size: 0.6rem;
+  padding: 0.15rem 0.3rem;
+}
+
+.quick-pick-message {
+  font-size: 0.75rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 700px) {
+  .quick-pick-card {
+    align-items: start;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .quick-pick-copy {
+    display: contents;
+  }
+
+  .quick-pick-copy .quick-pick-overview,
+  .quick-pick-copy .quick-pick-actions,
+  .quick-pick-copy .quick-pick-message {
+    grid-column: 1 / -1;
+  }
+
+  .quick-pick-copy .display-title {
+    font-size: clamp(2.15rem, 10vw, 3.5rem);
+  }
+
+  .quick-pick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    margin-top: 0;
+  }
+
+  .quick-pick-actions .button-primary {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+}

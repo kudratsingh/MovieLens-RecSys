@@ -200,6 +200,28 @@ and the complete watched/rating/watchlist/dismissal state is overlaid.
 This bundle can begin after Bundle 0 and run beside Bundles 1–3 using recorded
 contract fixtures. It must not hard-code unresolved backend semantics.
 
+**Progress as of 2026-08-21:**
+
+- [x] Formalize semantic surface, text, accent, focus, status, poster,
+  typography, spacing, and motion tokens.
+- [x] Add responsive desktop top navigation and mobile bottom navigation.
+- [x] Split Discover, Browse, Library, movie detail, and Quick Picks into
+  route-owned server shells with interactive client leaves.
+- [x] Build poster/fallback, rail, collection, state-control, rating, drawer,
+  route/error-boundary, skeleton, empty, and expected-error primitives.
+- [x] Make recommendation, catalog, Library, and evidence results independently
+  fail-able using typed recorded contract fixtures.
+- [x] Add Vitest, React Testing Library, user-event, jest-axe, and Playwright.
+- [x] Prove route shells at 390, 768, and 1440 widths with no horizontal page
+  overflow; commit the representative evidence set.
+- [x] Preserve the Phase 3 dashboard at `/legacy` during vertical-slice work.
+
+Bundle 4 is complete as a frontend-system layer. Fixture-driven controls are
+explicitly preview-only; persistence, catalog pagination, and live route data
+remain owned by Bundles 2 and 3. The system is isolated under authenticated
+`/ui-preview/*` routes until Bundle 5 integrates those primitives with the live
+resources.
+
 **Work:**
 
 - formalize semantic surface/text/accent/focus/status/poster tokens;

@@ -1,0 +1,35 @@
+.movie-grid {
+  display: grid;
+  gap: clamp(1.4rem, 3vw, 2.25rem) clamp(0.75rem, 2vw, 1.4rem);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.movie-grid-compact {
+  gap-block: 1.25rem;
+}
+
+@media (min-width: 600px) {
+  .movie-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .movie-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .movie-grid-compact {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .movie-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .movie-grid-compact {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}

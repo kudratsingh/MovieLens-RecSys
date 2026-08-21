@@ -1,0 +1,54 @@
+.movie-rail {
+  margin-top: clamp(3rem, 7vw, 6rem);
+}
+
+.rail-header {
+  align-items: flex-end;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.rail-header .eyebrow,
+.rail-header h2 {
+  margin: 0;
+}
+
+.rail-header h2 {
+  margin-top: 0.45rem;
+}
+
+.rail-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.rail-track {
+  display: grid;
+  gap: clamp(0.75rem, 2vw, 1.25rem);
+  grid-auto-columns: minmax(9rem, 13.5rem);
+  grid-auto-flow: column;
+  margin-inline: calc(clamp(1rem, 4vw, 4rem) * -1);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 0.2rem clamp(1rem, 4vw, 4rem) 1.25rem;
+  scroll-padding-inline: clamp(1rem, 4vw, 4rem);
+  scroll-snap-type: inline proximity;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.rail-track > * {
+  scroll-snap-align: start;
+}
+
+@media (max-width: 520px) {
+  .rail-actions .icon-button {
+    display: none;
+  }
+
+  .rail-track {
+    grid-auto-columns: minmax(8.8rem, 42vw);
+  }
+}

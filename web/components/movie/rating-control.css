@@ -1,0 +1,42 @@
+.rating-control {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.rating-control legend {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.rating-stars {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.rating-stars button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.4rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.75rem;
+}
+
+.rating-stars button:hover,
+.rating-stars button.rating-active {
+  color: var(--warning);
+}
+
+.rating-control p {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin: 0.35rem 0 0;
+}

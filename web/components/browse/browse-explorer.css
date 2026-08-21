@@ -1,0 +1,133 @@
+.browse-toolbar {
+  align-items: stretch;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1fr auto;
+  margin: clamp(2rem, 5vw, 4rem) 0 1rem;
+}
+
+.search-field {
+  align-items: center;
+  background: var(--surface-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  display: flex;
+  gap: 0.75rem;
+  min-height: 3.25rem;
+  padding: 0 1rem;
+}
+
+.search-field:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 25%, transparent);
+}
+
+.search-field input {
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  outline: 0;
+  width: 100%;
+}
+
+.search-field input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-options {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.filter-options legend {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 750;
+  margin-bottom: 0.8rem;
+}
+
+.filter-options label {
+  align-items: center;
+  border-top: 1px solid var(--border-strong);
+  cursor: pointer;
+  display: flex;
+  gap: 0.8rem;
+  min-height: 3.2rem;
+}
+
+.filter-options input {
+  accent-color: var(--accent);
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.active-filters button {
+  background: var(--accent-muted);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.45rem 0.75rem;
+}
+
+.collection-bar {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 0 1rem;
+}
+
+.collection-bar p {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.collection-bar p strong {
+  color: var(--text-primary);
+}
+
+.collection-bar p span {
+  color: var(--degraded);
+}
+
+.collection-bar label {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.72rem;
+  gap: 0.5rem;
+}
+
+.collection-bar select {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  color: var(--text-primary);
+  padding: 0.5rem;
+}
+
+@media (max-width: 520px) {
+  .browse-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .browse-toolbar > .button-secondary {
+    justify-self: start;
+  }
+
+  .collection-bar p span {
+    display: none;
+  }
+}

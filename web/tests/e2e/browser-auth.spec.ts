@@ -29,6 +29,11 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   expect(publicSession).not.toHaveProperty("refreshToken");
   expect(publicSession).not.toHaveProperty("idToken");
 
+  await page.goto("/ui-preview/discover");
+  await expect(page.getByRole("heading", { level: 1, name: "The Handmaiden" })).toBeVisible();
+  await expect(page.getByText("Recorded persona")).toBeVisible();
+  await page.goto("/");
+
   const durableMutation = await page.evaluate(async () => {
     const userId = 900000104;
     const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
@@ -75,5 +80,8 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   expect(rejectedMutation).toBe(403);
 
   await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
+  await page.goto("/ui-preview/discover");
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
 });

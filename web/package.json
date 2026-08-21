@@ -10,9 +10,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts",
+    "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
     "evidence:baseline": "playwright test tests/e2e/capture-baseline.spec.ts",
     "api:types": "openapi-typescript ../docs/api/openapi.json -o lib/api.generated.ts",
-    "api:types:check": "node scripts/check-api-types.mjs"
+    "api:types:check": "node scripts/check-api-types.mjs",
+    "test:watch": "vitest",
+    "test:e2e:update": "playwright test --update-snapshots",
+    "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -22,12 +26,18 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@tailwindcss/postcss": "^4",
+    "@types/jest-axe": "^3.5.9",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "jest-axe": "^10.0.0",
+    "jsdom": "^26.1.0",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
     "typescript": "^5",

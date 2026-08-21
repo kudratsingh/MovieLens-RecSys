@@ -1,0 +1,88 @@
+.resource-state {
+  align-items: center;
+  background: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: auto 1fr;
+  min-height: 9rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+}
+
+.resource-state .button-secondary {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.resource-state-icon {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--accent-strong);
+  display: flex;
+  font-weight: 800;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+
+.resource-state-title {
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 740;
+  margin: 0 0 0.25rem;
+}
+
+.resource-state p:last-child {
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.resource-error {
+  border-color: color-mix(in srgb, var(--destructive) 32%, var(--border-subtle));
+}
+
+.skeleton-rail {
+  display: grid;
+  gap: 1rem;
+  grid-auto-columns: minmax(9rem, 14rem);
+  grid-auto-flow: column;
+  overflow: hidden;
+}
+
+.skeleton-card {
+  min-width: 0;
+}
+
+.skeleton-poster,
+.skeleton-line {
+  animation: skeleton-pulse 1.3s ease-in-out infinite alternate;
+  background: var(--surface-raised);
+}
+
+.skeleton-poster {
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+}
+
+.skeleton-line {
+  border-radius: 999px;
+  height: 0.55rem;
+  margin-top: 0.6rem;
+  width: 58%;
+}
+
+.skeleton-line-strong {
+  height: 0.75rem;
+  width: 88%;
+}
+
+@keyframes skeleton-pulse {
+  to {
+    background: var(--surface-overlay);
+  }
+}

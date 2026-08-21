@@ -1,0 +1,26 @@
+.state-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.state-controls button {
+  min-width: 9.5rem;
+}
+
+.state-controls-compact button {
+  min-width: 0;
+}
+
+@media (max-width: 420px) {
+  .state-controls:not(.state-controls-compact) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .state-controls:not(.state-controls-compact) button {
+    font-size: 0.78rem;
+    min-width: 0;
+    padding-inline: 0.65rem;
+  }
+}
