@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { signInThroughKeycloak } from "./keycloak";
+
 /**
  * The service-backed Discover journey.
  *
@@ -9,21 +11,17 @@ import { expect, test, type Page } from "@playwright/test";
  * router actually chose, that a mutation commits through the BFF, and that
  * "Recommendations refreshed" is only said after a real refetch answers.
  *
- * The persona is Drama Fan, kept distinct from the Cold Start persona the
- * browser-auth spec mutates so the two specs cannot interfere.
+ * This journey owns **Drama Fan (900000102)** and writes to no other persona.
+ * `browser-auth.spec.ts` carries the ownership table for the whole run; the
+ * short version is that both spec files draw on one seeded database, so a
+ * shared persona would let one journey's cleanup surface as another journey's
+ * failure. It marks the featured movie watched and rates it, then removes the
+ * watched interaction — which takes the rating with it — in a `finally`, so a
+ * failure part-way through still leaves the persona as it was found.
  */
 
 const PERSONA_ID = 900000102;
 const DISCOVER = `/discover?userId=${PERSONA_ID}`;
-
-async function signIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Continue with Keycloak" }).click();
-  await page.locator("#username").fill("demo");
-  await page.locator("#password").fill("demo");
-  await page.locator("#kc-login").click();
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-}
 
 /** Reads the movie ID the primary card links to, so cleanup can undo it. */
 async function featuredMovieId(page: Page): Promise<number> {
@@ -56,7 +54,7 @@ async function removeWatched(page: Page, movieId: number) {
 test("sign in, read the served policy, open the evidence, and refresh on feedback", async ({
   page,
 }) => {
-  await signIn(page);
+  await signInThroughKeycloak(page);
   await page.goto(DISCOVER);
 
   // 1. The primary movie is the first read, and the label follows the response.
