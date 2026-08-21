@@ -644,19 +644,32 @@ the host.
 | `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:perf` | 5 tests, pass ×3, [numbers below](#107-performance) |
 | `MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:bundle7d` | 10 captures, [`evidence/bundle-7d/`](evidence/bundle-7d/README.md) |
 
-Seeded state at capture time, read from the API in the browser's own session —
-unchanged from the 7A run, which is what makes the two evidence sets
-comparable:
+Everything above was run twice over, against two stacks, because `main` moved
+under this branch while it was in review — see
+[10.10](#1010-verified-against-main-after-pr-64). Seeded state at capture time,
+read from the API in the browser's own session, on the second of them:
 
 ```json
 {"name":"item-item-cosine+lightgbm","learned":true,"positive_signal_count":8,
- "threshold":5,"reason":"learned-two-stage: item-item-cosine retrieval over 0
+ "threshold":5,"reason":"learned-two-stage: item-item-cosine retrieval over 8
  positive seeds, ranked by demo-lgbm-v1","score_scale":"lightgbm-rank-score",
  "filter_policy":"watched-and-dismissed-excluded-v1","excluded_count":8}
 ```
 
-CI has not run this branch at the time of writing. Everything above is local;
-the CI columns are what the PR's checks will fill in.
+That is [PR #64](https://github.com/kudratsingh/MovieLens-RecSys/pull/64)
+visible in the response: `over 8 positive seeds` where the 7A run and this
+branch's own first run both read `over 0 positive seeds`. It resolves
+[N2](#n2-learned-serving-reports-zero-positive-seeds), and it changes which
+titles every persona is served — which is why the committed evidence was
+recaptured against it.
+
+**CI on this branch: all eight checks pass** —
+[run 32530254885](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32530254885):
+`frontend` (the visual and accessibility gate, including the front door added
+below), `browser-auth-e2e` (the service-backed journey and 7b's browser
+timing), `demo-compose`, `feature-parity`, `lint`, `synthetic-load-smoke`,
+`tenant-isolation`, and `test`. That run is of the branch as pushed, before
+#64.
 
 ### 10.3 Blocking items
 
@@ -730,7 +743,7 @@ Protocol unchanged: 390×844, first stable render, three questions.
 
 | Question | Answer |
 |---|---|
-| What is this? | A movie recommender. A poster, `Casino`, `1995 / Crime · Drama`, and one line of reason. |
+| What is this? | A movie recommender. A poster, `The Shawshank Redemption`, `1994 / Crime · Drama`, and one line of reason. |
 | Is it for you? | Yes — `Similar to movies in this persona's watched history`, with the persona named in the shell separately from the signed-in actor. |
 | What should you do first? | `Open movie`, the one filled button on the screen. |
 
@@ -759,28 +772,41 @@ throttle), three runs, all passing. Representative run:
 
 Discover's LCP moved from the 120 ms recorded in [§5](#performance-gate--pass-carried-from-7b)
 to a reproducible 380–396 ms, and that deserved an explanation rather than a
-shrug. It is not the cutover. Measured directly, the route emits two LCP
-candidates for the warm persona: the server-rendered `h1` at 52 ms — which at
-that moment still holds the placeholder `Finding a strong first pick…` — and
-then the route status line at 376 ms, which only exists after hydration and is
-larger. The primary movie's poster never becomes a candidate **because that
-recommendation has no artwork**, which is exactly
-[N1](#n1-the-first-learned-recommendation-has-no-poster). Loading the same
-route for Cold Start, whose top pick does have a poster, gives an `IMG` LCP
-element at 88 ms.
+shrug.
 
-So N1 is not only a cosmetic finding: on the warm persona it moves the LCP
-element off the image and onto a hydration-time paragraph, which makes the
-number bimodal depending on catalog coverage. The enforced budget is 2500 ms
-and both modes clear it by a wide margin, so this is recorded rather than
-gating. Ruled out along the way: the footer link added to the shell is not
-prefetched (measured — zero `/legacy` requests during the measurement) and is
-below the fold, so it is not an LCP candidate.
+**What is measured.** The route emits two LCP candidates for the warm persona:
+the server-rendered `h1` at ~72 ms — which at that moment still holds the
+placeholder `Finding a strong first pick…` — and then the route status line at
+~380 ms, which only exists after hydration and is the larger of the two
+(12617 px² against 10980). The primary movie's poster is never among the
+candidates.
+
+**What is ruled out.** Not the cutover: the only change this PR makes to
+Discover's document is a footer link that sits below the fold and is not
+prefetched — measured, zero `/legacy` requests during the measurement window.
+Not catalog coverage either, which was this review's first guess and was wrong:
+[N1](#n1-the-first-learned-recommendation-has-no-poster) meant the warm
+persona's top pick had no artwork before #64 and does have artwork after it
+(`The Shawshank Redemption`, `Get Shorty`), and the LCP element and timing are
+unchanged across that — 380 ms without a poster, 384 ms with one. The guess was
+made plausible by a Cold Start measurement that did produce an `IMG` LCP at
+88 ms, and it does not survive the second stack.
+
+**What is open.** Why the featured poster never becomes an LCP candidate on
+this route, when it does on Quick Picks and Cold Start's Discover. Recorded as
+a follow-up rather than answered here: the enforced budget is 2500 ms, both
+measurements clear it by more than six times, and CLS is 0.0000, so nothing
+about this gates the cutover. It is written down because a route whose LCP
+element is a hydration-time paragraph will report hydration cost as paint cost
+for as long as that is true, and the next person to read a 380 ms number should
+know that is what it is.
 
 The direct-API p99 gate and the page-shaped load budgets are unchanged by this
-PR and were not re-measured; `synthetic-load-smoke` still owns them. Rate
-limiting is still recorded as not implemented, still non-blocking here, and
-still needs the decision [§5](#performance-gate--pass-carried-from-7b)
+PR and were not re-measured; `synthetic-load-smoke` still owns them, and it
+passed on this branch.
+
+Rate limiting is still recorded as not implemented, still non-blocking here,
+and still needs the decision [§5](#performance-gate--pass-carried-from-7b)
 describes.
 
 ### 10.8 What the owner must run to convert this verdict
@@ -814,9 +840,24 @@ findings below.
 
 ### 10.9 Findings
 
-Carried from [§6](#6-non-blocking-findings): N1 (now with a measured
-performance consequence — see [10.7](#107-performance)), N2, N3, N4, N5. All
-still non-blocking, none of them touched by this PR.
+Carried from [§6](#6-non-blocking-findings): N3, N4, and N5 — all still
+non-blocking, none of them touched by this PR.
+
+[N2](#n2-learned-serving-reports-zero-positive-seeds) is **resolved** by
+[PR #64](https://github.com/kudratsingh/MovieLens-RecSys/pull/64), which found
+the seeds were being dropped before retrieval. The response now reads `over 8
+positive seeds`, and a retrieval no seed reached is labelled
+`unseeded-retrieval` with `learned: false` rather than borrowing the learned
+label — which is the backend making the same commitment the frontend's
+truthfulness criterion makes.
+
+[N1](#n1-the-first-learned-recommendation-has-no-poster) is **substantially
+improved** by the same PR rather than by any coverage work: the personas are
+now served titles that do carry artwork, so the first learned recommendation
+has a poster. The underlying coverage gap the finding names — 24 of 120
+reviewed titles with complete poster metadata — is unchanged, so a different
+persona or a different ranking can still land on the fallback. Recorded as
+improved, not closed.
 
 #### N6. The product has no persona picker
 
@@ -849,7 +890,49 @@ made here: it changes the cascade under every route, and a cutover PR that is
 also re-running the finish gate is the wrong place to take that risk. Recorded
 as a follow-up.
 
-### 10.10 Re-running this section
+### 10.10 Verified against `main` after PR #64
+
+`main` moved while this branch was in review:
+[PR #64](https://github.com/kudratsingh/MovieLens-RecSys/pull/64) changed which
+titles every persona is served and when `learned` may be reported. A gate
+re-run that only described the branch's own base would have been describing a
+system that no longer exists, so this section was produced twice.
+
+**Run one** — the branch as pushed, on `25807b2`. All commands in
+[10.2](#102-what-was-run), plus CI's eight green checks.
+
+**Run two** — a throwaway verification tree combining `origin/main` at
+`fb459dc` (which includes #64) with this branch's `web/`, which is what this
+branch becomes once the owner rebases it. Built and seeded as its own Compose
+stack, then:
+
+| Command | Result |
+|---|---|
+| `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:e2e` | 7 tests, pass ×2 (20.8 s, 22.2 s) |
+| `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:perf` | 5 tests, pass |
+| `MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:bundle7d` | 10 captures |
+
+Nothing in the cutover depends on which policy the router chose, and the run
+confirms it: the journey asserts copy against the response rather than against
+a constant, so a stricter `learned` rule and a different ranked set change what
+the assertions read without changing whether they hold. Every verdict in
+[10.4](#104-criteria) is unaffected.
+
+**The committed evidence is from run two.** It is labelled that way in
+[`evidence/bundle-7d/README.md`](evidence/bundle-7d/README.md), and it matters:
+capturing this branch on its own base would have committed pictures of
+recommendations that `main` no longer serves. Re-running
+`npm run evidence:bundle7d` after the rebase reproduces them; running it on the
+branch before the rebase does not.
+
+**One thing the owner will hit on the rebase.** #64 also added a bullet to
+`CLAUDE.md` immediately above `Remaining Phase 3 — product track`, and this
+branch adds its own bullet in the same place. Keep both, in either order. #64's
+other documentation change — the `Resolved in PR #64` line under
+[N2](#n2-learned-serving-reports-zero-positive-seeds) — is in a region this
+branch does not touch.
+
+### 10.11 Re-running this section
 
 ```bash
 # Service-backed

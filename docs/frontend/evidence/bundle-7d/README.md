@@ -11,6 +11,17 @@ catalog snapshot, the feature and model servers, and the web BFF. Nothing here
 needed failure injection, because none of these is a state a healthy stack
 cannot be asked to hold still in.
 
+**Which tree these were captured from, because it is not this branch alone.**
+[PR #64](https://github.com/kudratsingh/MovieLens-RecSys/pull/64) merged to
+`main` while this branch was in review, and it changed which titles every
+persona is served. These images come from a stack built from `origin/main` at
+`fb459dc` — #64 included — plus this branch's `web/`, which is what this branch
+becomes once it is rebased. Capturing on the branch's own base would have
+committed pictures of recommendations `main` no longer serves. Running the
+command below after the rebase reproduces these; running it before the rebase
+does not. The reasoning is in the review's
+[§10.10](../../finish-gate-review.md#1010-verified-against-main-after-pr-64).
+
 ## Capture command
 
 ```bash
@@ -29,8 +40,8 @@ reader to trust the picture.
 | Surface | Files | What it shows |
 |---|---|---|
 | Sign-in door | `sign-in-door-{mobile,desktop}` | The only thing an unauthenticated visitor reaches, rebuilt on the product's design tokens after the accessibility gate found two contrast failures and a 320px overflow on it |
-| Front door, signed in | `landing-after-sign-in-{mobile,tablet,desktop}` | `/` now answers with the movie-discovery product. Read against `../bundle-7a/landing-after-sign-in-*`, which is the dashboard it replaces — that pair is the whole of B1 |
-| Legacy dashboard | `legacy-dashboard-{mobile,desktop}` | The pre-redesign dashboard in its new home: labelled as legacy, linked back to the product, and reporting the serving policy the response carried instead of `Candidate policy: Popularity baseline` |
+| Front door, signed in | `landing-after-sign-in-{mobile,tablet,desktop}` | `/` now answers with the movie-discovery product — `The Shawshank Redemption`, ranked by the learned model, with one filled action. Read against `../bundle-7a/landing-after-sign-in-*`, which is the dashboard it replaces — that pair is the whole of B1 |
+| Legacy dashboard | `legacy-dashboard-{mobile,desktop}` | The pre-redesign dashboard in its new home: labelled as legacy, linked back to the product, and reporting the serving policy the response carried — `item-item-cosine+lightgbm`, learned, `over 8 positive seeds` — instead of `Candidate policy: Popularity baseline`. Its `Explore` button is also readable again; see the review's N7 |
 | Browse on the product shell | `browse-shell-mobile` | The bottom navigation the design contract requires for the three primary routes, on the route that had no mobile navigation at all |
 | Movie detail on the product shell | `movie-detail-shell-mobile` | The same, plus `Exploring as` a resolved persona name where the route-owned header printed `Exploring as persona 900000101` |
 | Library on the product shell | `library-shell-mobile` | Library ran a third header of its own; it is on the shared shell now, so the persona wording matches Discover's |
