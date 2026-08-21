@@ -138,20 +138,32 @@ is preempted, no matter what the service did. So the second round of work is
 about giving the measurement less to compete with, and about being able to prove
 which of the two happened.
 
-**Less to compete with.** The demo overlay now assigns CFS weights rather than
-caps: `api-load` and `model-server` at 4096, `feature-server`, `k6`, `postgres`,
-`pgbouncer` and `redis` at 2048, and `keycloak`, `keycloak-postgres`,
-`prometheus`, `api` and `web` at 256. Weights only decide who wins when the host
-is oversubscribed, so an uncontended measurement is bit-for-bit what it was —
-this cannot flatter a result, only stop an unrelated process from spoiling one.
-Keycloak stays running because the gate authenticates for real, but its heap is
-pinned to 256–512 MB with the serial collector and its JIT stopped at C1, since
-its default heap is sized off container memory and it is otherwise idle during
-the measured minute; its Postgres is sized for one ten-connection pool.
-Prometheus does not start for the smoke profile at all: remote-write is a
-trend feature for the nightly run, and the 60-second smoke holds its batch until
-after the scenario anyway, so all it contributed was another process. Its
-evidence goes to the run artifact instead. `demo-load-nightly` keeps it.
+**Less to compete with.** The demo overlay assigns CFS weights rather than caps,
+and it only ever *promotes*: `api-load` and `model-server` to 4096,
+`feature-server` and `k6` to 2048, everything else left at the default 1024.
+Weights only decide who wins when the host is oversubscribed, so an uncontended
+measurement is bit-for-bit what it was — this cannot flatter a result, only stop
+an unrelated process from spoiling one.
+
+Promotion-only is a correction, and the reason is worth keeping. The first
+attempt also demoted the neighbours — Keycloak, its Postgres, `api`, `web` — and
+pinned Keycloak to a 512 MB serial-GC heap with its JIT stopped at C1. That was
+wrong twice over. It buys nothing, because shares arbitrate between *runnable*
+tasks and a mostly-idle Keycloak consumes nothing whatever its weight; only the
+ratio between the busy processes matters, and promotion sets that ratio by
+itself. And it is not free, because `browser-auth-e2e` drives `api`, `web`, and
+an interactive Keycloak login through these same Compose files, on the same
+4-vCPU runner, with 10-second assertion timeouts. Starving the services under
+test in one job to speed up another is not a trade this repository should make.
+The demotions and the JVM flags are gone; `api`, `web`, `keycloak`,
+`keycloak-postgres`, `postgres`, `pgbouncer` and `redis` resolve identically to
+what they were before this ADR note. The one demotion left is `prometheus` at
+256, which no other job starts.
+
+Prometheus does not start for the smoke profile at all: remote-write is a trend
+feature for the nightly run, and the 60-second smoke holds its batch until after
+the scenario anyway, so all it contributed was another process. Its evidence
+goes to the run artifact instead. `demo-load-nightly` keeps it.
 
 **Proving which happened.** `synthetic/load/probe_host_cpu.py` samples
 `/proc/stat` once a second for the whole window, and `synthetic/load/
