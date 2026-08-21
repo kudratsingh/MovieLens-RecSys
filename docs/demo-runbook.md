@@ -196,6 +196,80 @@ mode for tenant `demo`; the browser therefore needs no manual token during this
 portfolio walkthrough. `Settings` refuses to start with that bypass in any
 non-development environment.
 
+### Page-shaped budgets and browser timing
+
+The gate above measures one endpoint. Two further commands measure what a
+*page* costs, and they are kept separate on purpose — the frontend testing
+strategy forbids conflating browser timing with the serving-only k6 number, so
+they run in different suites and produce different reports.
+
+```bash
+make demo-load-pages          # page-shaped API workloads, per step
+make demo-reliability-check   # request ids, readiness, degraded metadata, ...
+```
+
+`make demo-load-pages` runs `synthetic/load/pages.js` through the same wrapper
+as the smoke gate — same warm-up, same host-CPU probe, same re-measure rule —
+and models five routes as tagged step sequences read off the web client's own
+loaders:
+
+| Scenario | What it drives |
+|---|---|
+| `discover` | recommendations + history + personas concurrently, then the audits/features disclosure |
+| `browse` | catalog first page → next cursor → next cursor → open a movie, across the search/genre/decade/sort variants |
+| `library` | the active tab + taste profile + personas, then the two tab switches |
+| `mutation` | read state → mutate → replay the idempotency key → read state → counts refresh → list read → revert → read state |
+| `quickpicks` | recommend → dismiss → recommend → undo → watched → recommend → revert |
+
+The two writing scenarios mutate demo personas and put them back inside the
+iteration; `teardown()` sweeps anything left and fails the run if it had to.
+Cold Start `900000104` is never mutated. Run the browser suite and this target
+one at a time locally — in CI they use different Compose projects and cannot
+collide.
+
+Correctness always fails the run: every check, zero request errors, zero
+unreverted mutations. The per-step latency budgets in
+`synthetic/load/page_thresholds.js` are **advisory** by default and reported
+rather than enforced (`PAGE_LATENCY_ENFORCED=true` enforces them, and
+`make demo-load-pages-nightly` does over a three-minute window). ADR 0010's
+2026-08-21 page-shaped note carries the budgets, the baselines they came from,
+and what it takes to promote them.
+
+The evidence lands under `artifacts/load-pages/` in the same shape as the smoke
+gate's, plus `window-1/steps.txt` — the per-step table with each step's
+percentiles next to its budget, which is the first thing to read when a budget
+slips. `reliability.json` sits alongside it.
+
+`make demo-reliability-check` reports ten pass/fail facts a percentile cannot
+express: `/healthz` reachable without a token while nine other routes answer
+401; a caller-supplied `X-Request-ID` echoed on the response *and* persisted to
+the audit row's `correlation_id`; auth, model and database provenance readable
+from `/whoami` and the audit row; bounded page sizes; a cursor reused under a
+different filter refused with 400; and a poster-less movie rendering as a record
+rather than a failure. It also records that **rate limiting is not implemented**
+— sixty rapid authenticated requests all answer 200, with no `429` and no
+`X-RateLimit-*` header. That check is advisory and describes the behaviour, so
+it will start describing a limiter the day one lands.
+
+Browser timing is a Playwright suite, not a load test:
+
+```bash
+cd web && npm run test:perf     # needs the demo stack up and seeded
+```
+
+It signs in through real Keycloak, warms each route, then measures LCP, CLS, and
+time-to-visible-acknowledgement on the agreed mobile profile — 390x844, device
+scale factor 3, touch, 4x CPU throttle, no network throttling — and asserts the
+structural promises: reserved poster boxes, below-fold lazy loading, a bounded
+catalog page, zero per-card TMDB requests, and technical evidence that loads on
+disclosure rather than blocking the first movie. Targets are LCP ≤ 2.5 s,
+CLS ≤ 0.1, and acknowledgement ≤ 100 ms; CLS, LCP and the structural claims are
+enforced, the acknowledgement budget is advisory for now. A route that answers
+404 is skipped and listed as skipped — `/quick-picks` does not exist yet, and
+the report says so rather than quietly measuring four routes and calling it
+five. The report is written to `artifacts/browser-timing/browser-timing.json`
+with a compact table in the log.
+
 ## Routine operations
 
 ```bash
