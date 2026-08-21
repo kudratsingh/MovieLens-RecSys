@@ -7,7 +7,10 @@ from src.serving.recommendations import RecommendationService, UnknownDemoPerson
 
 
 def _connection() -> Connection:
-    engine = create_engine("sqlite://")
+    # Recommendation orchestration deliberately runs synchronous DB work in
+    # the request thread pool. Production uses psycopg2; allow this test-only
+    # SQLite connection to follow the same serialized cross-thread lifecycle.
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
     connection = engine.connect()
     connection.execute(
         text('CREATE TABLE movies ("movieId" INTEGER PRIMARY KEY, title TEXT, genres TEXT)')

@@ -36,32 +36,38 @@ The synthetic-load harness is **k6** (`grafana/k6` OSS distribution), with the f
 
 ## Implemented baseline
 
-The first accepted local Docker Desktop implementation run on 2026-08-15 used
-k6 2.1.0, four slim API workers, four model-sidecar workers, and the initial
-60-request/second arrival target. The recommendation-only summary (setup
+The accepted local Docker Desktop implementation run on 2026-08-20 used k6
+2.1.0, four slim API workers, four model-sidecar workers, and the defined
+55-request/second arrival target. The recommendation-only summary (setup
 validation excluded) reported:
 
-- p50: 5.83 ms
-- p95: 9.97 ms
-- p99: 70.08 ms
-- achieved throughput: 59.18 requests/second across 3,570 requests
+- p50: 6.31 ms
+- p95: 14.27 ms
+- p99: 41.30 ms
+- achieved throughput: 54.08 requests/second across 3,301 requests
 - request error rate: 0; response check rate: 1
-- dropped iterations: 31
+- dropped iterations: 0
 
 The arrival target is 55 requests/second, while the contractual throughput
 threshold is the achieved rate above 50. Dropped iterations remain visible in
 the JSON summary as capacity evidence; they do not replace the achieved-rate,
 latency, correctness, or error thresholds.
 
-Implementation tuning later exposed a measurement artifact: k6's default
-five-second Prometheus batches stalled enough in Docker Desktop to inflate its
-own p99, while an otherwise identical run without the output reported p99
-78.64 ms at 54.02 requests/second. The smoke profile therefore uses a two-minute
-push interval. That is longer than the scenario, and k6's `PeriodicFlusher`
+Implementation tuning exposed two independent tail-latency problems. First,
+k6's default five-second Prometheus batches stalled enough in Docker Desktop
+to inflate its own p99. The smoke profile therefore uses a two-minute push
+interval. That is longer than the scenario, and k6's `PeriodicFlusher`
 [performs one final flush on shutdown](https://pkg.go.dev/go.k6.io/k6/output#PeriodicFlusher),
 so the full batch still reaches Prometheus after measurement without pausing
 in-flight VUs. The higher-volume profile uses 30-second batches to bound memory
 without letting exporter work dominate its much larger p99 sample.
+
+Second, synchronous JWT verification and PostgreSQL reads were running on the
+API workers' event loops. Durable stage audits showed learned-request p99 at
+87.84 ms while the model sidecar was only 18.68 ms, isolating the orchestration
+overhead. Moving those blocking operations to the request thread pool reduced
+end-to-end p99 from 117.40 ms to the accepted 41.30 ms without changing the
+arrival target, traffic mix, audit durability, or thresholds.
 
 ## Rationale
 

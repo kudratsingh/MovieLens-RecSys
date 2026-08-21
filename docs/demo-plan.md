@@ -255,10 +255,10 @@ Implementation notes:
   60 seconds with 10 VUs and a deterministic 7/2/3 warm/cold/mixed ratio.
   A concurrent setup batch warms every serving worker; measured responses must
   have the expected policy, non-empty items, and a request ID.
-- The accepted 2026-08-15 implementation baseline used the initial
-  60-request/second target and reported p50 5.83 ms, p95 9.97 ms, p99 70.08
-  ms, 59.18 requests/second, and zero request errors across 3,570 measured
-  recommendations. Setup validation requests are excluded.
+- The accepted 2026-08-20 implementation baseline reported p50 6.31 ms, p95
+  14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request errors,
+  and zero dropped iterations across 3,301 measured recommendations. Setup
+  validation requests are excluded.
 - `make demo-load-nightly` exposes the larger five-minute/100-VU profile. A
   scheduled staging run remains dependent on the environment-specific Compose
   bundle and is not represented as complete here.

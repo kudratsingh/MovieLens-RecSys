@@ -116,9 +116,9 @@ The final JSON object is the compact evidence artifact. It includes p50, p95,
 p99, achieved throughput, request count, error/check rates, and dropped
 iterations. Dropped iterations are kept visible as a capacity signal; the gate
 is based on achieved throughput together with latency, correctness, and error
-thresholds. The accepted 2026-08-15 implementation baseline used the initial
-60-request/second target and reported p50 5.83 ms, p95 9.97 ms, p99 70.08 ms,
-59.18 requests/second, and zero request errors across 3,570 measured requests.
+thresholds. The accepted 2026-08-20 implementation baseline reported p50 6.31
+ms, p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
+errors, and zero dropped iterations across 3,301 measured requests.
 
 Both local and CI runs use the exact k6 image version pinned in
 `infra/ci/k6-version` and remote-write their measurements to the local

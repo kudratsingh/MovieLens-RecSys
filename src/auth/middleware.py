@@ -109,7 +109,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            principal = self._resolve_principal(request)
+            # Token parsing can perform RSA signature verification and a
+            # cache-miss JWKS fetch. Neither belongs on the event loop: under
+            # concurrent recommendation traffic it would otherwise delay
+            # unrelated requests handled by the same worker.
+            principal = await run_in_threadpool(self._resolve_principal, request)
         except UnauthenticatedError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=401)
         except UnauthorizedError as exc:

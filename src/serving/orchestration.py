@@ -7,6 +7,7 @@ from typing import Protocol
 
 import httpx
 from sqlalchemy import Connection
+from starlette.concurrency import run_in_threadpool
 
 from src.serving.audit import PredictionAudit
 from src.serving.models import (
@@ -62,13 +63,17 @@ class RecommendationCoordinator:
         user_id: int,
         limit: int,
     ) -> RecommendationDecision:
-        history = self._recommendations.recent_history(
+        # SQLAlchemy uses a synchronous psycopg2 connection here. Keep each
+        # operation serialized on the request's RLS transaction, but do not
+        # block the worker event loop while Postgres is doing I/O.
+        history = await run_in_threadpool(
+            self._recommendations.recent_history,
             connection,
             user_id=user_id,
             limit=500,
         )
         if not history:
-            return self._popularity(
+            return await self._popularity(
                 connection,
                 user_id=user_id,
                 limit=limit,
@@ -83,20 +88,21 @@ class RecommendationCoordinator:
                 candidate_limit=max(100, limit * 10),
             )
         except (httpx.HTTPError, ModelServerContractError):
-            return self._popularity(
+            return await self._popularity(
                 connection,
                 user_id=user_id,
                 limit=limit,
                 reason="model-server-unavailable",
             )
-        items = self._recommendations.hydrate_ranked_movies(
+        items = await run_in_threadpool(
+            self._recommendations.hydrate_ranked_movies,
             connection,
             user_id=user_id,
             ranked_items=[(item.movie_id, item.score) for item in learned.items],
             reason="LightGBM rank over learned item-item candidates",
         )
         if not items:
-            return self._popularity(
+            return await self._popularity(
                 connection,
                 user_id=user_id,
                 limit=limit,
@@ -125,7 +131,7 @@ class RecommendationCoordinator:
             ],
         )
 
-    def _popularity(
+    async def _popularity(
         self,
         connection: Connection,
         *,
@@ -133,7 +139,8 @@ class RecommendationCoordinator:
         limit: int,
         reason: str,
     ) -> RecommendationDecision:
-        items = self._recommendations.popular_for_user(
+        items = await run_in_threadpool(
+            self._recommendations.popular_for_user,
             connection,
             user_id=user_id,
             limit=limit,
