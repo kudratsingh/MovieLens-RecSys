@@ -8,6 +8,7 @@ export type CatalogItem = components["schemas"]["CatalogItem"];
 export type CatalogResponse = components["schemas"]["CatalogResponse"];
 export type PersonaItem = components["schemas"]["PersonaItem"];
 export type PersonaResponse = components["schemas"]["PersonaResponse"];
+export type CurrentActorResponse = components["schemas"]["CurrentActorResponse"];
 
 export interface UserDashboard {
   recommendations: RecommendationResponse;

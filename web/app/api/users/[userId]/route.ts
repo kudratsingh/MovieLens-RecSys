@@ -1,18 +1,28 @@
+import type { NextAuthRequest } from "next-auth";
+
+import { auth } from "@/auth";
 import type { UserDashboard } from "@/lib/api";
+import { apiAuthorization, requireApiAccessToken } from "@/lib/bff-auth";
 
 const API_BASE_URL = process.env.RECOMMENDATION_API_URL ?? "http://localhost:8000";
 
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ userId: string }> },
+async function dashboard(
+  request: NextAuthRequest,
+  context: { params: Promise<Record<string, string | string[] | undefined>> },
 ) {
-  const { userId } = await context.params;
+  const userId = (await context.params).userId;
+  if (typeof userId !== "string") {
+    return Response.json({ detail: "Invalid MovieLens user ID" }, { status: 400 });
+  }
   if (!/^\d+$/.test(userId) || Number(userId) < 1) {
     return Response.json({ detail: "Invalid MovieLens user ID" }, { status: 400 });
   }
 
-  const authorization = request.headers.get("authorization");
-  const headers = authorization ? { Authorization: authorization } : undefined;
+  const accessToken = requireApiAccessToken(request.auth);
+  if (!accessToken) {
+    return Response.json({ detail: "Your session has expired. Sign in again." }, { status: 401 });
+  }
+  const headers = apiAuthorization(accessToken);
 
   try {
     const [recommendationsResponse, historyResponse, catalogResponse] = await Promise.all([
@@ -58,3 +68,5 @@ export async function GET(
     );
   }
 }
+
+export const GET = auth(dashboard);

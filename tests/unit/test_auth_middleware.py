@@ -193,6 +193,7 @@ def _build_app(
         jwks=jwks,
         app_engine=engine,
         expected_audience=_AUDIENCE,
+        expected_issuer_base_url=_BASE_URL,
         allowed_authorized_parties=(_API_CLIENT, _WEB_CLIENT),
         dev_auth_bypass=dev_auth_bypass,
         dev_bypass_tenant="default",
@@ -477,19 +478,13 @@ def test_dev_bypass_short_circuits_without_token() -> None:
     assert engine.set_local_calls[0]["params"] == {"tid": "default"}
 
 
-def test_issuer_derives_tenant_from_last_realms_segment() -> None:
-    """The realm-derivation logic in AuthMiddleware pulls the segment
-    after the *last* '/realms/' in the issuer URL. That resists
-    spoofing via a fake path prefix like
-    'http://keycloak/realms/attacker/realms/default'.
-    """
+def test_issuer_with_untrusted_prefix_is_rejected() -> None:
     key = _generate_keypair()
     app, engine = _build_app(key=key)
 
-    # Craft a token whose iss has an extra `/realms/attacker` prefix.
-    # We expect the middleware to use the last segment ('default')
-    # for realm resolution, and since our JWKS is keyed by 'default'
-    # the token verifies against the right key.
+    # The token is signed by the correct realm key, but its issuer URL is not
+    # the exact trusted public issuer. Signature validity must not make an
+    # attacker-controlled issuer origin or path acceptable.
     now = int(time.time())
     payload = {
         "iss": f"{_BASE_URL}/realms/attacker/realms/default",
@@ -504,6 +499,27 @@ def test_issuer_derives_tenant_from_last_realms_segment() -> None:
 
     client = TestClient(app)
     resp = client.get("/whoami", headers={"Authorization": f"Bearer {token}"})
-    # Verifies as tenant 'default' — the last-segment rule holds.
-    assert resp.status_code == 200
-    assert resp.json()["tenant_id"] == "default"
+    assert resp.status_code == 401
+
+
+def test_issuer_with_untrusted_origin_is_rejected() -> None:
+    key = _generate_keypair()
+    app, _ = _build_app(key=key)
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": "https://attacker.example/realms/default",
+            "sub": "eve",
+            "aud": _AUDIENCE,
+            "azp": _API_CLIENT,
+            "iat": now,
+            "exp": now + 300,
+        },
+        key,
+        algorithm="RS256",
+        headers={"kid": _KID},
+    )
+
+    response = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401

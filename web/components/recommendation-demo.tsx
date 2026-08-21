@@ -98,7 +98,10 @@ export function RecommendationDemo() {
     try {
       const response = await fetch(`/api/users/${userId}/ratings`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": await createCsrfToken(),
+        },
         body: JSON.stringify({ movie_id: movieId, rating }),
       });
       const payload = (await response.json()) as { detail?: string };
@@ -115,7 +118,10 @@ export function RecommendationDemo() {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`/api/users/${userId}/ratings`, { method: "DELETE" });
+      const response = await fetch(`/api/users/${userId}/ratings`, {
+        method: "DELETE",
+        headers: { "x-csrf-token": await createCsrfToken() },
+      });
       const payload = (await response.json()) as { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Could not reset ratings");
       await loadUser(userId);
@@ -194,6 +200,12 @@ export function RecommendationDemo() {
       ) : null}
     </section>
   );
+}
+
+async function createCsrfToken() {
+  const response = await fetch("/api/auth/csrf", { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not create a secure feedback request");
+  return ((await response.json()) as { csrfToken: string }).csrfToken;
 }
 
 function Dashboard({

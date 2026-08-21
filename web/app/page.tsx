@@ -1,6 +1,13 @@
+import { auth, signIn } from "@/auth";
+import { SignOutButton } from "@/components/auth-controls";
 import { RecommendationDemo } from "@/components/recommendation-demo";
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth();
+  if (!session?.user || session.error) {
+    return <SignInPage expired={session?.error === "RefreshAccessTokenError"} />;
+  }
+
   return (
     <main className="min-h-screen bg-[#08090b] text-zinc-100">
       <div className="mx-auto max-w-[1500px] px-5 py-6 sm:px-8 lg:px-12">
@@ -14,9 +21,14 @@ export default function Home() {
               <p className="text-xs text-zinc-500">Recommendation Lab</p>
             </div>
           </div>
-          <div className="hidden items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/5 px-3 py-1.5 text-xs text-emerald-300 sm:flex">
-            <span className="size-1.5 rounded-full bg-emerald-300" />
-            Phase 3 · online baseline
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <p className="text-xs font-medium text-zinc-200">
+                {session.user.name ?? session.user.email ?? "Signed-in actor"}
+              </p>
+              <p className="text-[11px] text-zinc-500">Demo persona access</p>
+            </div>
+            <SignOutButton />
           </div>
         </header>
 
@@ -57,6 +69,51 @@ export default function Home() {
 
         <RecommendationDemo />
       </div>
+    </main>
+  );
+}
+
+function SignInPage({ expired }: { expired: boolean }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#08090b] px-5 text-zinc-100">
+      <section className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/[0.035] p-8 shadow-2xl shadow-black/30 sm:p-10">
+        <div className="grid size-12 place-items-center rounded-2xl bg-amber-300 text-lg font-black text-zinc-950">
+          M
+        </div>
+        <p className="mt-8 font-mono text-xs uppercase tracking-[0.25em] text-amber-300">
+          MovieLens recommendation lab
+        </p>
+        <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em]">
+          Sign in to explore a real recommendation session.
+        </h1>
+        <p className="mt-4 text-sm leading-6 text-zinc-400">
+          Keycloak authenticates the browser with authorization code and PKCE. Tokens stay in
+          an encrypted HttpOnly server session and never enter browser storage.
+        </p>
+        {expired ? (
+          <p className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-sm text-amber-100">
+            Your session expired and could not be refreshed. Sign in again to continue.
+          </p>
+        ) : null}
+        <form
+          action={async () => {
+            "use server";
+            await signIn("keycloak", { redirectTo: "/" });
+          }}
+          className="mt-8"
+        >
+          <button
+            className="w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-zinc-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-300"
+            type="submit"
+          >
+            Continue with Keycloak
+          </button>
+        </form>
+        <p className="mt-4 text-xs leading-5 text-zinc-600">
+          Demo environment: use the seeded walkthrough account. The selected MovieLens persona
+          is separate from the signed-in actor.
+        </p>
+      </section>
     </main>
   );
 }

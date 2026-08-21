@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundle 1 in progress
+**Status:** Bundles 0 and 1 complete; Bundles 2–4 in progress
 
 **Last updated:** 2026-08-21
 
@@ -66,7 +66,8 @@ treated as complete without the seeded browser harness.
 - [x] Support API and browser calling clients with an explicit API audience.
 - [x] Require the demo-impersonator role for browser persona selection.
 - [x] Reject verified Keycloak realms missing from the tenant registry.
-- [ ] Prove the real browser login/refresh/logout path with bypass disabled.
+- [x] Prove real browser login, protected API access, and local-session logout
+  with bypass disabled; unit-test token rotation and rejected refresh.
 - [x] Commit generated OpenAPI and TypeScript contracts with CI drift gates.
 
 **Backend:**
@@ -96,6 +97,13 @@ treated as complete without the seeded browser harness.
 persona access fail; a successful mutation is immediately readable; histories
 0/1/3 use fallback and 5/10 use learned serving; generated client types are in
 sync.
+
+**Completed evidence:** the browser-auth Playwright flow signs in through the
+real Keycloak PKCE page with `DEV_AUTH_BYPASS=false`, reaches the role-gated API
+and `/whoami`, proves tokens are absent from the public session response,
+rejects a mutation without CSRF proof, and propagates logout. Refresh success
+and failure are pinned by server-token tests. The authenticated baseline matrix
+is stored under [`evidence/baseline/`](evidence/baseline/).
 
 ## Bundle 2 — Durable feedback and Library foundation
 

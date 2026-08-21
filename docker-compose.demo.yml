@@ -25,9 +25,8 @@ services:
       APP_USER_DB_PORT: 5432
       ADMIN_USER_DB_HOST: postgres
       KEYCLOAK_BASE_URL: http://keycloak:8080
-      DEV_AUTH_BYPASS: "true"
-      DEV_BYPASS_TENANT: demo
-      DEV_BYPASS_USER: portfolio-demo
+      KEYCLOAK_PUBLIC_BASE_URL: http://localhost:8080
+      DEV_AUTH_BYPASS: "false"
       TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:-}
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_REPO_PATH: src/features/feast_repo
@@ -58,9 +57,8 @@ services:
       retries: 12
       start_period: 10s
 
-  # The portfolio API keeps dev impersonation enabled. Load traffic uses this
-  # second internal-only process so every measured request exercises real
-  # Keycloak token validation without changing the browser demo's behavior.
+  # Load traffic uses a separate multi-worker process so the browser demo and
+  # k6 latency gate can scale independently. Both validate real Keycloak JWTs.
   api-load:
     profiles: ["load"]
     image: movielens-recsys/api:demo
@@ -83,6 +81,7 @@ services:
       APP_USER_DB_PORT: 5432
       ADMIN_USER_DB_HOST: postgres
       KEYCLOAK_BASE_URL: http://keycloak:8080
+      KEYCLOAK_PUBLIC_BASE_URL: http://localhost:8080
       DEV_AUTH_BYPASS: "false"
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_REPO_PATH: src/features/feast_repo
@@ -215,11 +214,20 @@ services:
     image: movielens-recsys/web:demo
     environment:
       RECOMMENDATION_API_URL: http://api:8000
+      AUTH_SECRET: ${AUTH_SECRET:-movielens-demo-auth-secret-change-outside-local-dev}
+      AUTH_URL: http://localhost:3001
+      AUTH_TRUST_HOST: "true"
+      APP_ORIGIN: http://localhost:3001
+      KEYCLOAK_PUBLIC_ISSUER: http://localhost:8080/realms/demo
+      KEYCLOAK_INTERNAL_ISSUER: http://keycloak:8080/realms/demo
+      KEYCLOAK_CLIENT_ID: movielens-web
     ports:
       - "3001:3001"
     depends_on:
       api:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     healthcheck:
       test:
         [

@@ -4,6 +4,13 @@
 
 **Date:** 2026-08-21
 
+**Implementation:** Browser identity and durability decisions are implemented:
+Auth.js owns authorization code + PKCE, encrypted HttpOnly sessions,
+refresh/logout, and CSRF/origin enforcement; FastAPI pins issuer, audience,
+calling client, registered tenant, and persona role; bypass-disabled Playwright
+and refresh-path tests provide the accepted evidence. Durable multi-state
+feedback and `/me` ownership continue in their dependent bundles.
+
 ## Context
 
 Phase 3 now has the essential authenticated serving path: Keycloak issuers map

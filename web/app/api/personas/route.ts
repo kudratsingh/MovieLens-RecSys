@@ -1,15 +1,21 @@
+import type { NextAuthRequest } from "next-auth";
+
+import { auth } from "@/auth";
 import type { PersonaResponse } from "@/lib/api";
+import { apiAuthorization, requireApiAccessToken } from "@/lib/bff-auth";
 
 const API_BASE_URL = process.env.RECOMMENDATION_API_URL ?? "http://localhost:8000";
 
-export async function GET(request: Request) {
-  const authorization = request.headers.get("authorization");
-  const headers = authorization ? { Authorization: authorization } : undefined;
+async function personas(request: NextAuthRequest) {
+  const accessToken = requireApiAccessToken(request.auth);
+  if (!accessToken) {
+    return Response.json({ detail: "Sign in to choose a demo persona" }, { status: 401 });
+  }
 
   try {
     const response = await fetch(`${API_BASE_URL}/personas`, {
       cache: "no-store",
-      headers,
+      headers: apiAuthorization(accessToken),
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { detail?: string } | null;
@@ -28,3 +34,5 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = auth(personas);

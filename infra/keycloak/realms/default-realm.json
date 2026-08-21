@@ -46,7 +46,7 @@
       "serviceAccountsEnabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "movielens-api-secret-dev-only",
-      "redirectUris": ["http://localhost:3001/*"],
+      "redirectUris": ["http://localhost:3001/api/auth/callback/keycloak"],
       "webOrigins": ["http://localhost:3001"],
       "attributes": {
         "access.token.lifespan": "300"
@@ -75,7 +75,7 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://localhost:3001/*"],
+      "redirectUris": ["http://localhost:3001/api/auth/callback/keycloak"],
       "webOrigins": ["http://localhost:3001"],
       "attributes": {
         "pkce.code.challenge.method": "S256"

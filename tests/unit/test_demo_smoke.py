@@ -5,7 +5,12 @@ import json
 import httpx
 import pytest
 
-from synthetic.smoke.demo import DemoSmokeError, run_behavior_smoke, wait_for_readiness
+from synthetic.smoke.demo import (
+    DemoSmokeError,
+    fetch_recent_audits,
+    run_behavior_smoke,
+    wait_for_readiness,
+)
 
 
 def _response(request: httpx.Request) -> httpx.Response:
@@ -104,3 +109,61 @@ def test_behavior_smoke_rejects_seen_recommendations() -> None:
     with httpx.Client(transport=httpx.MockTransport(leaking_response)) as client:
         with pytest.raises(DemoSmokeError, match="seen movie IDs"):
             run_behavior_smoke(client, web_url="http://web.test")
+
+
+def test_direct_api_smoke_uses_a_short_lived_service_token() -> None:
+    def direct_response(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/protocol/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "service-token"})
+        assert request.headers.get("Authorization") == "Bearer service-token"
+        if path == "/personas":
+            return _response(httpx.Request("GET", "http://web.test/api/personas"))
+        if path == "/users/101/history":
+            return httpx.Response(200, json={"items": [{"movie_id": 1}]})
+        if path == "/users/101/recommendations":
+            return httpx.Response(
+                200,
+                json={
+                    "policy": "item-item-cosine+lightgbm",
+                    "items": [{"movie_id": 2}],
+                },
+            )
+        if path == "/users/104/history":
+            return httpx.Response(200, json={"items": []})
+        if path == "/users/104/recommendations":
+            return httpx.Response(
+                200,
+                json={"policy": "popularity", "items": [{"movie_id": 1}]},
+            )
+        return httpx.Response(404)
+
+    with httpx.Client(transport=httpx.MockTransport(direct_response)) as client:
+        summary = run_behavior_smoke(
+            client,
+            web_url="http://web.test",
+            api_url="http://api.test",
+            keycloak_url="http://keycloak.test",
+        )
+
+    assert summary.action_history_count == 1
+    assert summary.cold_history_count == 0
+
+
+def test_recent_audits_use_a_short_lived_service_token() -> None:
+    def audit_response(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/protocol/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "service-token"})
+        assert request.headers.get("Authorization") == "Bearer service-token"
+        assert request.url.path == "/users/900000101/audits"
+        assert str(request.url.params) == "limit=3"
+        return httpx.Response(200, json={"items": [{"request_id": "req-1"}]})
+
+    with httpx.Client(transport=httpx.MockTransport(audit_response)) as client:
+        payload = fetch_recent_audits(
+            client,
+            api_url="http://api.test",
+            keycloak_url="http://keycloak.test",
+        )
+
+    assert payload == {"items": [{"request_id": "req-1"}]}

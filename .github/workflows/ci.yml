@@ -60,7 +60,47 @@ jobs:
       - run: npm run api:types:check
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
+
+  browser-auth-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Start bypass-disabled browser demo
+        run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml up -d --build --wait --wait-timeout 180 api web
+      - name: Wait for imported demo realm
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:8080/realms/demo/.well-known/openid-configuration > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Keycloak demo realm did not become ready"
+          exit 1
+      - name: Seed deterministic browser personas
+        run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml run --rm demo-setup python -c "from synthetic.personas.seed import main; main()"
+      - name: Prove Keycloak PKCE session and protected API access
+        run: npm run test:e2e
+        working-directory: web
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3001
+      - name: Print browser-auth service logs on failure
+        if: failure()
+        run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml logs --tail 300 web api keycloak
+      - name: Stop browser-auth demo
+        if: always()
+        run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml down --volumes --remove-orphans
 
   lint:
     runs-on: ubuntu-latest
