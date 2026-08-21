@@ -52,3 +52,11 @@
     grid-auto-columns: minmax(8.8rem, 42vw);
   }
 }
+
+/* Live rails put a control under each poster; the track sizes the wrapper. */
+.rail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}

@@ -92,7 +92,7 @@ jobs:
           exit 1
       - name: Seed deterministic browser personas
         run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml run --rm demo-setup python -c "from synthetic.personas.seed import main; main()"
-      - name: Prove Keycloak PKCE session and protected API access
+      - name: Prove Keycloak PKCE session, protected API access, and the Discover journey
         run: npm run test:e2e
         working-directory: web
         env:

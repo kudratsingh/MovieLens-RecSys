@@ -16,7 +16,7 @@ make web-lint
 make web-typecheck
 ```
 
-The live authenticated routes remain `/`, `/browse`, `/library`, and
+The live authenticated routes are `/discover`, `/`, `/browse`, `/library`, and
 `/movies/[movieId]`. The same Phase 3 dashboard is also preserved at `/legacy`.
 Bundle 4's authenticated `/ui-preview/*` namespace uses typed recorded fixtures
 for visual-system review; its local state controls do not claim persistence.
@@ -32,6 +32,11 @@ npm run build
 npm run test:e2e:ui
 npm run test:e2e # real Keycloak stack only
 ```
+
+`npm run test:e2e` runs the browser-auth suite and the service-backed Discover
+journey, which both need the bypass-disabled demo stack (see the demo runbook).
+`npm run test:e2e:ui` runs the isolated responsive suite, including the
+`/discover` state matrix.
 
 Install the pinned browser runtime once with `npx playwright install chromium`.
 The isolated UI Playwright configuration defaults to port 3104 so it can run
@@ -57,6 +62,40 @@ session.
 RECOMMENDATION_API_URL=http://api.internal:8000 make web-dev
 MOVIELENS_UI_PORT=3204 npm run test:e2e:ui
 ```
+
+## `/discover`
+
+`/discover?userId=<persona>` is the authenticated, role-gated selected-persona
+recommendation route. It loads recommendations and watch history as independent
+server-rendered regions through `lib/resources/`, so a failing history query
+never erases the movie decision, and it fetches the prediction audit and online
+feature values only when a reader opens them. The serving-policy label follows
+the response: `Popular while we learn` for a popularity fallback, learned copy
+only when the response reports learned serving.
+
+Feedback goes through the canonical write path in `lib/movie-state/mutate.ts`
+and is relayed to the other routes through `lib/movie-state/committed-store.ts`,
+so a state committed on movie detail or in Library is the revision Discover's
+next write asserts. Recommendation responses carry no per-item state, so a first
+write can only assert revision `0`; a `409` is treated as a correction — the
+movie's canonical record is read, the control updates, and the retry succeeds.
+
+`middleware.ts` marks the document `private, no-store`. Next overwrites a
+`headers()` entry for dynamically rendered pages, so the header is set in
+middleware instead — this is verifiable in a production build, not in `next dev`.
+
+Reviewers can drive every state without a backend using the isolated harness:
+
+```bash
+MOVIELENS_UI_FIXTURE_MODE=1 npx next dev -p 3104
+# /discover?demo=learned | fallback | empty | loading | auth-expired
+# /discover?demo=recommendations-error | history-error | evidence-error | poster-failure
+npm run evidence:bundle5b   # writes docs/frontend/evidence/bundle-5b
+```
+
+The `demo` selector is honoured only inside `MOVIELENS_UI_FIXTURE_MODE` and
+never in production; without it the route always reads live, and a failed read
+stays a visible failure rather than becoming recorded data.
 
 ## Status
 

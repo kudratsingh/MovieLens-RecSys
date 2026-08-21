@@ -13,11 +13,17 @@ export function MovieRail({
   eyebrow,
   movies,
   seeAllHref,
+  movieHref,
+  footer,
 }: {
   title: string;
   eyebrow?: string;
   movies: readonly MovieCard[];
   seeAllHref: string;
+  /** Live routes link into `/movies`; the preview keeps its own namespace. */
+  movieHref?: (movie: MovieCard) => string;
+  /** Optional per-card controls a live route needs and the preview does not. */
+  footer?: (movie: MovieCard) => React.ReactNode;
 }) {
   const railRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
@@ -61,7 +67,10 @@ export function MovieRail({
         tabIndex={0}
       >
         {movies.map((movie) => (
-          <PosterCard density="compact" key={movie.id} movie={movie} />
+          <div className="rail-item" key={movie.id}>
+            <PosterCard density="compact" href={movieHref?.(movie)} movie={movie} />
+            {footer?.(movie)}
+          </div>
         ))}
       </div>
     </section>

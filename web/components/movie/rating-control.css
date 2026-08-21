@@ -40,3 +40,14 @@
   font-size: 0.7rem;
   margin: 0.35rem 0 0;
 }
+
+.rating-stars button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.rating-control .rating-note {
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 34rem;
+}

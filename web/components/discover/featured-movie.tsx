@@ -7,15 +7,42 @@ import { Icon } from "@/components/ui/icons";
 import type { EvidenceRecord, MovieCard } from "@/lib/movie-types";
 import "./featured-movie.css";
 
-export function FeaturedMovie({ movie, evidence }: { movie: MovieCard; evidence?: EvidenceRecord }) {
+/**
+ * The primary movie: the first thing a viewer should read on Discover.
+ *
+ * The slots exist so the live route can supply its own eyebrow, movie URL,
+ * mutating controls, and evidence disclosure without a second copy of this
+ * layout. Left alone, it renders the recorded preview exactly as Bundle 4 did.
+ */
+export function FeaturedMovie({
+  movie,
+  evidence,
+  eyebrow,
+  href,
+  actions,
+  aside,
+  disclosure,
+}: {
+  movie: MovieCard;
+  evidence?: EvidenceRecord;
+  eyebrow?: React.ReactNode;
+  href?: string;
+  actions?: React.ReactNode;
+  /** Rendered under the actions: rating, mutation status, honesty notes. */
+  aside?: React.ReactNode;
+  disclosure?: React.ReactNode;
+}) {
+  const movieHref = href ?? `/ui-preview/movies/${movie.id}`;
   return (
     <section className="featured-movie" aria-labelledby="featured-title">
       <div className="featured-poster">
-        <PosterCard movie={movie} priority />
+        <PosterCard href={movieHref} movie={movie} priority />
       </div>
       <div className="featured-copy">
         <div className="featured-identity">
-          <p className="eyebrow">Tonight&apos;s first look · Rank {movie.rank ?? 1}</p>
+          <p className="eyebrow">
+            {eyebrow ?? <>Tonight&apos;s first look · Rank {movie.rank ?? 1}</>}
+          </p>
           <h1 className="display-title" id="featured-title">
             {movie.title}
           </h1>
@@ -25,16 +52,18 @@ export function FeaturedMovie({ movie, evidence }: { movie: MovieCard; evidence?
         </div>
         <p className="featured-reason">{movie.reason ?? "Selected from the current ranked recommendation set."}</p>
         <div className="featured-actions">
-          <Link className="button-primary" href={`/ui-preview/movies/${movie.id}`}>
+          <Link className="button-primary" href={movieHref}>
             Open movie <Icon name="arrow" />
           </Link>
-          <StateControls initialState={movie.state} title={movie.title} />
+          {actions ?? <StateControls initialState={movie.state} title={movie.title} />}
         </div>
-        {evidence ? (
-          <Drawer buttonLabel="Why this?" eyebrow="Model evidence" title={`Why ${movie.title}?`}>
-            <EvidenceDetails evidence={evidence} reason={movie.reason} />
-          </Drawer>
-        ) : null}
+        {aside}
+        {disclosure ??
+          (evidence ? (
+            <Drawer buttonLabel="Why this?" eyebrow="Model evidence" title={`Why ${movie.title}?`}>
+              <EvidenceDetails evidence={evidence} reason={movie.reason} />
+            </Drawer>
+          ) : null)}
       </div>
     </section>
   );

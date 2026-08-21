@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A, 5C, and 5D landed, 5B open)
+**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A, 5C, and 5D landed, 5B landing)
 
 **Last updated:** 2026-08-21
 
@@ -250,7 +250,18 @@ erase unrelated content; lint, typecheck, build, component, and axe checks pass.
   `not-found`/`upstream-error` state model with reusable region rendering and a
   reauthentication path; caller-supplied bearer tokens refused at the BFF edge
   and in the browser reader; and a structural fixture lockout asserted in tests.
-- [ ] 5B — Discover.
+- [x] 5B — Discover: `/discover` loads recommendations and watch history as
+  independent server-owned regions, with technical evidence fetched only on
+  demand so it never delays the first movie; the policy label follows the
+  reported serving policy (`Popular while we learn` for fallback, learned copy
+  only when the response says learned); `Why this?` shows only structured
+  evidence that exists and reaches the prediction audit and online features in
+  two deliberate actions; the canonical watched, rating, watchlist, and
+  dismissal controls reconcile the committed state and revision, then request
+  fresh recommendations before any refreshed copy appears, with rollback and
+  focus recovery on failure; component, axe, responsive Playwright, and
+  service-backed browser coverage plus the 390/768/1440 evidence matrix in
+  `evidence/bundle-5b`.
 - [x] 5C — Browse and movie detail: Browse wired to the Bundle 3 catalog query
   contract through the 5A boundary, with search, genre, decade, sort, and
   cursor serialized into the URL and no invented total; deduplicated page
