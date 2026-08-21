@@ -1,18 +1,18 @@
 # Movie-discovery frontend: backend readiness
 
-**Status:** Bundle 2 durable feedback and Library foundation implemented
+**Status:** Bundles 0–3 implemented: source audit, Auth.js boundary, durable Library,
+and scalable local catalog/detail
 
 **Last updated:** 2026-08-21
 
 ## Outcome
 
-The proposed frontend is feasible, but the current backend supports a narrower
-product than the route contracts describe. Discover can be redesigned on the
-existing recommendation path. A scalable Browse, durable Library, honest Quick
-Picks loop, and real browser login require backend contract work.
+The backend now supports authenticated Discover, a scalable local-metadata
+Browse/detail surface, and a durable selected-persona Library. Quick Picks,
+end-user `/me` ownership, and broader observability still require contract work.
 
-This document separates current truth from proposed behavior. It is not an
-implementation claim.
+This document separates current truth from proposed behavior and records which
+parts of the route design are implementation claims.
 
 ## Current truth
 
@@ -21,11 +21,11 @@ implementation claim.
 | Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback | Static artifacts and snapshot features still do not update on each rating |
 | Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
-| Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, and a truthful `live-ratings-v1` summary | The resources are selected-persona mode until `/me` ownership mapping lands; visual poster metadata belongs to Bundle 3 |
-| Catalog | The shared MovieLens catalog contains 62,423 titles; live rating state is overlaid from the durable projection | Endpoint returns at most 100 ID-ordered rows with no poster/year/search/filter/sort/cursor/detail contract |
-| Demo catalog | Reviewed 24-title fixture gives deterministic demos | Merely adding titles does not add them to prediction artifacts or popularity coverage |
-| Metadata | TMDB is bounded, cached, and failure-tolerant for small recommendation sets | Cache is per process and live fan-out can block; it is unsuitable for a large poster grid |
-| Browser auth | Keycloak gives both callers the API audience; FastAPI pins the public issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly session cookies, refresh/logout, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
+| Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, and a truthful `live-ratings-v1` summary | The resources remain selected-persona mode until `/me` ownership mapping lands |
+| Catalog | Filter-bound keyset cursor, search, genre/year filters, three stable sorts, 48-item cap, local detail, and complete watched/rating/watchlist/dismissal state overlay | Selected-persona ownership remains the boundary; full-catalog query profiling is still required before widening the reviewed fixture |
+| Demo catalog | Reviewed 120-title fixture; 24 complete poster/overview records; 480 background interactions make all 120 titles artifact-eligible after regeneration | Visible, poster-backed, and policy-specific eligibility remain separate measures |
+| Metadata | Shared persisted read model supplies Browse, detail, and recommendation hydration with complete/partial/unavailable status | Snapshot enrichment is offline; partial titles intentionally render deterministic fallbacks |
+| Browser auth | Keycloak gives both callers the API audience; FastAPI pins issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly sessions, server-side token refresh/logout, BFF authorization, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
 | BFF loading | The current dashboard proxy fetches recommendations, history, and catalog concurrently; TypeScript types are now generated from committed OpenAPI | One failed request still fails the entire dashboard and BFF bodies are not yet runtime validated |
 | Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit | Other reads and mutations have no generic request audit or retention policy |
 | Performance | Authenticated recommendation k6 gate enforces p99 below 100 ms for its pinned workload | It does not measure page-shaped BFF fan-out, real poster enrichment, catalog paging, or mutation-plus-refresh |
@@ -230,11 +230,11 @@ may claim comparable recommendation coverage. CI should assert both:
 | Route | Can UI work begin? | Backend gate before complete behavior |
 |---|---|---|
 | `/discover` | Yes, against the existing response | Structured reasons and independent BFF route; remeasure the SLO with commit latency included |
-| `/browse` | Shell/grid states yes | Cursor catalog contract, local metadata read model, measured search/filter queries, coverage fixture |
-| `/library` | Static route/states yes | User movie state, feedback events, RLS/ownership, cursor APIs, canonical mutations |
-| `/movies/[id]` | Layout/states yes | Detail endpoint, local metadata, canonical user state, optional explanation |
+| `/browse` | Yes: cursor catalog, local metadata, durable state overlay, filters, load more, fallbacks, and scroll restoration | Run seeded browser/visual gates and profile full-catalog queries before expanding beyond the reviewed fixture |
+| `/library` | Yes: durable tabs, counts, state controls, filtering, and canonical reconciliation | `/me` ownership mapping and shared poster-card integration remain follow-up work |
+| `/movies/[id]` | Yes: local detail, source status, durable state, CSRF-protected rating action, and fallbacks | Add structured explanation and the broader shared state-control component later |
 | `/quick-picks` | Prototype only | Watched/watchlist/dismissal resources, undo, five-signal routing, separate positive/excluded inputs |
-| Real signed-in product | No ownership claim yet | Browser-token audience, BFF session, `/me` mapping or role-gated impersonation, CSRF/refresh/logout E2E |
+| Real signed-in product | Role-gated persona mode is signed in through Auth.js | `/me` mapping remains required before claiming a private end-user profile |
 
 ## Verification gates
 

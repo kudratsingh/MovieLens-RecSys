@@ -31,3 +31,8 @@ Bundle 2 adds the selected-persona Library and feedback resources:
 - canonical mutation responses containing a revision and idempotency request
   ID. Rating deletion preserves watched state; deleting watched state is the
   separate history-removal resource.
+
+Bundle 3 adds `listDemoCatalog` and `getMovieDetail`. Catalog cursors are
+opaque, versioned, and bound to the active filter/sort query. Browse and detail
+metadata come from the persisted local read model, overlay the complete durable
+movie state, and never trigger live per-card TMDB calls.

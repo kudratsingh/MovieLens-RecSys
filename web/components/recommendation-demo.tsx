@@ -330,7 +330,7 @@ function RatingStudio({
                 <button
                   aria-label={`${rating} stars`}
                   className={`grid size-8 place-items-center rounded-md text-sm transition ${
-                    movie.rating === rating
+                    movie.state?.rating === rating
                       ? "bg-amber-300 font-bold text-zinc-950"
                       : "bg-white/[0.06] text-zinc-400 hover:bg-white/[0.12] hover:text-amber-200"
                   }`}
@@ -342,7 +342,7 @@ function RatingStudio({
                   {rating}
                 </button>
               ))}
-              <span className="ml-2 text-xs text-zinc-500">{movie.rating ? `${movie.rating.toFixed(1)}★` : "Unrated"}</span>
+              <span className="ml-2 text-xs text-zinc-500">{movie.state?.rating ? `${movie.state.rating.toFixed(1)}★` : "Unrated"}</span>
             </div>
           </article>
         ))}

@@ -46,6 +46,7 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
         "listDemoPersonas",
         "getOnlineUserFeatures",
         "listDemoCatalog",
+        "getMovieDetail",
         "setMovieRating",
         "resetDemoRatings",
         "getMovieState",
@@ -90,6 +91,29 @@ def test_feedback_mutations_accept_idempotency_and_revision_contracts() -> None:
     assert operation["responses"]["409"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ErrorResponse"
     }
+
+
+def test_catalog_contract_is_bounded_and_exposes_opaque_page_state() -> None:
+    schema = _schema()
+    operation = schema["paths"]["/users/{user_id}/catalog"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert parameters["limit"]["schema"] == {
+        "default": 24,
+        "maximum": 48,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer",
+    }
+    assert parameters["sort"]["schema"]["enum"] == ["title", "newest", "popular"]
+    assert operation["responses"]["400"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
+    page = schema["components"]["schemas"]["CatalogPageInfo"]
+    assert set(page["required"]) == {"next_cursor", "has_more"}
+    item = schema["components"]["schemas"]["CatalogItem"]
+    assert "state" in item["required"]
+    assert "rating" not in item["properties"]
 
 
 @pytest.mark.parametrize("rating", [0.5, 1.0, 4.5, 5.0])

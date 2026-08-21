@@ -30,7 +30,7 @@ finish gate.
 | Browser-facing dashboard requests 8 recommendations and 8 history entries | `web/app/api/users/[userId]/route.ts` |
 | Catalog frontend type has no poster, overview, year, or state beyond rating | `web/lib/api.ts` |
 | Catalog query has no pagination/search/filter and uses `LIMIT 100` | `src/serving/recommendations.py` |
-| Clean demo fixture contains 24 movies | `synthetic/personas/catalog.json` |
+| Baseline fixture contained 24 movies; Bundle 3 expands it to 120 with 24 complete poster records | `synthetic/personas/catalog.json` |
 | Frontend has no component or browser test scripts | `web/package.json` |
 
 ## Baseline screenshot matrix

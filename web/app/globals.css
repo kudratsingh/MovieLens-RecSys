@@ -20,6 +20,22 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
+}
+
+:focus-visible {
+  outline-color: #fcd34d;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

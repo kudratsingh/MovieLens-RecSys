@@ -17,6 +17,8 @@ while keeping the ML system inspectable through progressive disclosure.
   gates; Bundles 5–7 are explicitly not implemented in this handoff.
 - [Backend readiness](backend-readiness.md) — source-audited capabilities,
   release blockers, proposed API boundaries, and frontend-safe claims.
+- [Catalog and movie-detail contract](catalog-contract.md) — paging, local
+  metadata, coverage, degradation, and Bundle 3 UI behavior.
 - [Generated API contract](../api/README.md) — committed OpenAPI, generated
   TypeScript types, stable operation IDs, and CI drift checks.
 - [Durable feedback and Library](library-feedback-contract.md) — migration,

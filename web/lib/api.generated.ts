@@ -77,7 +77,7 @@ export interface paths {
         };
         /**
          * Catalog
-         * @description Return rateable movies and current ratings for one demo persona.
+         * @description Return deterministic local metadata with the persona's durable state overlay.
          */
         get: operations["listDemoCatalog"];
         put?: never;
@@ -140,6 +140,26 @@ export interface paths {
          * @description Return one bounded keyset page plus counts for all Library tabs.
          */
         get: operations["listLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Movie Detail
+         * @description Return persisted detail metadata and the persona's durable movie state.
+         */
+        get: operations["getMovieDetail"];
         put?: never;
         post?: never;
         delete?: never;
@@ -359,17 +379,44 @@ export interface components {
         CatalogItem: {
             /** Genres */
             genres: string[];
+            /** Interaction Count */
+            interaction_count: number;
+            /**
+             * Metadata Source
+             * @enum {string}
+             */
+            metadata_source: "reviewed-fixture" | "tmdb-snapshot" | "movielens";
             /** Movie Id */
             movie_id: number;
-            /** Rating */
-            rating: number | null;
+            /** Overview */
+            overview: string | null;
+            /** Poster Url */
+            poster_url: string | null;
+            /** Release Year */
+            release_year: number | null;
+            /**
+             * Source Status
+             * @enum {string}
+             */
+            source_status: "complete" | "partial" | "unavailable";
+            state: components["schemas"]["MovieStateResponse"] | null;
             /** Title */
             title: string;
+            /** Tmdb Id */
+            tmdb_id: string | null;
+        };
+        /** CatalogPageInfo */
+        CatalogPageInfo: {
+            /** Has More */
+            has_more: boolean;
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** CatalogResponse */
         CatalogResponse: {
             /** Items */
             items: components["schemas"]["CatalogItem"][];
+            page: components["schemas"]["CatalogPageInfo"];
             /** Tenant Id */
             tenant_id: string;
             /** User Id */
@@ -483,6 +530,14 @@ export interface components {
              * @enum {string}
              */
             tab: "rated" | "watchlist" | "history";
+            /** Tenant Id */
+            tenant_id: string;
+            /** User Id */
+            user_id: number;
+        };
+        /** MovieDetailResponse */
+        MovieDetailResponse: {
+            item: components["schemas"]["CatalogItem"];
             /** Tenant Id */
             tenant_id: string;
             /** User Id */
@@ -625,8 +680,11 @@ export interface components {
         RecommendationItem: {
             /** Genres */
             genres: string[];
-            /** Metadata Source */
-            metadata_source: string;
+            /**
+             * Metadata Source
+             * @enum {string}
+             */
+            metadata_source: "reviewed-fixture" | "tmdb-snapshot" | "movielens";
             /** Movie Id */
             movie_id: number;
             /** Overview */
@@ -898,7 +956,15 @@ export interface operations {
     };
     listDemoCatalog: {
         parameters: {
-            query?: never;
+            query?: {
+                q?: string | null;
+                genre?: string | null;
+                year_from?: number | null;
+                year_to?: number | null;
+                sort?: "title" | "newest" | "popular";
+                limit?: number;
+                cursor?: string | null;
+            };
             header?: never;
             path: {
                 user_id: number;
@@ -916,7 +982,7 @@ export interface operations {
                     "application/json": components["schemas"]["CatalogResponse"];
                 };
             };
-            /** @description Request parameters are invalid or cursor does not match query */
+            /** @description Cursor is invalid for this query */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -943,7 +1009,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Requested persona or movie does not exist */
+            /** @description Demo persona was not found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1207,6 +1273,92 @@ export interface operations {
                 };
             };
             /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getMovieDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovieDetailResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Movie or demo persona was not found */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -153,6 +153,20 @@ without seeding or training; tenant and same-tenant non-owner tests pass.
 
 ## Bundle 3 — Scalable catalog and movie detail
 
+**Progress as of 2026-08-21:**
+
+- [x] Add filter-bound cursor pagination with deterministic movie-ID tie-breakers.
+- [x] Add searchable title, genre, year, and sort composition with a 48-item cap.
+- [x] Add a persisted shared metadata read model and source-status fields.
+- [x] Move Browse, detail, and recommendation metadata off live TMDB fan-out.
+- [x] Expand the fixture to 120 visible titles and 480 background interactions.
+- [x] Assert visible, poster-backed, and recommendable fixture coverage separately.
+- [x] Move catalog/detail SQL off the async event loop.
+- [x] Add local movie detail and the complete durable user-state overlay.
+- [x] Build Browse grid/search/filter/load-more/fallback/scroll-restoration behavior.
+- [x] Build movie detail with source-aware fallbacks and rating interaction.
+- [x] Regenerate OpenAPI and TypeScript contracts.
+
 **Backend:**
 
 - add a cursor-paginated, searchable, filterable catalog contract with stable
@@ -176,6 +190,10 @@ without seeding or training; tenant and same-tenant non-owner tests pass.
 **Exit:** Search/filter/cursor combinations are deterministic; page size is
 bounded; poster failures do not collapse layout; Browse generates no per-card
 TMDB fan-out; visible and recommendable coverage are separately asserted.
+
+**Exit status:** Integrated atop Bundles 1 and 2. Catalog and detail reads use
+the server Auth.js token, rating writes use the established Origin/CSRF boundary,
+and the complete watched/rating/watchlist/dismissal state is overlaid.
 
 ## Bundle 4 — Frontend system and route split
 
