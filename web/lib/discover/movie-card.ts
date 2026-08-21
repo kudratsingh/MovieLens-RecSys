@@ -6,10 +6,16 @@
  * Translating in one place keeps the API shape out of the components and gives
  * the small display decisions — the MovieLens title carrying its own year, an
  * absent poster, an unknown state — a single tested home.
+ *
+ * The state projection and the optimistic transitions are *not* here. They are
+ * shared with every other surface in `lib/movie-state/actions.ts`, because a
+ * recommendation card and a Library row have to agree about what marking a
+ * movie watched does.
  */
 
 import type { MovieState, RecommendationItem } from "@/lib/api";
-import type { MovieCard, MovieState as MovieCardState } from "@/lib/movie-types";
+import { displayState, type MovieDisplayState } from "@/lib/movie-state/actions";
+import type { MovieCard } from "@/lib/movie-types";
 
 const TRAILING_YEAR = /\s*\((\d{4})\)\s*$/;
 
@@ -24,23 +30,6 @@ export function displayTitle(title: string, releaseYear: number | null): string 
   return match && Number(match[1]) === releaseYear
     ? title.slice(0, match.index).trim()
     : title;
-}
-
-export const UNKNOWN_MOVIE_STATE: MovieCardState = {
-  watched: false,
-  watchlisted: false,
-  rating: null,
-  suppressed: false,
-};
-
-export function movieCardState(state: MovieState | null | undefined): MovieCardState {
-  if (!state) return UNKNOWN_MOVIE_STATE;
-  return {
-    watched: state.watched_at !== null,
-    watchlisted: state.watchlisted_at !== null,
-    rating: state.rating,
-    suppressed: state.dismissed_at !== null,
-  };
 }
 
 export function recommendationCard(
@@ -61,51 +50,19 @@ export function recommendationCard(
     overview: item.overview,
     reason: item.reason,
     rank,
-    state: movieCardState(state),
+    state: displayState(state),
   };
 }
 
 /**
- * The display state a control should show while its mutation is in flight.
- *
- * It mirrors the transitions ADR 0012 §4 pins — watched clears watchlist, a
- * rating implies watched, deleting a rating leaves watched intact — so the
- * optimistic frame matches what the committed response will say. It is a
- * prediction, never a source of truth: the caller reconciles the canonical
- * state on success and restores the previous value on failure.
- */
-export function optimisticCardState(
-  current: MovieCardState,
-  resource: "watched" | "rating" | "watchlist" | "dismissal",
-  method: "PUT" | "DELETE",
-  rating?: number,
-): MovieCardState {
-  if (resource === "watchlist") {
-    return { ...current, watchlisted: method === "PUT" };
-  }
-  if (resource === "watched") {
-    return method === "PUT"
-      ? { ...current, watched: true, watchlisted: false }
-      : { ...current, watched: false, rating: null };
-  }
-  if (resource === "rating") {
-    return method === "PUT"
-      ? { ...current, watched: true, watchlisted: false, rating: rating ?? null }
-      : { ...current, rating: null };
-  }
-  return method === "PUT"
-    ? { ...current, suppressed: true, watchlisted: false }
-    : { ...current, suppressed: false };
-}
-
-/**
  * Recommendation responses carry no per-item state, so a card starts from
- * "nothing known" and is overlaid with whatever this session has since
- * committed. Anything the overlay does not cover stays honestly unknown.
+ * "nothing known" and is overlaid with whatever the route has since learned —
+ * this session's own commits, and the states other routes relayed through the
+ * committed store. Anything the overlay does not cover stays honestly unknown.
  */
 export function recommendationCards(
   items: readonly RecommendationItem[],
-  states: Readonly<Record<number, MovieCardState>> = {},
+  states: Readonly<Record<number, MovieDisplayState>> = {},
 ): MovieCard[] {
   return items.map((item, index) => {
     const card = recommendationCard(item, index + 1);

@@ -15,7 +15,8 @@
  */
 
 import type { CatalogItem, MovieState } from "@/lib/api";
-import type { MovieCard, MovieState as CardState } from "@/lib/movie-types";
+import { displayState } from "@/lib/movie-state/actions";
+import type { MovieCard } from "@/lib/movie-types";
 
 type MetadataSource = CatalogItem["metadata_source"];
 type SourceStatus = CatalogItem["source_status"];
@@ -61,15 +62,6 @@ export function genresText(item: CatalogItem): string {
   return item.genres.length ? item.genres.join(" · ") : "Genre unavailable";
 }
 
-export function cardState(state: MovieState | null): CardState {
-  return {
-    watched: Boolean(state?.watched_at),
-    watchlisted: Boolean(state?.watchlisted_at),
-    rating: state?.rating ?? null,
-    suppressed: Boolean(state?.dismissed_at),
-  };
-}
-
 /**
  * Poster alternative text policy: a poster that loads is decorative next to a
  * visible title, so it takes an empty alt and the link carries the name. When
@@ -85,7 +77,7 @@ export function catalogItemToCard(item: CatalogItem): MovieCard {
     posterSrc: item.poster_url,
     posterAlt: "",
     overview: item.overview,
-    state: cardState(item.state),
+    state: displayState(item.state),
   };
 }
 

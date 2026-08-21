@@ -11,7 +11,7 @@ const state = (
   watched: false,
   watchlisted: false,
   rating: null,
-  suppressed: false,
+  dismissed: false,
   ...overrides,
 });
 

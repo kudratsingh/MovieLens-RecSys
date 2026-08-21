@@ -30,7 +30,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { RatingControl } from "@/components/movie/rating-control";
+import { MovieRatingControl } from "@/components/movie/movie-state-controls";
 import { Icon } from "@/components/ui/icons";
 import { REASON_DETAIL, ResourceProblem } from "@/components/ui/resource-region";
 import type { RecommendationResponse } from "@/lib/api";
@@ -512,7 +512,7 @@ function DecisionCard({
           detail, Discover, and Library. The note carries what is specific to
           this route: one press is one write that marks watched *and* rates.
         */}
-        <RatingControl
+        <MovieRatingControl
           busy={busy}
           idPrefix="quick-pick-rating"
           note={`A star saves this as watched and records the rating in one write. ${QUICK_PICK_SEMANTICS.watched.modelEffect}`}

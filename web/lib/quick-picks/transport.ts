@@ -109,8 +109,18 @@ export function createLiveQuickPickTransport(options: {
     return readCommittedStates(relay, userId).get(movieId)?.revision ?? 0;
   }
 
-  function adopt(state: MovieState) {
+  /**
+   * A committed write relays itself — recording the canonical answer is part of
+   * the shared write path — so this only has to remember the revision the next
+   * decision asserts.
+   */
+  function rememberRevision(state: MovieState) {
     revisions.set(state.movie_id, state.revision);
+  }
+
+  /** A canonical *read* has nothing behind it, so it relays on its own. */
+  function adopt(state: MovieState) {
+    rememberRevision(state);
     const relay = store();
     if (relay) recordCommittedState(relay, userId, state);
   }
@@ -148,10 +158,12 @@ export function createLiveQuickPickTransport(options: {
         // never carried a state, and the relay answers for it.
         expectedRevision: http.expectedRevision ?? knownRevision(request.movieId),
         fetchImpl: options.fetchImpl,
+        // Keeps the relay testable outside a browser: one sink, chosen here.
+        store: store() ?? null,
       });
 
       if (result.status === "committed") {
-        adopt(result.state);
+        rememberRevision(result.state);
         return { ok: true, state: result.state };
       }
       if (result.status === "conflict") {

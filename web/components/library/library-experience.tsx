@@ -19,23 +19,23 @@ import {
 } from "@/components/ui/resource-region";
 import { EmptyState } from "@/components/ui/resource-states";
 import type { LibraryCounts, LibraryResponse, TasteSummaryResponse } from "@/lib/api";
+import { bffLibraryClient, type LibraryClient } from "@/lib/library/client";
 import {
-  bffLibraryClient,
-  type LibraryClient,
-  type LibraryMutationRequest,
-} from "@/lib/library/client";
-import {
-  actionRequest,
   affectsTasteSummary,
   appendLibraryPage,
-  applyOptimisticState,
-  conflictAnnouncement,
   mapMovieState,
-  mutationAnnouncement,
   replaceMovieState,
-  rollbackAnnouncement,
-  type LibraryAction,
 } from "@/lib/library/collection";
+import {
+  applyActionToState,
+  type MovieStateAction,
+} from "@/lib/movie-state/actions";
+import { movieStateAnnouncement } from "@/lib/movie-state/announce";
+import { restoreFocus } from "@/lib/movie-state/focus";
+import {
+  newIdempotencyKey,
+  type MovieStateMutationInput,
+} from "@/lib/movie-state/mutate";
 import {
   LIBRARY_BASE_PATH,
   LIBRARY_PAGE_SIZE,
@@ -108,27 +108,13 @@ type TabView = { key: string; state: ResourceState<LibraryResponse> };
 type PendingMutation = {
   movieId: number;
   title: string;
-  action: LibraryAction;
-  request: LibraryMutationRequest;
-  focusId: string;
+  action: MovieStateAction;
+  request: MovieStateMutationInput;
+  /** The control the reader used, held so focus can go back to it. */
+  control: HTMLElement;
   /** The collection exactly as it stood before the optimistic write. */
   rollback: LibraryResponse;
 };
-
-/**
- * Returns focus to the control the reader used, then to the row, then to the
- * collection they are in. A mutation that leaves focus on `<body>` loses a
- * keyboard reader's place entirely.
- */
-function restoreFocus(focusId: string, movieId: number, tab: LibraryTab) {
-  requestAnimationFrame(() => {
-    const target =
-      document.getElementById(focusId) ??
-      document.getElementById(libraryRowAnchorId(movieId)) ??
-      document.getElementById(libraryTabId(tab));
-    target?.focus();
-  });
-}
 
 /** Keeps the region's own request ID and source while swapping its rows. */
 function withCollection(
@@ -292,7 +278,7 @@ export function LibraryExperience({
    * from under them.
    */
   const refreshDerivedState = useCallback(
-    async (kind: LibraryAction["kind"], from: LibraryUrlState) => {
+    async (action: MovieStateAction, from: LibraryUrlState) => {
       for (const other of LIBRARY_TABS) {
         if (other !== from.tab) requested.current[other] = undefined;
       }
@@ -301,7 +287,7 @@ export function LibraryExperience({
       const [refreshed, summary] = await Promise.all([
         // One row is enough: only the counts are being read back.
         readPage({ ...from, cursor: null }, 1),
-        affectsTasteSummary(kind)
+        affectsTasteSummary(action)
           ? client.readTasteProfile(from.userId)
           : Promise.resolve(null),
       ]);
@@ -323,66 +309,76 @@ export function LibraryExperience({
         state: withCollection(
           base.state,
           mapMovieState(mutation.rollback, mutation.movieId, (state) =>
-            applyOptimisticState(state, mutation.action, now),
+            applyActionToState(state, mutation.action, now),
           ),
         ),
       });
 
+      const voice = { title: mutation.title, voice: "library" as const, persona: personaLabel };
       const result = await client.mutate(mutation.request);
       let settled = mutation.rollback;
 
       if (result.status === "committed") {
         settled = replaceMovieState(mutation.rollback, mutation.movieId, result.state);
         setAnnouncement(
-          mutationAnnouncement(mutation.action.kind, mutation.title, personaLabel),
+          movieStateAnnouncement({ kind: "committed", action: mutation.action }, voice),
         );
         setPending(null);
       } else if (result.status === "conflict") {
         // The row was written from a revision that is no longer current. Show
         // what is actually stored rather than guessing which side won.
-        const canonical = await client.readMovieState(from.userId, mutation.movieId);
+        const canonical = await client.readState(from.userId, mutation.movieId);
         if (canonical) {
           settled = replaceMovieState(mutation.rollback, mutation.movieId, canonical);
         }
-        setAnnouncement(conflictAnnouncement(mutation.title, personaLabel));
+        setAnnouncement(movieStateAnnouncement({ kind: "conflict" }, voice));
         setPending(null);
       } else {
-        setMutationFailure(result);
-        setAnnouncement(rollbackAnnouncement(mutation.title, personaLabel));
+        setMutationFailure(result.failure);
+        setAnnouncement(
+          movieStateAnnouncement({ kind: "failed", failure: result.failure }, voice),
+        );
       }
 
       setView(from.tab, { key: base.key, state: withCollection(base.state, settled) });
       setBusyMovieId(null);
-      restoreFocus(mutation.focusId, mutation.movieId, from.tab);
+      // The control the reader used, then the row, then the collection.
+      restoreFocus(
+        mutation.control,
+        libraryRowAnchorId(mutation.movieId),
+        libraryTabId(from.tab),
+      );
 
       if (result.status === "committed") {
-        await refreshDerivedState(mutation.action.kind, from);
+        await refreshDerivedState(mutation.action, from);
       }
     },
     [client, personaLabel, refreshDerivedState, setView],
   );
 
   function act(movieId: number, title: string, revision: number) {
-    return (action: LibraryAction, focusId: string) => {
+    return (action: MovieStateAction, control: HTMLElement) => {
       if (!view || !hasResourceData(view.state)) return;
-      const request = actionRequest(action.kind);
       void runMutation(
         {
           movieId,
           title,
           action,
-          focusId,
+          control,
           rollback: view.state.data,
           request: {
             userId,
             movieId,
-            resource: request.resource,
-            method: request.method,
-            rating: action.rating,
+            resource: action.resource,
+            method: action.method,
+            rating:
+              action.resource === "rating" && action.method === "PUT"
+                ? action.rating
+                : undefined,
             expectedRevision: revision,
-            // One key per intent: retrying this same change replays the original
-            // commit instead of writing a second feedback event.
-            idempotencyKey: crypto.randomUUID(),
+            // One key per intent: `Try again` replays the original commit
+            // instead of writing a second feedback event.
+            idempotencyKey: newIdempotencyKey(),
           },
         },
         urlState,

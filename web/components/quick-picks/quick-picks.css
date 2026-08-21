@@ -178,14 +178,14 @@
 
 /* The shared rating control sits in a panel here so the combined
    "watched with a rating" action reads as one decision, not a stray field. */
-.quick-pick-card .rating-control {
+.quick-pick-card .movie-rating {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: var(--space-4);
 }
 
 /* The panel gives the legend a border to sit on, so it needs room around it. */
-.quick-pick-card .rating-control legend {
+.quick-pick-card .movie-rating legend {
   padding-inline: var(--space-2);
 }
 
@@ -350,7 +350,7 @@
   .quick-pick-copy > .quick-pick-reason,
   .quick-pick-copy > .quick-pick-evidence,
   .quick-pick-copy > .quick-pick-actions,
-  .quick-pick-copy > .rating-control,
+  .quick-pick-copy > .movie-rating,
   .quick-pick-copy > .quick-pick-gesture-hint {
     grid-column: 1 / -1;
   }
@@ -383,7 +383,7 @@
     background: Highlight;
   }
 
-  .quick-pick-card .rating-control,
+  .quick-pick-card .movie-rating,
   .quick-pick-exhausted,
   .quick-pick-progress {
     border: 1px solid CanvasText;

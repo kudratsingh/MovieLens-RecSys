@@ -1,33 +1,67 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
 
+import {
+  MovieRatingControl,
+  MovieStateControls,
+  type MovieStateControlSet,
+} from "@/components/movie/movie-state-controls";
 import type { LibraryMovie } from "@/lib/api";
 import {
   leftCollectionNote,
   movieMatchesTab,
   stateSummary,
   titleInitials,
-  type LibraryAction,
 } from "@/lib/library/collection";
 import type { LibraryTab } from "@/lib/library/url-state";
-
-const RATING_VALUES = Array.from({ length: 10 }, (_, index) => (index + 1) / 2);
+import {
+  displayState,
+  ratingAction,
+  type MovieStateAction,
+} from "@/lib/movie-state/actions";
 
 export function libraryRowAnchorId(movieId: number): string {
   return `library-movie-${movieId}`;
 }
 
+/** The id prefix every control in a row shares, so focus can find them again. */
+export function libraryRowControlPrefix(movieId: number): string {
+  return `library-${movieId}`;
+}
+
+/**
+ * Which controls a row offers, and in what order.
+ *
+ * The collections are deliberately not identical. Rated is for editing or
+ * clearing a star value, Watchlist leads with `Mark watched` and lets a title
+ * be released or excluded, and History owns the one destructive action in the
+ * route. Showing every control everywhere was the older behaviour and it made
+ * `Remove rating` and `Remove from history` look like the same button.
+ */
+export function libraryControlSet(
+  tab: LibraryTab,
+  watched: boolean,
+): MovieStateControlSet {
+  if (tab === "watchlist") {
+    return [
+      { kind: "watched", mode: "mark" },
+      { kind: "watchlist", mode: "remove" },
+      { kind: "dismissal", mode: "toggle" },
+    ];
+  }
+  const dismissal: MovieStateControlSet = [{ kind: "dismissal", mode: "undo" }];
+  // A History row that has lost its watched interaction offers nothing to
+  // remove; it is on its way out of the collection.
+  if (tab === "history" && watched) {
+    return [{ kind: "watched", mode: "confirm" }, ...dismissal];
+  }
+  return dismissal;
+}
+
 /**
  * One movie in a collection, with the canonical controls for the collection it
  * is being shown in.
- *
- * The controls are deliberately not identical across tabs. Rated is for editing
- * or clearing a star value, Watchlist is for opening or releasing a saved
- * title, and History owns the one destructive action in the route. Showing
- * every control everywhere was the older behaviour and it made
- * `Remove rating` and `Remove from history` look like the same button.
  */
 export function LibraryRow({
   movie,
@@ -44,68 +78,18 @@ export function LibraryRow({
   href: string;
   busy: boolean;
   disabled: boolean;
-  onAction: (action: LibraryAction, focusId: string) => void;
+  onAction: (action: MovieStateAction, control: HTMLElement) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
   const state = movie.state;
   const anchorId = libraryRowAnchorId(movie.movie_id);
-  const ratingId = `library-rating-${movie.movie_id}`;
-  const removeId = `library-remove-${movie.movie_id}`;
-  const consequenceId = `library-remove-consequence-${movie.movie_id}`;
+  const prefix = libraryRowControlPrefix(movie.movie_id);
   const inactive = !movieMatchesTab(state, tab);
   const locked = busy || disabled;
-
-  useEffect(() => {
-    if (confirming) confirmRef.current?.focus();
-  }, [confirming]);
-
-  function cancelConfirm() {
-    setConfirming(false);
-    // The trigger is unmounted while the confirmation is open, so focus has to
-    // wait for the row to render it again.
-    requestAnimationFrame(() => document.getElementById(removeId)?.focus());
-  }
-
-  const ratingControl = (
-    <span className="library-rating">
-      <label className="visually-hidden" htmlFor={ratingId}>
-        Rating for {movie.title}
-      </label>
-      <select
-        className="library-select"
-        disabled={locked}
-        id={ratingId}
-        onChange={(event) => {
-          const rating = Number(event.target.value);
-          if (rating) onAction({ kind: "rate", rating }, ratingId);
-        }}
-        value={state.rating ?? ""}
-      >
-        <option disabled value="">
-          Rate
-        </option>
-        {RATING_VALUES.map((rating) => (
-          <option key={rating} value={rating}>
-            {rating.toFixed(1)} stars
-          </option>
-        ))}
-      </select>
-    </span>
-  );
-
-  const clearRating =
-    state.rating !== null ? (
-      <button
-        className="button-quiet library-action"
-        disabled={locked}
-        onClick={() => onAction({ kind: "clear-rating" }, ratingId)}
-        type="button"
-      >
-        Remove rating
-      </button>
-    ) : null;
+  const classNames = {
+    root: "library-row-actions",
+    action: "library-action",
+    confirm: "library-confirm",
+  };
 
   return (
     <li className={`library-row${inactive ? " library-row-inactive" : ""}`}>
@@ -128,120 +112,34 @@ export function LibraryRow({
         ) : null}
       </div>
 
-      {confirming ? (
-        <div
-          aria-label={`Confirm removing ${movie.title} from watched history`}
-          className="library-confirm"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              cancelConfirm();
-            }
-          }}
-          role="group"
-        >
-          <p id={consequenceId}>
-            Removing {movie.title} from history deletes the watched interaction and
-            its rating. It stops counting as a positive signal for {persona}, and
-            the title can appear again as unseen.
-          </p>
-          <span className="library-confirm-actions">
-            <button
-              aria-describedby={consequenceId}
-              className="library-destructive"
-              disabled={locked}
-              onClick={() => {
-                setConfirming(false);
-                onAction({ kind: "remove-history" }, anchorId);
-              }}
-              ref={confirmRef}
-              type="button"
-            >
-              Remove from history
-            </button>
-            <button
-              className="button-quiet library-action"
-              disabled={locked}
-              onClick={cancelConfirm}
-              type="button"
-            >
-              Keep it
-            </button>
-          </span>
-        </div>
-      ) : (
-        <div className="library-row-actions">
-          {tab === "rated" ? (
-            <>
-              {ratingControl}
-              {clearRating}
-            </>
-          ) : null}
-
-          {tab === "history" ? (
-            <>
-              {ratingControl}
-              {clearRating}
-              {state.watched_at ? (
-                <button
-                  className="button-quiet library-action library-action-danger"
-                  disabled={locked}
-                  id={removeId}
-                  onClick={() => setConfirming(true)}
-                  type="button"
-                >
-                  Remove from history
-                </button>
-              ) : null}
-            </>
-          ) : null}
-
-          {tab === "watchlist" ? (
-            <>
-              <button
-                className="button-secondary library-action"
-                disabled={locked}
-                id={removeId}
-                onClick={() => onAction({ kind: "mark-watched" }, removeId)}
-                type="button"
-              >
-                Mark watched
-              </button>
-              {state.watchlisted_at ? (
-                <button
-                  className="button-quiet library-action"
-                  disabled={locked}
-                  onClick={() => onAction({ kind: "unsave" }, anchorId)}
-                  type="button"
-                >
-                  Remove from watchlist
-                </button>
-              ) : null}
-              {!state.dismissed_at ? (
-                <button
-                  className="button-quiet library-action"
-                  disabled={locked}
-                  onClick={() => onAction({ kind: "dismiss" }, anchorId)}
-                  type="button"
-                >
-                  Not for me
-                </button>
-              ) : null}
-            </>
-          ) : null}
-
-          {state.dismissed_at ? (
-            <button
-              className="button-quiet library-action"
-              disabled={locked}
-              onClick={() => onAction({ kind: "undismiss" }, anchorId)}
-              type="button"
-            >
-              Undo not for me
-            </button>
-          ) : null}
-        </div>
-      )}
+      <MovieStateControls
+        busy={locked}
+        classNames={classNames}
+        confirmation={{
+          trigger: "Remove from history",
+          action: "Remove from history",
+          groupLabel: `Confirm removing ${movie.title} from watched history`,
+          consequence: `Removing ${movie.title} from history deletes the watched interaction and its rating. It stops counting as a positive signal for ${persona}, and the title can appear again as unseen.`,
+        }}
+        controls={libraryControlSet(tab, state.watched_at !== null)}
+        idPrefix={prefix}
+        onAction={onAction}
+        state={displayState(state)}
+        title={movie.title}
+      >
+        {tab === "watchlist" ? null : (
+          <MovieRatingControl
+            busy={locked}
+            classNames={{ root: "library-rating", action: "library-action" }}
+            clearLabel="Remove rating"
+            idPrefix={prefix}
+            mode="half-star-select"
+            onRate={(value, control) => onAction(ratingAction(value), control)}
+            rating={state.rating}
+            title={movie.title}
+          />
+        )}
+      </MovieStateControls>
     </li>
   );
 }

@@ -149,3 +149,28 @@ test("mobile keeps the primary decision and the bottom navigation reachable", as
   );
   await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
 });
+
+test("Quick Picks is reachable from Discover without a fourth navigation slot", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=learned");
+
+  const entry = page.getByRole("link", { name: /Quick picks/ });
+  await expect(entry).toBeVisible();
+  await expect(entry).toHaveAttribute("href", "/quick-picks?user=900000101");
+  // The route contract keeps the shell at three primary routes.
+  await expect(
+    page.getByRole("navigation", { name: /Primary/ }).first().getByRole("link", {
+      name: /Quick/,
+    }),
+  ).toHaveCount(0);
+});
+
+test("the Quick Picks entry stays a thumb-sized target", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390", "Mobile touch-target assertion");
+  await page.goto("/discover?demo=learned");
+
+  const box = await page.getByRole("link", { name: /Quick picks/ }).boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+});

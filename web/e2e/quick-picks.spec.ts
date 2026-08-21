@@ -144,7 +144,7 @@ test("every decision control clears the 44px mobile target size", async ({ page 
   await openQuickPicks(page);
 
   const controls = page.locator(
-    ".quick-pick-actions button, .rating-stars button, .quick-picks-header a",
+    ".quick-pick-actions button, .movie-rating-stars button, .quick-picks-header a",
   );
   const count = await controls.count();
   expect(count).toBeGreaterThan(0);

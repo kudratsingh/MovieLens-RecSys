@@ -24,20 +24,3 @@ export function resolveDemoPersonaId(
     : DEFAULT_DEMO_PERSONA_ID;
 }
 
-/**
- * Only a same-origin path back into Browse is honoured. A `returnTo` arrives
- * from a link the browser controls, so anything else is discarded rather than
- * followed.
- */
-export function safeBrowseReturnHref(
-  value: string | string[] | undefined,
-  fallback: string,
-  browsePath = "/browse",
-): string {
-  const first = Array.isArray(value) ? value[0] : value;
-  if (typeof first !== "string") return fallback;
-  if (first !== browsePath && !first.startsWith(`${browsePath}?`)) return fallback;
-  // A protocol-relative or backslash-prefixed value would leave the origin.
-  if (first.includes("//") || first.includes("\\")) return fallback;
-  return first;
-}

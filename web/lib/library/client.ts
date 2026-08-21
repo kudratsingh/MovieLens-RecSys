@@ -1,64 +1,34 @@
 /**
- * Browser-side Library reads and writes.
+ * Browser-side Library reads, over the shared movie-state write path.
  *
  * Reads go through the shared live-resource reader so a Library region reports
- * the same state model as every other region. Writes cannot: they need a
- * method, a body, an idempotency key, and a CSRF token, so they are assembled
- * here and then mapped through the *same* outcome translation, which is what
- * keeps a 401 during a mutation and a 401 during a read from telling the reader
- * two different stories.
+ * the same state model as every other region. Writes are not defined here at
+ * all any more: a Library row changes exactly the same four resources a
+ * recommendation card or a movie's own page does, so it uses the same client,
+ * the same idempotency and revision rules, and the same committed-state relay.
+ * The Library-specific part of a write — the optimistic collection projection,
+ * the persona-voiced announcement, the focus walk — belongs to the route, not
+ * to a second transport.
  *
- * Three properties are deliberate rather than incidental:
- *
- * - No request here sets `Authorization`. The access token lives in the Auth.js
- *   server session and only the BFF may attach it.
- * - The idempotency key belongs to the user's intent, not to the HTTP attempt,
- *   so retrying a mutation that may already have committed replays the original
- *   result instead of writing a second event.
- * - `expected_revision` is always the revision the row was rendered from, so a
- *   write against a stale row is refused by the API rather than silently
- *   clobbering a change made somewhere else.
- *
- * This module imports no fixture. The recorded Library preview supplies its own
- * client object instead, so there is no path by which a live route can fall
- * back to recorded data.
+ * `LibraryClient` composes the two so the recorded `/ui-preview` surface can
+ * still supply one working object. This module imports no fixture: the recorded
+ * preview supplies its own client, so there is no path by which a live route can
+ * fall back to recorded data.
  */
 
-import type {
-  FeedbackMutationResponse,
-  LibraryResponse,
-  MovieState,
-  TasteSummaryResponse,
-} from "@/lib/api";
-import type { FeedbackResource } from "@/lib/library/collection";
+import type { LibraryResponse, TasteSummaryResponse } from "@/lib/api";
 import {
   LIBRARY_PAGE_SIZE,
   type LibrarySort,
   type LibraryTab,
 } from "@/lib/library/url-state";
+import {
+  createBffMovieStateClient,
+  type MovieStateClient,
+} from "@/lib/movie-state/client";
 import { readBffResource } from "@/lib/resources/browser";
-import {
-  LIBRARY,
-  MOVIE_DETAIL,
-  TASTE_PROFILE,
-  type ResourceDefinition,
-} from "@/lib/resources/definitions";
-import {
-  readResourcePayload,
-  resourceStateFromPayload,
-  resourceStateFromTransportError,
-} from "@/lib/resources/mapping";
-import {
-  newRequestId,
-  REQUEST_ID_HEADER,
-  sanitizeRequestId,
-} from "@/lib/resources/request-id";
-import {
-  hasResourceData,
-  type ResourceFailure,
-  type ResourceState,
-} from "@/lib/resources/state";
-import { isFeedbackMutationResponse } from "@/lib/resources/validate";
+import { LIBRARY, TASTE_PROFILE } from "@/lib/resources/definitions";
+import type { ResourceState } from "@/lib/resources/state";
 
 export type LibraryReadOptions = {
   userId: number;
@@ -70,46 +40,9 @@ export type LibraryReadOptions = {
   signal?: AbortSignal;
 };
 
-export type LibraryMutationRequest = {
-  userId: number;
-  movieId: number;
-  resource: FeedbackResource;
-  method: "PUT" | "DELETE";
-  rating?: number;
-  expectedRevision: number;
-  /** Stable across retries of the same user intent. */
-  idempotencyKey: string;
-};
-
-export type LibraryMutationResult =
-  | {
-      status: "committed";
-      state: MovieState;
-      requestId: string;
-      /** True when the API replayed an earlier identical request. */
-      replayed: boolean;
-    }
-  | { status: "conflict"; requestId: string }
-  | ResourceFailure;
-
-export type LibraryClient = {
+export type LibraryClient = MovieStateClient & {
   readLibrary(options: LibraryReadOptions): Promise<ResourceState<LibraryResponse>>;
   readTasteProfile(userId: number): Promise<ResourceState<TasteSummaryResponse>>;
-  /** Used to recover a row after the API reports a revision conflict. */
-  readMovieState(userId: number, movieId: number): Promise<MovieState | null>;
-  mutate(request: LibraryMutationRequest): Promise<LibraryMutationResult>;
-};
-
-/**
- * A mutation answers with the committed canonical state, so it is validated as
- * strictly as a read is. It reports under the Library resource because that is
- * the region a failed write is shown in.
- */
-const MOVIE_STATE_MUTATION: ResourceDefinition<FeedbackMutationResponse> = {
-  name: "library",
-  label: "Movie state",
-  timeoutMs: 6_000,
-  guard: isFeedbackMutationResponse,
 };
 
 export function libraryReadUrl(options: LibraryReadOptions): string {
@@ -123,18 +56,12 @@ export function libraryReadUrl(options: LibraryReadOptions): string {
   return `/api/users/${options.userId}/library?${params}`;
 }
 
-async function csrfToken(fetchImpl: typeof fetch): Promise<string> {
-  const response = await fetchImpl("/api/auth/csrf", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Could not create a secure feedback request");
-  }
-  return ((await response.json()) as { csrfToken: string }).csrfToken;
-}
-
 export function createBffLibraryClient(
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl?: typeof fetch,
 ): LibraryClient {
   return {
+    ...createBffMovieStateClient(fetchImpl),
+
     readLibrary(options) {
       return readBffResource(LIBRARY, libraryReadUrl(options), {
         fetchImpl,
@@ -148,76 +75,6 @@ export function createBffLibraryClient(
         `/api/users/${userId}/taste-profile`,
         { fetchImpl },
       );
-    },
-
-    async readMovieState(userId, movieId) {
-      const state = await readBffResource(
-        MOVIE_DETAIL,
-        `/api/users/${userId}/movies/${movieId}`,
-        { fetchImpl },
-      );
-      return hasResourceData(state) ? (state.data.item.state ?? null) : null;
-    },
-
-    async mutate(request) {
-      const requestId = newRequestId();
-      const url =
-        `/api/users/${request.userId}/movies/${request.movieId}/${request.resource}` +
-        `?expected_revision=${request.expectedRevision}`;
-
-      let response: Response;
-      try {
-        response = await fetchImpl(url, {
-          method: request.method,
-          cache: "no-store",
-          credentials: "same-origin",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "Idempotency-Key": request.idempotencyKey,
-            [REQUEST_ID_HEADER]: requestId,
-            "x-csrf-token": await csrfToken(fetchImpl),
-          },
-          body:
-            request.resource === "rating" && request.method === "PUT"
-              ? JSON.stringify({ rating: request.rating })
-              : undefined,
-        });
-      } catch (error) {
-        return resourceStateFromTransportError({
-          resource: MOVIE_STATE_MUTATION.name,
-          requestId,
-          error,
-        });
-      }
-
-      const correlationId =
-        sanitizeRequestId(response.headers.get(REQUEST_ID_HEADER)) ?? requestId;
-
-      // A 409 is not a malformed request: the row was written from a revision
-      // that is no longer current, or the key was reused for a different
-      // mutation. Either way the fix is to show what is actually stored.
-      if (response.status === 409) {
-        return { status: "conflict", requestId: correlationId };
-      }
-
-      const state = resourceStateFromPayload({
-        definition: MOVIE_STATE_MUTATION,
-        requestId: correlationId,
-        httpStatus: response.status,
-        payload: await readResourcePayload(response),
-      });
-      if (!hasResourceData(state)) {
-        // `resourceStateFromPayload` only ever resolves to ready, empty, or a
-        // failure; a pending state is not reachable from a settled response.
-        return state as ResourceFailure;
-      }
-      return {
-        status: "committed",
-        state: state.data.state,
-        requestId: state.requestId,
-        replayed: state.data.replayed,
-      };
     },
   };
 }

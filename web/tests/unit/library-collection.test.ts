@@ -2,16 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { LibraryMovie, LibraryResponse, MovieState } from "@/lib/api";
 import {
-  actionRequest,
   affectsTasteSummary,
   appendLibraryPage,
-  applyOptimisticState,
   movieMatchesTab,
-  mutationAnnouncement,
   replaceMovieState,
   stateSummary,
   titleInitials,
 } from "@/lib/library/collection";
+import type { MovieStateAction } from "@/lib/movie-state/actions";
 
 const WATCHED_AT = "2026-08-16T21:05:00Z";
 const NOW = "2026-08-21T12:00:00Z";
@@ -89,82 +87,27 @@ describe("appending cursor pages", () => {
   });
 });
 
-describe("optimistic transitions follow the accepted feedback contract", () => {
-  it("keeps the original watched time when a rating is edited", () => {
-    const edited = applyOptimisticState(state({ rating: 3 }), { kind: "rate", rating: 5 }, NOW);
-
-    expect(edited.rating).toBe(5);
-    expect(edited.watched_at).toBe(WATCHED_AT);
-    expect(edited.rating_updated_at).toBe(NOW);
-  });
-
-  it("marks an unwatched movie watched when it is rated, and clears the watchlist", () => {
-    const rated = applyOptimisticState(
-      state({ rating: null, rating_updated_at: null, watched_at: null, watchlisted_at: NOW }),
-      { kind: "rate", rating: 4 },
-      NOW,
-    );
-
-    expect(rated.watched_at).toBe(NOW);
-    expect(rated.watchlisted_at).toBeNull();
-  });
-
-  it("leaves a movie watched when only its rating is deleted", () => {
-    const cleared = applyOptimisticState(state(), { kind: "clear-rating" }, NOW);
-
-    expect(cleared.rating).toBeNull();
-    expect(cleared.rating_updated_at).toBeNull();
-    expect(cleared.watched_at).toBe(WATCHED_AT);
-    expect(movieMatchesTab(cleared, "history")).toBe(true);
-    expect(movieMatchesTab(cleared, "rated")).toBe(false);
-  });
-
-  it("removes the positive interaction and the rating when history is removed", () => {
-    const removed = applyOptimisticState(state(), { kind: "remove-history" }, NOW);
-
-    expect(removed.watched_at).toBeNull();
-    expect(removed.rating).toBeNull();
-    expect(movieMatchesTab(removed, "history")).toBe(false);
-  });
-
-  it("treats watchlist and dismissal as independent of watched history", () => {
-    const saved = applyOptimisticState(
-      state({ watched_at: null, rating: null, rating_updated_at: null }),
-      { kind: "save" },
-      NOW,
-    );
-    expect(saved.watchlisted_at).toBe(NOW);
-    expect(saved.watched_at).toBeNull();
-
-    const dismissed = applyOptimisticState(saved, { kind: "dismiss" }, NOW);
-    expect(dismissed.dismissed_at).toBe(NOW);
-    expect(dismissed.watchlisted_at).toBeNull();
-    expect(dismissed.rating).toBeNull();
-
-    expect(applyOptimisticState(dismissed, { kind: "undismiss" }, NOW).dismissed_at).toBeNull();
-  });
-
-  it("never invents a revision the API has not issued", () => {
-    for (const kind of ["rate", "clear-rating", "mark-watched", "remove-history"] as const) {
-      expect(applyOptimisticState(state(), { kind, rating: 4 }, NOW).revision).toBe(7);
-    }
-  });
-
-  it("maps each action to the resource and method the API publishes", () => {
-    expect(actionRequest("rate")).toEqual({ resource: "rating", method: "PUT" });
-    expect(actionRequest("clear-rating")).toEqual({ resource: "rating", method: "DELETE" });
-    expect(actionRequest("remove-history")).toEqual({ resource: "watched", method: "DELETE" });
-    expect(actionRequest("mark-watched")).toEqual({ resource: "watched", method: "PUT" });
-    expect(actionRequest("save")).toEqual({ resource: "watchlist", method: "PUT" });
-    expect(actionRequest("dismiss")).toEqual({ resource: "dismissal", method: "PUT" });
-  });
-
+describe("derived Library state", () => {
   it("re-reads the ratings summary only for the actions that can change it", () => {
-    expect(affectsTasteSummary("rate")).toBe(true);
-    expect(affectsTasteSummary("clear-rating")).toBe(true);
-    expect(affectsTasteSummary("remove-history")).toBe(true);
-    expect(affectsTasteSummary("save")).toBe(false);
-    expect(affectsTasteSummary("dismiss")).toBe(false);
+    const affects: MovieStateAction[] = [
+      { resource: "rating", method: "PUT", rating: 4 },
+      { resource: "rating", method: "DELETE" },
+      { resource: "watched", method: "DELETE" },
+    ];
+    const leaves: MovieStateAction[] = [
+      { resource: "watched", method: "PUT" },
+      { resource: "watchlist", method: "PUT" },
+      { resource: "dismissal", method: "PUT" },
+    ];
+
+    for (const action of affects) expect(affectsTasteSummary(action)).toBe(true);
+    for (const action of leaves) expect(affectsTasteSummary(action)).toBe(false);
+  });
+
+  it("knows which collection a movie still belongs in", () => {
+    expect(movieMatchesTab(state(), "history")).toBe(true);
+    expect(movieMatchesTab(state({ rating: null }), "rated")).toBe(false);
+    expect(movieMatchesTab(state({ watchlisted_at: NOW }), "watchlist")).toBe(true);
   });
 });
 
@@ -194,18 +137,6 @@ describe("reconciliation and row copy", () => {
         "watchlist",
       ),
     ).toEqual(["Saved Aug 16, 2026", "Excluded from recommendations"]);
-  });
-
-  it("names the persona and the model meaning in mutation feedback", () => {
-    expect(mutationAnnouncement("rate", "Burning", "Action Fan")).toBe(
-      "Rating saved for Burning in Action Fan's library. It stays watched history; the star value is display feedback only.",
-    );
-    expect(mutationAnnouncement("clear-rating", "Burning", "Action Fan")).toContain(
-      "still watched history",
-    );
-    expect(mutationAnnouncement("save", "Burning", "Action Fan")).toContain(
-      "does not change recommendations",
-    );
   });
 
   it("derives a stable initial pair because the payload carries no poster", () => {

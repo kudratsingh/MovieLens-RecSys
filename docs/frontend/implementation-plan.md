@@ -345,6 +345,21 @@ traceable; gesture and non-gesture paths have identical outcomes.
 
 ## Bundle 7 — Finish gate and cutover
 
+**Progress as of 2026-08-21:**
+
+- [x] 7c — convergence: one movie-state control family
+  (`web/components/movie/movie-state-controls.tsx`) serving Discover, the
+  featured movie, movie detail, and Library rows through declared control sets;
+  one write path (`web/lib/movie-state/`) carrying the intent-bound idempotency
+  key, `expected_revision`, the conflict re-read, rollback with announced
+  restore, the focus walk, and the committed-state relay for every surface; a
+  deliberate non-nav Quick Picks entry from Discover; `returnTo` honoured for
+  `/browse`, `/library`, and `/discover`; and Discover cards seeded from the
+  relay because `RecommendationItem` carries no state. Behaviour-preserving —
+  see `docs/frontend/frontend-system.md` for the resulting system of record.
+
+Remaining:
+
 - complete the required desktop/tablet/mobile state matrix;
 - run moderated movie-viewer and technical-reviewer tasks;
 - pass component, contract, backend, RLS/ownership, browser-auth, accessibility,

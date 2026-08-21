@@ -318,7 +318,7 @@ describe("canonical state controls", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Not for me" }));
 
-    expect(await screen.findByRole("button", { name: "Undo dismissal" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Undo not for me" })).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent(
       "excluded from recommendations and can be undone",
     );

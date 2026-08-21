@@ -68,11 +68,11 @@
   margin-top: 2rem;
 }
 
-.featured-actions .state-controls {
+.featured-actions .movie-state-row {
   display: contents;
 }
 
-.featured-actions .state-controls button {
+.featured-actions .movie-state-row button {
   min-width: 0;
 }
 
@@ -171,7 +171,7 @@
     grid-column: 1 / -1;
   }
 
-  .featured-actions .state-controls {
+  .featured-actions .movie-state-row {
     display: contents;
   }
 
@@ -184,5 +184,12 @@
 @media (max-width: 420px) {
   .featured-movie {
     grid-template-columns: minmax(0, 8.1rem) minmax(0, 1fr);
+  }
+
+  /* Two action columns on the narrowest profile only work if the labels fit on
+     one line; "Mark watched" is the one that decides it. */
+  .featured-actions .movie-state-row button {
+    font-size: 0.78rem;
+    padding-inline: 0.65rem;
   }
 }

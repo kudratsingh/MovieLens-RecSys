@@ -197,15 +197,16 @@
   color: var(--degraded);
 }
 
-.library-row-actions,
-.library-confirm-actions {
+/*
+ * Placement only. The controls themselves — their spacing, their destructive
+ * treatment, and the confirmation panel — come from the shared movie-state
+ * family; a Library row only says where they sit in its grid. The extra
+ * specificity keeps that placement deterministic regardless of which
+ * stylesheet the bundler emits first.
+ */
+.library-row .library-row-actions {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.library-row-actions {
   grid-column: 2;
   justify-content: flex-start;
 }
@@ -216,42 +217,8 @@
   padding-inline: var(--space-4);
 }
 
-.library-action-danger {
-  color: var(--destructive);
-}
-
-.library-destructive {
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--destructive);
-  border-radius: 999px;
-  color: var(--destructive);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 0.8rem;
-  font-weight: 720;
-  min-height: 2.75rem;
-  padding-inline: var(--space-4);
-}
-
-.library-destructive:hover {
-  background: color-mix(in srgb, var(--destructive) 16%, transparent);
-}
-
-.library-confirm {
-  border: 1px solid color-mix(in srgb, var(--destructive) 40%, var(--border-subtle));
-  border-radius: var(--radius-md);
-  display: grid;
-  gap: var(--space-3);
+.library-row .library-confirm {
   grid-column: 2;
-  padding: var(--space-4);
-}
-
-.library-confirm p {
-  color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.6;
-  margin: 0;
 }
 
 .library-continued,
@@ -350,12 +317,12 @@
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .library-row-actions {
+  .library-row .library-row-actions {
     grid-column: 3;
     justify-content: flex-end;
   }
 
-  .library-confirm {
+  .library-row .library-confirm {
     grid-column: 1 / -1;
   }
 

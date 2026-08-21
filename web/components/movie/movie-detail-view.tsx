@@ -19,7 +19,7 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
-import { CanonicalStateControls } from "@/components/movie/canonical-state-controls";
+import { MovieStatePanel } from "@/components/movie/movie-state-panel";
 import { PosterFallbackMark } from "@/components/movie/poster-card";
 import { Drawer } from "@/components/ui/drawer";
 import { Icon } from "@/components/ui/icons";
@@ -30,6 +30,8 @@ import {
   overviewText,
   releaseYearText,
 } from "@/lib/browse/catalog-card";
+import type { MovieStateClient } from "@/lib/movie-state/client";
+import { returnHrefLabel } from "@/lib/navigation";
 import "@/components/movie/poster-card.css";
 import "./movie-detail-view.css";
 
@@ -55,6 +57,7 @@ export function MovieDetailView({
   backHref,
   requestId,
   explanation = null,
+  stateClient,
   onCommitted,
 }: {
   item: CatalogItem;
@@ -62,6 +65,7 @@ export function MovieDetailView({
   backHref: string;
   requestId: string;
   explanation?: MovieExplanation | null;
+  stateClient?: MovieStateClient;
   onCommitted?: (state: MovieState) => void;
 }) {
   return (
@@ -89,7 +93,8 @@ export function MovieDetailView({
           </section>
         ) : null}
 
-        <CanonicalStateControls
+        <MovieStatePanel
+          client={stateClient}
           initialState={item.state}
           movieId={item.movie_id}
           onCommitted={onCommitted}
@@ -133,9 +138,15 @@ export function MovieDetailView({
             </p>
           </Drawer>
 
+          {/*
+            Named after where it actually goes. A movie opened from Library or
+            from Discover returns to the collection it was opened from, and a
+            link that said "Browse" regardless was the last place the route
+            still assumed one entry point.
+          */}
           <Link className="button-quiet" href={backHref}>
             <Icon name="chevron-left" />
-            Back to Browse
+            {returnHrefLabel(backHref)}
           </Link>
         </div>
       </div>
