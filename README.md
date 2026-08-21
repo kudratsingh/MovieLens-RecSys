@@ -1,6 +1,6 @@
 # MovieLens Two-Stage Recommender
 
-[![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
 A two-stage movie recommender on MovieLens 25M, built end-to-end with the engineering discipline of a production ML platform — ADR-gated decisions, time-respecting splits, stage-specific evaluation, and per-policy attribution. The point is the engineering around the model, not the leaderboard.
 
@@ -255,7 +255,3 @@ The token is sent to TMDB as a server-side Bearer credential. It is never
 included in recommendation responses or the browser bundle. Successful and
 failed lookups are held in a bounded six-hour in-process cache so an upstream
 failure does not make recommendations unavailable or trigger repeated calls.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
