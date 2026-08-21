@@ -1,0 +1,101 @@
+/*
+ * Browse owns its grid geometry rather than borrowing the rail collection's,
+ * so the columns cannot silently disappear when this route stops importing
+ * that component. The column counts match the shared movie grid on purpose —
+ * the two should look like one system — and the poster ratio inside each cell
+ * is what reserves the space before any artwork arrives.
+ */
+.catalog-grid {
+  display: grid;
+  gap: clamp(1.4rem, 3vw, 2.25rem) clamp(0.75rem, 2vw, 1.4rem);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 600px) {
+  .catalog-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .catalog-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .catalog-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.catalog-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.catalog-cell-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  /* Reserved so a state note or a failed save never reflows the grid. */
+  min-height: 2.5rem;
+  padding-top: var(--space-2);
+}
+
+.catalog-cell-watchlist {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 700;
+  gap: var(--space-1);
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+}
+
+.catalog-cell-watchlist svg {
+  height: 0.95rem;
+  width: 0.95rem;
+}
+
+.catalog-cell-watchlist:hover:not([aria-disabled="true"]) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.catalog-cell-watchlist[aria-pressed="true"] {
+  background: var(--accent-muted);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent-strong);
+}
+
+/* Kept focusable while in flight so a failed save can restore focus to it. */
+.catalog-cell-watchlist[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.catalog-cell-state {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.catalog-cell-error {
+  color: var(--destructive);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+/* Touch targets keep the 44px minimum on the mobile profile. */
+@media (max-width: 600px) {
+  .catalog-cell-watchlist {
+    min-height: 2.75rem;
+  }
+}

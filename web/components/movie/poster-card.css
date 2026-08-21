@@ -169,3 +169,14 @@
     display: none;
   }
 }
+
+/*
+ * Shown only when the shared metadata snapshot is incomplete for a title, so
+ * a missing poster or synopsis reads as a known gap rather than a broken card.
+ */
+.poster-metadata-note {
+  color: var(--degraded);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  margin: 0.3rem 0 0;
+}

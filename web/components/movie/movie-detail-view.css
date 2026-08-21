@@ -1,0 +1,129 @@
+.movie-detail {
+  align-items: start;
+  display: grid;
+  gap: clamp(1.5rem, 5vw, 4.5rem);
+  grid-template-columns: minmax(0, 1fr);
+  padding-block: clamp(1.5rem, 4vw, 3rem);
+}
+
+.movie-detail-poster {
+  max-width: 15rem;
+}
+
+.detail-poster {
+  /* `.poster-frame` already reserves the 2:3 box, so a poster that fails to
+     load swaps to the fallback without moving the copy beside it. */
+  width: 100%;
+}
+
+.movie-detail-copy {
+  max-width: 50rem;
+  min-width: 0;
+}
+
+.movie-detail-copy .eyebrow,
+.movie-detail-copy h1 {
+  margin: 0;
+}
+
+.movie-detail-copy h1 {
+  margin-top: var(--space-4);
+}
+
+.movie-detail-meta {
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  margin: var(--space-6) 0 0;
+  text-transform: uppercase;
+}
+
+.movie-overview {
+  color: var(--text-secondary);
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  line-height: 1.7;
+  margin: var(--space-5) 0 0;
+  max-width: 44rem;
+}
+
+.movie-explanation {
+  border-left: 2px solid var(--accent);
+  margin-top: var(--space-6);
+  padding-left: var(--space-4);
+}
+
+.movie-explanation-reason {
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.movie-explanation-meta {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  margin: var(--space-2) 0 0;
+}
+
+.movie-detail-disclosure {
+  align-items: center;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+}
+
+.movie-detail-disclosure .button-quiet {
+  gap: var(--space-1);
+}
+
+.record-details {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.record-details div {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-3);
+}
+
+.record-details dt {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.record-details dd {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.record-note {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  margin-top: var(--space-5);
+}
+
+@media (min-width: 700px) {
+  .movie-detail {
+    grid-template-columns: minmax(14rem, 21rem) minmax(0, 1fr);
+  }
+
+  .movie-detail-poster {
+    max-width: none;
+  }
+}
+
+/*
+ * The escape hatch beside a failed detail: a viewer who cannot see the movie
+ * still needs one obvious way back to the grid they came from.
+ */
+.movie-detail-escape {
+  margin-top: var(--space-8);
+}
