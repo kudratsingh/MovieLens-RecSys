@@ -2,7 +2,7 @@
 
 **Verdict: HOLD.**
 
-**Reviewed:** 2026-08-21 · **Bundle:** 7A · **Base:** `0dfcf2b`
+**Reviewed:** 2026-08-21 · **Bundle:** 7A · **Base:** `876fd36` (7b merged)
 
 **Reviewer:** one engineer, against a locally seeded Compose stack. Where a
 criterion requires participants rather than a reviewer, this document says so
@@ -96,6 +96,15 @@ nothing in the stack reaches the API through the host.
 
 Every row above was re-run after rebasing onto `876fd36` (PR #62, 7b).
 
+### 3.2 CI
+
+The same gates on a clean runner, against a Compose stack built from scratch:
+[PR #63](https://github.com/kudratsingh/MovieLens-RecSys/pull/63), CI run
+[32523881379](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32523881379).
+The `frontend` job carries the visual and accessibility gate; `browser-auth-e2e`
+carries the service-backed journey and then 7b's browser timing;
+`synthetic-load-smoke` carries the unchanged direct-API p99 gate.
+
 Seeded state at capture time, read from the API in the browser's own session:
 
 ```json
@@ -108,7 +117,7 @@ Seeded state at capture time, read from the API in the browser's own session:
 So the learned path was genuinely exercised, not assumed: the warm persona was
 above the five-signal threshold and the response reported learned serving.
 
-### 3.2 The service-backed journey
+### 3.3 The service-backed journey
 
 `web/tests/e2e/finish-gate-journey.spec.ts` runs the handoff's ten steps end to
 end in one browser session. It honours the persona ownership table the run
@@ -134,7 +143,7 @@ page, the components, and the resource state machine are the shipped ones and
 only the bytes the BFF returns are replaced. No production route was given a
 demo mode to make this possible.
 
-### 3.3 CI wiring, and why
+### 3.4 CI wiring, and why
 
 The journey was appended to the existing serialized `npm run test:e2e` set
 rather than given its own job. Measured: it adds **6.1 s locally** to a set that
