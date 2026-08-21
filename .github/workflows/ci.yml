@@ -60,8 +60,10 @@ jobs:
       - run: npm run api:types:check
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:ui
 
   browser-auth-e2e:
     runs-on: ubuntu-latest

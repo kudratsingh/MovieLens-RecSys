@@ -1,0 +1,171 @@
+.poster-card {
+  min-width: 0;
+}
+
+.poster-frame {
+  aspect-ratio: 2 / 3;
+  background: var(--poster-fallback);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  display: block;
+  overflow: hidden;
+  position: relative;
+  text-decoration: none;
+}
+
+.poster-frame::after {
+  background: linear-gradient(transparent 58%, var(--poster-overlay));
+  content: "";
+  inset: 0;
+  opacity: 0.78;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity var(--motion-standard) var(--ease-out);
+}
+
+.poster-frame img {
+  object-fit: cover;
+  transition: transform var(--motion-standard) var(--ease-out);
+}
+
+.poster-frame:hover img,
+.poster-frame:focus-visible img {
+  transform: scale(1.025);
+}
+
+.poster-frame:hover::after,
+.poster-frame:focus-visible::after {
+  opacity: 1;
+}
+
+.rank-badge {
+  align-items: center;
+  background: var(--surface-inverse);
+  border-radius: 999px;
+  color: var(--text-inverse);
+  display: flex;
+  font-size: 0.65rem;
+  font-weight: 850;
+  height: 2rem;
+  justify-content: center;
+  left: 0.65rem;
+  min-width: 2rem;
+  padding: 0 0.45rem;
+  position: absolute;
+  top: 0.65rem;
+  z-index: 2;
+}
+
+.poster-open-cue {
+  align-items: center;
+  bottom: 0.75rem;
+  color: var(--text-primary);
+  display: flex;
+  font-size: 0.72rem;
+  font-weight: 750;
+  gap: 0.25rem;
+  left: 0.75rem;
+  opacity: 0;
+  position: absolute;
+  transform: translateY(0.3rem);
+  transition: all var(--motion-fast) var(--ease-out);
+  z-index: 2;
+}
+
+.poster-open-cue svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.poster-frame:hover .poster-open-cue,
+.poster-frame:focus-visible .poster-open-cue {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.poster-fallback {
+  align-items: center;
+  background:
+    linear-gradient(135deg, transparent 49%, var(--border-strong) 50%, transparent 51%),
+    var(--poster-fallback);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: absolute;
+  text-align: center;
+}
+
+.poster-fallback span:first-child {
+  color: var(--accent-strong);
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(2rem, 7vw, 4.25rem);
+  letter-spacing: -0.08em;
+}
+
+.poster-fallback span:last-child {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.poster-card-copy {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding-top: 0.75rem;
+}
+
+.poster-title {
+  color: var(--text-primary);
+  display: -webkit-box;
+  font-size: 0.9rem;
+  font-weight: 720;
+  line-height: 1.25;
+  overflow: hidden;
+  text-decoration: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.poster-title:hover {
+  color: var(--accent-strong);
+}
+
+.poster-meta,
+.poster-reason {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin: 0.3rem 0 0;
+}
+
+.poster-reason {
+  color: var(--text-secondary);
+  display: -webkit-box;
+  font-size: 0.76rem;
+  margin-top: 0.6rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.poster-state {
+  color: var(--accent-strong);
+  flex: 0 0 auto;
+}
+
+.poster-state svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+@media (hover: none) {
+  .poster-open-cue {
+    display: none;
+  }
+}

@@ -1,41 +1,292 @@
 @import "tailwindcss";
 
 :root {
-  --background: #08090b;
-  --foreground: #f4f4f5;
+  color-scheme: dark;
+  --surface-canvas: #0b0a09;
+  --surface-base: #12110f;
+  --surface-raised: #1a1815;
+  --surface-overlay: #221f1b;
+  --surface-inverse: #f0e8dc;
+  --border-subtle: #2b2823;
+  --border-strong: #464037;
+  --text-primary: #f4ede3;
+  --text-secondary: #bdb3a6;
+  --text-muted: #81796f;
+  --text-inverse: #171411;
+  --accent: #ee7657;
+  --accent-strong: #ff8968;
+  --accent-muted: #3a211a;
+  --focus: #f7bd63;
+  --success: #75c39a;
+  --warning: #e9b85b;
+  --destructive: #ff827c;
+  --degraded: #a89bc6;
+  --poster-fallback: #29251f;
+  --poster-overlay: rgba(9, 8, 7, 0.78);
+  --font-body: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --motion-fast: 120ms;
+  --motion-standard: 220ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --shadow-raised: 0 18px 50px rgba(0, 0, 0, 0.28);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --color-background: var(--surface-canvas);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-body);
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--surface-canvas);
+  scroll-behavior: smooth;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    var(--surface-canvas);
+  background-size: 100% 40px;
+  color: var(--text-primary);
+  font-family: var(--font-body), "Helvetica Neue", Helvetica, Arial, sans-serif;
   margin: 0;
+  min-width: 320px;
 }
 
 button,
 input,
 select {
+  color: inherit;
   font: inherit;
 }
 
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: inherit;
+}
+
 :focus-visible {
-  outline-color: #fcd34d;
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.skip-link {
+  background: var(--surface-inverse);
+  color: var(--text-inverse);
+  left: 1rem;
+  padding: 0.75rem 1rem;
+  position: fixed;
+  top: -5rem;
+  z-index: 100;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+.app-page {
+  margin: 0 auto;
+  max-width: 94rem;
+  min-height: calc(100dvh - 5rem);
+  padding: clamp(1.25rem, 4vw, 3.5rem) clamp(1rem, 4vw, 4rem) 7.5rem;
+  width: 100%;
+}
+
+.display-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(2.6rem, 6vw, 6.5rem);
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  line-height: 0.93;
+}
+
+.eyebrow {
+  color: var(--accent-strong);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.section-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.65rem, 3vw, 2.5rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+.button-primary,
+.button-secondary,
+.button-quiet,
+.icon-button {
+  align-items: center;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 720;
+  gap: 0.5rem;
+  justify-content: center;
+  min-height: 2.75rem;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.button-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #160c09;
+  padding: 0.7rem 1.2rem;
+}
+
+.button-secondary {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: 0.7rem 1.2rem;
+}
+
+.button-quiet {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 0.65rem 0.9rem;
+}
+
+.icon-button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  min-width: 2.75rem;
+  padding: 0.55rem;
+}
+
+.button-primary:hover,
+.button-secondary:hover,
+.button-quiet:hover,
+.icon-button:hover {
+  transform: translateY(-1px);
+}
+
+.button-primary:hover {
+  background: var(--accent-strong);
+}
+
+.button-secondary:hover,
+.icon-button:hover {
+  border-color: var(--text-muted);
+}
+
+.button-quiet:hover {
+  color: var(--text-primary);
+}
+
+.button-primary:disabled,
+.button-secondary:disabled,
+.button-quiet:disabled {
+  cursor: wait;
+  opacity: 0.52;
+  transform: none;
+}
+
+.card-surface {
+  background: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.rule-label {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.68rem;
+  font-weight: 700;
+  gap: 0.75rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.rule-label::after {
+  background: var(--border-subtle);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+
+.visually-hidden {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+
+  .button-primary,
+  .button-secondary,
+  .icon-button,
+  .card-surface {
+    border: 1px solid CanvasText;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   *,
   *::before,
   *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-page {
+    padding-bottom: 4rem;
   }
 }

@@ -1,0 +1,75 @@
+.library-shell {
+  margin-top: clamp(2.5rem, 6vw, 5rem);
+}
+
+.library-tabs {
+  border-bottom: 1px solid var(--border-strong);
+  display: flex;
+  gap: clamp(1rem, 4vw, 2.5rem);
+  overflow-x: auto;
+}
+
+.library-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: clamp(0.9rem, 2vw, 1.05rem);
+  font-weight: 720;
+  min-height: 3.5rem;
+  padding: 0.5rem 0;
+  white-space: nowrap;
+}
+
+.library-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.library-tabs button span {
+  align-items: center;
+  background: var(--surface-raised);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.65rem;
+  height: 1.35rem;
+  justify-content: center;
+  margin-left: 0.3rem;
+  min-width: 1.35rem;
+  padding-inline: 0.25rem;
+}
+
+.library-panel {
+  padding-top: 2rem;
+}
+
+.collection-heading {
+  align-items: flex-end;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.collection-heading .eyebrow,
+.collection-heading h2,
+.collection-heading > p {
+  margin: 0;
+}
+
+.collection-heading h2 {
+  margin-top: 0.4rem;
+}
+
+.collection-heading > p {
+  color: var(--degraded);
+  font-size: 0.72rem;
+}
+
+@media (max-width: 600px) {
+  .collection-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

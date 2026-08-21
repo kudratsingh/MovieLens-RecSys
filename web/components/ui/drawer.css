@@ -1,0 +1,88 @@
+.drawer-layer {
+  inset: 0;
+  position: fixed;
+  z-index: 80;
+}
+
+.drawer-scrim {
+  background: rgba(0, 0, 0, 0.7);
+  border: 0;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.drawer-panel {
+  animation: drawer-enter var(--motion-standard) var(--ease-out);
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  bottom: 0;
+  box-shadow: var(--shadow-raised);
+  max-height: min(88dvh, 48rem);
+  overflow: auto;
+  padding: 0 1.25rem max(1.5rem, env(safe-area-inset-bottom));
+  position: absolute;
+  width: 100%;
+}
+
+.drawer-handle {
+  background: var(--border-strong);
+  border-radius: 999px;
+  height: 0.25rem;
+  margin: 0.65rem auto 0;
+  width: 2.5rem;
+}
+
+.drawer-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 1.5rem 0;
+}
+
+.drawer-header .eyebrow,
+.drawer-header h2 {
+  margin: 0;
+}
+
+.drawer-header h2 {
+  margin-top: 0.4rem;
+}
+
+.drawer-content {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+@keyframes drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2rem);
+  }
+}
+
+@media (min-width: 768px) {
+  .drawer-panel {
+    border-radius: 0;
+    bottom: 0;
+    max-height: none;
+    padding: 1rem 2rem 2rem;
+    right: 0;
+    top: 0;
+    width: min(31rem, 90vw);
+  }
+
+  .drawer-handle {
+    display: none;
+  }
+
+  @keyframes drawer-enter {
+    from {
+      opacity: 0;
+      transform: translateX(2rem);
+    }
+  }
+}
