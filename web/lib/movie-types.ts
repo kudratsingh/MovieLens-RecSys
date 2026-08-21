@@ -1,9 +1,4 @@
-export type MovieState = {
-  watched: boolean;
-  watchlisted: boolean;
-  rating: number | null;
-  suppressed: boolean;
-};
+import type { MovieDisplayState } from "@/lib/movie-state/actions";
 
 export type MovieCard = {
   id: number;
@@ -15,7 +10,11 @@ export type MovieCard = {
   overview: string | null;
   reason?: string;
   rank?: number;
-  state: MovieState;
+  /**
+   * The same projection the controls render, so a card and the button beside it
+   * cannot disagree about whether a movie is saved.
+   */
+  state: MovieDisplayState;
 };
 
 export type EvidenceRecord = {

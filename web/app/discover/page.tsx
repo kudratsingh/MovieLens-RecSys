@@ -67,6 +67,10 @@ export default async function DiscoverPage({
   ]);
 
   const browseHref = `/browse?user=${userId}`;
+  const discoverHref = `/discover?userId=${userId}`;
+  // Quick Picks is a deliberate entry point from here rather than a fourth
+  // navigation slot; the route itself is Bundle 6's.
+  const quickPicksHref = `/quick-picks?user=${userId}`;
   const recorded =
     hasResourceData(resources.recommendations) &&
     resources.recommendations.source === "recorded-contract-fixture";
@@ -79,7 +83,7 @@ export default async function DiscoverPage({
           : (session?.user?.name ?? session?.user?.email ?? "Signed-in actor")
       }
       fixtureMode={fixtureMode}
-      homeHref={`/discover?userId=${userId}`}
+      homeHref={discoverHref}
       homeLabel="MovieLens — For you"
       navigationItems={productNavigationItems(userId)}
       personaLabel="Exploring as"
@@ -100,10 +104,11 @@ export default async function DiscoverPage({
             initialRecommendations={resources.recommendations}
             limit={DISCOVER_RECOMMENDATION_LIMIT}
             movieHrefBase="/movies"
-            // Movie detail only accepts a Browse return target today, so no
-            // `returnTo` is sent rather than one the route would discard.
-            movieHrefQuery={`?user=${userId}`}
+            // Detail honours a Discover return target, so a viewer who opens a
+            // recommendation lands back on the ranking rather than the catalog.
+            movieHrefQuery={`?user=${userId}&returnTo=${encodeURIComponent(discoverHref)}`}
             personaName={personaName}
+            quickPicksHref={quickPicksHref}
             recordedEvidence={resources.recordedEvidence}
             userId={userId}
           />

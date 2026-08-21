@@ -31,6 +31,7 @@ function renderRoute(
         limit={10}
         movieHrefBase="/movies"
         personaName="Action Fan"
+        quickPicksHref="/quick-picks?user=900000101"
         userId={900000101}
       />
       <WatchHistory

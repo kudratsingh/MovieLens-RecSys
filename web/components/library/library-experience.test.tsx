@@ -288,14 +288,15 @@ describe("mutations reconcile canonical state", () => {
     const { user } = await renderLibrary({
       ...client,
       mutate: () =>
-        Promise.resolve(
-          failureState({
+        Promise.resolve({
+          status: "failed" as const,
+          failure: failureState({
             status: "upstream-error",
             resource: "library",
             reason: "timeout",
             requestId: "req-write-timeout",
           }),
-        ),
+        }),
     });
 
     const rating = screen.getByLabelText("Rating for Memories of Murder");
@@ -315,7 +316,12 @@ describe("mutations reconcile canonical state", () => {
     const client = createRecordedLibraryClient();
     const { user } = await renderLibrary({
       ...client,
-      mutate: () => Promise.resolve({ status: "conflict", requestId: "req-conflict" }),
+      mutate: () =>
+        Promise.resolve({
+          status: "conflict" as const,
+          requestId: "req-conflict",
+          detail: "state revision does not match",
+        }),
     });
 
     await user.selectOptions(screen.getByLabelText("Rating for Memories of Murder"), "1");

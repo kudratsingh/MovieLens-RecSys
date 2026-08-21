@@ -2,61 +2,30 @@
  * Pure collection logic for the Library route.
  *
  * The component that uses this is busy with focus, announcements, and network
- * state, so the parts that are easy to get subtly wrong — page appends, the
- * optimistic projection of a movie-state transition, and the copy that
- * describes what a transition actually means to the model — live here where
- * they can be tested directly.
+ * state, so the parts that are easy to get subtly wrong — page appends and the
+ * copy that describes a collection — live here where they can be tested
+ * directly.
  *
- * Every transition below mirrors the accepted contract in ADR 0012 and
- * `docs/frontend/library-feedback-contract.md`. Watched is the positive
- * interaction; star magnitude is display feedback; deleting a rating leaves the
- * movie watched; removing history removes the positive interaction; watchlist
- * is organizational only; dismissal is an undoable exclusion rather than a
- * learned negative.
+ * What is deliberately *not* here any more: the transition table, the request
+ * mapping, and the mutation vocabulary. Those describe what a watched, rating,
+ * watchlist, or dismissal change means, which is the same on every route, so
+ * they live in `lib/movie-state/` with the write path that enforces them. This
+ * module keeps only what is genuinely about a Library collection.
  */
 
 import type { LibraryMovie, LibraryResponse, MovieState } from "@/lib/api";
+import type { MovieStateAction } from "@/lib/movie-state/actions";
 import type { LibraryTab } from "@/lib/library/url-state";
 
-export type LibraryActionKind =
-  | "rate"
-  | "clear-rating"
-  | "mark-watched"
-  | "remove-history"
-  | "save"
-  | "unsave"
-  | "dismiss"
-  | "undismiss";
-
-export type LibraryAction = {
-  kind: LibraryActionKind;
-  /** Half-star value, required for `rate` and ignored otherwise. */
-  rating?: number;
-};
-
-export type FeedbackResource = "watched" | "rating" | "watchlist" | "dismissal";
-
-const ACTION_REQUESTS: Record<
-  LibraryActionKind,
-  { resource: FeedbackResource; method: "PUT" | "DELETE" }
-> = {
-  rate: { resource: "rating", method: "PUT" },
-  "clear-rating": { resource: "rating", method: "DELETE" },
-  "mark-watched": { resource: "watched", method: "PUT" },
-  "remove-history": { resource: "watched", method: "DELETE" },
-  save: { resource: "watchlist", method: "PUT" },
-  unsave: { resource: "watchlist", method: "DELETE" },
-  dismiss: { resource: "dismissal", method: "PUT" },
-  undismiss: { resource: "dismissal", method: "DELETE" },
-};
-
-export function actionRequest(kind: LibraryActionKind) {
-  return ACTION_REQUESTS[kind];
-}
-
-/** Only these actions can change the rating-derived taste summary. */
-export function affectsTasteSummary(kind: LibraryActionKind): boolean {
-  return kind === "rate" || kind === "clear-rating" || kind === "remove-history";
+/**
+ * Only a rating change — or a history removal, which takes the rating with it —
+ * can move the rating-derived taste summary.
+ */
+export function affectsTasteSummary(action: MovieStateAction): boolean {
+  return (
+    action.resource === "rating" ||
+    (action.resource === "watched" && action.method === "DELETE")
+  );
 }
 
 /**
@@ -83,45 +52,6 @@ export function appendLibraryPage(
   // Counts, page, and echoed query come from the newest response; the items are
   // the accumulation of every page read so far.
   return { ...next, items: merged };
-}
-
-/**
- * Projects a transition onto a movie's state for the moment between the click
- * and the committed response.
- *
- * `revision` is deliberately left alone: it is the server's optimistic-locking
- * token, and inventing one here would send a value the backend never issued.
- */
-export function applyOptimisticState(
-  state: MovieState,
-  action: LibraryAction,
-  now: string,
-): MovieState {
-  switch (action.kind) {
-    case "rate":
-      return {
-        ...state,
-        rating: action.rating ?? state.rating,
-        rating_updated_at: now,
-        // Rating implies watched, and the first watched time is preserved.
-        watched_at: state.watched_at ?? now,
-        watchlisted_at: null,
-      };
-    case "clear-rating":
-      return { ...state, rating: null, rating_updated_at: null };
-    case "mark-watched":
-      return { ...state, watched_at: state.watched_at ?? now, watchlisted_at: null };
-    case "remove-history":
-      return { ...state, watched_at: null, rating: null, rating_updated_at: null };
-    case "save":
-      return { ...state, watchlisted_at: state.watchlisted_at ?? now };
-    case "unsave":
-      return { ...state, watchlisted_at: null };
-    case "dismiss":
-      return { ...state, dismissed_at: now, watchlisted_at: null };
-    case "undismiss":
-      return { ...state, dismissed_at: null };
-  }
 }
 
 export function replaceMovieState(
@@ -165,39 +95,6 @@ const LEFT_COLLECTION: Record<LibraryTab, string> = {
 
 export function leftCollectionNote(tab: LibraryTab): string {
   return LEFT_COLLECTION[tab];
-}
-
-export function mutationAnnouncement(
-  kind: LibraryActionKind,
-  title: string,
-  persona: string,
-): string {
-  switch (kind) {
-    case "rate":
-      return `Rating saved for ${title} in ${persona}'s library. It stays watched history; the star value is display feedback only.`;
-    case "clear-rating":
-      return `Rating removed from ${title} in ${persona}'s library. It is still watched history.`;
-    case "mark-watched":
-      return `${title} marked watched in ${persona}'s library.`;
-    case "remove-history":
-      return `${title} removed from ${persona}'s watched history, along with its rating.`;
-    case "save":
-      return `${title} saved to ${persona}'s watchlist. Saving does not change recommendations.`;
-    case "unsave":
-      return `${title} removed from ${persona}'s watchlist.`;
-    case "dismiss":
-      return `${title} excluded from ${persona}'s recommendations. This can be undone.`;
-    case "undismiss":
-      return `${title} is eligible for ${persona}'s recommendations again.`;
-  }
-}
-
-export function rollbackAnnouncement(title: string, persona: string): string {
-  return `Could not update ${title}. ${persona}'s saved state was restored.`;
-}
-
-export function conflictAnnouncement(title: string, persona: string): string {
-  return `${title} changed elsewhere. ${persona}'s latest saved state is shown.`;
 }
 
 // UTC keeps a row's date stable across the reviewer's machine, CI, and the

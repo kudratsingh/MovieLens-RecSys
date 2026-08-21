@@ -1,0 +1,36 @@
+.movie-state-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+}
+
+.movie-state-panel-primary {
+  gap: var(--space-3);
+}
+
+.movie-state-panel-rating {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.movie-state-panel-rating legend {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  padding: 0 var(--space-2);
+  text-transform: uppercase;
+}
+
+.movie-state-panel-message {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+  /* Reserved so an announcement never nudges the layout under a pointer. */
+  min-height: 1.25rem;
+}
+
+.movie-state-panel-message.is-error {
+  color: var(--destructive);
+}

@@ -26,7 +26,7 @@ const DESKTOP = { width: 1440, height: 1000 };
 const RESULTS = ".collection-bar";
 const PROBLEM = ".resource-error";
 const EMPTY = ".resource-empty";
-const CONTROLS = ".canonical-state";
+const CONTROLS = ".movie-state-panel";
 
 const captures = [
   { name: "browse-header-desktop", path: "/ui-preview/browse", ...DESKTOP },

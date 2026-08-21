@@ -1,12 +1,15 @@
 /**
  * The browser side of a canonical movie-state mutation.
  *
- * Every watched, rating, watchlist, and dismissal change goes through here so
- * the four rules the write path depends on are enforced once rather than per
- * button:
+ * Every watched, rating, watchlist, and dismissal change from every surface —
+ * Discover, Browse, movie detail, Library — goes through here so the rules the
+ * write path depends on are enforced once rather than per button:
  *
- * - **Idempotency key.** One key per attempt, so a retried or duplicated
- *   request replays the original commit instead of applying twice.
+ * - **Idempotency key.** One key per *intent*, not per HTTP attempt, so a
+ *   retried mutation that may already have committed replays the original
+ *   result instead of writing a second feedback event. A caller that offers a
+ *   `Try again` supplies the key it used the first time; a caller that does not
+ *   gets a fresh one per call.
  * - **Expected revision.** The revision we rendered is sent with the write, so
  *   a change made elsewhere is a `409` we can report rather than an overwrite.
  * - **Double-submit CSRF plus same-origin.** The BFF requires both; a token is
@@ -14,12 +17,21 @@
  * - **The committed response is the truth.** The optimistic value is discarded
  *   on success and replaced by the state the API actually committed, revision
  *   included. Nothing here invents a revision.
+ * - **The committed answer is relayed.** Recording it in the tab-local store is
+ *   part of committing, not a detail of one route: a watchlist set on detail has
+ *   to be visible on the restored Browse card and on the Discover rail, and the
+ *   only way that holds for every surface is if the write path does it.
  *
  * The access token is never touched: the BFF holds it, and this request goes
  * same-origin with the session cookie only.
  */
 
 import type { FeedbackMutationResponse, MovieState } from "@/lib/api";
+import type { MovieStateResource } from "@/lib/movie-state/actions";
+import {
+  recordCommittedState,
+  type SessionStore,
+} from "@/lib/movie-state/committed-store";
 import type { ResourceDefinition } from "@/lib/resources/definitions";
 import {
   readResourcePayload,
@@ -27,7 +39,11 @@ import {
   resourceStateFromTransportError,
   upstreamDetail,
 } from "@/lib/resources/mapping";
-import { newRequestId, REQUEST_ID_HEADER } from "@/lib/resources/request-id";
+import {
+  newRequestId,
+  REQUEST_ID_HEADER,
+  sanitizeRequestId,
+} from "@/lib/resources/request-id";
 import {
   failureState,
   hasResourceData,
@@ -36,7 +52,7 @@ import {
 } from "@/lib/resources/state";
 import { isFeedbackMutationResponse } from "@/lib/resources/validate";
 
-export type MovieStateResource = "watched" | "rating" | "watchlist" | "dismissal";
+export type { MovieStateResource };
 
 /**
  * A mutation failure is rendered beside the control that produced it, so it
@@ -59,8 +75,12 @@ export type MovieStateMutationInput = {
   rating?: number;
   /** The revision the control rendered. `0` means "no state yet". */
   expectedRevision: number;
+  /** Stable across retries of one user intent; minted per call when absent. */
+  idempotencyKey?: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
+  /** Overridable so a test can watch the relay without touching the tab's. */
+  store?: SessionStore | null;
 };
 
 export type MovieStateMutationResult =
@@ -122,6 +142,12 @@ export function movieStatePath(input: {
   );
 }
 
+/** `undefined` means "use the tab's store"; `null` means "do not relay". */
+function relayStore(store: SessionStore | null | undefined): SessionStore | null {
+  if (store !== undefined) return store;
+  return typeof window === "undefined" ? null : window.sessionStorage;
+}
+
 export async function mutateMovieState(
   input: MovieStateMutationInput,
 ): Promise<MovieStateMutationResult> {
@@ -132,7 +158,7 @@ export async function mutateMovieState(
   try {
     const headers = new Headers({
       Accept: "application/json",
-      "Idempotency-Key": newIdempotencyKey(),
+      "Idempotency-Key": input.idempotencyKey ?? newIdempotencyKey(),
       [REQUEST_ID_HEADER]: requestId,
       "x-csrf-token": await csrfToken(fetchImpl, input.signal),
     });
@@ -158,17 +184,19 @@ export async function mutateMovieState(
     };
   }
 
+  const correlationId =
+    sanitizeRequestId(response.headers.get(REQUEST_ID_HEADER)) ?? requestId;
   const payload = await readResourcePayload(response);
   // A revision or idempotency conflict is not a broken request: somebody else
   // — another tab, another device — committed first, and the viewer needs to
   // be told that rather than shown a generic failure.
   if (response.status === 409) {
-    return { status: "conflict", requestId, detail: upstreamDetail(payload) };
+    return { status: "conflict", requestId: correlationId, detail: upstreamDetail(payload) };
   }
 
   const state = resourceStateFromPayload({
     definition: MOVIE_STATE_MUTATION,
-    requestId,
+    requestId: correlationId,
     httpStatus: response.status,
     payload,
   });
@@ -182,10 +210,13 @@ export async function mutateMovieState(
         status: "upstream-error",
         resource: MOVIE_STATE_MUTATION.name,
         reason: "invalid-payload",
-        requestId,
+        requestId: correlationId,
       }),
     };
   }
+
+  const store = relayStore(input.store);
+  if (store) recordCommittedState(store, input.userId, state.data.state);
 
   return {
     status: "committed",

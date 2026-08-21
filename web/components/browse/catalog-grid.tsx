@@ -16,7 +16,7 @@
  */
 
 import { PosterCard } from "@/components/movie/poster-card";
-import { useCanonicalMovieState } from "@/components/movie/use-canonical-movie-state";
+import { useMovieState } from "@/components/movie/use-movie-state";
 import { Icon } from "@/components/ui/icons";
 import type { CatalogItem, MovieState } from "@/lib/api";
 import {
@@ -72,7 +72,7 @@ function CatalogCardActions({
   userId: number;
   onCommitted?: (state: MovieState) => void;
 }) {
-  const { display, pending, message, run, state } = useCanonicalMovieState({
+  const { display, pending, message, run, state } = useMovieState({
     userId,
     movieId: item.movie_id,
     title: item.title,

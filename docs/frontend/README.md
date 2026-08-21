@@ -12,8 +12,9 @@ while keeping the ML system inspectable through progressive disclosure.
   information hierarchy, responsive behavior, and forbidden defaults.
 - [Implementation plan](implementation-plan.md) — sequenced frontend and backend
   bundles, dependencies, API gaps, and delivery exit criteria.
-- [Frontend system](frontend-system.md) — Bundle 4 tokens, route/client
-  boundaries, typed fixture semantics, and automated checks.
+- [Frontend system](frontend-system.md) — tokens, route/client boundaries, typed
+  fixture semantics, the shared movie-state control family and write path, and
+  automated checks.
 - [Bundles 5–7 handoff](bundles-5-7-handoff.md) — exact post-Bundle-4 state,
   remaining vertical slices, implementation order, risks, and verification
   gates; Bundles 5–7 are explicitly not implemented in this handoff.

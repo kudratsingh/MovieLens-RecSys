@@ -1,0 +1,20 @@
+.quick-picks-entry {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  margin: var(--space-5) 0 0;
+}
+
+/* `.button-secondary` already reserves 44px of height; this keeps the target
+   from collapsing below that width on a narrow screen. */
+.quick-picks-entry-action {
+  min-width: 2.75rem;
+}
+
+.quick-picks-entry-note {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-width: 32rem;
+}

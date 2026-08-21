@@ -14,6 +14,7 @@ import {
   learnedRecommendations,
   posterFailureRecommendations,
 } from "@/lib/fixtures/discover-fixtures";
+import { recordCommittedState } from "@/lib/movie-state/committed-store";
 import {
   emptyState,
   failureState,
@@ -74,6 +75,7 @@ function renderDiscover(state: ResourceState<RecommendationResponse>) {
         movieHrefBase="/movies"
         movieHrefQuery="?user=900000101"
         personaName="Action Fan"
+        quickPicksHref="/quick-picks?user=900000101"
         userId={900000101}
       />
     </main>,
@@ -339,5 +341,60 @@ describe("a committed action refreshes recommendations before it says so", () =>
     expect(
       panel.getByRole("button", { name: "4 stars for The Handmaiden" }),
     ).toBeVisible();
+  });
+});
+
+describe("Quick Picks is reachable without claiming a fourth navigation slot", () => {
+  it("offers a labelled entry beside the ranked set", () => {
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+
+    const entry = screen.getByRole("link", { name: /Quick picks/ });
+    expect(entry).toHaveAttribute("href", "/quick-picks?user=900000101");
+    expect(entry).toHaveTextContent("Rate a few in Quick picks");
+  });
+
+  it("still offers it when there is no ranked set to read", () => {
+    renderDiscover(
+      emptyState("recommendations", { ...learnedRecommendations, items: [] }, REQUEST_ID),
+    );
+
+    expect(screen.getByRole("link", { name: /Quick picks/ })).toHaveAttribute(
+      "href",
+      "/quick-picks?user=900000101",
+    );
+    expect(screen.getByRole("link", { name: "Browse the catalog" })).toBeVisible();
+  });
+});
+
+describe("cards start from the state other routes already committed", () => {
+  it("shows a watchlist set elsewhere and asserts the revision it was given", async () => {
+    const user = userEvent.setup();
+    recordCommittedState(window.sessionStorage, 900000101, {
+      ...committed().state,
+      revision: 5,
+      watchlisted_at: "2026-08-21T09:00:00Z",
+    });
+
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) return Response.json(committed({ revision: 6 }));
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+
+    // The relay is read after hydration, so the card corrects itself rather
+    // than inviting a save that would answer 409.
+    const saved = await featuredRegion().findByRole("button", { name: "In watchlist" });
+    expect(saved).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(saved);
+    await waitFor(() =>
+      expect(calls.some((url) => url.includes("expected_revision=5"))).toBe(true),
+    );
   });
 });

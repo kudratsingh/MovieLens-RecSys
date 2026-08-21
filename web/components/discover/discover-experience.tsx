@@ -2,38 +2,37 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { FeaturedMovie } from "@/components/discover/featured-movie";
+import { QuickPicksEntry } from "@/components/discover/quick-picks-entry";
 import { WhyThis } from "@/components/discover/why-this";
 import type { PreloadedTechnicalEvidence } from "@/components/discover/technical-evidence";
 import { MovieRail } from "@/components/movie/movie-rail";
-import { RatingControl } from "@/components/movie/rating-control";
 import {
-  StateControls,
-  type MovieStateAction,
-} from "@/components/movie/state-controls";
+  MovieRatingControl,
+  MovieStateControls,
+  RECOMMENDATION_CONTROLS,
+} from "@/components/movie/movie-state-controls";
 import { ResourceProblem, ResourceRegion } from "@/components/ui/resource-region";
 import { EmptyState, PosterSkeleton } from "@/components/ui/resource-states";
 import type { MovieState, RecommendationResponse } from "@/lib/api";
-import {
-  movieCardState,
-  optimisticCardState,
-  recommendationCards,
-} from "@/lib/discover/movie-card";
+import { recommendationCards } from "@/lib/discover/movie-card";
 import { describeServingPolicy } from "@/lib/discover/policy";
-import type { MovieCard, MovieState as MovieCardState } from "@/lib/movie-types";
-import { discoverMutationAnnouncement } from "@/lib/discover/announce";
+import type { MovieCard } from "@/lib/movie-types";
 import {
-  readCommittedStates,
-  recordCommittedState,
-} from "@/lib/movie-state/committed-store";
-import {
-  mutateMovieState,
-  type MovieStateMutationResult,
-  type MovieStateResource,
-} from "@/lib/movie-state/mutate";
-import { MOVIE_DETAIL, RECOMMENDATIONS } from "@/lib/resources/definitions";
+  applyActionToDisplay,
+  displayState,
+  ratingAction,
+  UNKNOWN_MOVIE_STATE,
+  type MovieDisplayState,
+  type MovieStateAction,
+} from "@/lib/movie-state/actions";
+import { movieStateAnnouncement } from "@/lib/movie-state/announce";
+import { bffMovieStateClient, type MovieStateClient } from "@/lib/movie-state/client";
+import { readCommittedStates } from "@/lib/movie-state/committed-store";
+import { restoreFocus } from "@/lib/movie-state/focus";
+import { RECOMMENDATIONS } from "@/lib/resources/definitions";
 import { readBffResource } from "@/lib/resources/browser";
 import {
   hasResourceData,
@@ -53,6 +52,9 @@ type Flow =
   | { kind: "refresh-failed"; message: string; failure: ResourceFailure }
   | { kind: "error"; message: string };
 
+/** The in-flight frame for the one movie currently being written. */
+type Optimistic = { movieId: number; state: MovieDisplayState };
+
 /**
  * The interactive half of `/discover`.
  *
@@ -62,6 +64,15 @@ type Flow =
  * canonical revision each committed response returns, and the re-read that
  * makes "Recommendations refreshed" true rather than decorative. That claim is
  * only ever made after the refetch resolves — a failed refetch says so.
+ *
+ * The recommendation contract carries no per-item state, which used to mean
+ * every card started as "not saved" and a title already on the watchlist showed
+ * an inviting `Watchlist` button until the first write came back `409`. Nothing
+ * on the backend has changed; what changed is that the states other routes have
+ * already committed are folded in from the tab-local relay before the cards
+ * render, and the conflict path still corrects anything the relay does not
+ * know. Per-card state reads are deliberately not the answer here: that is the
+ * fan-out the local catalog snapshot exists to prevent.
  */
 export function DiscoverExperience({
   userId,
@@ -69,15 +80,18 @@ export function DiscoverExperience({
   initialRecommendations,
   recordedEvidence,
   browseHref,
+  quickPicksHref,
   movieHrefBase,
   movieHrefQuery = "",
   limit,
+  stateClient = bffMovieStateClient,
 }: {
   userId: number;
   personaName: string;
   initialRecommendations: ResourceState<RecommendationResponse>;
   recordedEvidence?: PreloadedTechnicalEvidence | null;
   browseHref: string;
+  quickPicksHref: string;
   /**
    * Built from strings rather than a callback: this component is a client
    * boundary, and a server component cannot hand a function across it.
@@ -85,15 +99,19 @@ export function DiscoverExperience({
   movieHrefBase: string;
   movieHrefQuery?: string;
   limit: number;
+  stateClient?: MovieStateClient;
 }) {
   const movieHrefFor = (movieId: number) =>
     `${movieHrefBase}/${movieId}${movieHrefQuery}`;
   const router = useRouter();
   const [recommendations, setRecommendations] = useState(initialRecommendations);
-  const [displayStates, setDisplayStates] = useState<Record<number, MovieCardState>>({});
-  const [revisions, setRevisions] = useState<Record<number, number>>({});
+  /** Canonical records this route has learned, by movie. Never a guess. */
+  const [known, setKnown] = useState<Record<number, MovieState>>({});
+  const [optimistic, setOptimistic] = useState<Optimistic | null>(null);
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
+  // Held as a snapshot rather than a lookup: a watched title leaves the ranked
+  // set on the next request, and the rating panel has to outlive it.
   const [justWatched, setJustWatched] = useState<MovieCard | null>(null);
 
   const refetch = useCallback(
@@ -110,122 +128,115 @@ export function DiscoverExperience({
     setRecommendations(await refetch());
   }, [refetch]);
 
-  function restoreFocus(id: string) {
-    requestAnimationFrame(() => document.getElementById(id)?.focus());
-  }
-
   /**
-   * Records a canonical state the API committed, in the three places that have
-   * to agree: what the card shows, the revision the next write asserts, and the
-   * tab-local relay the other routes read.
+   * Adopts a canonical record the API committed, wherever it came from: this
+   * session's own write, the conflict re-read, or the relay another route left
+   * behind. A record only wins if it is newer than what is already held, so an
+   * older echo can never overwrite a fresher answer.
    */
-  const adoptCommittedState = useCallback(
-    (state: MovieState) => {
-      setDisplayStates((current) => ({
-        ...current,
-        [state.movie_id]: movieCardState(state),
-      }));
-      setRevisions((current) => ({ ...current, [state.movie_id]: state.revision }));
-      if (typeof window !== "undefined") {
-        recordCommittedState(window.sessionStorage, userId, state);
+  const adopt = useCallback((states: readonly MovieState[]) => {
+    setKnown((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const state of states) {
+        const held = current[state.movie_id];
+        if (held && held.revision >= state.revision) continue;
+        next[state.movie_id] = state;
+        changed = true;
       }
-    },
-    [userId],
-  );
+      return changed ? next : current;
+    });
+  }, []);
 
-  /**
-   * A recommendation response carries no per-item state, so a first write can
-   * only assert revision 0 and a title already saved elsewhere answers `409`.
-   * Reading that one movie's canonical record turns the conflict into a
-   * correction: the control shows the truth and the next click asserts a
-   * revision the server issued.
-   */
-  const resyncMovieState = useCallback(
-    async (movieId: number) => {
-      const detail = await readBffResource(
-        MOVIE_DETAIL,
-        `/api/users/${userId}/movies/${movieId}`,
-      );
-      if (!hasResourceData(detail) || !detail.data.item.state) return;
-      adoptCommittedState(detail.data.item.state);
-    },
-    [adoptCommittedState, userId],
-  );
+  // Reading the relay is an external read, not something derivable during
+  // render: the server renders this component too and has no session storage,
+  // so folding it in at render time would make the two disagree. It re-runs
+  // when the ranked set changes, because a refreshed set may contain movies the
+  // previous one did not.
+  useEffect(() => {
+    // Reading session storage and adopting what it holds is the effect's whole
+    // job, and the rule's usual advice — derive it during render instead — is
+    // the one thing that cannot work here: the server renders this component
+    // too and has no session storage, so the two renders would disagree about
+    // what the cards show. The state set here is the external read.
+    if (typeof window === "undefined") return;
+    const relayed = readCommittedStates(window.sessionStorage, userId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (relayed.size) adopt([...relayed.values()]);
+  }, [adopt, recommendations, userId]);
 
-  /**
-   * The revision the next write asserts. A recommendation response carries no
-   * per-item state, so this session's own commits come first, then the
-   * tab-local relay of states other routes committed, and only then the
-   * canonical "no state yet" value. The relay is read here rather than folded
-   * into render state so nothing reads browser storage while rendering.
-   */
-  function knownRevision(movieId: number): number {
-    if (movieId in revisions) return revisions[movieId];
-    if (typeof window === "undefined") return 0;
-    return readCommittedStates(window.sessionStorage, userId).get(movieId)?.revision ?? 0;
-  }
-
-  function mutationFailureCopy(
-    result: Extract<MovieStateMutationResult, { status: "conflict" | "failed" }>,
-    title: string,
-  ): string {
-    if (result.status === "conflict") {
-      return `${title} changed somewhere else before this saved. Its current state has been loaded; try again.`;
+  const cardStates = useMemo(() => {
+    const states: Record<number, MovieDisplayState> = {};
+    for (const [movieId, state] of Object.entries(known)) {
+      states[Number(movieId)] = displayState(state);
     }
-    if (result.failure.status === "auth-expired") {
-      return `Your session expired before this saved. Sign in again to change ${title}.`;
-    }
-    if (result.failure.status === "forbidden") {
-      return `This session is not allowed to change state for ${title}.`;
-    }
-    return `${title} was not saved. It was left as it was. Request ${result.failure.requestId}.`;
-  }
+    if (optimistic) states[optimistic.movieId] = optimistic.state;
+    return states;
+  }, [known, optimistic]);
 
   async function commit(
     movie: MovieCard,
-    resource: MovieStateResource,
-    method: "PUT" | "DELETE",
-    control: HTMLButtonElement,
-    rating?: number,
+    action: MovieStateAction,
+    control: HTMLElement,
   ) {
-    const controlId = control.id;
-    const previous = displayStates;
-    const currentState = displayStates[movie.id] ?? movie.state;
+    const currentState = cardStates[movie.id] ?? UNKNOWN_MOVIE_STATE;
 
     setPendingMovieId(movie.id);
     setFlow({ kind: "saving", message: `Saving ${movie.title}…` });
-    setDisplayStates({
-      ...previous,
-      [movie.id]: optimisticCardState(currentState, resource, method, rating),
+    setOptimistic({
+      movieId: movie.id,
+      state: applyActionToDisplay(currentState, action),
     });
 
-    const result = await mutateMovieState({
+    const result = await stateClient.mutate({
       userId,
       movieId: movie.id,
-      resource,
-      method,
-      rating,
+      resource: action.resource,
+      method: action.method,
+      rating:
+        action.resource === "rating" && action.method === "PUT"
+          ? action.rating
+          : undefined,
       // `0` is the canonical "no state yet" assertion; anything else is a
       // revision the server issued, never one invented here.
-      expectedRevision: knownRevision(movie.id),
+      expectedRevision: known[movie.id]?.revision ?? 0,
     });
 
     if (result.status !== "committed") {
-      setDisplayStates(previous);
+      // Dropping the pending frame *is* the rollback: the card falls back to
+      // the last canonical record this route holds.
+      setOptimistic(null);
       setPendingMovieId(null);
-      setFlow({ kind: "error", message: mutationFailureCopy(result, movie.title) });
-      if (result.status === "conflict") void resyncMovieState(movie.id);
-      restoreFocus(controlId);
+      setFlow({
+        kind: "error",
+        message: movieStateAnnouncement(
+          result.status === "conflict"
+            ? { kind: "conflict" }
+            : { kind: "failed", failure: result.failure },
+          { title: movie.title, voice: "discover" },
+        ),
+      });
+      if (result.status === "conflict") {
+        // Turn the conflict into a correction: read the canonical record so the
+        // control shows the truth and the next click asserts a real revision.
+        const canonical = await stateClient.readState(userId, movie.id);
+        if (canonical) adopt([canonical]);
+      }
+      restoreFocus(control);
       return;
     }
 
     // The committed state replaces the optimistic guess outright; a
     // reconciliation that kept any local field would be a second source of
     // truth for the same movie.
-    adoptCommittedState(result.state);
-    const message = discoverMutationAnnouncement(resource, method, movie.title);
+    adopt([result.state]);
+    setOptimistic(null);
+    const message = movieStateAnnouncement(
+      { kind: "committed", action },
+      { title: movie.title, voice: "discover" },
+    );
     if (result.state.watched_at !== null) {
-      setJustWatched({ ...movie, state: movieCardState(result.state) });
+      setJustWatched({ ...movie, state: displayState(result.state) });
     }
 
     setFlow({ kind: "refreshing", message });
@@ -244,8 +255,8 @@ export function DiscoverExperience({
   }
 
   function onAction(movie: MovieCard) {
-    return (action: MovieStateAction, control: HTMLButtonElement) => {
-      void commit(movie, action.resource, action.method, control);
+    return (action: MovieStateAction, control: HTMLElement) => {
+      void commit(movie, action, control);
     };
   }
 
@@ -254,9 +265,15 @@ export function DiscoverExperience({
       empty={
         <EmptyState
           action={
-            <Link className="button-primary" href={browseHref}>
-              Browse the catalog
-            </Link>
+            <>
+              <Link className="button-primary" href={browseHref}>
+                Browse the catalog
+              </Link>
+              <QuickPicksEntry
+                href={quickPicksHref}
+                note="Or classify a handful quickly, so the next ranked set has something to work with."
+              />
+            </>
           }
           message="The recommendation API answered with no unseen titles for this persona. Browsing and marking a few movies gives it something to work with."
           title="No recommendations right now"
@@ -268,7 +285,7 @@ export function DiscoverExperience({
       state={recommendations}
     >
       {(data) => {
-        const cards = recommendationCards(data.items, displayStates);
+        const cards = recommendationCards(data.items, cardStates);
         const [featured, ...rest] = cards;
         const policy = describeServingPolicy(data);
         if (!featured) return null;
@@ -276,12 +293,11 @@ export function DiscoverExperience({
           <>
             <FeaturedMovie
               actions={
-                <StateControls
+                <MovieStateControls
                   busy={pendingMovieId === featured.id}
+                  controls={RECOMMENDATION_CONTROLS}
                   idPrefix={`featured-${featured.id}`}
-                  initialState={featured.state}
                   onAction={onAction(featured)}
-                  showDismiss
                   state={featured.state}
                   title={featured.title}
                 />
@@ -297,7 +313,9 @@ export function DiscoverExperience({
                 <WhyThis
                   item={data.items[0]}
                   preloadedEvidence={recordedEvidence}
-                  requestId={hasResourceData(recommendations) ? recommendations.requestId : null}
+                  requestId={
+                    hasResourceData(recommendations) ? recommendations.requestId : null
+                  }
                   response={data}
                   userId={userId}
                 />
@@ -317,9 +335,9 @@ export function DiscoverExperience({
                 busy={pendingMovieId === justWatched.id}
                 movie={justWatched}
                 onRate={(value, control) =>
-                  void commit(justWatched, "rating", "PUT", control, value)
+                  void commit(justWatched, ratingAction(value), control)
                 }
-                state={displayStates[justWatched.id] ?? justWatched.state}
+                state={cardStates[justWatched.id] ?? justWatched.state}
               />
             ) : null}
 
@@ -327,13 +345,13 @@ export function DiscoverExperience({
               <MovieRail
                 eyebrow={policy.label}
                 footer={(movie) => (
-                  <StateControls
+                  <MovieStateControls
                     busy={pendingMovieId === movie.id}
                     compact
+                    controls={RECOMMENDATION_CONTROLS}
                     idPrefix={`rail-${movie.id}`}
-                    initialState={movie.state}
                     onAction={onAction(movie)}
-                    state={displayStates[movie.id] ?? movie.state}
+                    state={movie.state}
                     title={movie.title}
                   />
                 )}
@@ -350,6 +368,8 @@ export function DiscoverExperience({
                 Browse the whole catalog
               </Link>
             </p>
+
+            <QuickPicksEntry href={quickPicksHref} />
           </>
         );
       }}
@@ -418,9 +438,9 @@ function JustWatched({
   onRate,
 }: {
   movie: MovieCard;
-  state: MovieCardState;
+  state: MovieDisplayState;
   busy: boolean;
-  onRate: (value: number, control: HTMLButtonElement) => void;
+  onRate: (value: number | null, control: HTMLElement) => void;
 }) {
   return (
     <section aria-labelledby="just-watched-heading" className="just-watched">
@@ -430,12 +450,13 @@ function JustWatched({
           Rate {movie.title}
         </h2>
       </div>
-      <RatingControl
+      <MovieRatingControl
         busy={busy}
         idPrefix={`just-watched-${movie.id}`}
         note="Stars are recorded feedback for this persona. The deployed recommender counts any rating as one observed watch, so a 1 and a 5 are the same learned signal today."
         onRate={onRate}
         rating={state.rating}
+        showRecorded
         title={movie.title}
       />
     </section>

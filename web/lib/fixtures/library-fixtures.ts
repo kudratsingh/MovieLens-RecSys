@@ -23,7 +23,11 @@ import type {
   TasteSummaryResponse,
 } from "@/lib/api";
 import type { LibraryClient, LibraryReadOptions } from "@/lib/library/client";
-import { applyOptimisticState, movieMatchesTab } from "@/lib/library/collection";
+import { movieMatchesTab } from "@/lib/library/collection";
+import {
+  applyActionToState,
+  movieStateActionOf,
+} from "@/lib/movie-state/actions";
 import type { LibraryTab } from "@/lib/library/url-state";
 import { FIXTURE_REQUEST_ID } from "@/lib/resources/fixture-gate";
 import {
@@ -222,19 +226,21 @@ export function createRecordedLibraryClient(
       );
     },
 
-    readMovieState(_userId, movieId) {
+    readState(_userId, movieId) {
       return Promise.resolve(movies.get(movieId)?.state ?? null);
     },
 
     mutate(request) {
       const movie = movies.get(request.movieId);
       if (!movie) {
-        return Promise.resolve(recordedFailure("library"));
+        return Promise.resolve({
+          status: "failed" as const,
+          failure: recordedFailure("library"),
+        });
       }
-      const kind = RECORDED_ACTION[`${request.resource}:${request.method}`];
-      const next = applyOptimisticState(
+      const next = applyActionToState(
         movie.state,
-        { kind, rating: request.rating },
+        movieStateActionOf(request),
         new Date().toISOString(),
       );
       const committed = { ...next, revision: movie.state.revision + 1 };
@@ -252,26 +258,13 @@ export function createRecordedLibraryClient(
       return Promise.resolve({
         status: "committed" as const,
         state: committed,
+        outcome: "changed" as const,
         requestId: FIXTURE_REQUEST_ID,
         replayed: false,
       });
     },
   };
 }
-
-const RECORDED_ACTION: Record<
-  string,
-  Parameters<typeof applyOptimisticState>[1]["kind"]
-> = {
-  "rating:PUT": "rate",
-  "rating:DELETE": "clear-rating",
-  "watched:PUT": "mark-watched",
-  "watched:DELETE": "remove-history",
-  "watchlist:PUT": "save",
-  "watchlist:DELETE": "unsave",
-  "dismissal:PUT": "dismiss",
-  "dismissal:DELETE": "undismiss",
-};
 
 /** The recorded first page a preview route renders before any interaction. */
 export function recordedLibraryState(

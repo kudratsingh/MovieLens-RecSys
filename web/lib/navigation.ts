@@ -32,3 +32,49 @@ export function productNavigationItems(userId: number): readonly NavigationItem[
     { href: `/library?userId=${userId}`, label: "Library", icon: "library", match: "/library" },
   ];
 }
+
+/**
+ * Where a movie may send a viewer back to.
+ *
+ * A movie is reachable from three collections and every one of them keeps state
+ * worth returning to — a Browse window and its scroll position, a Library tab
+ * and its filter, a Discover ranking. Detail used to honour only Browse, so a
+ * viewer who opened a title from Library was quietly redirected into the
+ * catalog on the way out. The allow-list is narrow on purpose: `returnTo`
+ * arrives from a link the browser controls, so anything not named here is
+ * discarded rather than followed.
+ */
+export const RETURNABLE_ROUTES = ["/browse", "/library", "/discover"] as const;
+
+const RETURN_LABELS: Record<string, string> = {
+  "/browse": "Back to Browse",
+  "/library": "Back to Library",
+  "/discover": "Back to For you",
+};
+
+function returnRoute(href: string): string | null {
+  // The recorded preview mirrors the live routes under its own prefix.
+  const path = href.startsWith("/ui-preview/") ? href.slice("/ui-preview".length) : href;
+  return (
+    RETURNABLE_ROUTES.find(
+      (route) => path === route || path.startsWith(`${route}?`),
+    ) ?? null
+  );
+}
+
+export function safeReturnHref(
+  value: string | string[] | undefined,
+  fallback: string,
+): string {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (typeof first !== "string") return fallback;
+  // A protocol-relative or backslash-prefixed value would leave the origin.
+  if (first.includes("//") || first.includes("\\")) return fallback;
+  return returnRoute(first) ? first : fallback;
+}
+
+/** The label for a back link, so the destination is named rather than guessed. */
+export function returnHrefLabel(href: string): string {
+  const route = returnRoute(href);
+  return route ? RETURN_LABELS[route] : "Back";
+}

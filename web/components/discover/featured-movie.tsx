@@ -1,7 +1,10 @@
 import Link from "next/link";
 
 import { PosterCard } from "@/components/movie/poster-card";
-import { StateControls } from "@/components/movie/state-controls";
+import {
+  MovieStateControls,
+  PREVIEW_CONTROLS,
+} from "@/components/movie/movie-state-controls";
 import { Drawer } from "@/components/ui/drawer";
 import { Icon } from "@/components/ui/icons";
 import type { EvidenceRecord, MovieCard } from "@/lib/movie-types";
@@ -55,7 +58,13 @@ export function FeaturedMovie({
           <Link className="button-primary" href={movieHref}>
             Open movie <Icon name="arrow" />
           </Link>
-          {actions ?? <StateControls initialState={movie.state} title={movie.title} />}
+          {actions ?? (
+            <MovieStateControls
+              controls={PREVIEW_CONTROLS}
+              initialState={movie.state}
+              title={movie.title}
+            />
+          )}
         </div>
         {aside}
         {disclosure ??

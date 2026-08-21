@@ -1,0 +1,141 @@
+/*
+ * The shared look of the movie-state controls.
+ *
+ * Only what the family owns lives here: the control row, the confirmation, and
+ * the star editor. Where a control row sits — a Library grid column, a featured
+ * movie's action strip, a detail column — stays with the surface, which passes
+ * its own class through `classNames`. That split is what keeps a star the same
+ * star on every route without the family having to know about three layouts.
+ */
+
+.movie-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  /* Contains the visually hidden preview live region. Without a positioned
+     ancestor it resolves against the initial containing block, which pushes the
+     page's scroll width out when these controls sit inside a horizontal rail. */
+  position: relative;
+}
+
+.movie-state-row-compact button {
+  min-width: 0;
+}
+
+/*
+ * In-flight controls are `aria-disabled`, not `disabled`: a disabled element
+ * cannot hold focus, and returning focus to the control that failed is exactly
+ * what a rollback has to do.
+ */
+.movie-state-row button[aria-disabled="true"],
+.movie-rating-stars button[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.movie-state-action-danger {
+  color: var(--destructive);
+}
+
+.movie-state-confirm {
+  border: 1px solid color-mix(in srgb, var(--destructive) 40%, var(--border-subtle));
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.movie-state-consequence {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.movie-state-confirm-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.movie-state-destructive {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--destructive);
+  border-radius: 999px;
+  color: var(--destructive);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.8rem;
+  font-weight: 720;
+  min-height: 2.75rem;
+  padding-inline: var(--space-4);
+}
+
+.movie-state-destructive:hover {
+  background: color-mix(in srgb, var(--destructive) 16%, transparent);
+}
+
+.movie-rating {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.movie-rating legend {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.movie-rating-stars {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.movie-rating-stars > button[aria-pressed] {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.4rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  /* 44px keeps the touch target usable on the mobile profile. */
+  height: 2.75rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.75rem;
+}
+
+.movie-rating-stars > button[aria-pressed]:hover:not([aria-disabled="true"]),
+.movie-rating-stars > button.rating-active {
+  color: var(--warning);
+}
+
+.movie-rating-status {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin: 0.35rem 0 0;
+}
+
+.movie-rating-note {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  margin: 0.35rem 0 0;
+  max-width: 34rem;
+}
+
+.movie-rating-select {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 0.85rem;
+  gap: var(--space-3);
+}

@@ -8,7 +8,8 @@ import { CatalogRouteHeader } from "@/components/browse/route-header";
 import { MovieDetailView } from "@/components/movie/movie-detail-view";
 import { ResourceRegion } from "@/components/ui/resource-region";
 import { overviewText } from "@/lib/browse/catalog-card";
-import { resolveDemoPersonaId, safeBrowseReturnHref } from "@/lib/demo-persona";
+import { resolveDemoPersonaId } from "@/lib/demo-persona";
+import { returnHrefLabel, safeReturnHref } from "@/lib/navigation";
 import { loadMovieDetail } from "@/lib/resources/server";
 import { hasResourceData } from "@/lib/resources/state";
 
@@ -85,7 +86,9 @@ export default async function MovieDetailPage({ params, searchParams }: DetailPr
 
   const userId = resolveDemoPersonaId(query.user);
   const actorName = session.user.name ?? session.user.email ?? "Signed-in actor";
-  const backHref = safeBrowseReturnHref(query.returnTo, `/browse?user=${userId}`);
+  // Browse, Library, and Discover can all send a viewer here, and each of them
+  // has state worth returning to.
+  const backHref = safeReturnHref(query.returnTo, `/browse?user=${userId}`);
   const state = await detailForRequest(userId, parseMovieId(movieId));
 
   return (
@@ -109,7 +112,7 @@ export default async function MovieDetailPage({ params, searchParams }: DetailPr
         {hasResourceData(state) ? null : (
           <p className="movie-detail-escape">
             <Link className="button-secondary" href={backHref}>
-              Back to Browse
+              {returnHrefLabel(backHref)}
             </Link>
           </p>
         )}
