@@ -1,8 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("real Keycloak PKCE session reaches the role-gated demo API and logs out", async ({
-  page,
-}) => {
+/** Bypass-disabled sign-in through the real Keycloak demo realm. */
+async function signInThroughKeycloak(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Continue with Keycloak" }).click();
 
@@ -11,6 +10,13 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   await page.locator("#kc-login").click();
 
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+}
+
+test("real Keycloak PKCE session reaches the role-gated demo API and logs out", async ({
+  page,
+}) => {
+  await signInThroughKeycloak(page);
+
   await expect(page.getByRole("button", { name: "Action Fan" })).toBeVisible();
 
   const actor = await page.evaluate(async () =>
@@ -165,4 +171,81 @@ test("a rating created on detail is findable, editable, and removable in Library
 
   await page.reload();
   await expect(page.getByRole("listitem").filter({ hasText: fullTitle })).toHaveCount(0);
+});
+
+/**
+ * The Bundle 7 journey step for Browse and detail, run against the seeded
+ * Compose stack rather than a fixture: search the catalog, continue the
+ * cursor, open a movie, save it, and come back to the same query, the same
+ * loaded window, and the same position.
+ *
+ * The persona is left as it was found, so the job can run repeatedly.
+ */
+test("search, cursor continuation, detail, and watchlist survive a round trip", async ({
+  page,
+}) => {
+  const userId = 900000104;
+  await signInThroughKeycloak(page);
+
+  await page.goto(`/browse?user=${userId}`);
+  const grid = page.getByRole("list", { name: "Browse results" });
+  await expect(grid).toBeVisible();
+
+  // Search reaches the catalog endpoint; it is not a client-side filter over
+  // an already-loaded page.
+  await page.getByRole("searchbox").fill("the");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(/[?&]q=the/);
+  await expect(page).toHaveURL(new RegExp(`user=${userId}`));
+  await expect(grid).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear the title search" }).click();
+  await expect(grid).toBeVisible();
+  const firstPage = await page.locator(".catalog-cell .poster-title").allInnerTexts();
+  expect(firstPage.length).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "Load more movies" }).click();
+  await expect(page.getByRole("listitem")).toHaveCount(firstPage.length * 2);
+  const loaded = await page.locator(".catalog-cell .poster-title").allInnerTexts();
+  expect(new Set(loaded).size).toBe(loaded.length);
+  expect(loaded.slice(0, firstPage.length)).toEqual(firstPage);
+  await expect(page).toHaveURL(/cursor=/);
+
+  const browseUrl = page.url();
+  const card = page.getByRole("listitem").last();
+  await card.scrollIntoViewIfNeeded();
+  const scrolledTo = await page.evaluate(() => window.scrollY);
+  expect(scrolledTo).toBeGreaterThan(0);
+  const title = await card.locator(".poster-title").innerText();
+  await card.getByRole("link").first().click();
+
+  await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+  // Normalize first, so the run does not depend on state a previous run left.
+  if (await page.getByRole("button", { name: "In watchlist" }).count()) {
+    await page.getByRole("button", { name: "In watchlist" }).click();
+    await expect(page.getByRole("button", { name: "Watchlist" })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "Watchlist" }).click();
+  await expect(page.getByRole("button", { name: "In watchlist" })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(
+    "changes no recommendation input",
+  );
+
+  await page.goBack();
+  await expect(page).toHaveURL(browseUrl);
+  await expect(page.getByRole("listitem")).toHaveCount(loaded.length);
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(scrolledTo - 200);
+  // The state committed on detail is reflected on the restored card.
+  const restoredCard = page.getByRole("listitem").last();
+  const savedToggle = restoredCard.getByRole("button", {
+    name: `Remove ${title} from watchlist`,
+  });
+  await expect(savedToggle).toBeVisible();
+
+  await savedToggle.click();
+  await expect(
+    restoredCard.getByRole("button", { name: `Add ${title} to watchlist` }),
+  ).toBeVisible();
 });

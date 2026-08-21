@@ -1,0 +1,81 @@
+.catalog-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 94rem;
+  padding: var(--space-4) clamp(1rem, 4vw, 4rem);
+  width: 100%;
+}
+
+.catalog-wordmark {
+  align-items: center;
+  color: var(--text-primary);
+  display: flex;
+  gap: var(--space-3);
+  text-decoration: none;
+}
+
+.catalog-wordmark > span:first-child {
+  align-items: center;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-inverse);
+  display: flex;
+  font-size: 0.72rem;
+  font-weight: 850;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+
+.catalog-wordmark strong,
+.catalog-session strong {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.catalog-wordmark small,
+.catalog-session small {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.68rem;
+}
+
+.catalog-nav {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.catalog-nav a {
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  min-height: 2.75rem;
+  padding: var(--space-3) var(--space-4);
+  text-decoration: none;
+}
+
+.catalog-nav a:hover {
+  color: var(--text-primary);
+}
+
+.catalog-nav a[aria-current="page"] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.catalog-session {
+  align-items: center;
+  display: flex;
+  gap: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  .catalog-session > span:first-child {
+    display: none;
+  }
+}

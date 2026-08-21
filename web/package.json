@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:e2e:update": "playwright test --update-snapshots",
     "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs",
+    "evidence:bundle5c": "node scripts/capture-bundle5c-evidence.mjs",
     "evidence:bundle5d": "node scripts/capture-bundle5d-evidence.mjs"
   },
   "dependencies": {

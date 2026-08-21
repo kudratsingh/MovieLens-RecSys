@@ -1,0 +1,97 @@
+.canonical-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+}
+
+.canonical-state-primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.canonical-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/*
+ * In-flight controls are `aria-disabled`, not `disabled`: a disabled element
+ * cannot hold focus, and returning focus to the control that failed is exactly
+ * what a rollback has to do.
+ */
+.canonical-state-primary button[aria-disabled="true"],
+.canonical-rating-stars button[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.canonical-state-warning {
+  border-left: 2px solid var(--warning);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+  padding-left: var(--space-3);
+}
+
+.canonical-rating {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.canonical-rating legend {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  padding: 0 var(--space-2);
+  text-transform: uppercase;
+}
+
+.canonical-rating-stars {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.canonical-rating-stars > button[aria-pressed] {
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  /* 44px keeps the touch target usable on the mobile profile. */
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0;
+}
+
+.canonical-rating-stars > button[aria-pressed]:hover:not([aria-disabled="true"]),
+.canonical-rating-stars > button.rating-active {
+  color: var(--focus);
+}
+
+.canonical-rating-note {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  margin: var(--space-3) 0 0;
+}
+
+.canonical-state-message {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+  /* Reserved so an announcement never nudges the layout under a pointer. */
+  min-height: 1.25rem;
+}
+
+.canonical-state-message.is-error {
+  color: var(--destructive);
+}

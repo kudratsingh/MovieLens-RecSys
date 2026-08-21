@@ -1,40 +1,66 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
 
-import { EvidenceDetails } from "@/components/discover/featured-movie";
-import { MovieRail } from "@/components/movie/movie-rail";
-import { PosterCard } from "@/components/movie/poster-card";
-import { RatingControl } from "@/components/movie/rating-control";
-import { StateControls } from "@/components/movie/state-controls";
-import { Drawer } from "@/components/ui/drawer";
-import { evidenceFixture, movies } from "@/lib/fixtures/movie-fixtures";
-import type { MovieCard } from "@/lib/movie-types";
-import "./movie-detail.css";
+import { MovieDetailView } from "@/components/movie/movie-detail-view";
+import { ResourceRegion } from "@/components/ui/resource-region";
+import type { MovieDetailResponse } from "@/lib/api";
+import {
+  recordedCatalogItem,
+  RECORDED_CATALOG_USER_ID,
+} from "@/lib/fixtures/catalog-fixtures";
+import { fixtureFailures } from "@/lib/fixtures/movie-fixtures";
+import {
+  fixtureResourceState,
+  injectedResourceFailure,
+  FIXTURE_REQUEST_ID,
+} from "@/lib/resources/fixture-gate";
+import { hasResourceData } from "@/lib/resources/state";
 
 export const metadata: Metadata = { title: "Movie detail" };
 
-export default async function MovieDetailPage({ params }: { params: Promise<{ movieId: string }> }) {
-  const { movieId } = await params;
-  const movie: MovieCard | undefined = movies.find((item) => item.id === Number(movieId));
-  if (!movie) notFound();
+/**
+ * The isolated preview of movie detail, served through 5A's fixture gate.
+ *
+ * The gate is the point: asking for recorded data outside the explicit preview
+ * mode throws rather than returning it, so this page cannot become a quiet
+ * fallback for a failed production read.
+ */
+export default async function MovieDetailPreviewPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ movieId: string }>;
+  searchParams: Promise<{ fail?: string | string[] }>;
+}) {
+  const [{ movieId }, query] = await Promise.all([params, searchParams]);
+  const failures = fixtureFailures(query.fail);
+  const item = /^\d+$/.test(movieId)
+    ? recordedCatalogItem(Number(movieId))
+    : undefined;
+
+  const state =
+    !item || failures.includes("movie-detail")
+      ? injectedResourceFailure("movie-detail", {
+          status: "not-found",
+          reason: "not-found",
+        })
+      : fixtureResourceState<MovieDetailResponse>("movie-detail", {
+          tenant_id: "demo",
+          user_id: RECORDED_CATALOG_USER_ID,
+          item,
+        });
 
   return (
-    <div className="app-page movie-detail-page">
-      <section className="movie-detail" aria-labelledby="movie-title">
-        <div className="movie-detail-poster"><PosterCard movie={movie} priority /></div>
-        <div className="movie-detail-copy">
-          <p className="eyebrow">Movie detail · Recorded metadata</p>
-          <h1 className="display-title" id="movie-title">{movie.title}</h1>
-          <p className="movie-detail-meta">{movie.year ?? "Year unknown"} · {movie.genres.join(" · ") || "Genre unavailable"}</p>
-          <p className="movie-overview">{movie.overview ?? "An overview is not available for this title."}</p>
-          <StateControls initialState={movie.state} title={movie.title} />
-          {movie.state.watched ? <RatingControl initialRating={movie.state.rating} title={movie.title} /> : null}
-          <Drawer buttonLabel="Model details" eyebrow="Technical evidence" title="How this result was served">
-            <EvidenceDetails evidence={evidenceFixture} reason={movie.reason} />
-          </Drawer>
-        </div>
-      </section>
-      <MovieRail movies={movies.filter((item) => item.id !== movie.id).slice(0, 6)} seeAllHref="/ui-preview/browse" title="Keep exploring" />
+    <div className="app-page">
+      <ResourceRegion state={state}>
+        {(detail) => (
+          <MovieDetailView
+            backHref="/ui-preview/browse"
+            item={detail.item}
+            requestId={hasResourceData(state) ? state.requestId : FIXTURE_REQUEST_ID}
+            userId={RECORDED_CATALOG_USER_ID}
+          />
+        )}
+      </ResourceRegion>
     </div>
   );
 }
