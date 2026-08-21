@@ -539,6 +539,17 @@ against a 2 500 ms budget, CLS 0.0000 everywhere, and acknowledgement 12.1–43.
 ms against 100 ms. The acknowledgement margin narrowed from 5.9x locally to 2.3x
 on the runner, which is exactly the sensitivity that kept it advisory.
 
+The same run also caught a defect no local execution could. The browser script
+reported `/quick-picks` with an LCP of 120 ms and a clean CLS — for a route that
+did not exist on that branch. It had redirected, the skip check looked only for
+a 404, and the script therefore measured whatever it landed on and filed the
+numbers under a route that was not there. Locally the same navigation returned a
+real 404 and skipped correctly, which is exactly why it survived to CI. The
+check now compares the landed path against the requested one, and the skip
+reason names which of the two failures it saw. That is the failure mode the skip
+logic existed to prevent, and it took a runner to expose it — which is the
+argument for this whole section in one paragraph.
+
 Both observations predate the persona realignment described above, and the
 budgets were tightened after them by the corroboration rule. The run is quoted
 against the tightened numbers, not the ones in force when it happened: it clears
@@ -575,15 +586,10 @@ assertion:
 
 #### Gaps this note is recording rather than closing
 
-- **A missing route can answer 200.** The first CI run of the browser script
-  reported `/quick-picks` with an LCP of 120 ms and a clean CLS — for a route
-  that did not exist on that branch. It had redirected, the script checked only
-  for a 404, and it therefore measured whatever it landed on and filed the
-  numbers under a route that was not there. Locally the same navigation had
-  answered a real 404 and skipped correctly, which is exactly why it survived to
-  CI. The check now compares the landed path against the requested one, and the
-  skip reason says which of the two failures it saw. This is the failure mode
-  the skip logic existed to prevent, and it took a runner to expose it.
+- **`/quick-picks` cannot be measured from this branch.** The route lands on
+  `main` separately; until this work is rebased onto it the browser report lists
+  the route as skipped, with the reason, rather than implying five routes were
+  covered by four.
 - **There is still no scheduled nightly workflow.** `make demo-load-pages-nightly`
   enforces the budgets over a three-minute window; nothing invokes it on a
   schedule, exactly as `demo-load-nightly` has stood since this ADR was written.
