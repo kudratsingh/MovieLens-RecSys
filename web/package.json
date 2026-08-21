@@ -19,7 +19,8 @@
     "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs",
     "evidence:bundle5b": "node scripts/capture-bundle5b-evidence.mjs",
     "evidence:bundle5c": "node scripts/capture-bundle5c-evidence.mjs",
-    "evidence:bundle5d": "node scripts/capture-bundle5d-evidence.mjs"
+    "evidence:bundle5d": "node scripts/capture-bundle5d-evidence.mjs",
+    "evidence:bundle6": "node scripts/capture-bundle6-evidence.mjs"
   },
   "dependencies": {
     "next": "16.2.6",

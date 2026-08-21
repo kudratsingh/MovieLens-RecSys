@@ -29,7 +29,7 @@ const PROBLEM_HEADLINE: Record<ResourceFailure["status"], string> = {
   "upstream-error": "Could not be loaded",
 };
 
-const REASON_DETAIL: Record<ResourceFailure["reason"], string> = {
+export const REASON_DETAIL: Record<ResourceFailure["reason"], string> = {
   "session-expired": "Sign in again to load it.",
   forbidden:
     "The signed-in actor's role or tenant does not cover this persona's data.",
