@@ -102,24 +102,43 @@ feature, ranker, model, and total latency fields. Cold Start records
 Run the authenticated smoke gate:
 
 ```bash
+make demo-load-quiesce
 make demo-load-smoke
 ```
 
-This starts an internal `api-load` process with development impersonation
-disabled and recreates the feature/model/load processes so each run begins at
-the same process-cache boundary. It obtains a real Keycloak token, concurrently
-warms and validates all four personas across the worker pool, and
-then targets 55 recommendation arrivals/second for 60 seconds with 10 VUs. The
-measured traffic follows a deterministic 7/2/3 warm/cold/mixed ratio. The
-command fails unless all recommendation checks pass, request errors are zero,
-p99 is below 100 ms, and achieved throughput is above 50 requests/second.
+`make demo-load-quiesce` stops the services the gate does not measure — the
+browser demo's `api` and `web` plus the one-shot setup containers — so they
+stop competing for CPU with the ones it does. It stops rather than removes
+them, so `make demo-logs` still explains a failure afterwards, and
+`make demo-up` brings them back. Skipping it is fine on a roomy laptop and is
+the difference between measuring the service and measuring the host on a
+shared CI runner.
+
+`make demo-load-smoke` starts an internal `api-load` process with development
+impersonation disabled and recreates the feature/model/load processes so each
+run begins at the same process-cache boundary. It obtains a real Keycloak
+token, then primes every uvicorn worker for every persona with real
+authenticated requests — the sidecar's feature cache is keyed by user *and*
+candidate set, so this is the only warm-up that pays for itself — and refuses
+to start measuring if the stack is not serving the seeded personas. It then
+targets 55 recommendation arrivals/second for 60 seconds with 10 preallocated
+VUs and a ceiling of 40. The measured traffic follows a deterministic 7/2/3
+warm/cold/mixed ratio. The command fails unless all recommendation checks pass,
+request errors are zero, p99 is below 100 ms, and achieved throughput is above
+50 requests/second. Warm personas must additionally report
+`serving_policy.learned`: a request that quietly degrades to the popularity
+fallback answers HTTP 200, and a latency gate that accepts it is timing the
+wrong answer.
 
 The final JSON object is the compact evidence artifact. It includes p50, p95,
-p99, achieved throughput, request count, error/check rates, and dropped
-iterations. Dropped iterations are kept visible as a capacity signal; the gate
-is based on achieved throughput together with latency, correctness, and error
-thresholds. The accepted 2026-08-20 implementation baseline reported p50 6.31
-ms, p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
+p99, achieved throughput, request count, total test-run duration, error/check
+rates, warm-up cost, dropped iterations, and silent learned fallbacks. Dropped
+iterations are kept visible as a capacity signal; the gate is based on achieved
+throughput together with latency, correctness, and error thresholds. Note that
+k6 divides the request count by the *whole* test-run duration, warm-up
+included, so the reported warm-up cost is spent out of the achieved-rate
+margin. The accepted 2026-08-20 implementation baseline reported p50 6.31 ms,
+p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
 errors, and zero dropped iterations across 3,301 measured requests.
 
 Both local and CI runs use the exact k6 image version pinned in
@@ -148,7 +167,7 @@ non-development environment.
 ```bash
 make demo-logs   # tail the services that explain startup/runtime failures
 make demo-down   # stop containers and preserve demo volumes
-make demo-up     # restart while preserving the database
+make demo-up     # restart while preserving the database (also undoes a quiesce)
 make demo-reset  # delete only movielens-demo volumes, rebuild, migrate, and reseed
 ```
 
@@ -173,9 +192,16 @@ permanently delete the isolated demo Postgres and Keycloak data.
   persistence is part of the request transaction and should fail the request
   rather than silently dropping a row.
 - **The load gate fails:** use the emitted JSON to separate response errors,
-  bad policy/check results, throughput saturation, and a p99 regression. Then
-  inspect `api-load`, `model-server`, `feature-server`, `pgbouncer`, and
-  `postgres` with `make demo-logs`.
+  bad policy/check results, throughput saturation, and a p99 regression. A
+  non-zero `silent_learned_fallbacks` means warm personas were served by the
+  popularity fallback — look for `model-server-unavailable` in `model-server`
+  and `api-load`. A non-zero `dropped_iterations` means the load generator
+  could not start every arrival, so the percentiles understate the tail; treat
+  the run as capacity-limited rather than as evidence either way. A flat p50
+  with a moved p99 is contention, not a regression: check what else is running
+  on the host and confirm `make demo-load-quiesce` ran. Then inspect
+  `api-load`, `model-server`, `feature-server`, `pgbouncer`, and `postgres`
+  with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
   configured, restart with `make demo-down && make demo-up` so FastAPI reads the
   new environment.

@@ -230,6 +230,12 @@ jobs:
       - name: Seed personas, Feast features, and learned artifacts
         run: make demo-seed
 
+      # The runner's 4 vCPUs are shared by every container in the stack. Stop
+      # the ones the gate does not measure so the measured p99 describes the
+      # service rather than contention with the browser demo.
+      - name: Free runner CPU for the measured services
+        run: make demo-load-quiesce
+
       - name: Run 60-second authenticated k6 SLO gate
         run: make demo-load-smoke
 

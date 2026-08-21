@@ -69,6 +69,63 @@ overhead. Moving those blocking operations to the request thread pool reduced
 end-to-end p99 from 117.40 ms to the accepted 41.30 ms without changing the
 arrival target, traffic mix, audit durability, or thresholds.
 
+### 2026-08-21 — measuring the service rather than the runner
+
+The job then began failing about half its runs on unchanged code: p99 between
+219 ms and 299 ms with 70–111 dropped iterations, while p50 stayed at 9–11 ms
+in passing and failing runs alike. A flat p50 with a moving p99 is contention,
+not a regression, and the tail had two distinct populations — a cold burst in
+the first two seconds with `feature_latency_ms` up to 452 ms, and a mid-run
+cluster with `feature_latency_ms` at zero. The measurement, not the service,
+was what varied. Four changes, none of them to a threshold:
+
+- **CPU headroom.** `make demo-load-quiesce` stops the services the gate does
+  not measure — the browser demo's `api` and `web` plus the one-shot setup
+  containers — between `demo-seed` and `demo-load-smoke`. They are stopped, not
+  removed, so `make demo-logs` still explains a failure. The runner's four
+  vCPUs are shared by every container in the stack, and CPU taken by processes
+  outside the measured path arrives as tail latency inside it.
+- **Warm-up in `setup()`.** The load scripts now prime every uvicorn worker for
+  every persona through real authenticated requests before the measured window
+  opens, in rotated rounds of at least two requests per worker per persona.
+  Priming through the endpoint is the only thing that works: the sidecar's
+  feature cache is keyed by `(tenant, user, candidate set)`, so warming a
+  process without warming that key pays nothing. The rounds are budgeted,
+  because k6 divides request counts by the whole test-run duration and `setup()`
+  is part of it — warm-up time is spent out of the achieved-rate threshold's
+  margin, and the summary now reports both so the cost stays visible.
+- **Arrival-rate fidelity.** The smoke profile keeps 10 preallocated VUs but
+  raises the ceiling to 40 (nightly: 100 and 400). At the old ceiling of 10 the
+  executor dropped arrivals it could not start, which removed the slowest
+  requests from the percentiles and depressed the achieved rate — the gate was
+  quietly measuring less as the service got slower. Headroom makes the
+  measurement stricter. Dropped iterations remain reported and deliberately
+  advisory rather than a threshold: they also occur when the load generator
+  itself is descheduled, which is a property of the host, not of the service.
+- **Learned serving is asserted, not assumed.** A warm persona whose sidecar
+  call exceeds `model_server_timeout_seconds` degrades to the popularity
+  fallback and answers HTTP 200. That is fast and wrong, and a latency gate that
+  accepts it is measuring the wrong thing. Warm traffic now fails `checks` when
+  `serving_policy.learned` is not true, and a `silent_learned_fallbacks` counter
+  names the failure in the summary and in Prometheus.
+
+Local runs against a 1-CPU-capped `api-load` and `model-server` — the
+reproduction the investigation used for the runner — confirm the cold-burst
+population is gone: the largest `feature_latency_ms` inside the measured window
+falls from 410 ms to under 1 ms. They also show that a `--cpus` cap is a harsher
+environment than a shared runner rather than a faithful model of one: the cgroup
+counters record dozens of CFS throttle events per run, each stalling every
+thread in the container until the next 100 ms period. Capped numbers are a
+stress bound, not a runner prediction.
+
+`model_server_timeout_seconds` stays at 0.5. Nothing in the warmed steady state
+tripped it — the sidecar's own p99 stayed near 12 ms even under the cap — and
+raising it would only widen the window in which the API waits on a sidecar that
+has already blown the end-to-end budget.
+
+No threshold changed: p99 < 100 ms, zero request errors, check rate 1, achieved
+rate above 50.
+
 ## Rationale
 
 1. **Purpose-built for CI/CD load testing is the argument.** k6 was designed by Grafana Labs specifically to fit into the shape non-negotiable #11 is asking for: a scriptable load test with declarative thresholds that a CI job can wait on and fail against. Threshold declarations *are* the pass/fail signal — you write `p(99)<100` in the script and CI stops on breach without a separate assertion harness. Locust's dashboard-first workflow was designed for an operator watching a graph, not for a CI job asserting an inequality; you can bolt CI-shape usage onto Locust with `--headless --check` and post-run parsing, but that's adaptation, not fit.
@@ -96,7 +153,7 @@ arrival target, traffic mix, audit durability, or thresholds.
 ## Consequences
 
 - **New source tree.** `synthetic/load/` contains `recommendations.js`, `lib/auth.js`, and `thresholds.js`. The workload mixes warm, cold, and mixed traffic in a deterministic 7/2/3 ratio per 12 arrivals and validates policy, non-empty results, and an auditable request ID.
-- **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, and invokes `make demo-load-smoke`. That target recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary. k6 threshold exit status is the job result; serving logs are uploaded on failure.
+- **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, quiesces the unmeasured services with `make demo-load-quiesce`, and invokes `make demo-load-smoke`. That target recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary. k6 threshold exit status is the job result; serving logs are uploaded on failure.
 - **Larger run.** `make demo-load-nightly` selects the five-minute, 100-VU profile locally. A scheduled staging workflow remains pending on the environment-specific Compose bundle, so this ADR does not claim a scheduler that does not yet exist.
 - **k6 container in dev tools.** `make demo-load-smoke` and CI both resolve the image tag from `infra/ci/k6-version`; no host `brew install` is required.
 - **Prometheus config.** Prometheus's `remote_write` receiver is enabled in the compose stack; k6's `experimental-prometheus-rw` output points at it. The receiver is *not* enabled in production compose stacks — synthetic-load metrics are dev/CI-only, and mixing them with production metrics would pollute the tsdb.
