@@ -3,29 +3,21 @@
 /**
  * Server actions for the Quick Picks route.
  *
- * The queue refetch and the seed-title lookup are reads the browser cannot make
- * for itself — the API access token lives in the server session. They are
- * exposed as bound server actions rather than as new BFF routes because these
- * reads belong to this route: Discover owns the shape of a shared
- * recommendations route, and claiming that file here would put two owners on
- * one contract.
+ * Refetching the queue is one read the browser cannot make for itself: the
+ * recommendations response and the prediction audit that explains it have to be
+ * sequenced server-side, because the audit row does not exist until the
+ * recommendations request has committed it. Discover's shared BFF route serves
+ * recommendations alone, so it is not a drop-in for that pair.
  *
- * Both delegate to the 5A boundary, so authorization, timeouts, request-ID
+ * It delegates to the 5A boundary, so authorization, timeouts, request-ID
  * propagation, and payload validation are the same as every other live read.
  */
 
-import { loadQuickPickQueue, loadQuickPickSeedTitle } from "@/lib/quick-picks/server";
+import { loadQuickPickQueue } from "@/lib/quick-picks/server";
 import type { QuickPickQueuePayload } from "@/lib/quick-picks/transport";
 
 export async function refreshQuickPickQueue(
   userId: number,
 ): Promise<QuickPickQueuePayload> {
   return loadQuickPickQueue(userId);
-}
-
-export async function resolveQuickPickSeedTitle(
-  userId: number,
-  movieId: number,
-): Promise<string | null> {
-  return loadQuickPickSeedTitle(userId, movieId);
 }

@@ -99,9 +99,8 @@ describe("the decision card", () => {
     for (const name of [/Not for me/, /Watchlist/, /Watched/]) {
       expect(screen.getByRole("button", { name })).toBeEnabled();
     }
-    expect(
-      screen.getByRole("button", { name: /Mark Perfect Blue watched and rate it 4 stars/ }),
-    ).toBeEnabled();
+    // The shared star control: the same accessible name as detail and Library.
+    expect(screen.getByRole("button", { name: "4 stars for Perfect Blue" })).toBeEnabled();
     expect(screen.getByRole("link", { name: "Exit to Browse" })).toHaveAttribute(
       "href",
       "/browse?user=900000101",
@@ -174,6 +173,19 @@ describe("progress toward learned serving", () => {
     await waitFor(() =>
       expect(screen.getByText("3 of 5 positive watched signals")).toBeVisible(),
     );
+  });
+
+  it("treats a star as one watched decision rather than a second step", async () => {
+    const user = userEvent.setup();
+    renderDeck();
+
+    await user.click(screen.getByRole("button", { name: "4 stars for Perfect Blue" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("3 of 5 positive watched signals")).toBeVisible(),
+    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love");
+    expect(screen.getByRole("status")).toHaveTextContent("Perfect Blue: watched saved.");
   });
 
   it("claims learned serving only when the returned policy reports it", () => {

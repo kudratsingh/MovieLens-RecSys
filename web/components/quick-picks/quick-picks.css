@@ -176,51 +176,19 @@
   opacity: 0.8;
 }
 
-.quick-pick-rating {
+/* The shared rating control sits in a panel here so the combined
+   "watched with a rating" action reads as one decision, not a stray field. */
+.quick-pick-card .rating-control {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: var(--space-4);
 }
 
-.quick-pick-rating legend {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  padding: 0 var(--space-2);
-  text-transform: uppercase;
+/* The panel gives the legend a border to sit on, so it needs room around it. */
+.quick-pick-card .rating-control legend {
+  padding-inline: var(--space-2);
 }
 
-.quick-pick-stars {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.quick-pick-star {
-  align-items: center;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  justify-content: center;
-  min-height: 2.75rem;
-  min-width: 2.75rem;
-}
-
-.quick-pick-star:hover {
-  border-color: var(--accent);
-  color: var(--accent-strong);
-}
-
-.quick-pick-rating:disabled .quick-pick-star {
-  cursor: wait;
-  opacity: 0.52;
-}
-
-.quick-pick-rating-note,
 .quick-pick-gesture-hint {
   color: var(--text-muted);
   font-size: 0.8rem;
@@ -382,7 +350,7 @@
   .quick-pick-copy > .quick-pick-reason,
   .quick-pick-copy > .quick-pick-evidence,
   .quick-pick-copy > .quick-pick-actions,
-  .quick-pick-copy > .quick-pick-rating,
+  .quick-pick-copy > .rating-control,
   .quick-pick-copy > .quick-pick-gesture-hint {
     grid-column: 1 / -1;
   }
@@ -415,8 +383,7 @@
     background: Highlight;
   }
 
-  .quick-pick-star,
-  .quick-pick-rating,
+  .quick-pick-card .rating-control,
   .quick-pick-exhausted,
   .quick-pick-progress {
     border: 1px solid CanvasText;

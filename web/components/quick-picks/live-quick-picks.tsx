@@ -21,21 +21,19 @@ export function LiveQuickPicks({
   browseHref,
   initial,
   loadQueue,
-  loadSeedTitle,
   personaLabel,
   userId,
 }: {
   browseHref: string;
   initial: QuickPickQueuePayload;
-  /** Bound server actions; the access token never leaves the server. */
+  /** Bound server action; the access token never leaves the server. */
   loadQueue: () => Promise<QuickPickQueuePayload>;
-  loadSeedTitle: (movieId: number) => Promise<string | null>;
   personaLabel: string;
   userId: number;
 }) {
   const transport = useMemo(
-    () => createLiveQuickPickTransport({ loadQueue, loadSeedTitle, userId }),
-    [loadQueue, loadSeedTitle, userId],
+    () => createLiveQuickPickTransport({ loadQueue, userId }),
+    [loadQueue, userId],
   );
 
   // The persona's display name is nice-to-have context, not part of the

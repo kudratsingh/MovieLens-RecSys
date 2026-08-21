@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { LiveQuickPicks } from "@/components/quick-picks/live-quick-picks";
 import { auth } from "@/auth";
 import { loadQuickPickQueue } from "@/lib/quick-picks/server";
-import { refreshQuickPickQueue, resolveQuickPickSeedTitle } from "./actions";
+import { refreshQuickPickQueue } from "./actions";
 
 export const metadata: Metadata = {
   title: "Quick picks",
@@ -33,7 +33,6 @@ export default async function QuickPicksPage({
       initial={initial}
       // Bound on the server so a caller cannot retarget the read by argument.
       loadQueue={refreshQuickPickQueue.bind(null, userId)}
-      loadSeedTitle={resolveQuickPickSeedTitle.bind(null, userId)}
       personaLabel={`Demo persona ${userId}`}
       userId={userId}
     />

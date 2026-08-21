@@ -18,7 +18,6 @@ import { QUICK_PICK_AUDIT_LOOKBACK, QUICK_PICK_QUEUE_LIMIT } from "@/lib/quick-p
 import { EMPTY_EVIDENCE, quickPickEvidence } from "@/lib/quick-picks/evidence";
 import type { QuickPickQueuePayload } from "@/lib/quick-picks/transport";
 import {
-  loadMovieDetail,
   loadRecommendationAudits,
   loadRecommendations,
 } from "@/lib/resources/server";
@@ -46,13 +45,4 @@ export async function loadQuickPickQueue(
       ? quickPickEvidence(audits.data, queue.requestId)
       : EMPTY_EVIDENCE,
   };
-}
-
-export async function loadQuickPickSeedTitle(
-  userId: number,
-  movieId: number,
-): Promise<string | null> {
-  const session = await auth();
-  const detail = await loadMovieDetail(userId, movieId, { session });
-  return hasResourceData(detail) ? detail.data.item.title : null;
 }

@@ -30,6 +30,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { RatingControl } from "@/components/movie/rating-control";
 import { Icon } from "@/components/ui/icons";
 import { REASON_DETAIL, ResourceProblem } from "@/components/ui/resource-region";
 import type { RecommendationResponse } from "@/lib/api";
@@ -66,7 +67,6 @@ import {
 } from "@/lib/resources/state";
 import "./quick-picks.css";
 
-const RATING_STEPS = [1, 2, 3, 4, 5] as const;
 const DECISION_ORDER = ["dismiss", "watchlist", "watched"] as const;
 
 const CARD_REGION_ID = "quick-pick-card";
@@ -507,25 +507,19 @@ function DecisionCard({
           ))}
         </div>
 
-        <fieldset className="quick-pick-rating" disabled={busy}>
-          <legend>Mark watched with an optional rating</legend>
-          <div className="quick-pick-stars">
-            {RATING_STEPS.map((value) => (
-              <button
-                aria-label={`Mark ${card.title} watched and rate it ${value} ${value === 1 ? "star" : "stars"}`}
-                className="quick-pick-star"
-                key={value}
-                onClick={() => onAction("watched", "button", value)}
-                type="button"
-              >
-                <Icon name="star" />
-              </button>
-            ))}
-          </div>
-          <p className="quick-pick-rating-note">
-            {QUICK_PICK_SEMANTICS.watched.modelEffect}
-          </p>
-        </fieldset>
+        {/*
+          The shared control, so a star is named and sized the same here as on
+          detail, Discover, and Library. The note carries what is specific to
+          this route: one press is one write that marks watched *and* rates.
+        */}
+        <RatingControl
+          busy={busy}
+          idPrefix="quick-pick-rating"
+          note={`A star saves this as watched and records the rating in one write. ${QUICK_PICK_SEMANTICS.watched.modelEffect}`}
+          onRate={(value) => onAction("watched", "button", value)}
+          rating={null}
+          title={card.title}
+        />
 
         <p className="quick-pick-gesture-hint">
           Swipe left for not for me, right for watchlist, up for watched. Every gesture has a
