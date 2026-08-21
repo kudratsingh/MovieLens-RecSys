@@ -16,6 +16,8 @@ while keeping the ML system inspectable through progressive disclosure.
   release blockers, proposed API boundaries, and frontend-safe claims.
 - [Generated API contract](../api/README.md) — committed OpenAPI, generated
   TypeScript types, stable operation IDs, and CI drift checks.
+- [Durable feedback and Library](library-feedback-contract.md) — migration,
+  transition, pagination, idempotency, and truthful taste-summary contracts.
 - [Testing strategy](testing-strategy.md) — research protocol, automated test
   pyramid, responsive evidence matrix, and the final PASS/HOLD finish gate.
 - [Baseline evidence](baseline-evidence.md) — current implementation evidence and

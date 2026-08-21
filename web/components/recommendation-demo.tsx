@@ -267,7 +267,7 @@ function Dashboard({
             {history.items.map((movie) => (
               <li className="flex gap-4 py-4" key={`${movie.movie_id}-${movie.timestamp}`}>
                 <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-white/[0.06] font-mono text-xs text-amber-300">
-                  {movie.rating.toFixed(1)}
+                  {movie.rating === null ? "✓" : movie.rating.toFixed(1)}
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{movie.title}</p>
@@ -317,7 +317,7 @@ function RatingStudio({
           onClick={() => void onReset()}
           type="button"
         >
-          Reset this profile
+          Clear ratings
         </button>
       </div>
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">

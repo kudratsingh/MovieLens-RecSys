@@ -21,3 +21,13 @@ The artifact includes stable operation IDs, the Keycloak bearer-security
 scheme, shared error responses, and request/response constraints. Generated
 frontend types must consume this file rather than importing Python models or
 maintaining a separate handwritten interpretation.
+
+Bundle 2 adds the selected-persona Library and feedback resources:
+
+- `GET /users/{user_id}/library` with bounded, filter-bound keyset cursors;
+- `GET /users/{user_id}/taste-profile` labeled `live-ratings-v1`;
+- independent `watched`, `rating`, `watchlist`, and `dismissal` PUT/DELETE
+  resources; and
+- canonical mutation responses containing a revision and idempotency request
+  ID. Rating deletion preserves watched state; deleting watched state is the
+  separate history-removal resource.

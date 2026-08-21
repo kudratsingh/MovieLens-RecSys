@@ -48,6 +48,17 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
         "listDemoCatalog",
         "setMovieRating",
         "resetDemoRatings",
+        "getMovieState",
+        "listLibrary",
+        "getLiveRatingsTasteSummary",
+        "setMovieWatched",
+        "removeMovieFromHistory",
+        "setMovieStateRating",
+        "deleteMovieStateRating",
+        "addMovieToWatchlist",
+        "removeMovieFromWatchlist",
+        "dismissMovie",
+        "undoMovieDismissal",
     }
 
 
@@ -57,6 +68,28 @@ def test_rating_schema_exposes_half_star_and_range_constraints() -> None:
     assert rating["minimum"] == 0.5
     assert rating["maximum"] == 5.0
     assert rating["multipleOf"] == 0.5
+
+
+def test_library_contract_bounds_pages_and_exposes_opaque_cursor() -> None:
+    operation = _schema()["paths"]["/users/{user_id}/library"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert parameters["limit"]["schema"]["minimum"] == 1
+    assert parameters["limit"]["schema"]["maximum"] == 50
+    assert parameters["cursor"]["schema"]["anyOf"][0]["maxLength"] == 1024
+    assert operation["operationId"] == "listLibrary"
+
+
+def test_feedback_mutations_accept_idempotency_and_revision_contracts() -> None:
+    operation = _schema()["paths"]["/users/{user_id}/movies/{movie_id}/rating"]["put"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert parameters["Idempotency-Key"]["in"] == "header"
+    assert parameters["Idempotency-Key"]["schema"]["anyOf"][0]["format"] == "uuid"
+    assert parameters["expected_revision"]["schema"]["anyOf"][0]["minimum"] == 0
+    assert operation["responses"]["409"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
 
 
 @pytest.mark.parametrize("rating", [0.5, 1.0, 4.5, 5.0])

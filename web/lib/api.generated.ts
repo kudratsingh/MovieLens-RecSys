@@ -128,6 +128,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users/{user_id}/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Library
+         * @description Return one bounded keyset page plus counts for all Library tabs.
+         */
+        get: operations["listLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}/dismissal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Dismissal */
+        put: operations["dismissMovie"];
+        post?: never;
+        /** Delete Dismissal */
+        delete: operations["undoMovieDismissal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}/rating": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set State Rating */
+        put: operations["setMovieStateRating"];
+        post?: never;
+        /** Delete State Rating */
+        delete: operations["deleteMovieStateRating"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Movie State
+         * @description Return one selected persona's canonical live state for a movie.
+         */
+        get: operations["getMovieState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}/watched": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Watched */
+        put: operations["setMovieWatched"];
+        post?: never;
+        /** Remove From History */
+        delete: operations["removeMovieFromHistory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/movies/{movie_id}/watchlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Watchlist */
+        put: operations["addMovieToWatchlist"];
+        post?: never;
+        /** Delete Watchlist */
+        delete: operations["removeMovieFromWatchlist"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/{user_id}/ratings": {
         parameters: {
             query?: never;
@@ -140,7 +252,7 @@ export interface paths {
         post?: never;
         /**
          * Reset Ratings
-         * @description Clear a demo persona so the cold-start experience can be rebuilt.
+         * @description Compatibility bulk rating clear; watched history is preserved.
          */
         delete: operations["resetDemoRatings"];
         options?: never;
@@ -180,6 +292,26 @@ export interface paths {
          * @description Run learned two-stage serving or an explicit popularity fallback.
          */
         get: operations["recommendMovies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/taste-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Taste Profile
+         * @description Summarize live ratings without claiming deployed-model attribution.
+         */
+        get: operations["getLiveRatingsTasteSummary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -260,9 +392,32 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** CursorPageResponse */
+        CursorPageResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
         /** ErrorResponse */
         ErrorResponse: {
             detail: string;
+        };
+        /** FeedbackMutationResponse */
+        FeedbackMutationResponse: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "changed" | "no_change";
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            state: components["schemas"]["MovieStateResponse"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -276,7 +431,7 @@ export interface components {
             /** Movie Id */
             movie_id: number;
             /** Rating */
-            rating: number;
+            rating: number | null;
             /** Timestamp */
             timestamp: number;
             /** Title */
@@ -290,6 +445,74 @@ export interface components {
             tenant_id: string;
             /** User Id */
             user_id: number;
+        };
+        /** LibraryCountsResponse */
+        LibraryCountsResponse: {
+            /** History */
+            history: number;
+            /** Rated */
+            rated: number;
+            /** Watchlist */
+            watchlist: number;
+        };
+        /** LibraryMovieResponse */
+        LibraryMovieResponse: {
+            /** Genres */
+            genres: string[];
+            /** Movie Id */
+            movie_id: number;
+            state: components["schemas"]["MovieStateResponse"];
+            /** Title */
+            title: string;
+        };
+        /** LibraryResponse */
+        LibraryResponse: {
+            counts: components["schemas"]["LibraryCountsResponse"];
+            /** Items */
+            items: components["schemas"]["LibraryMovieResponse"][];
+            page: components["schemas"]["CursorPageResponse"];
+            /** Query */
+            query: string | null;
+            /**
+             * Sort
+             * @enum {string}
+             */
+            sort: "recent" | "title" | "rating";
+            /**
+             * Tab
+             * @enum {string}
+             */
+            tab: "rated" | "watchlist" | "history";
+            /** Tenant Id */
+            tenant_id: string;
+            /** User Id */
+            user_id: number;
+        };
+        /** MovieStateResponse */
+        MovieStateResponse: {
+            /** Dismissed At */
+            dismissed_at: string | null;
+            /** Movie Id */
+            movie_id: number;
+            /** Rating */
+            rating: number | null;
+            /** Rating Updated At */
+            rating_updated_at: string | null;
+            /** Revision */
+            revision: number;
+            /** Tenant Id */
+            tenant_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** User Id */
+            user_id: number;
+            /** Watched At */
+            watched_at: string | null;
+            /** Watchlisted At */
+            watchlisted_at: string | null;
         };
         /** OnlineUserFeaturesResponse */
         OnlineUserFeaturesResponse: {
@@ -434,6 +657,40 @@ export interface components {
             /** User Id */
             user_id: number;
         };
+        /** TasteGenreResponse */
+        TasteGenreResponse: {
+            /** Average Rating */
+            average_rating: number;
+            /** Genre */
+            genre: string;
+            /** Rated Count */
+            rated_count: number;
+        };
+        /** TasteSummaryResponse */
+        TasteSummaryResponse: {
+            /** Average Rating */
+            average_rating: number | null;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Rating Count */
+            rating_count: number;
+            /**
+             * Source
+             * @constant
+             */
+            source: "live-ratings-v1";
+            /** Tenant Id */
+            tenant_id: string;
+            /** Top Genres */
+            top_genres: components["schemas"]["TasteGenreResponse"][];
+            /** User Id */
+            user_id: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -496,6 +753,15 @@ export interface operations {
                     "application/json": components["schemas"]["PersonaResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -507,6 +773,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -547,6 +831,15 @@ export interface operations {
                     "application/json": components["schemas"]["RecommendationAuditResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -558,6 +851,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -605,6 +916,15 @@ export interface operations {
                     "application/json": components["schemas"]["CatalogResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -616,6 +936,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -663,6 +1001,15 @@ export interface operations {
                     "application/json": components["schemas"]["OnlineUserFeaturesResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -674,6 +1021,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -723,6 +1088,15 @@ export interface operations {
                     "application/json": components["schemas"]["HistoryResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -734,6 +1108,925 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listLibrary: {
+        parameters: {
+            query?: {
+                tab?: "rated" | "watchlist" | "history";
+                sort?: "recent" | "title" | "rating";
+                limit?: number;
+                cursor?: string | null;
+                q?: string | null;
+            };
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    dismissMovie: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    undoMovieDismissal: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setMovieStateRating: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RatingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteMovieStateRating: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getMovieState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovieStateResponse"] | null;
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setMovieWatched: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    removeMovieFromHistory: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    addMovieToWatchlist: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    removeMovieFromWatchlist: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                user_id: number;
+                movie_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -781,6 +2074,15 @@ export interface operations {
                     "application/json": components["schemas"]["RatingMutationResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -792,6 +2094,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -844,6 +2164,15 @@ export interface operations {
                     "application/json": components["schemas"]["RatingMutationResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -855,6 +2184,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -904,6 +2251,15 @@ export interface operations {
                     "application/json": components["schemas"]["RecommendationResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -915,6 +2271,109 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getLiveRatingsTasteSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TasteSummaryResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -960,6 +2419,15 @@ export interface operations {
                     "application/json": components["schemas"]["CurrentActorResponse"];
                 };
             };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Missing or invalid access token */
             401: {
                 headers: {
@@ -971,6 +2439,24 @@ export interface operations {
             };
             /** @description Authenticated actor is not authorized */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

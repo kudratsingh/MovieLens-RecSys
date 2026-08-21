@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import Connection, Engine, bindparam, create_engine, text
+from sqlalchemy import JSON, Connection, Engine, bindparam, create_engine, text
 
 from src.config import Settings
 
@@ -200,6 +202,10 @@ def _replace_seed_rows(
         'DELETE FROM ratings WHERE tenant_id = :tenant_id AND "userId" IN :user_ids'
     ).bindparams(bindparam("user_ids", expanding=True))
     connection.execute(delete_ratings, {"tenant_id": tenant_id, "user_ids": user_ids})
+    delete_state = text(
+        "DELETE FROM user_movie_state WHERE tenant_id = :tenant_id AND user_id IN :user_ids"
+    ).bindparams(bindparam("user_ids", expanding=True))
+    connection.execute(delete_state, {"tenant_id": tenant_id, "user_ids": user_ids})
     connection.execute(
         text("DELETE FROM demo_personas WHERE tenant_id = :tenant_id"),
         {"tenant_id": tenant_id},
@@ -221,6 +227,75 @@ def _replace_seed_rows(
                 """),
             rating_rows,
         )
+        state_rows = [
+            {
+                **row,
+                "watched_at": datetime.fromtimestamp(_fixture_int(row["timestamp"]), UTC),
+            }
+            for row in rating_rows
+        ]
+        connection.execute(
+            text("""
+                INSERT INTO user_movie_state (
+                    tenant_id, user_id, movie_id, watched_at, rating,
+                    rating_updated_at, state_version, updated_at
+                ) VALUES (
+                    :tenant_id, :user_id, :movie_id, :watched_at, :rating,
+                    :watched_at, 1, :watched_at
+                )
+                """),
+            state_rows,
+        )
+        insert_seed_event = text("""
+            INSERT INTO user_feedback_events (
+                tenant_id, event_id, actor_user_id, user_id, movie_id, action,
+                old_value, new_value, state_version, outcome, created_at
+            ) VALUES (
+                :tenant_id, :event_id, 'seed:demo-personas', :user_id, :movie_id,
+                'rating_imported', NULL, :new_value, 1, 'backfilled', :created_at
+            )
+            ON CONFLICT (tenant_id, event_id) DO NOTHING
+            """).bindparams(bindparam("new_value", type_=JSON))
+        connection.execute(
+            insert_seed_event,
+            [
+                {
+                    "tenant_id": str(row["tenant_id"]),
+                    "event_id": str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"movielens-demo:{row['tenant_id']}:{row['user_id']}:{row['movie_id']}",
+                        )
+                    ),
+                    "user_id": _fixture_int(row["user_id"]),
+                    "movie_id": _fixture_int(row["movie_id"]),
+                    "new_value": {
+                        "rating": _fixture_float(row["rating"]),
+                        "watched_at": _fixture_datetime(row["watched_at"]).isoformat(),
+                    },
+                    "created_at": _fixture_datetime(row["watched_at"]),
+                }
+                for row in state_rows
+            ],
+        )
+
+
+def _fixture_int(value: object) -> int:
+    if isinstance(value, (str, int, float)):
+        return int(value)
+    raise TypeError(f"fixture value is not integer-compatible: {value!r}")
+
+
+def _fixture_float(value: object) -> float:
+    if isinstance(value, (str, int, float)):
+        return float(value)
+    raise TypeError(f"fixture value is not numeric: {value!r}")
+
+
+def _fixture_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    raise TypeError(f"fixture value is not a datetime: {value!r}")
 
 
 def main() -> None:

@@ -27,6 +27,24 @@ def _fixture_engine() -> Engine:
                 "PRIMARY KEY (tenant_id, user_id))"
             )
         )
+        connection.execute(
+            text(
+                "CREATE TABLE user_movie_state ("
+                "tenant_id TEXT, user_id INTEGER, movie_id INTEGER, watched_at DATETIME, "
+                "rating FLOAT, rating_updated_at DATETIME, watchlisted_at DATETIME, "
+                "dismissed_at DATETIME, state_version INTEGER, updated_at DATETIME, "
+                "PRIMARY KEY (tenant_id, user_id, movie_id))"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE user_feedback_events ("
+                "tenant_id TEXT, event_id TEXT, actor_user_id TEXT, user_id INTEGER, "
+                "movie_id INTEGER, action TEXT, old_value JSON, new_value JSON, "
+                "state_version INTEGER, outcome TEXT, created_at DATETIME, "
+                "PRIMARY KEY (tenant_id, event_id))"
+            )
+        )
     return engine
 
 
@@ -77,11 +95,19 @@ def test_seed_is_idempotent_and_preserves_cold_start() -> None:
                 "WHERE tenant_id = 'demo' AND \"userId\" = 900000104"
             )
         )
+        state_count = connection.scalar(
+            text("SELECT COUNT(*) FROM user_movie_state WHERE tenant_id = 'demo'")
+        )
+        event_count = connection.scalar(
+            text("SELECT COUNT(*) FROM user_feedback_events WHERE tenant_id = 'demo'")
+        )
 
     assert first == second
     assert persona_count == first.persona_count
     assert rating_count == first.persona_rating_count + first.background_rating_count
     assert cold_rating_count == 0
+    assert state_count == rating_count
+    assert event_count == rating_count
     engine.dispose()
 
 

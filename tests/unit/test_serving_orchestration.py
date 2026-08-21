@@ -80,6 +80,20 @@ def _add_catalog_and_history(
                 "timestamp": 2000 + movie_id,
             },
         )
+        connection.execute(
+            text("""
+                INSERT INTO user_movie_state (
+                    tenant_id, user_id, movie_id, watched_at, rating,
+                    rating_updated_at, state_version, updated_at
+                ) VALUES ('demo', :user_id, :movie_id, :timestamp, 4.0,
+                          :timestamp, 1, :timestamp)
+                """),
+            {
+                "user_id": user_id,
+                "movie_id": movie_id,
+                "timestamp": 2000 + movie_id,
+            },
+        )
 
 
 def _make_existing_user_warm(connection: Connection) -> None:
@@ -100,6 +114,15 @@ def _make_existing_user_warm(connection: Connection) -> None:
             "('demo', 10, 6, 4.0, 302)"
         )
     )
+    connection.execute(text("""
+            INSERT INTO user_movie_state (
+                tenant_id, user_id, movie_id, watched_at, rating,
+                rating_updated_at, state_version, updated_at
+            ) VALUES
+                ('demo', 10, 4, 300, 4.0, 300, 1, 300),
+                ('demo', 10, 5, 301, 4.0, 301, 1, 301),
+                ('demo', 10, 6, 302, 4.0, 302, 1, 302)
+            """))
 
 
 @pytest.mark.asyncio

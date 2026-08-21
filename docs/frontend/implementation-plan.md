@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0 and 1 complete; Bundles 2–4 in progress
+**Status:** Bundles 0–2 complete; Bundles 3–4 in progress
 
 **Last updated:** 2026-08-21
 
@@ -106,6 +106,23 @@ and failure are pinned by server-token tests. The authenticated baseline matrix
 is stored under [`evidence/baseline/`](evidence/baseline/).
 
 ## Bundle 2 — Durable feedback and Library foundation
+
+**Progress as of 2026-08-21:**
+
+- [x] Add forced-RLS `user_movie_state` and append-only `user_feedback_events`.
+- [x] Backfill latest legacy ratings without rewriting imported MovieLens rows.
+- [x] Enforce composite identity, rating/state constraints, tenant-leading
+  indexes, least-privilege grants, and state revisions.
+- [x] Implement idempotent watched/rating/watchlist/dismissal mutations with
+  canonical replay and optimistic-revision conflicts.
+- [x] Separate rating deletion from destructive watched-history removal.
+- [x] Add cursor-paginated Rated, Watchlist, and History Library resources.
+- [x] Add `live-ratings-v1` taste summaries with non-model attribution copy.
+- [x] Build the authenticated selected-persona `/library` tabs, counts, URL
+  sort/filter, optimistic reconciliation, rollback, empty/error states, and
+  focus recovery.
+- [x] Move live history, seen filtering, and demo rating overlays to the new
+  projection while retaining raw ratings for source/training provenance.
 
 **Backend:**
 

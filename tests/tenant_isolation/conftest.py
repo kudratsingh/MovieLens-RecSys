@@ -59,6 +59,20 @@ def tenant_canary_rows() -> Generator[None, None, None]:
     engine = create_engine(Settings().database_url)
     with engine.begin() as connection:
         connection.execute(
+            text(
+                "DELETE FROM user_feedback_events "
+                "WHERE user_id IN (:canary_user, 987654323, 987654324)"
+            ),
+            {"canary_user": CANARY_USER_ID},
+        )
+        connection.execute(
+            text(
+                "DELETE FROM user_movie_state "
+                "WHERE user_id IN (:canary_user, 987654323, 987654324)"
+            ),
+            {"canary_user": CANARY_USER_ID},
+        )
+        connection.execute(
             text("DELETE FROM recommendation_audits " "WHERE user_id = :user_id"),
             {"user_id": CANARY_USER_ID},
         )
@@ -101,6 +115,23 @@ def tenant_canary_rows() -> Generator[None, None, None]:
         )
         connection.execute(
             text("""
+                INSERT INTO user_movie_state (
+                    tenant_id, user_id, movie_id, watched_at, rating,
+                    rating_updated_at, state_version, updated_at
+                ) VALUES
+                    ('default', :user_id, 900000001, to_timestamp(2000000001), 5.0,
+                     to_timestamp(2000000001), 1, to_timestamp(2000000001)),
+                    ('demo', :user_id, 900000002, to_timestamp(2000000002), 5.0,
+                     to_timestamp(2000000002), 1, to_timestamp(2000000002)),
+                    ('default', 987654323, 900000003, to_timestamp(2000000003), 4.5,
+                     to_timestamp(2000000003), 1, to_timestamp(2000000003)),
+                    ('demo', 987654324, 900000004, to_timestamp(2000000004), NULL,
+                     NULL, 1, to_timestamp(2000000004))
+                """),
+            {"user_id": CANARY_USER_ID},
+        )
+        connection.execute(
+            text("""
                 INSERT INTO demo_personas
                     (tenant_id, user_id, slug, display_name, description, sort_order, synthetic)
                 VALUES
@@ -113,6 +144,20 @@ def tenant_canary_rows() -> Generator[None, None, None]:
     yield
 
     with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM user_feedback_events "
+                "WHERE user_id IN (:canary_user, 987654323, 987654324)"
+            ),
+            {"canary_user": CANARY_USER_ID},
+        )
+        connection.execute(
+            text(
+                "DELETE FROM user_movie_state "
+                "WHERE user_id IN (:canary_user, 987654323, 987654324)"
+            ),
+            {"canary_user": CANARY_USER_ID},
+        )
         connection.execute(
             text("DELETE FROM recommendation_audits " "WHERE user_id = :user_id"),
             {"user_id": CANARY_USER_ID},

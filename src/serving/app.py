@@ -10,6 +10,10 @@ The authenticated surface currently includes:
   * ``GET /users/{user_id}/history`` — tenant-scoped recent history.
   * ``GET /personas`` — tenant-scoped named demo identities.
   * ``GET /users/{user_id}/catalog`` — rateable demo catalog.
+  * ``GET /users/{user_id}/library`` — cursor-paginated durable movie state.
+  * ``GET /users/{user_id}/taste-profile`` — live, non-model rating summary.
+  * ``PUT|DELETE /users/{user_id}/movies/{movie_id}/*`` — idempotent watched,
+    rating, watchlist, and dismissal resources.
   * ``PUT /users/{user_id}/ratings/{movie_id}`` — RLS-scoped feedback write.
   * ``DELETE /users/{user_id}/ratings`` — reset one demo profile.
 
@@ -26,18 +30,18 @@ and the process exits non-zero.
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
-from uuid import UUID
+from typing import Any, Literal
+from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, create_engine
+from sqlalchemy import Connection, create_engine, text
+from starlette.concurrency import run_in_threadpool
 
 from src.auth import AuthMiddleware, JwksCache
 from src.config import Settings
@@ -47,6 +51,17 @@ from src.serving.audit import (
     RecommendationAuditService,
 )
 from src.serving.features import FeatureServerClient
+from src.serving.feedback import (
+    FeedbackAction,
+    FeedbackService,
+    IdempotencyConflictError,
+    InvalidLibraryCursorError,
+    InvalidStateTransitionError,
+    LibraryPage,
+    MovieState,
+    MutationResult,
+    StateRevisionConflictError,
+)
 from src.serving.models import ModelServerClient
 from src.serving.orchestration import RecommendationCoordinator
 from src.serving.recommendations import (
@@ -95,6 +110,7 @@ _jwks = JwksCache(
 
 _tenant_router = TenantRouter(_admin_engine)
 _recommendations = RecommendationService()
+_feedback = FeedbackService()
 _audits = RecommendationAuditService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _model_server = ModelServerClient(
@@ -142,7 +158,7 @@ class HistoryItem(BaseModel):
     movie_id: int
     title: str
     genres: list[str]
-    rating: float
+    rating: float | None
     timestamp: int
 
 
@@ -185,6 +201,72 @@ class RatingMutationResponse(BaseModel):
     tenant_id: str
     user_id: int
     changed: int
+
+
+class MovieStateResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    movie_id: int
+    watched_at: datetime | None
+    rating: float | None
+    rating_updated_at: datetime | None
+    watchlisted_at: datetime | None
+    dismissed_at: datetime | None
+    revision: int
+    updated_at: datetime
+
+
+class FeedbackMutationResponse(BaseModel):
+    request_id: UUID
+    replayed: bool
+    outcome: Literal["changed", "no_change"]
+    state: MovieStateResponse
+
+
+class LibraryMovieResponse(BaseModel):
+    movie_id: int
+    title: str
+    genres: list[str]
+    state: MovieStateResponse
+
+
+class LibraryCountsResponse(BaseModel):
+    rated: int
+    watchlist: int
+    history: int
+
+
+class CursorPageResponse(BaseModel):
+    next_cursor: str | None
+    has_more: bool
+
+
+class LibraryResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    tab: Literal["rated", "watchlist", "history"]
+    sort: Literal["recent", "title", "rating"]
+    query: str | None
+    counts: LibraryCountsResponse
+    page: CursorPageResponse
+    items: list[LibraryMovieResponse]
+
+
+class TasteGenreResponse(BaseModel):
+    genre: str
+    rated_count: int
+    average_rating: float
+
+
+class TasteSummaryResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    source: Literal["live-ratings-v1"]
+    generated_at: datetime
+    rating_count: int
+    average_rating: float | None
+    top_genres: list[TasteGenreResponse]
+    explanation: str
 
 
 class CurrentActorResponse(BaseModel):
@@ -306,8 +388,11 @@ def _openapi_schema() -> dict[str, Any]:
             operation["security"] = [{"BearerAuth": []}]
             responses = operation.setdefault("responses", {})
             for status, description in (
+                ("400", "Request parameters are invalid or cursor does not match query"),
                 ("401", "Missing or invalid access token"),
                 ("403", "Authenticated actor is not authorized"),
+                ("404", "Requested persona or movie does not exist"),
+                ("409", "Idempotency, state revision, or transition conflict"),
                 ("500", "Request transaction failed"),
             ):
                 responses.setdefault(
@@ -590,6 +675,278 @@ async def catalog(user_id: int, request: Request) -> CatalogResponse:
     )
 
 
+@app.get(
+    "/users/{user_id}/movies/{movie_id}/state",
+    response_model=MovieStateResponse | None,
+    operation_id="getMovieState",
+)
+async def movie_state(user_id: int, movie_id: int, request: Request) -> MovieStateResponse | None:
+    """Return one selected persona's canonical live state for a movie."""
+    _require_demo_persona_access(request)
+    connection: Connection = request.state.db
+    try:
+        state = await run_in_threadpool(
+            _feedback.get_state,
+            connection,
+            user_id=user_id,
+            movie_id=movie_id,
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _movie_state_response(state) if state is not None else None
+
+
+@app.get(
+    "/users/{user_id}/library",
+    response_model=LibraryResponse,
+    operation_id="listLibrary",
+)
+async def library(
+    user_id: int,
+    request: Request,
+    tab: Literal["rated", "watchlist", "history"] = "rated",
+    sort: Literal["recent", "title", "rating"] = "recent",
+    limit: int = Query(default=24, ge=1, le=50),
+    cursor: str | None = Query(default=None, max_length=1024),
+    q: str | None = Query(default=None, max_length=120),
+) -> LibraryResponse:
+    """Return one bounded keyset page plus counts for all Library tabs."""
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        page = await run_in_threadpool(
+            _feedback.library,
+            connection,
+            user_id=user_id,
+            tab=tab,
+            sort=sort,
+            limit=limit,
+            cursor=cursor,
+            query=q,
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidLibraryCursorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _library_response(
+        page,
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        tab=tab,
+        sort=sort,
+        query=q.strip() if q and q.strip() else None,
+    )
+
+
+@app.get(
+    "/users/{user_id}/taste-profile",
+    response_model=TasteSummaryResponse,
+    operation_id="getLiveRatingsTasteSummary",
+)
+async def taste_profile(user_id: int, request: Request) -> TasteSummaryResponse:
+    """Summarize live ratings without claiming deployed-model attribution."""
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        summary = await run_in_threadpool(
+            _feedback.taste_summary,
+            connection,
+            user_id=user_id,
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TasteSummaryResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        source="live-ratings-v1",
+        generated_at=summary.generated_at,
+        rating_count=summary.rating_count,
+        average_rating=summary.average_rating,
+        top_genres=[TasteGenreResponse(**item.__dict__) for item in summary.top_genres],
+        explanation=summary.explanation,
+    )
+
+
+@app.put(
+    "/users/{user_id}/movies/{movie_id}/watched",
+    response_model=FeedbackMutationResponse,
+    operation_id="setMovieWatched",
+)
+async def set_watched(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="watched_set",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.delete(
+    "/users/{user_id}/movies/{movie_id}/watched",
+    response_model=FeedbackMutationResponse,
+    operation_id="removeMovieFromHistory",
+)
+async def remove_from_history(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="history_removed",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.put(
+    "/users/{user_id}/movies/{movie_id}/rating",
+    response_model=FeedbackMutationResponse,
+    operation_id="setMovieStateRating",
+)
+async def set_state_rating(
+    user_id: int,
+    movie_id: int,
+    payload: RatingRequest,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="rating_set",
+        request_id=request_id,
+        expected_revision=expected_revision,
+        rating=payload.rating,
+    )
+
+
+@app.delete(
+    "/users/{user_id}/movies/{movie_id}/rating",
+    response_model=FeedbackMutationResponse,
+    operation_id="deleteMovieStateRating",
+)
+async def delete_state_rating(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="rating_deleted",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.put(
+    "/users/{user_id}/movies/{movie_id}/watchlist",
+    response_model=FeedbackMutationResponse,
+    operation_id="addMovieToWatchlist",
+)
+async def set_watchlist(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="watchlist_set",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.delete(
+    "/users/{user_id}/movies/{movie_id}/watchlist",
+    response_model=FeedbackMutationResponse,
+    operation_id="removeMovieFromWatchlist",
+)
+async def delete_watchlist(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="watchlist_deleted",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.put(
+    "/users/{user_id}/movies/{movie_id}/dismissal",
+    response_model=FeedbackMutationResponse,
+    operation_id="dismissMovie",
+)
+async def set_dismissal(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="dismissal_set",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
+@app.delete(
+    "/users/{user_id}/movies/{movie_id}/dismissal",
+    response_model=FeedbackMutationResponse,
+    operation_id="undoMovieDismissal",
+)
+async def delete_dismissal(
+    user_id: int,
+    movie_id: int,
+    request: Request,
+    request_id: UUID | None = Header(default=None, alias="Idempotency-Key"),
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> FeedbackMutationResponse:
+    return await _feedback_mutation(
+        request,
+        user_id=user_id,
+        movie_id=movie_id,
+        action="dismissal_deleted",
+        request_id=request_id,
+        expected_revision=expected_revision,
+    )
+
+
 @app.put(
     "/users/{user_id}/ratings/{movie_id}",
     response_model=RatingMutationResponse,
@@ -606,13 +963,16 @@ async def rate_movie(
     principal = request.state.principal
     connection: Connection = request.state.db
     try:
-        _recommendations.rate_movie(
+        await run_in_threadpool(
+            _feedback.mutate,
             connection,
             tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
             user_id=user_id,
             movie_id=movie_id,
+            action="rating_set",
+            request_id=uuid4(),
             rating=payload.rating,
-            timestamp=int(time.time()),
         )
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -631,16 +991,130 @@ async def rate_movie(
     operation_id="resetDemoRatings",
 )
 async def reset_ratings(user_id: int, request: Request) -> RatingMutationResponse:
-    """Clear a demo persona so the cold-start experience can be rebuilt."""
+    """Compatibility bulk rating clear; watched history is preserved."""
     _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     try:
-        changed = _recommendations.reset_ratings(connection, user_id=user_id)
+        _feedback.require_persona(connection, user_id=user_id)
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    movie_ids = [
+        int(row.movie_id)
+        for row in connection.execute(
+            text("""
+                SELECT movie_id
+                FROM user_movie_state
+                WHERE user_id = :user_id AND rating IS NOT NULL
+                ORDER BY movie_id ASC
+                """),
+            {"user_id": user_id},
+        )
+    ]
+    for movie_id in movie_ids:
+        await run_in_threadpool(
+            _feedback.mutate,
+            connection,
+            tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            user_id=user_id,
+            movie_id=movie_id,
+            action="rating_deleted",
+            request_id=uuid4(),
+        )
     return RatingMutationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
-        changed=changed,
+        changed=len(movie_ids),
+    )
+
+
+async def _feedback_mutation(
+    request: Request,
+    *,
+    user_id: int,
+    movie_id: int,
+    action: FeedbackAction,
+    request_id: UUID | None,
+    expected_revision: int | None,
+    rating: float | None = None,
+) -> FeedbackMutationResponse:
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    resolved_request_id = request_id or uuid4()
+    try:
+        result = await run_in_threadpool(
+            _feedback.mutate,
+            connection,
+            tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            user_id=user_id,
+            movie_id=movie_id,
+            action=action,
+            request_id=resolved_request_id,
+            rating=rating,
+            expected_revision=expected_revision,
+        )
+    except (UnknownDemoPersonaError, UnknownMovieError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (
+        StateRevisionConflictError,
+        IdempotencyConflictError,
+        InvalidStateTransitionError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _mutation_response(result)
+
+
+def _movie_state_response(state: MovieState) -> MovieStateResponse:
+    return MovieStateResponse(
+        tenant_id=state.tenant_id,
+        user_id=state.user_id,
+        movie_id=state.movie_id,
+        watched_at=state.watched_at,
+        rating=state.rating,
+        rating_updated_at=state.rating_updated_at,
+        watchlisted_at=state.watchlisted_at,
+        dismissed_at=state.dismissed_at,
+        revision=state.state_version,
+        updated_at=state.updated_at,
+    )
+
+
+def _mutation_response(result: MutationResult) -> FeedbackMutationResponse:
+    return FeedbackMutationResponse(
+        request_id=result.request_id,
+        replayed=result.replayed,
+        outcome=result.outcome,
+        state=_movie_state_response(result.state),
+    )
+
+
+def _library_response(
+    page: LibraryPage,
+    *,
+    tenant_id: str,
+    user_id: int,
+    tab: Literal["rated", "watchlist", "history"],
+    sort: Literal["recent", "title", "rating"],
+    query: str | None,
+) -> LibraryResponse:
+    return LibraryResponse(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        tab=tab,
+        sort=sort,
+        query=query,
+        counts=LibraryCountsResponse(**page.counts.__dict__),
+        page=CursorPageResponse(next_cursor=page.next_cursor, has_more=page.has_more),
+        items=[
+            LibraryMovieResponse(
+                movie_id=item.movie_id,
+                title=item.title,
+                genres=item.genres,
+                state=_movie_state_response(item.state),
+            )
+            for item in page.items
+        ],
     )
