@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts",
+    "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts tests/e2e/discover-journey.spec.ts",
     "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
     "evidence:baseline": "playwright test tests/e2e/capture-baseline.spec.ts",
     "api:types": "openapi-typescript ../docs/api/openapi.json -o lib/api.generated.ts",
@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:e2e:update": "playwright test --update-snapshots",
     "evidence:bundle4": "node scripts/capture-bundle4-evidence.mjs",
+    "evidence:bundle5b": "node scripts/capture-bundle5b-evidence.mjs",
     "evidence:bundle5c": "node scripts/capture-bundle5c-evidence.mjs",
     "evidence:bundle5d": "node scripts/capture-bundle5d-evidence.mjs"
   },

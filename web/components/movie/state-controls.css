@@ -2,6 +2,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
+  /* Contains the visually hidden live region. Without a positioned ancestor it
+     resolves against the initial containing block, which pushes the page's
+     scroll width out when these controls sit inside a horizontal rail. */
+  position: relative;
 }
 
 .state-controls button {

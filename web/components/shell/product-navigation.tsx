@@ -4,17 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { Icon } from "@/components/ui/icons";
-
-const items = [
-  { href: "/ui-preview/discover", label: "For you", icon: "spark" as const },
-  { href: "/ui-preview/browse", label: "Browse", icon: "compass" as const },
-  { href: "/ui-preview/library", label: "Library", icon: "library" as const },
-];
+import { previewNavigationItems, type NavigationItem } from "@/lib/navigation";
 
 export function ProductNavigation({
   location,
+  items = previewNavigationItems,
 }: {
   location: "desktop" | "mobile";
+  items?: readonly NavigationItem[];
 }) {
   const pathname = usePathname();
 
@@ -24,7 +21,7 @@ export function ProductNavigation({
       className={location === "mobile" ? "bottom-navigation" : "top-navigation"}
     >
       {items.map((item) => {
-        const active = pathname.startsWith(item.href);
+        const active = pathname.startsWith(item.match ?? item.href);
         return (
           <Link aria-current={active ? "page" : undefined} href={item.href} key={item.href}>
             <Icon name={item.icon} />
