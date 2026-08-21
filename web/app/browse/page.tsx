@@ -4,9 +4,13 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { BrowseExplorer } from "@/components/browse/browse-explorer";
-import { CatalogRouteHeader } from "@/components/browse/route-header";
+import { AppShell } from "@/components/shell/app-shell";
 import { ResourceLoading } from "@/components/ui/resource-region";
+import { requireApiAccessToken } from "@/lib/bff-auth";
 import { resolveDemoPersonaId } from "@/lib/demo-persona";
+import { personaDisplayName } from "@/lib/discover/persona";
+import { productNavigationItems } from "@/lib/navigation";
+import "@/components/shell/shell.css";
 
 export const metadata: Metadata = {
   title: "Browse movies",
@@ -31,14 +35,27 @@ export default async function BrowsePage({
 
   const userId = resolveDemoPersonaId(params.user);
   const actorName = session.user.name ?? session.user.email ?? "Signed-in actor";
+  // Shell chrome, not a product region: the catalog must not wait on the
+  // persona directory, and a failed lookup degrades to the numeric persona
+  // rather than to an error.
+  const personaName = await personaDisplayName(
+    requireApiAccessToken(session),
+    userId,
+  );
 
   return (
-    <>
-      <a className="skip-link" href="#main-content">
-        Skip to content
-      </a>
-      <CatalogRouteHeader actorName={actorName} current="browse" userId={userId} />
-      <main className="app-page" id="main-content">
+    <AppShell
+      actorName={actorName}
+      fixtureMode={false}
+      homeHref={`/discover?userId=${userId}`}
+      homeLabel="MovieLens — For you"
+      legacyHref="/legacy"
+      navigationItems={productNavigationItems(userId)}
+      personaLabel="Exploring as"
+      personaName={personaName}
+      wordmarkSubtitle="Recommendation lab"
+    >
+      <div className="app-page">
         <header className="max-w-3xl">
           <p className="eyebrow">Browse the catalog</p>
           <h1 className="display-title mt-3 mb-0">
@@ -60,7 +77,7 @@ export default async function BrowsePage({
             userId={userId}
           />
         </Suspense>
-      </main>
-    </>
+      </div>
+    </AppShell>
   );
 }

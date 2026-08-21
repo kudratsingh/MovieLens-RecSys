@@ -2,12 +2,19 @@ import { expect, test, type Page } from "@playwright/test";
 
 const EVIDENCE = "../docs/frontend/evidence/baseline";
 
+/**
+ * The pre-redesign dashboard moved to `/legacy` with the 7d cutover, so this
+ * capture follows it there. It is the same surface these baseline images have
+ * always shown; what changed is that it is no longer what `/` renders.
+ */
 async function signIn(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Continue with Keycloak" }).click();
   await page.locator("#username").fill("demo");
   await page.locator("#password").fill("demo");
   await page.locator("#kc-login").click();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await page.goto("/legacy");
   await expect(page.getByRole("button", { name: "Action Fan" })).toBeVisible();
 }
 

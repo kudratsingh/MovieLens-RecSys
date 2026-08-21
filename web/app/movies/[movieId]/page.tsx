@@ -4,14 +4,21 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 
 import { auth } from "@/auth";
-import { CatalogRouteHeader } from "@/components/browse/route-header";
 import { MovieDetailView } from "@/components/movie/movie-detail-view";
+import { AppShell } from "@/components/shell/app-shell";
 import { ResourceRegion } from "@/components/ui/resource-region";
+import { requireApiAccessToken } from "@/lib/bff-auth";
 import { overviewText } from "@/lib/browse/catalog-card";
 import { resolveDemoPersonaId } from "@/lib/demo-persona";
-import { returnHrefLabel, safeReturnHref } from "@/lib/navigation";
+import { personaDisplayName } from "@/lib/discover/persona";
+import {
+  productNavigationItems,
+  returnHrefLabel,
+  safeReturnHref,
+} from "@/lib/navigation";
 import { loadMovieDetail } from "@/lib/resources/server";
 import { hasResourceData } from "@/lib/resources/state";
+import "@/components/shell/shell.css";
 
 type DetailProps = {
   params: Promise<{ movieId: string }>;
@@ -89,15 +96,26 @@ export default async function MovieDetailPage({ params, searchParams }: DetailPr
   // Browse, Library, and Discover can all send a viewer here, and each of them
   // has state worth returning to.
   const backHref = safeReturnHref(query.returnTo, `/browse?user=${userId}`);
-  const state = await detailForRequest(userId, parseMovieId(movieId));
+  // Started together: the persona name is shell chrome and must not stand in
+  // front of the movie the route exists to show.
+  const [state, personaName] = await Promise.all([
+    detailForRequest(userId, parseMovieId(movieId)),
+    personaDisplayName(requireApiAccessToken(session), userId),
+  ]);
 
   return (
-    <>
-      <a className="skip-link" href="#main-content">
-        Skip to content
-      </a>
-      <CatalogRouteHeader actorName={actorName} current="movie" userId={userId} />
-      <main className="app-page" id="main-content">
+    <AppShell
+      actorName={actorName}
+      fixtureMode={false}
+      homeHref={`/discover?userId=${userId}`}
+      homeLabel="MovieLens — For you"
+      legacyHref="/legacy"
+      navigationItems={productNavigationItems(userId)}
+      personaLabel="Exploring as"
+      personaName={personaName}
+      wordmarkSubtitle="Recommendation lab"
+    >
+      <div className="app-page">
         <ResourceRegion state={state}>
           {(detail) => (
             <MovieDetailView
@@ -116,7 +134,7 @@ export default async function MovieDetailPage({ params, searchParams }: DetailPr
             </Link>
           </p>
         )}
-      </main>
-    </>
+      </div>
+    </AppShell>
   );
 }

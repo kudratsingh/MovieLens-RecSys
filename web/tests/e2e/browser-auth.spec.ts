@@ -43,7 +43,12 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   const personaId = 900000104;
   await signInThroughKeycloak(page);
 
-  await expect(page.getByRole("button", { name: "Action Fan" })).toBeVisible();
+  // The front door hands a signed-in viewer to the product rather than to the
+  // pre-redesign dashboard. Asserted on the URL as well as on the screen: a
+  // shell that happens to look right on a route that is still `/` is the
+  // failure the 7d cutover exists to remove.
+  await expect(page).toHaveURL(/\/discover\?userId=\d+$/);
+  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
 
   const actor = await page.evaluate(async () =>
     fetch("/api/auth/actor", { cache: "no-store" }).then((response) => response.json()),

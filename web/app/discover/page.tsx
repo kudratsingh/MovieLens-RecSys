@@ -85,6 +85,10 @@ export default async function DiscoverPage({
       fixtureMode={fixtureMode}
       homeHref={discoverHref}
       homeLabel="MovieLens — For you"
+      // The rollback stays reachable from the product, at the foot of the page
+      // rather than in the navigation. The fixture harness has no session, so
+      // `/legacy` would only send a reviewer back to the sign-in door.
+      legacyHref={fixtureMode ? undefined : "/legacy"}
       navigationItems={productNavigationItems(userId)}
       personaLabel="Exploring as"
       personaName={personaName}

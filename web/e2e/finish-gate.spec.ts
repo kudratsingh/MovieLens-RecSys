@@ -47,6 +47,16 @@ const heading = (name: string | RegExp) => async (page: Page) => {
 const HANDMAIDEN = "The Handmaiden";
 
 const MATRIX: MatrixState[] = [
+  {
+    // The front door, signed out. The 7d cutover made `/` a redirect for a
+    // signed-in viewer and left this as the only thing it renders on its own,
+    // so it is the one changed surface the isolated harness can reach: the
+    // fixture server holds no session, and every authenticated route lands
+    // here.
+    id: "sign-in-door",
+    path: "/",
+    settle: heading(/Sign in to explore/),
+  },
   { id: "discover-learned", path: "/discover?demo=learned", settle: heading(HANDMAIDEN) },
   { id: "discover-fallback", path: "/discover?demo=fallback", settle: heading(HANDMAIDEN) },
   {

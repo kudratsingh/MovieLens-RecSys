@@ -1,3 +1,5 @@
+import { resolveDemoPersonaId } from "@/lib/demo-persona";
+
 /**
  * Primary navigation sets.
  *
@@ -77,4 +79,29 @@ export function safeReturnHref(
 export function returnHrefLabel(href: string): string {
   const route = returnRoute(href);
   return route ? RETURN_LABELS[route] : "Back";
+}
+
+/**
+ * Where a signed-in viewer is sent when they arrive at `/`.
+ *
+ * The front door redirects rather than rendering Discover a second time under
+ * a different address. Three things pay for that choice: the primary
+ * navigation decides which slot is current from the pathname, so a second URL
+ * serving the same route would leave `For you` unmarked; the personalized
+ * `Cache-Control` header stays attached to one path instead of two; and
+ * `/discover?userId=` remains the only address that carries a persona, which
+ * is what makes a link shareable between the shell, the movie detail
+ * `returnTo`, and the evidence scripts.
+ *
+ * Both spellings of the persona parameter are accepted because the live routes
+ * still disagree about the name — Discover reads `userId`, Browse and detail
+ * read `user` — so a link either of them produced keeps its persona across the
+ * door instead of silently landing on the default one.
+ */
+export function frontDoorHref(params: {
+  user?: string | string[];
+  userId?: string | string[];
+}): string {
+  const requested = params.userId ?? params.user;
+  return `/discover?userId=${resolveDemoPersonaId(requested)}`;
 }
