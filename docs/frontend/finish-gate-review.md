@@ -1,6 +1,14 @@
 # Movie-discovery frontend: UI finish-gate review
 
-**Verdict: HOLD.**
+**Verdict: HOLD — and moderated research with real participants is the only
+thing standing between this document and PASS.** Every criterion a reviewer can
+settle is settled and passing after the 7d cutover; see
+[§10](#10-re-run-after-cutover-7d), which supersedes the verdict below.
+
+This document is written in two dated passes. Sections 1–9 are the **7A**
+pass and are left as the record of what was true then, including its HOLD and
+its three blocking items. [Section 10](#10-re-run-after-cutover-7d) is the
+**7D** re-run after the cutover that cleared them, and is the current verdict.
 
 **Reviewed:** 2026-08-21 · **Bundle:** 7A · **Base:** `876fd36` (7b merged)
 
@@ -64,7 +72,7 @@ it rather than its new home. So the honest reading of this HOLD is:
 | Visual and accessibility gate | This PR | Automated and green; screenshot matrix captured |
 | Product finish review | This PR | Below |
 | Page-shaped load, browser timing (LCP/CLS/ack) | PR 7b, merged | Cited; the browser half re-run on this branch — see [§5](#performance-gate--pass-carried-from-7b) |
-| Legacy removal and cutover | PR 7d | Blocked on this verdict; see §1 |
+| Legacy removal and cutover | PR 7d | Cutover done, `/legacy` retained as the rollback — see [§10](#10-re-run-after-cutover-7d) |
 | Moderated research with real participants | Not scheduled | **Not met** — see [§4.2](#42-moderated-tasks) |
 
 ---
@@ -578,3 +586,282 @@ MODE=fixture MOVIELENS_UI_PORT=3113 npm run evidence:bundle7a
 In CI: the `frontend` job runs the visual and accessibility gate; the
 `browser-auth-e2e` job runs the service-backed journey against the
 bypass-disabled Compose stack.
+
+---
+
+## 10. Re-run after cutover (7D)
+
+**Verdict: HOLD, on one item that is not a reviewer's to close — moderated
+research with real participants.** Every one of the seven finish-gate criteria
+now passes, the three blocking items in [§7](#7-blocking-items) are cleared and
+asserted against the running stack, and no new blocking item was found. What is
+missing is validation data, and a reviewer cannot manufacture it.
+
+**Re-run:** 2026-08-21 · **Bundle:** 7D · **Base:** `25807b2` (7a merged) plus
+this branch · **Reviewer:** one engineer, against a locally seeded Compose
+stack — the same limitation [§4.2](#42-moderated-tasks) records, and the same
+consequence.
+
+### 10.1 What changed
+
+- `/` is the movie-discovery product for a signed-in viewer and the sign-in
+  door for everyone else. It redirects rather than rendering Discover under a
+  second address, so `/discover?userId=` stays the only URL that carries a
+  persona and the navigation's active state stays honest. Both spellings of the
+  persona parameter (`userId`, `user`) survive the door.
+- The pre-redesign dashboard lives only at `/legacy`, labelled as legacy on
+  screen, linked back to the product, authenticated like every other route, and
+  reachable from a footer utility link rather than from any primary navigation.
+- Its `SERVING CONTRACT` panel reports the `serving_policy` the response
+  carried — policy name, learned or not, model version, and the reason string —
+  and renders `Not read yet` rather than naming a policy it was not told about.
+- Browse, movie detail, and Library render the shared `AppShell`. The two
+  parallel headers (`CatalogRouteHeader`, `LibraryShell`) are deleted.
+- `/` joined the middleware's personalized-document set, because its answer now
+  depends on the session in both directions.
+
+### 10.2 What was run
+
+Local, against the seeded stack: `docker compose -p movielens-demo -f
+docker-compose.yml -f docker-compose.demo.yml -f <local port override>`,
+mirroring `make demo-up` / `make demo-seed`, with `DEV_AUTH_BYPASS=false`, real
+Keycloak on the imported `demo` realm, forced RLS, the local catalog snapshot,
+Feast's feature server, the model server, and the web BFF. The only local
+deviation is the published host port of the API container, moved off `8000`
+because another project holds it; nothing in the stack reaches the API through
+the host.
+
+| Command | Result |
+|---|---|
+| `npm ci` | clean |
+| `npm run api:types:check` | pass — no OpenAPI/TypeScript drift |
+| `npm run lint` | pass |
+| `npm run typecheck` | pass |
+| `npm test` | 45 files, 413 tests, pass (399 before; the additions are below) |
+| `npm run build` | pass |
+| `MOVIELENS_UI_PORT=3114 npm run test:e2e:ui` | 204 across `mobile-390`, `tablet-768`, `desktop-1440` — 190 run, 14 skipped by project, pass ×2. **The first attempt failed**, see [10.5](#105-the-gate-failed-the-first-time-it-was-pointed-at-the-front-door) |
+| `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:e2e` | 7 tests, pass, 18.8–22.9 s — ×2 on the final tree, and ×2 more before the legacy contrast fix |
+| `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:perf` | 5 tests, pass ×3, [numbers below](#107-performance) |
+| `MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:bundle7d` | 10 captures, [`evidence/bundle-7d/`](evidence/bundle-7d/README.md) |
+
+Seeded state at capture time, read from the API in the browser's own session —
+unchanged from the 7A run, which is what makes the two evidence sets
+comparable:
+
+```json
+{"name":"item-item-cosine+lightgbm","learned":true,"positive_signal_count":8,
+ "threshold":5,"reason":"learned-two-stage: item-item-cosine retrieval over 0
+ positive seeds, ranked by demo-lgbm-v1","score_scale":"lightgbm-rank-score",
+ "filter_policy":"watched-and-dismissed-excluded-v1","excluded_count":8}
+```
+
+CI has not run this branch at the time of writing. Everything above is local;
+the CI columns are what the PR's checks will fill in.
+
+### 10.3 Blocking items
+
+| Item | Status | Evidence |
+|---|---|---|
+| [B1](#b1-the-authenticated-front-door-is-the-pre-redesign-dashboard) — the front door is the pre-redesign dashboard | **Cleared** | `evidence/bundle-7d/landing-after-sign-in-{mobile,tablet,desktop}.png` against `evidence/bundle-7a/landing-after-sign-in-*.png`; `finish-gate-journey.spec.ts` step 1 asserts the URL and the shell after the Keycloak round trip |
+| B1 — the panel's false model claim | **Cleared** | `evidence/bundle-7d/legacy-dashboard-desktop.png` shows `Serving policy: item-item-cosine+lightgbm`, `Learned ranking: Yes`; journey step 1 checks the panel against the response it claims to report, not against a string the test invented; `serving-contract-panel.test.tsx` covers the no-policy and cold-start cases |
+| [B2](#b2-discover-has-no-inbound-link) — `/discover` has no inbound link | **Cleared** | Journey step 1 asserts every slot of the primary navigation by `href`; `app-shell.test.tsx` asserts the same set in both the desktop and the mobile navigation. Quick Picks keeps its Discover entry point and is still not a fourth slot |
+| [B3](#b3-browse-and-movie-detail-run-a-second-shell) — Browse and detail run a second shell | **Cleared** | `evidence/bundle-7d/{browse-shell,movie-detail-shell,library-shell}-mobile.png`; journey steps 4 and 5 assert the bottom navigation at 390×844 and a resolved persona name with no numeric ID in the header |
+
+B3 is cleared by deletion rather than by convergence: `CatalogRouteHeader` and
+`LibraryShell` no longer exist, so there is no second shell left to drift.
+
+### 10.4 Criteria
+
+Applied in the documented order. Rows unchanged from the 7A pass are marked as
+carried; the gate was re-run for all of them, not only the three that moved.
+
+| # | Criterion | 7A | Now | Evidence |
+|---|---|---|---|---|
+| 1 | Product legibility | HOLD | **PASS** | [10.6](#106-five-second-test) · `landing-after-sign-in-*.png` |
+| 2 | Hierarchy | PASS | PASS (carried, re-run) | `finish-gate.spec.ts` outline and landmark checks across the matrix |
+| 3 | Pattern fit | PASS | PASS (carried, re-run) | Journey steps 4 and 8; the legacy dashboard is a footer utility link, not a navigation slot |
+| 4 | States | PASS | PASS (carried, re-run) | Injected matrix unchanged; journey step 9 |
+| 5 | Responsive behaviour | HOLD | **PASS** | B3 cleared; 320px sweep now also covers the front door on two font metrics |
+| 6 | Implementation fidelity | HOLD | **PASS** | One shell, one persona vocabulary; the front door left the Tailwind-utility island and uses the product's tokens |
+| 7 | Truthfulness | HOLD | **PASS** | B1's panel cleared; the product routes' truthfulness findings are unchanged and still pass |
+| — | Accessibility gate | PASS | PASS | `finish-gate.spec.ts`, all three projects, now including the signed-out front door |
+| — | Performance and reliability | PASS | PASS | [10.7](#107-performance) |
+| — | Moderated research | Not met | **Not met — requires participant sessions (owner)** | [10.8](#108-what-the-owner-must-run-to-convert-this-verdict) |
+
+### 10.5 The gate failed the first time it was pointed at the front door
+
+Worth recording, because it is the whole argument for putting a surface in a
+gate rather than reasoning about it. Adding `/` to the accessibility matrix
+failed four checks immediately, on a screen that had shipped for months:
+
+- **The primary action's label cleared 1.31:1.** `button, input, select { color:
+  inherit }` in `globals.css` is unlayered, and Tailwind v4 puts utilities in
+  `@layer utilities` — so an unlayered element selector out-ranks every one of
+  them. `text-zinc-950` on `Continue with Keycloak` had never applied, and the
+  label rendered at `#f4f4f5` on `#ffd230`. This is a structural defect, not a
+  colour choice: no utility on that element could have won.
+- **The helper text cleared 2.42:1** (`text-zinc-600` on the card).
+- **The door overflowed a 320px viewport** by 31px on the platform's fonts and
+  48px under the forced wide face. The card sat in a `grid` whose auto track
+  floors at the item's min-content width, and the longest word in the heading
+  was wider than the viewport could hold.
+
+Fixed rather than filed, by moving the door onto the same `.card-surface` /
+`.button-primary` / `.eyebrow` vocabulary as the product it opens: token
+colours that are already proven against this gate, `min-width: 0` on the card,
+and `overflow-wrap: anywhere` on the title — `anywhere` rather than
+`break-word` because only `anywhere` reduces the min-content contribution that
+set the floor. Zero axe violations and zero overflow afterwards, at 320, 390,
+768, and 1440.
+
+The same structural cause was then visible in the 7D evidence on the retained
+dashboard: `Explore` was white text on a white button, and the selected persona
+chip and selected star cleared about 1.3:1 on amber. Fixed here too — a
+rollback with an unreadable primary control is not a rollback — with one
+class-scoped rule in `components/legacy/`, deliberately local. See
+[N7](#n7-tailwind-colour-utilities-lose-to-the-unlayered-base-rule).
+
+### 10.6 Five-second test
+
+Protocol unchanged: 390×844, first stable render, three questions.
+
+**On `/` after signing in — PASS.** Evidence:
+`evidence/bundle-7d/landing-after-sign-in-mobile.png`.
+
+| Question | Answer |
+|---|---|
+| What is this? | A movie recommender. A poster, `Casino`, `1995 / Crime · Drama`, and one line of reason. |
+| Is it for you? | Yes — `Similar to movies in this persona's watched history`, with the persona named in the shell separately from the signed-in actor. |
+| What should you do first? | `Open movie`, the one filled button on the screen. |
+
+This is the same answer `/discover` already gave in the 7A pass, which is the
+point: the route a signed-in viewer actually lands on is now that route. Compare
+`evidence/bundle-7a/landing-after-sign-in-mobile.png`, whose first words were
+`TWO-STAGE RECOMMENDER` above a `SERVING CONTRACT` table.
+
+**On the signed-out `/` — PASS**, against the same three questions applied to a
+door rather than a product: it says what the product is, that a demo persona is
+separate from the signed-in actor, and offers exactly one action. Evidence:
+`evidence/bundle-7d/sign-in-door-mobile.png`.
+
+### 10.7 Performance
+
+`npm run test:perf` on 7b's pinned mobile profile (390×844, DPR 3, 4× CPU
+throttle), three runs, all passing. Representative run:
+
+| Route | LCP | CLS | Acknowledgement | Structural |
+|---|---:|---:|---:|---|
+| discover | 384 ms | 0.0000 | 11.0 ms | 5/5 |
+| browse | 108 ms | 0.0000 | 13.7 ms | 5/5 |
+| movie-detail | 72 ms | 0.0000 | 9.1 ms | 2/2 |
+| library | 112 ms | 0.0000 | 16.8 ms | 2/2 |
+| quick-picks | 112 ms | 0.0000 | — | 2/2 |
+
+Discover's LCP moved from the 120 ms recorded in [§5](#performance-gate--pass-carried-from-7b)
+to a reproducible 380–396 ms, and that deserved an explanation rather than a
+shrug. It is not the cutover. Measured directly, the route emits two LCP
+candidates for the warm persona: the server-rendered `h1` at 52 ms — which at
+that moment still holds the placeholder `Finding a strong first pick…` — and
+then the route status line at 376 ms, which only exists after hydration and is
+larger. The primary movie's poster never becomes a candidate **because that
+recommendation has no artwork**, which is exactly
+[N1](#n1-the-first-learned-recommendation-has-no-poster). Loading the same
+route for Cold Start, whose top pick does have a poster, gives an `IMG` LCP
+element at 88 ms.
+
+So N1 is not only a cosmetic finding: on the warm persona it moves the LCP
+element off the image and onto a hydration-time paragraph, which makes the
+number bimodal depending on catalog coverage. The enforced budget is 2500 ms
+and both modes clear it by a wide margin, so this is recorded rather than
+gating. Ruled out along the way: the footer link added to the shell is not
+prefetched (measured — zero `/legacy` requests during the measurement) and is
+below the fold, so it is not an LCP candidate.
+
+The direct-API p99 gate and the page-shaped load budgets are unchanged by this
+PR and were not re-measured; `synthetic-load-smoke` still owns them. Rate
+limiting is still recorded as not implemented, still non-blocking here, and
+still needs the decision [§5](#performance-gate--pass-carried-from-7b)
+describes.
+
+### 10.8 What the owner must run to convert this verdict
+
+This is the whole remaining distance to PASS. Nothing in it can be delegated to
+a reviewer, and [§4.2](#42-moderated-tasks) already states why: the protocol
+says persona simulations "do not count as validation data", and one engineer
+walking the tasks is an expert walkthrough.
+
+**Required — moderated sessions.** From
+[the testing strategy](testing-strategy.md#moderated-task-protocol):
+
+- **4–5 movie-focused participants** and **3–4 technical reviewers**, with
+  keyboard-only and small-screen coverage present in the mix.
+- The seven discovery tasks in [§4.2](#42-moderated-tasks), run against the
+  cutover build — task 1 now starts at `/` rather than at a typed URL, and task
+  6's Quick Picks entry is reachable by clicking for the first time.
+- Capture what this document has left blank on purpose: completion and
+  abandonment, time on task, errors and recovery, movie scan count before a
+  decision, feedback-semantics comprehension, spontaneous comments and
+  confidence, and whether the ML evidence is discoverable but non-disruptive.
+
+**Then:** replace §4.2 with the observed data and re-record the verdict. On the
+evidence in this section, nothing else is outstanding — if the sessions surface
+no new defect, this becomes **PASS**, and legacy removal becomes eligible in
+its own PR with the rollback documented in
+[`README.md`](README.md#rolling-the-cutover-back).
+
+**Not required for PASS, but open:** the rate-limiting decision, and the two
+findings below.
+
+### 10.9 Findings
+
+Carried from [§6](#6-non-blocking-findings): N1 (now with a measured
+performance consequence — see [10.7](#107-performance)), N2, N3, N4, N5. All
+still non-blocking, none of them touched by this PR.
+
+#### N6. The product has no persona picker
+
+The cutover removed the dashboard from the front door, and the four named demo
+personas were only ever offered there. The product selects a persona by URL —
+`?userId=` on Discover and Library, `?user=` on Browse, movie detail, and Quick
+Picks — and the shell names the selected persona without offering a way to
+change it. `/legacy` still has the chips, which is one reason it is linked from
+the shell's footer rather than hidden.
+
+Not treated as a blocking item: the design contract's shell requirement is
+"authenticated actor plus an explicitly labeled selected demo persona", which
+is met, and it names no picker. It is recorded because a portfolio walkthrough
+wants one, and because building it inside a cutover would have put a new
+control into every shell header on the same PR that re-runs the gate over those
+headers. It belongs in its own change, with its own accessibility evidence.
+
+#### N7. Tailwind colour utilities lose to the unlayered base rule
+
+`button, input, select { color: inherit }` sits outside any cascade layer in
+`globals.css`, so it beats every Tailwind colour utility on those elements
+app-wide. Two surfaces were affected and both are fixed here, locally: the
+sign-in door (rebuilt on tokens) and the legacy dashboard (one class-scoped
+rule). The product routes are unaffected because they style controls with the
+token classes rather than with utilities.
+
+The general fix is to move the base rules into `@layer base`, which would make
+every such utility apply as written. That is the better answer and it is not
+made here: it changes the cascade under every route, and a cutover PR that is
+also re-running the finish gate is the wrong place to take that risk. Recorded
+as a follow-up.
+
+### 10.10 Re-running this section
+
+```bash
+# Service-backed
+make demo-up && make demo-seed
+cd web && PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:e2e
+PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:perf
+MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:bundle7d
+
+# Visual and accessibility
+cd web && MOVIELENS_UI_PORT=3113 npm run test:e2e:ui
+```
+
+In CI: the `frontend` job runs the visual and accessibility gate, and
+`browser-auth-e2e` runs the service-backed journey and then the browser timing
+against the bypass-disabled Compose stack.

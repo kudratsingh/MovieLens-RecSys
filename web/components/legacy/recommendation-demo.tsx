@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 
 import { ServingContractPanel } from "@/components/legacy/serving-contract-panel";
+import "@/components/legacy/legacy-dashboard.css";
 import type {
   PersonaItem,
   PersonaResponse,
@@ -166,7 +167,7 @@ export function RecommendationDemo({ intro }: { intro?: React.ReactNode }) {
               <button
                 className={`rounded-full border px-4 py-2 text-sm transition ${
                   userId === persona.user_id
-                    ? "border-amber-300 bg-amber-300 text-zinc-950"
+                    ? "legacy-on-light border-amber-300 bg-amber-300"
                     : "border-white/10 bg-white/[0.035] text-zinc-300 hover:border-white/25"
                 }`}
                 key={persona.user_id}
@@ -193,7 +194,7 @@ export function RecommendationDemo({ intro }: { intro?: React.ReactNode }) {
             value={inputValue}
           />
           <button
-            className="rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300"
+            className="legacy-on-light rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold transition hover:bg-amber-300"
             type="submit"
           >
             Explore
@@ -354,7 +355,7 @@ function RatingStudio({
                   aria-label={`${rating} stars`}
                   className={`grid size-8 place-items-center rounded-md text-sm transition ${
                     movie.state?.rating === rating
-                      ? "bg-amber-300 font-bold text-zinc-950"
+                      ? "legacy-on-light bg-amber-300 font-bold"
                       : "bg-white/[0.06] text-zinc-400 hover:bg-white/[0.12] hover:text-amber-200"
                   }`}
                   disabled={saving}
