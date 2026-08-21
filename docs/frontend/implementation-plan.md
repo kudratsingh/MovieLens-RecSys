@@ -357,16 +357,17 @@ traceable; gesture and non-gesture paths have identical outcomes.
   `/browse`, `/library`, and `/discover`; and Discover cards seeded from the
   relay because `RecommendationItem` carries no state. Behaviour-preserving —
   see `docs/frontend/frontend-system.md` for the resulting system of record.
-- [x] **7b — performance and reliability gate.** Page-shaped k6 workloads for
-  the Discover fan-out, the Browse cursor continuation, Library reads, mutation
-  plus immediate read, and the Quick Picks action sequence, tagged per page and
-  per step with measured p95/p99 budgets; browser LCP/CLS/acknowledgement
-  measured separately on the pinned mobile profile, with the structural layout
-  promises asserted; and a reliability check covering request-id traceability,
-  readiness, the auth boundary, dependency provenance, bounded pages, cursor
-  rejection, and degraded metadata. Rate limiting is recorded as not
-  implemented. ADR 0010's page-shaped note carries the budgets and the
-  advisory-versus-enforced split.
+- [x] 7b — performance and reliability gate: page-shaped k6 workloads for the
+  Discover fan-out, the Browse cursor continuation, Library reads, mutation plus
+  immediate read, and the Quick Picks action sequence, tagged per page and per
+  step against measured p95/p99 budgets; browser LCP, CLS and action
+  acknowledgement measured separately on the pinned mobile profile, with the
+  reserved-poster, lazy-loading, bounded-page, no-TMDB-fan-out and
+  progressive-disclosure promises asserted; and a reliability check covering
+  request-id traceability into the audit row, readiness, the auth boundary,
+  dependency provenance, bounded pages, cursor rejection and degraded metadata.
+  Rate limiting is recorded as not implemented. ADR 0010's page-shaped note
+  carries the budgets and the advisory-versus-enforced split.
 
 Remaining:
 
