@@ -289,8 +289,21 @@ test("Quick Picks decisions change what serving returns", async ({ page }) => {
 
   const before = await signalCount();
 
-  await page.getByRole("button", { name: /Not for me/ }).click();
-  await expect(page.getByRole("status")).toContainText(`${title}: not for me saved.`);
+  // The journeys above mutate this same persona, so the top pick may already
+  // carry a state row the queue cannot see — a recommendation carries no
+  // revision, so a first write can only assert zero. That conflict is what the
+  // deck is built to correct: it re-reads the canonical record, and the next
+  // attempt asserts a revision the server issued. Retrying once exercises that
+  // path rather than papering over it.
+  const notForMe = page.getByRole("button", { name: /Not for me/ });
+  const status = page.getByRole("status");
+  await notForMe.click();
+  await expect(status).not.toBeEmpty();
+  if (!((await status.textContent()) ?? "").includes(`${title}: not for me saved.`)) {
+    await expect(page.locator(".quick-picks-error")).toContainText("try again");
+    await notForMe.click();
+  }
+  await expect(status).toContainText(`${title}: not for me saved.`);
   expect(await recommendedIds()).not.toContain(movieId);
   // A dismissal is an exclusion, never a positive signal.
   expect(await signalCount()).toBe(before);

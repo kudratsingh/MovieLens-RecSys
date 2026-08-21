@@ -13,6 +13,7 @@
  */
 
 import type { RecommendationItem, RecommendationResponse, ServingPolicy } from "@/lib/api";
+import { displayTitle } from "@/lib/discover/movie-card";
 
 /**
  * Queue depth. Deep enough that a viewer can make several decisions without a
@@ -97,9 +98,10 @@ export type QuickPickCommitRequest = {
   /** Only meaningful for `watched`; ignored elsewhere. */
   rating: number | null;
   /**
-   * Asserted only where a revision was actually observed. A queue card has no
-   * state row yet, so claiming revision 0 would 409 against a title the persona
-   * had merely watchlisted earlier.
+   * The revision the machine actually observed, or `null` for a queue card —
+   * a recommendation carries no state, and inventing one here would be a claim
+   * about the server. The transport answers for `null` from what this session
+   * and other routes have committed.
    */
   expectedRevision: number | null;
 };
@@ -174,7 +176,10 @@ export function quickPickHttpRequest(
 export function toQuickPickCard(item: RecommendationItem): QuickPickCard {
   return {
     movieId: item.movie_id,
-    title: item.title,
+    // MovieLens embeds the year in the title; the shared helper drops it only
+    // when the year is also available as structured metadata, so the card does
+    // not read "Heat (1995)" above a "1995" line.
+    title: displayTitle(item.title, item.release_year),
     year: item.release_year,
     genres: item.genres,
     overview: item.overview,
