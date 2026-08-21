@@ -307,6 +307,22 @@ the first movie.
 
 ## Bundle 6 — Quick Picks and serving feedback
 
+**Progress as of 2026-08-21:**
+
+- [x] Backend: positive history and excluded IDs passed and enforced
+  separately, with the audit evidence and the `serving_policy` object the UI
+  reads.
+- [x] Frontend: `/quick-picks` as a role-gated selected-persona route — one
+  card at a time, equal button/keyboard/gesture paths, watchlist, watched with
+  an optional rating, not-for-me with undo, progress toward five watched
+  signals, queue exhaustion with Browse and restart paths, failure rollback
+  with focus recovery, and `prefers-reduced-motion` support.
+
+The queue is refetched after three committed watched signals, when a committed
+signal first reaches the five-signal threshold, or when the queue empties. Cold
+start copy stays `Popular while we learn` until a returned policy reports
+`learned: true`.
+
 **Backend:**
 
 - pass `positive_history_movie_ids` and `excluded_movie_ids` separately;
