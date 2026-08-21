@@ -1,5 +1,6 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
+import { signInThroughKeycloak } from "../e2e/keycloak";
 import {
   BUDGETS,
   CPU_THROTTLE,
@@ -41,11 +42,32 @@ import {
  * than blocking the first movie.
  *
  * Runs against the bypass-disabled Compose stack with a real Keycloak login,
- * exactly like the journey suite, so what it measures is the deployed path.
+ * after the journeys and under the same single worker, so what it measures is
+ * the deployed path and a timing measurement can never be blamed for a journey
+ * failure.
+ *
+ * **Persona ownership.** This suite shares one seeded database with the
+ * journeys, so it follows the ownership table in `tests/e2e/browser-auth.spec.ts`
+ * exactly: every route is measured against the persona whose journey already
+ * owns that kind of write, and every write is undone.
+ *
+ * | Persona                   | Owner                   | What this suite does        |
+ * |---------------------------|-------------------------|-----------------------------|
+ * | 900000101 Action Fan      | Library                 | edits a rating, then undoes |
+ * | 900000102 Drama Fan       | Discover                | watchlists, then removes    |
+ * | 900000103 Eclectic Viewer | Browse (watchlist only) | watchlists, then removes    |
+ * | 900000104 Cold Start      | PKCE, then Quick Picks  | **reads only**              |
+ *
+ * Cold Start is measured and never written. The ownership note requires it to
+ * stay below five watched signals, and Quick Picks is the one route whose whole
+ * point is that counter: classifying a movie there to time the animation would
+ * spend the signal the journey is asserting on.
  */
 
-const DEFAULT_PERSONA = 900000101;
-const LIBRARY_PERSONA = 900000103;
+const LIBRARY_PERSONA = 900000101;
+const DISCOVER_PERSONA = 900000102;
+const BROWSE_PERSONA = 900000103;
+const COLD_START_PERSONA = 900000104;
 const CATALOG_PAGE_SIZE = 24;
 
 // Not serial: the config already pins one worker, and a route that fails its
@@ -56,13 +78,9 @@ test.afterAll(() => {
   writeReport();
 });
 
-async function signIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Continue with Keycloak" }).click();
-  await page.locator("#username").fill("demo");
-  await page.locator("#password").fill("demo");
-  await page.locator("#kc-login").click();
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+interface RoutePresence {
+  present: boolean;
+  reason: string;
 }
 
 /**
@@ -72,32 +90,47 @@ async function signIn(page: Page) {
  * first-ever hit on a Next route pays for module evaluation and connection
  * setup that a reader on a running deployment never sees, so measuring it would
  * report the deployment's cold start as the page's cost.
+ *
+ * It also decides whether the route is really there, which a status code alone
+ * cannot. A missing route can answer 404, or it can redirect — and the redirect
+ * is the dangerous one, because it answers 200 and a naive check then measures
+ * whatever it landed on and files the numbers under a route that does not
+ * exist. A CI run did exactly that before this compared paths.
  */
-async function prepare(page: Page, path: string): Promise<number> {
+async function prepare(page: Page, path: string): Promise<RoutePresence> {
   await throttleCpu(page, CPU_THROTTLE);
   await installVitals(page);
-  await signIn(page);
-  const warm = await page.goto(path);
-  const status = warm?.status() ?? 0;
-  if (status !== 404) {
-    await settle(page);
+  await signInThroughKeycloak(page);
+  const response = await page.goto(path);
+  const status = response?.status() ?? 0;
+  if (status === 404) {
+    return { present: false, reason: "route answered HTTP 404" };
   }
-  return status;
+  const requested = new URL(path, "http://localhost").pathname;
+  const landed = new URL(page.url()).pathname;
+  if (landed !== requested) {
+    return {
+      present: false,
+      reason: `route redirected to ${landed}, whose cost is not ${requested}'s`,
+    };
+  }
+  await settle(page);
+  return { present: true, reason: "" };
 }
 
-function skipMissingRoute(route: string, path: string, status: number): boolean {
-  if (status !== 404) {
+function skipMissingRoute(route: string, path: string, presence: RoutePresence): boolean {
+  if (presence.present) {
     return false;
   }
   record({
     route,
     path,
-    skipped: `route answered HTTP 404 — not implemented on this branch`,
+    skipped: `${presence.reason} — not available on this branch`,
     structural: {},
   });
-  // Not a failure: the route is scheduled work, and the report lists it so a
-  // reader can see the gate has a hole rather than assuming it was measured.
-  test.skip(true, `${path} is not implemented on this branch`);
+  // Not a failure: the route may be scheduled work, and the report lists it so
+  // a reader can see the gate has a hole rather than assuming it was measured.
+  test.skip(true, `${path} is not available: ${presence.reason}`);
   return true;
 }
 
@@ -117,8 +150,7 @@ function assertTiming(measurement: RouteMeasurement): void {
     (ENFORCE_LCP ? enforced : advisory).push(overrun);
   }
   if ((measurement.acknowledgement?.ms ?? 0) > BUDGETS.ackMs) {
-    const overrun =
-      `acknowledgement ${measurement.acknowledgement?.ms.toFixed(1)} ms > ${BUDGETS.ackMs} ms`;
+    const overrun = `acknowledgement ${measurement.acknowledgement?.ms.toFixed(1)} ms > ${BUDGETS.ackMs} ms`;
     (ENFORCE_ACK ? enforced : advisory).push(overrun);
   }
   if (advisory.length > 0) {
@@ -156,12 +188,21 @@ async function clearWatchlist(page: Page, userId: number, movieId: number) {
   );
 }
 
+/** The movie id the featured Discover card links to. */
+async function featuredMovieId(page: Page): Promise<number> {
+  const featured = page.locator("section.featured-movie");
+  const href = await featured.getByRole("link", { name: /Open movie/ }).getAttribute("href");
+  const match = /\/movies\/(\d+)/.exec(href ?? "");
+  expect(match, `expected a movie link on the featured card, got ${href}`).not.toBeNull();
+  return Number(match?.[1]);
+}
+
 test("Discover: fan-out render, deferred evidence, and feedback acknowledgement", async ({
   page,
 }) => {
-  const path = `/discover?userId=${DEFAULT_PERSONA}`;
-  const status = await prepare(page, path);
-  if (skipMissingRoute("discover", path, status)) {
+  const path = `/discover?userId=${DISCOVER_PERSONA}`;
+  const presence = await prepare(page, path);
+  if (skipMissingRoute("discover", path, presence)) {
     return;
   }
 
@@ -199,11 +240,10 @@ test("Discover: fan-out render, deferred evidence, and feedback acknowledgement"
   const vitals = await readVitals(page);
   // The featured card is the first-read object, so its Watchlist control is the
   // action whose acknowledgement matters.
-  const featured = page.locator("section.featured-movie");
-  const movieId = await featuredMovieId(featured);
+  const movieId = await featuredMovieId(page);
   const ackMs = await clickAndMeasureAcknowledgement(
     page,
-    featured.getByRole("button", { name: "Watchlist" }),
+    page.locator("section.featured-movie").getByRole("button", { name: "Watchlist" }),
     "#discover-status",
   );
 
@@ -219,22 +259,15 @@ test("Discover: fan-out render, deferred evidence, and feedback acknowledgement"
   };
   record(measurement);
 
-  await clearWatchlist(page, DEFAULT_PERSONA, movieId);
+  await clearWatchlist(page, DISCOVER_PERSONA, movieId);
   assertStructural(measurement);
   assertTiming(measurement);
 });
 
-async function featuredMovieId(featured: Locator): Promise<number> {
-  const href = await featured.getByRole("link", { name: /Open movie/ }).getAttribute("href");
-  const match = /\/movies\/(\d+)/.exec(href ?? "");
-  expect(match, `expected a movie link on the featured card, got ${href}`).not.toBeNull();
-  return Number(match?.[1]);
-}
-
 test("Browse: bounded grid, lazy posters, and a cursor continuation", async ({ page }) => {
-  const path = `/browse?user=${DEFAULT_PERSONA}`;
-  const status = await prepare(page, path);
-  if (skipMissingRoute("browse", path, status)) {
+  const path = `/browse?user=${BROWSE_PERSONA}`;
+  const presence = await prepare(page, path);
+  if (skipMissingRoute("browse", path, presence)) {
     return;
   }
 
@@ -279,15 +312,22 @@ test("Browse: bounded grid, lazy posters, and a cursor continuation", async ({ p
 });
 
 test("Movie detail: reserved artwork and a canonical-state acknowledgement", async ({ page }) => {
-  // The detail route is entered the way a reader enters it — from a card — so
-  // the movie under test is one the catalog actually offers.
+  // Entered the way a reader enters it — from a Browse card — so the movie
+  // under test is one the catalog actually offers, and the watchlist mutation
+  // stays inside what the Browse journey owns for this persona.
   await throttleCpu(page, CPU_THROTTLE);
   await installVitals(page);
-  await signIn(page);
-  await page.goto(`/discover?userId=${DEFAULT_PERSONA}`);
+  await signInThroughKeycloak(page);
+  await page.goto(`/browse?user=${BROWSE_PERSONA}`);
   await settle(page);
-  const movieId = await featuredMovieId(page.locator("section.featured-movie"));
-  const path = `/movies/${movieId}?user=${DEFAULT_PERSONA}`;
+  // A card that rendered artwork, so the reserved-box check has something to
+  // check rather than passing vacuously on a fallback mark.
+  const card = page.locator(".catalog-cell:has(img) a[href^='/movies/']").first();
+  const href = await card.getAttribute("href");
+  const movieId = Number(/\/movies\/(\d+)/.exec(href ?? "")?.[1]);
+  expect(movieId, `expected a movie link with artwork, got ${href}`).toBeGreaterThan(0);
+
+  const path = `/movies/${movieId}?user=${BROWSE_PERSONA}`;
   await page.goto(path);
   await settle(page);
 
@@ -318,20 +358,20 @@ test("Movie detail: reserved artwork and a canonical-state acknowledgement", asy
   };
   record(measurement);
 
-  // The status paragraph and its error twin share a class; only the status
-  // one carries the committed message.
+  // The status paragraph and its error twin share a class; only the status one
+  // carries the committed message.
   await expect(page.locator('p.canonical-state-message[role="status"]')).toContainText(
     /watchlist/i,
   );
-  await clearWatchlist(page, DEFAULT_PERSONA, movieId);
+  await clearWatchlist(page, BROWSE_PERSONA, movieId);
   assertStructural(measurement);
   assertTiming(measurement);
 });
 
 test("Library: tabbed collections and a rating-edit acknowledgement", async ({ page }) => {
   const path = `/library?userId=${LIBRARY_PERSONA}&tab=rated`;
-  const status = await prepare(page, path);
-  if (skipMissingRoute("library", path, status)) {
+  const presence = await prepare(page, path);
+  if (skipMissingRoute("library", path, presence)) {
     return;
   }
 
@@ -382,10 +422,12 @@ test("Library: tabbed collections and a rating-edit acknowledgement", async ({ p
   assertTiming(measurement);
 });
 
-test("Quick Picks: measured when the route exists", async ({ page }) => {
-  const path = "/quick-picks";
-  const status = await prepare(page, path);
-  if (skipMissingRoute("quick-picks", path, status)) {
+test("Quick Picks: the cold-start decision queue, read without spending a signal", async ({
+  page,
+}) => {
+  const path = `/quick-picks?user=${COLD_START_PERSONA}`;
+  const presence = await prepare(page, path);
+  if (skipMissingRoute("quick-picks", path, presence)) {
     return;
   }
 
@@ -402,7 +444,7 @@ test("Quick Picks: measured when the route exists", async ({ page }) => {
     shifts: vitals.shifts,
     structural: {
       reserved_poster_boxes: await posterReservation(page),
-      no_per_card_tmdb_fan_out: tmdbFanOut(requests, 1),
+      no_per_card_tmdb_fan_out: tmdbFanOut(requests, await page.locator(".poster-frame").count()),
     },
     requests,
   };

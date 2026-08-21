@@ -29,16 +29,18 @@
 // to a route and to a position inside it, and correctness is asserted at every
 // step: a fast wrong answer is not a passing measurement.
 //
-// One caveat, recorded rather than papered over: there is no authenticated
-// `/quick-picks` route on this branch — it exists only as a zero-network
-// fixture preview. That scenario therefore models the API contract the route
-// will drive (durable suppression, undo, and a coherent policy after a fresh
-// signal) rather than an observed page. Everything else mirrors a real loader.
+// The `quickpicks` sequence is the API contract the Quick Picks route drives —
+// durable suppression, undo, and a coherent policy after a fresh signal —
+// rather than a transcript of one page's fetches, because the route's own
+// classification happens through server actions rather than a fixed request
+// list. It is the shape that has to hold under load either way.
 //
-// The two writing scenarios mutate demo personas that the browser journeys do
-// not drive, revert inside the iteration, and are swept again in teardown.
-// Cold Start (900000104) is never mutated: pushing it past five positive
-// signals would flip the fallback path this harness exists to keep honest.
+// The two writing scenarios follow the same persona ownership table the browser
+// suite uses, revert inside the iteration, and are swept again in teardown.
+// Cold Start is never mutated, and the run refuses to start if it is pointed
+// there: pushing it past five positive signals would flip the fallback path
+// this harness exists to keep honest, and would break the browser suite's Quick
+// Picks journey, which owns that persona precisely for its signal count.
 import { check } from "k6";
 import exec from "k6/execution";
 import http from "k6/http";
@@ -74,17 +76,45 @@ const CATALOG_MAX_PAGE_SIZE = 48;
 const LIBRARY_PAGE_SIZE = 12;
 const LIBRARY_MAX_PAGE_SIZE = 50;
 
-// Persona assignment. Discover and Browse are read-only, so they use the
-// product's default persona. The two writers get personas of their own, which
-// keeps a failed assertion attributable to one scenario instead of to
-// whichever two raced.
-const DISCOVER_WARM_USER = 900000101;
-const DISCOVER_COLD_USER = 900000104;
-const BROWSE_USER = 900000101;
-const LIBRARY_USER = 900000103;
-const MUTATION_USER = 900000103;
-const QUICKPICKS_USER = 900000102;
-const MUTATING_USERS = [MUTATION_USER, QUICKPICKS_USER];
+// Persona assignment, mirroring the ownership table the browser suite keeps in
+// `web/tests/e2e/browser-auth.spec.ts`: rating and watched history belong to
+// Action Fan, watchlist to Eclectic Viewer, Discover's writes to Drama Fan, and
+// Cold Start is read-only for everyone. In CI the two suites never share a
+// database — the load gate runs under the `movielens-demo` Compose project and
+// the browser job under `movielens-browser-e2e` — so a collision is impossible
+// there; locally they would share one, which is why the same table governs both
+// and why every write here is undone.
+//
+// Which persona each *reader* uses is a measurement decision on top of that.
+// Discover and Browse read Eclectic Viewer because the only writes that persona
+// receives are watchlist changes, and watchlist changes no recommendation
+// input — so the budgeted recommendation step is coupled to the cheapest
+// possible writer. Library reads Action Fan, whose rating edits churn values
+// the library reports but not the counts it is asserted on.
+//
+// Overridable so that a dedicated load persona, if the seeder ever grows one,
+// is a variable change rather than an edit to five call sites.
+const DISCOVER_WARM_USER = Number(__ENV.LOAD_DISCOVER_USER || 900000103);
+const DISCOVER_COLD_USER = Number(__ENV.LOAD_COLD_USER || 900000104);
+const BROWSE_USER = Number(__ENV.LOAD_BROWSE_USER || 900000103);
+const LIBRARY_USER = Number(__ENV.LOAD_LIBRARY_USER || 900000101);
+const RATING_USER = Number(__ENV.LOAD_RATING_USER || 900000101);
+const WATCHLIST_USER = Number(__ENV.LOAD_WATCHLIST_USER || 900000103);
+const QUICKPICKS_USER = Number(__ENV.LOAD_QUICKPICKS_USER || 900000102);
+const MUTATING_USERS = [...new Set([RATING_USER, WATCHLIST_USER, QUICKPICKS_USER])];
+
+// Cold Start is the one persona with a hard rule attached: the browser suite's
+// PKCE and Quick Picks journeys own it and require it to stay below five
+// watched signals, and this harness's own cold-traffic assertion requires it to
+// stay on the popularity fallback. A writer pointed at it would break both, so
+// the run refuses to start rather than discovering it in a threshold.
+if (MUTATING_USERS.includes(DISCOVER_COLD_USER)) {
+  throw new Error(
+    `persona ${DISCOVER_COLD_USER} is the cold-start persona and must never be mutated: ` +
+      "the browser suite's Quick Picks journey asserts on its signal count and this " +
+      "workload asserts it is served by the popularity fallback.",
+  );
+}
 
 // Browse variants, rotated by iteration so one run covers search, genre, decade
 // and both non-default sorts rather than measuring the same query 200 times.
@@ -208,13 +238,13 @@ export function setup() {
     catalogIds = catalog.ids;
   }
   const pools = {
-    watchlist: pickUntouchedMovies(catalogIds, snapshots[MUTATION_USER], 16),
-    rating: pickRatedMovies(snapshots[MUTATION_USER], 8),
+    watchlist: pickUntouchedMovies(catalogIds, snapshots[WATCHLIST_USER], 16),
+    rating: pickRatedMovies(snapshots[RATING_USER], 8),
   };
   if (pools.watchlist.length === 0 || pools.rating.length === 0) {
     throw new Error(
-      `persona ${MUTATION_USER} has no usable mutation pool ` +
-        `(untouched=${pools.watchlist.length}, rated=${pools.rating.length}). ` +
+      `no usable mutation pool: persona ${WATCHLIST_USER} has ${pools.watchlist.length} ` +
+        `untouched movies and persona ${RATING_USER} has ${pools.rating.length} rated ones. ` +
         "Run `make demo-seed` before measuring: the page workloads mutate real state.",
     );
   }
@@ -244,7 +274,10 @@ function warmUp(auth) {
     timeout: "15s",
   };
   const urls = [`${BASE_URL}/personas`];
-  for (const userId of [DISCOVER_WARM_USER, DISCOVER_COLD_USER, LIBRARY_USER, QUICKPICKS_USER]) {
+  const personas = [
+    ...new Set([DISCOVER_WARM_USER, DISCOVER_COLD_USER, LIBRARY_USER, ...MUTATING_USERS]),
+  ];
+  for (const userId of personas) {
     urls.push(
       `${BASE_URL}/users/${userId}/recommendations?limit=${DISCOVER_RECOMMENDATION_LIMIT}`,
       `${BASE_URL}/users/${userId}/history?limit=${DISCOVER_HISTORY_LIMIT}`,
@@ -621,9 +654,15 @@ export function mutationJourney(data) {
   }
 }
 
+/** The persona a mutation step is scoped to, so tags and URLs cannot drift apart. */
+function mutationUser(action) {
+  return action === "rating" ? RATING_USER : WATCHLIST_USER;
+}
+
 function watchlistJourney(data, movieId) {
-  const base = `${BASE_URL}/users/${MUTATION_USER}/movies/${movieId}`;
   const action = "watchlist";
+  const user = mutationUser(action);
+  const base = `${BASE_URL}/users/${user}/movies/${movieId}`;
   const journeyStart = Date.now();
   const blockingStart = Date.now();
 
@@ -647,8 +686,11 @@ function watchlistJourney(data, movieId) {
     endpoint: "mutation",
     action,
   });
-  // The reader is waiting from the click until the button flips, which is this
-  // read plus this write, not the write alone.
+  // Deliberately the read plus the write. A real client already holds the
+  // revision from the rendered page, so its tap costs only the mutation; this
+  // harness has no page state and must fetch it first. Budgeting the pair keeps
+  // the number honest about what was measured rather than quietly attributing
+  // the harness's extra round trip to the product.
   pageBlocking.add(Date.now() - blockingStart, { page: "mutation" });
   check(
     added,
@@ -702,7 +744,7 @@ function watchlistJourney(data, movieId) {
 
   const counts = get(
     data.auth,
-    `${BASE_URL}/users/${MUTATION_USER}/library?tab=watchlist&sort=recent&limit=1`,
+    `${BASE_URL}/users/${user}/library?tab=watchlist&sort=recent&limit=1`,
     { page: "mutation", step: "library_counts", endpoint: "library", action },
   );
   check(
@@ -719,7 +761,7 @@ function watchlistJourney(data, movieId) {
 
   const library = get(
     data.auth,
-    `${BASE_URL}/users/${MUTATION_USER}/library?tab=watchlist&sort=recent&limit=${LIBRARY_PAGE_SIZE}`,
+    `${BASE_URL}/users/${user}/library?tab=watchlist&sort=recent&limit=${LIBRARY_PAGE_SIZE}`,
     { page: "mutation", step: "library_read_after", endpoint: "library", action },
   );
   check(
@@ -766,8 +808,9 @@ function watchlistJourney(data, movieId) {
 }
 
 function ratingJourney(data, target) {
-  const base = `${BASE_URL}/users/${MUTATION_USER}/movies/${target.movie_id}`;
   const action = "rating";
+  const user = mutationUser(action);
+  const base = `${BASE_URL}/users/${user}/movies/${target.movie_id}`;
   // Half a star from the seeded value, clamped into the API's 0.5–5.0 range.
   // Small on purpose: this has to change the value without changing what the
   // persona means.
@@ -860,10 +903,10 @@ function ratingJourney(data, target) {
   const [counts, taste] = http.batch([
     request(
       data.auth,
-      `${BASE_URL}/users/${MUTATION_USER}/library?tab=rated&sort=recent&limit=1`,
+      `${BASE_URL}/users/${user}/library?tab=rated&sort=recent&limit=1`,
       { page: "mutation", step: "library_counts", endpoint: "library", action },
     ),
-    request(data.auth, `${BASE_URL}/users/${MUTATION_USER}/taste-profile`, {
+    request(data.auth, `${BASE_URL}/users/${user}/taste-profile`, {
       page: "mutation",
       step: "taste_refresh",
       endpoint: "taste-profile",
@@ -889,7 +932,7 @@ function ratingJourney(data, target) {
 
   const library = get(
     data.auth,
-    `${BASE_URL}/users/${MUTATION_USER}/library?tab=rated&sort=recent&limit=${LIBRARY_PAGE_SIZE}`,
+    `${BASE_URL}/users/${user}/library?tab=rated&sort=recent&limit=${LIBRARY_PAGE_SIZE}`,
     { page: "mutation", step: "library_read_after", endpoint: "library", action },
   );
   check(
@@ -1108,6 +1151,7 @@ export function quickPicksJourney(data) {
  * needed repairing did not measure what it claimed to.
  */
 export function teardown(data) {
+  assertColdStartUntouched(data.auth);
   const repaired = [];
   for (const userId of MUTATING_USERS) {
     const expected = data.snapshots[userId];
@@ -1134,6 +1178,31 @@ const EMPTY_STATE = {
   watchlisted_at: null,
   dismissed_at: null,
 };
+
+/**
+ * The cold persona still has nothing to learn from.
+ *
+ * The module-level guard proves no *configured* writer targets it. This proves
+ * nothing wrote to it anyway — a mis-scoped URL, a stray pool entry, a fixture
+ * that shifted underneath the run. It is one request and it protects two
+ * separate contracts: this workload's cold-traffic assertion, and the browser
+ * suite's Quick Picks journey, which owns this persona for its signal count.
+ */
+function assertColdStartUntouched(auth) {
+  const response = http.get(
+    `${BASE_URL}/users/${DISCOVER_COLD_USER}/recommendations?limit=1`,
+    { headers: authorizationHeaders(auth), tags: { endpoint: "teardown" }, timeout: "15s" },
+  );
+  const policy = response.status === 200 ? response.json("serving_policy") : null;
+  if (!policy || policy.name !== POPULARITY_POLICY || policy.positive_signal_count !== 0) {
+    throw new Error(
+      `cold-start persona ${DISCOVER_COLD_USER} did not survive the run untouched: ` +
+        `HTTP ${response.status}, policy ${policy ? policy.name : "none"}, ` +
+        `${policy ? policy.positive_signal_count : "?"} positive signals (expected popularity ` +
+        "and 0). Something in this run wrote to the one persona nothing may write to.",
+    );
+  }
+}
 
 function restoreMovie(auth, userId, movieId, expected, actual) {
   const want = expected || EMPTY_STATE;

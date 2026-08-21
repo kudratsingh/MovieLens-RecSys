@@ -221,11 +221,15 @@ loaders:
 | `mutation` | read state → mutate → replay the idempotency key → read state → counts refresh → list read → revert → read state |
 | `quickpicks` | recommend → dismiss → recommend → undo → watched → recommend → revert |
 
-The two writing scenarios mutate demo personas and put them back inside the
-iteration; `teardown()` sweeps anything left and fails the run if it had to.
-Cold Start `900000104` is never mutated. Run the browser suite and this target
-one at a time locally — in CI they use different Compose projects and cannot
-collide.
+The two writing scenarios follow the same persona ownership table the browser
+journeys use (`web/tests/e2e/browser-auth.spec.ts`): rating and watched history
+on Action Fan, watchlist on Eclectic Viewer, Discover's writes on Drama Fan.
+They put every change back inside the iteration, and `teardown()` sweeps
+anything left and fails the run if it had to. Cold Start `900000104` is never
+mutated — the script refuses to start if a writer is pointed at it, and
+teardown reads its policy back to prove nothing moved its signal count. Run the
+browser suite and this target one at a time locally; in CI they use different
+Compose projects against different databases and cannot collide.
 
 Correctness always fails the run: every check, zero request errors, zero
 unreverted mutations. The per-step latency budgets in
@@ -264,11 +268,13 @@ structural promises: reserved poster boxes, below-fold lazy loading, a bounded
 catalog page, zero per-card TMDB requests, and technical evidence that loads on
 disclosure rather than blocking the first movie. Targets are LCP ≤ 2.5 s,
 CLS ≤ 0.1, and acknowledgement ≤ 100 ms; CLS, LCP and the structural claims are
-enforced, the acknowledgement budget is advisory for now. A route that answers
-404 is skipped and listed as skipped — `/quick-picks` does not exist yet, and
-the report says so rather than quietly measuring four routes and calling it
-five. The report is written to `artifacts/browser-timing/browser-timing.json`
-with a compact table in the log.
+enforced, the acknowledgement budget is advisory for now. Each route is measured
+against the persona whose journey already owns that kind of write, and Cold
+Start is read only — Quick Picks owns it for its signal counter, and timing an
+animation is not a reason to spend the signal it is counting. A route that is
+missing is skipped and listed as skipped, whether it answers 404 or redirects
+somewhere else; the report names which. It is written to
+`artifacts/browser-timing/browser-timing.json` with a compact table in the log.
 
 ## Routine operations
 

@@ -252,12 +252,39 @@ register.
 The two writing scenarios run a single virtual user each. They are journeys, not
 throughput tests, and serialising them means an `expected_revision` conflict can
 only ever be the service disagreeing with itself rather than two copies of the
-harness racing. They mutate `900000103` (rating edits, watchlist) and
-`900000102` (dismiss/undo/watched), revert inside the iteration, and are swept
-again in `teardown()` — which repairs any divergence and then *fails* the run,
-because a run that needed repairing did not measure what it claimed to. Cold
-Start `900000104` is never mutated: pushing it past five positive signals would
-flip the fallback path this harness exists to keep honest.
+harness racing.
+
+Which persona each scenario touches follows the ownership table the browser
+suite keeps in `web/tests/e2e/browser-auth.spec.ts`, so one rule governs both
+suites: rating and watched history belong to Action Fan `900000101`, watchlist
+to Eclectic Viewer `900000103`, Discover's writes to Drama Fan `900000102`, and
+Cold Start `900000104` is read-only for everyone. In CI the two suites cannot
+collide anyway — the load gate runs under the `movielens-demo` Compose project
+and the browser job under `movielens-browser-e2e`, against separate databases —
+but locally they share one, which is why the same table governs both.
+
+Which persona each *reader* uses is a measurement decision layered on top.
+Discover and Browse read Eclectic Viewer, whose only writes here are watchlist
+changes, and a watchlist change is not a recommendation input — so the budgeted
+recommendation step is coupled to the cheapest possible writer rather than to
+one whose edits invalidate the sidecar's feature cache. Library reads Action
+Fan, whose rating edits churn values it reports but not the counts it asserts.
+
+Every write is undone inside its iteration, and `teardown()` sweeps again: it
+repairs any divergence and then *fails* the run, because a run that needed
+repairing did not measure what it claimed to. One residue it cannot remove is
+worth naming: adding and then removing a watchlist entry leaves a
+`user_movie_state` row whose every field is null. The API has no endpoint that
+deletes the row, and every consumer — library counts, catalog card state,
+recommendation exclusions, the positive-signal count — treats it exactly as it
+treats no row at all. That is the precision "restore exactly" has here.
+
+Cold Start gets belt and braces. The script refuses to start if any writer is
+pointed at it, and `teardown()` reads its policy back and fails unless it is
+still `popularity` with zero positive signals. That protects two separate
+contracts at once: this workload's own cold-traffic assertion, and the browser
+suite's Quick Picks journey, which owns that persona precisely for the counter
+a stray write would move.
 
 #### Correctness and latency are separate verdicts
 
@@ -278,87 +305,109 @@ The re-measure rule is unchanged and now applies only to latency breaches.
 #### Baselines and the budgets they produced
 
 Local Docker Desktop, k6 2.1.0, four `api-load` workers, four model-sidecar
-workers, 45-second window, two runs per configuration. "1-CPU" is `api-load` and
-`model-server` each capped with `cpus: 1.0`; per the 2026-08-21 note above that
-is a harsher environment than a shared runner rather than a model of one, so
-those numbers are a stress bound. Every column is the worst of the two runs.
+workers, 45-second windows. "1-CPU" caps `api-load` and `model-server` with
+`cpus: 1.0` each; per the 2026-08-21 note above that is a harsher environment
+than a shared runner rather than a model of one, so those numbers are a stress
+bound. Six windows in all: two uncapped and four capped, the latter spanning
+both sides of the persona realignment described earlier, since the workload
+shape did not change with it.
 
-Every budget is **1.5x the worst 1-CPU observation, rounded up to the next
-10 ms**, and steps that hit the same endpoint inside the same page share the
-worst of their budgets — encoding the gap between two 23-sample percentiles as
-two different contracts would be recording noise as a promise.
+The derivation, stated once so it can be reapplied rather than re-invented:
 
-| Step | uncapped p95/p99 | 1-CPU p95/p99 | budget p95/p99 | margin over 1-CPU |
+> **budget = 1.5x the worst value at least two runs corroborate, rounded up to
+> the next 10 ms.**
+
+"Corroborated" means the second-highest of the four capped windows, not the
+highest, and that is the load-bearing part. A capped container is stalled by
+CFS throttling dozens of times per run, and these journeys produce 23 to 46
+samples per window — so a p99 there is barely more than a maximum, and a single
+stall can carry it. Sizing off the single worst reading produced, on the first
+attempt, a 230 ms p99 budget for a recommendation read whose median is 26 ms:
+arithmetically correct and useless as a gate. Requiring two runs to agree stops
+a hypervisor stall from buying permanent headroom, and it makes every budget
+*tighter* than the naive rule rather than looser. The cost is explicit and
+accepted: one of the four capped windows is expected to breach, because it is
+the outlier the rule deliberately excluded.
+
+Steps that hit the same endpoint inside the same page share the worst of their
+budgets, and a page's p99 budget is floored at 1.3x its p95 budget — on the
+low-sample journeys the two statistics land on top of each other, and a p99
+contract that is really a p95 contract is a trap for whoever reads it next.
+
+| Step | uncapped p95/p99 | 1-CPU worst | 1-CPU corroborated | budget p95/p99 |
 |---|---:|---:|---:|---:|
-| `browse:catalog_first` | 22 / 30 | 28 / 41 | 50 / 70 | 1.8x / 1.7x |
-| `browse:catalog_next_1` | 12 / 20 | 22 / 52 | 70 / 120 | 3.2x / 2.3x |
-| `browse:catalog_next_2` | 9 / 17 | 46 / 74 | 70 / 120 | 1.5x / 1.6x |
-| `browse:movie_detail` | 5 / 10 | 22 / 44 | 40 / 70 | 1.8x / 1.6x |
-| `discover:audits` | 8 / 15 | 21 / 66 | 40 / 100 | 1.9x / 1.5x |
-| `discover:features` | 11 / 17 | 25 / 66 | 40 / 100 | 1.6x / 1.5x |
-| `discover:history` | 16 / 23 | 18 / 36 | 30 / 60 | 1.7x / 1.7x |
-| `discover:personas` | 15 / 20 | 16 / 34 | 40 / 60 | 2.5x / 1.8x |
-| `discover:recommendations` | 31 / 39 | 40 / 74 | 60 / 120 | 1.5x / 1.6x |
-| `library:library_history` | 9 / 13 | 47 / 65 | 80 / 110 | 1.7x / 1.7x |
-| `library:library_rated` | 22 / 26 | 31 / 64 | 80 / 110 | 2.6x / 1.7x |
-| `library:library_watchlist` | 12 / 18 | 26 / 68 | 80 / 110 | 3.0x / 1.6x |
-| `library:personas` | 15 / 22 | 20 / 38 | 40 / 60 | 2.0x / 1.6x |
-| `library:taste_profile` | 19 / 25 | 23 / 45 | 40 / 70 | 1.8x / 1.6x |
-| `mutation:library_counts` | 6 / 10 | 35 / 46 | 90 / 100 | 2.5x / 2.2x |
-| `mutation:library_read_after` | 7 / 8 | 56 / 61 | 90 / 100 | 1.6x / 1.6x |
-| `mutation:mutate` | 16 / 16 | 74 / 89 | 120 / 140 | 1.6x / 1.6x |
-| `mutation:mutate_replay` | 9 / 12 | 43 / 71 | 120 / 140 | 2.8x / 2.0x |
-| `mutation:revert` | 7 / 13 | 46 / 81 | 120 / 140 | 2.6x / 1.7x |
-| `mutation:state_read` | 21 / 25 | 33 / 50 | 70 / 100 | 2.1x / 2.0x |
-| `mutation:state_read_after` | 5 / 7 | 42 / 61 | 70 / 100 | 1.7x / 1.6x |
-| `mutation:state_read_final` | 4 / 5 | 23 / 56 | 70 / 100 | 3.0x / 1.8x |
-| `mutation:taste_refresh` | 6 / 8 | 55 / 68 | 90 / 110 | 1.6x / 1.6x |
-| `quickpicks:dismiss` | 18 / 21 | 67 / 73 | 110 / 120 | 1.6x / 1.6x |
-| `quickpicks:recommendations_after_dismiss` | 14 / 16 | 59 / 66 | 90 / 140 | 1.5x / 2.1x |
-| `quickpicks:recommendations_after_watched` | 11 / 14 | 31 / 57 | 90 / 140 | 2.9x / 2.5x |
-| `quickpicks:recommendations_before` | 40 / 48 | 44 / 87 | 90 / 140 | 2.1x / 1.6x |
-| `quickpicks:revert_watched` | 6 / 9 | 27 / 35 | 110 / 120 | 4.1x / 3.5x |
-| `quickpicks:undo` | 6 / 6 | 35 / 44 | 110 / 120 | 3.1x / 2.7x |
-| `quickpicks:watched` | 5 / 6 | 24 / 30 | 110 / 120 | 4.6x / 4.0x |
+| `browse:catalog_first` | 28 / 31 | 28 / 62 | 26 / 41 | 40 / 70 |
+| `browse:catalog_next_1` | 14 / 17 | 22 / 55 | 13 / 52 | 40 / 100 |
+| `browse:catalog_next_2` | 13 / 25 | 46 / 74 | 21 / 67 | 40 / 100 |
+| `browse:movie_detail` | 5 / 12 | 22 / 54 | 21 / 44 | 40 / 70 |
+| `discover:audits` | 10 / 23 | 21 / 66 | 19 / 48 | 30 / 80 |
+| `discover:features` | 13 / 33 | 29 / 66 | 25 / 64 | 40 / 100 |
+| `discover:history` | 21 / 26 | 18 / 40 | 18 / 36 | 30 / 60 |
+| `discover:personas` | 18 / 24 | 17 / 34 | 17 / 26 | 30 / 60 |
+| `discover:recommendations` | 34 / 44 | 40 / 77 | 35 / 74 | 60 / 120 |
+| `library:library_history` | 11 / 30 | 47 / 68 | 27 / 65 | 50 / 100 |
+| `library:library_rated` | 26 / 31 | 31 / 64 | 25 / 52 | 50 / 100 |
+| `library:library_watchlist` | 11 / 14 | 26 / 68 | 15 / 36 | 50 / 100 |
+| `library:personas` | 18 / 20 | 20 / 41 | 20 / 38 | 30 / 60 |
+| `library:taste_profile` | 21 / 31 | 23 / 45 | 23 / 29 | 40 / 50 |
+| `mutation:library_counts` | 7 / 15 | 35 / 46 | 26 / 45 | 50 / 80 |
+| `mutation:library_read_after` | 5 / 7 | 56 / 61 | 32 / 47 | 50 / 80 |
+| `mutation:mutate` | 13 / 13 | 74 / 89 | 42 / 84 | 70 / 130 |
+| `mutation:mutate_replay` | 7 / 8 | 61 / 74 | 43 / 71 | 70 / 130 |
+| `mutation:revert` | 6 / 7 | 46 / 81 | 42 / 52 | 70 / 130 |
+| `mutation:state_read` | 23 / 27 | 33 / 63 | 29 / 50 | 60 / 90 |
+| `mutation:state_read_after` | 5 / 6 | 42 / 61 | 38 / 55 | 60 / 90 |
+| `mutation:state_read_final` | 3 / 4 | 23 / 56 | 18 / 41 | 60 / 90 |
+| `mutation:taste_refresh` | 7 / 18 | 55 / 68 | 48 / 57 | 80 / 90 |
+| `quickpicks:dismiss` | 15 / 16 | 67 / 73 | 61 / 71 | 100 / 110 |
+| `quickpicks:recommendations_after_dismiss` | 11 / 14 | 61 / 72 | 59 / 66 | 90 / 140 |
+| `quickpicks:recommendations_after_watched` | 9 / 9 | 47 / 57 | 31 / 54 | 90 / 140 |
+| `quickpicks:recommendations_before` | 38 / 39 | 44 / 150 | 41 / 87 | 90 / 140 |
+| `quickpicks:revert_watched` | 5 / 11 | 30 / 38 | 27 / 35 | 100 / 110 |
+| `quickpicks:undo` | 5 / 7 | 39 / 45 | 35 / 44 | 100 / 110 |
+| `quickpicks:watched` | 4 / 5 | 24 / 30 | 24 / 25 | 100 / 110 |
 
-Per page, on the two custom trends the script records — `blocking` is what
-the route must finish before it can render its first-read object,
-`journey` is the whole modelled sequence:
+Where a budget looks larger than 1.5x its own corroborated value, the row
+shares a family budget with a slower sibling — the three Library tabs, the
+two cursor continuations, the three mutation writes and so on.
 
-| Page | Trend | uncapped p95/p99 | 1-CPU p95/p99 | budget p95/p99 |
-|---|---|---:|---:|---:|
-| `discover` | blocking | 31 / 44 | 41 / 74 | 70 / 120 |
-| `discover` | journey | 41 / 52 | 81 / 109 | 130 / 170 |
-| `browse` | blocking | 23 / 30 | 28 / 42 | 50 / 70 |
-| `browse` | journey | 49 / 65 | 104 / 180 | 160 / 280 |
-| `library` | blocking | 23 / 33 | 33 / 65 | 50 / 100 |
-| `library` | journey | 46 / 56 | 97 / 162 | 150 / 250 |
-| `mutation` | blocking | 36 / 39 | 91 / 140 | 140 / 210 |
-| `mutation` | journey | 65 / 80 | 153 / 407 | 230 / 620 |
-| `quickpicks` | blocking | 41 / 49 | 44 / 87 | 70 / 140 |
-| `quickpicks` | journey | 92 / 101 | 197 / 209 | 300 / 400 |
+Per page, on the two custom trends the script records:
 
-These are deliberately generous. A brand-new budget's first job is to not
-flake, and the margins above are measured against an environment nothing in CI
-actually runs in. What they catch today is an order-of-magnitude regression —
-`mutation:mutate` going from 16 ms to 130 ms, a fan-out that stopped being
-parallel, a keyset scan that became a table scan. What they do not catch is
-drift, and tightening them is the follow-up below.
+| Page | Trend | uncapped p95/p99 | 1-CPU worst | 1-CPU corroborated | budget p95/p99 |
+|---|---|---:|---:|---:|---:|
+| `discover` | blocking | 34 / 45 | 41 / 77 | 36 / 74 | 60 / 120 |
+| `discover` | journey | 49 / 77 | 81 / 129 | 76 / 109 | 120 / 170 |
+| `browse` | blocking | 28 / 31 | 28 / 64 | 26 / 42 | 40 / 70 |
+| `browse` | journey | 56 / 78 | 104 / 180 | 94 / 155 | 150 / 240 |
+| `library` | blocking | 28 / 32 | 33 / 65 | 26 / 53 | 40 / 80 |
+| `library` | journey | 51 / 83 | 97 / 162 | 75 / 114 | 120 / 180 |
+| `mutation` | blocking | 34 / 37 | 91 / 147 | 72 / 140 | 110 / 210 |
+| `mutation` | journey | 58 / 73 | 153 / 407 | 114 / 202 | 180 / 310 |
+| `quickpicks` | blocking | 38 / 39 | 44 / 150 | 42 / 87 | 70 / 140 |
+| `quickpicks` | journey | 80 / 82 | 197 / 254 | 171 / 209 | 260 / 340 |
 
-Two verification runs followed the derivation, on the budgets above rather than
-on placeholders: one uncapped with `PAGE_LATENCY_ENFORCED=true` and one capped,
-both `GATE=pass` with every check passing, zero request errors, zero dropped
-iterations, and zero unreverted mutations. The capped run met every budget
-outright, so the advisory path was not even exercised by it — it was exercised
-during derivation, when ten steps breached the placeholder budgets and the run
-still exited 0 with the breaches named in the log and the artifact.
+Two verification windows followed the derivation, on the budgets above rather
+than on placeholders: one uncapped with `PAGE_LATENCY_ENFORCED=true` and one
+capped and advisory. Both reported `GATE=pass` with every check passing, zero
+request errors, zero dropped iterations and zero unreverted mutations, and both
+met every budget outright — the capped one included, which is a stronger result
+than the rule required.
 
-Two honest weak points in the table. `mutation` and `quickpicks` produce 45 and
-23 samples per smoke window, so their p99 is barely more than a maximum — which
-is why `mutation:journey` p99 is budgeted at 620 ms off a single 407 ms
-iteration. And `browse:catalog_next_2` was *faster* than `catalog_next_1`
-uncapped and slower capped, which is noise, not a property of the second cursor;
-the two share a budget for that reason.
+These are still generous against the uncapped readings, and deliberately so: a
+brand-new budget's first job is to not flake, and it is measured against an
+environment nothing in CI actually runs in. What they catch today is an
+order-of-magnitude regression — `mutation:mutate` going from 16 ms to 130 ms, a
+fan-out that stopped being parallel, a keyset scan that became a table scan.
+What they do not catch is drift, and tightening them is the follow-up below.
+
+The honest weak point is sample count. `mutation` yields 46 iterations per smoke
+window and `quickpicks` 23, so a p99 there is barely more than a maximum; the
+corroboration rule is a mitigation, not a cure. The nightly profile is where
+these become percentiles — it keeps the smoke arrival rates and lengthens the
+window to three minutes, giving 180 and 90 samples. A second, smaller one:
+`browse:catalog_next_2` reads *faster* than `catalog_next_1` uncapped and slower
+capped, which is noise rather than a property of the second cursor, and the two
+share a budget for that reason.
 
 #### Browser timing, measured separately
 
@@ -377,15 +426,24 @@ capture-phase input event and the first mutation that changes the visible text
 of the control's status region. Timing a Playwright call would measure
 Playwright's round trip as much as the application.
 
+Each route is measured against the persona whose journey already owns that kind
+of write, per the same ownership table, and every write is undone. Cold Start is
+read and never written: Quick Picks owns it for the five-signal counter, and
+timing a decision queue is not a reason to spend the signal it is counting.
+
 Three runs on the seeded local stack, worst reading per route:
 
-| Route | LCP (ms) | CLS | acknowledgement (ms) | interaction measured |
-|---|---:|---:|---:|---|
-| `/discover` | 392 | 0.0000 | 15.9 | watchlist the featured movie |
-| `/browse` | 108 | 0.0000 | 14.6 | load the next cursor page |
-| `/movies/{id}` | 104 | 0.0000 | 9.9 | watchlist from the detail controls |
-| `/library` | 128 | 0.0000 | 16.9 | edit a rating |
-| `/quick-picks` | — | — | — | **skipped: HTTP 404** |
+| Route | Persona | LCP (ms) | CLS | ack (ms) | interaction measured |
+|---|---|---:|---:|---:|---|
+| `/discover` | 900000102 | 400 | 0.0000 | 14.4 | watchlist the featured movie |
+| `/browse` | 900000103 | 104 | 0.0000 | 14.7 | load the next cursor page |
+| `/movies/{id}` | 900000103 | 108 | 0.0000 | 7.7 | watchlist from the detail controls |
+| `/library` | 900000101 | 120 | 0.0000 | 16.5 | edit a rating |
+| `/quick-picks` | 900000104 | — | — | — | **skipped: HTTP 404 on this branch** |
+
+Quick Picks lands on `main` with its own pull request; the route is measured as
+soon as this branch is rebased onto it, and until then the report says skipped
+rather than implying five routes were covered.
 
 Alongside the timings, the structural promises the testing strategy makes are
 asserted rather than assumed, because a good number on one run is not the same
@@ -440,6 +498,53 @@ a contract, so the day a limiter lands it starts describing it without being
 rewritten. Inventing a limiter to have something to assert would have been worse
 than the gap.
 
+#### First observation from the runner
+
+The gap this note keeps naming — no data from a shared 4-vCPU runner — got its
+first entry when this work's own CI run went green. One run is not a trend and
+it does not promote anything, but it is the first evidence that the budgets are
+not fantasy, and it belongs here rather than in a pull-request comment that will
+be closed. Every step and every page landed inside budget, with zero request
+errors, zero dropped iterations and zero unreverted mutations at 71.6
+requests/second.
+
+| Step (tightest margin first) | runner p95/p99 | budget p95/p99 | margin |
+|---|---:|---:|---:|
+| `library:personas` | 19 / 22 | 30 / 60 | 1.6x / 2.8x |
+| `discover:recommendations` | 34 / 41 | 60 / 120 | 1.7x / 2.9x |
+| `library:taste_profile` | 23 / 28 | 40 / 50 | 1.7x / 1.8x |
+| `quickpicks:recommendations_before` | 50 / 52 | 90 / 140 | 1.8x / 2.7x |
+| `browse:catalog_first` | 21 / 26 | 40 / 70 | 1.9x / 2.7x |
+| `discover:history` | 16 / 22 | 30 / 60 | 1.9x / 2.7x |
+
+| Page | runner blocking p95/p99 | budget | runner journey p95/p99 | budget |
+|---|---:|---:|---:|---:|
+| `discover` | 35 / 41 | 60 / 120 | 58 / 64 | 120 / 170 |
+| `browse` | 22 / 27 | 40 / 70 | 65 / 75 | 150 / 240 |
+| `library` | 25 / 32 | 40 / 80 | 61 / 70 | 120 / 180 |
+| `mutation` | 40 / 44 | 110 / 210 | 88 / 94 | 180 / 310 |
+| `quickpicks` | 51 / 52 | 70 / 140 | 124 / 136 | 260 / 340 |
+
+Two things worth reading off that. The runner's numbers sit close to the local
+*uncapped* readings and well under the 1-CPU ones, which is the clearest
+confirmation yet of what the previous note asserted: a `--cpus` cap is a harsher
+environment than a shared runner, so budgets derived from it are conservative
+rather than optimistic. And the tightest margin in the whole table is
+`quickpicks` blocking at 1.4x — a recommendation read taken immediately after a
+state change, which is a deliberate cache miss and therefore the step most
+worth watching as the catalog grows.
+
+The browser suite's first runner readings, from the same run: LCP 112–448 ms
+against a 2 500 ms budget, CLS 0.0000 everywhere, and acknowledgement 12.1–43.0
+ms against 100 ms. The acknowledgement margin narrowed from 5.9x locally to 2.3x
+on the runner, which is exactly the sensitivity that kept it advisory.
+
+Both observations predate the persona realignment described above, and the
+budgets were tightened after them by the corroboration rule. The run is quoted
+against the tightened numbers, not the ones in force when it happened: it clears
+every one of them, which is the useful fact. The workload shape did not change
+with the realignment, and the budgets stand on the re-measured local windows.
+
 #### What is enforced, and how an advisory budget gets promoted
 
 | Measure | PR CI | Nightly | Why |
@@ -470,14 +575,15 @@ assertion:
 
 #### Gaps this note is recording rather than closing
 
-- **There is no `/quick-picks` route on this branch.** It exists only as a
-  zero-network fixture preview under `/ui-preview/quick-picks`. The browser
-  script navigates to `/quick-picks`, sees the 404, skips, and lists it in the
-  report as skipped rather than silently measuring four routes and calling it
-  five. The k6 `quickpicks` scenario still runs, because the API contract it
-  exercises — durable suppression, undo, and a coherent policy after a fresh
-  signal — is real and worth holding under load whether or not a page drives it
-  yet.
+- **A missing route can answer 200.** The first CI run of the browser script
+  reported `/quick-picks` with an LCP of 120 ms and a clean CLS — for a route
+  that did not exist on that branch. It had redirected, the script checked only
+  for a 404, and it therefore measured whatever it landed on and filed the
+  numbers under a route that was not there. Locally the same navigation had
+  answered a real 404 and skipped correctly, which is exactly why it survived to
+  CI. The check now compares the landed path against the requested one, and the
+  skip reason says which of the two failures it saw. This is the failure mode
+  the skip logic existed to prevent, and it took a runner to expose it.
 - **There is still no scheduled nightly workflow.** `make demo-load-pages-nightly`
   enforces the budgets over a three-minute window; nothing invokes it on a
   schedule, exactly as `demo-load-nightly` has stood since this ADR was written.
