@@ -10,8 +10,14 @@ import { NextResponse, type NextRequest } from "next/server";
  * the part that matters when a CDN sits in front of the app. Setting it here
  * rather than in `next.config.ts` is deliberate: the framework overwrites the
  * configured header for dynamically rendered pages.
+ *
+ * `/` joined the list with the cutover. It no longer renders one document for
+ * everyone: signed out it is the sign-in door, and signed in it is a redirect
+ * carrying the viewer's persona. Either answer cached in a shared cache would
+ * be served to the wrong visitor. `/legacy` renders a persona's dashboard for
+ * the same reason.
  */
-const PERSONALIZED_ROUTES = ["/discover"];
+const PERSONALIZED_ROUTES = ["/", "/discover", "/legacy"];
 
 export function middleware(request: NextRequest) {
   const response = NextResponse.next();
@@ -21,4 +27,4 @@ export function middleware(request: NextRequest) {
   return response;
 }
 
-export const config = { matcher: ["/discover"] };
+export const config = { matcher: ["/", "/discover", "/legacy"] };

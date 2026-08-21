@@ -11,6 +11,12 @@ import type { NavigationItem } from "@/lib/navigation";
  * signed-in human, and the shell has to keep those two identities visibly
  * apart until `(tenant, subject)` maps to an owned profile. Defaults preserve
  * the Bundle 4 recorded preview wording; live routes pass their own.
+ *
+ * Every authenticated route renders this shell. Browse and movie detail used
+ * to run a header of their own, which dropped the bottom navigation the design
+ * contract requires on small screens and printed the persona as a raw numeric
+ * ID; retiring it is what makes the mobile navigation and the resolved persona
+ * name properties of the product rather than of two routes out of five.
  */
 export function AppShell({
   actorName,
@@ -23,6 +29,7 @@ export function AppShell({
   personaName = "Action Fan",
   personaInitials,
   navigationItems,
+  legacyHref,
 }: {
   actorName: string;
   children: React.ReactNode;
@@ -34,6 +41,13 @@ export function AppShell({
   personaName?: string;
   personaInitials?: string;
   navigationItems?: readonly NavigationItem[];
+  /**
+   * The pre-redesign dashboard, when the route wants to offer it.
+   *
+   * Deliberately a utility link at the foot of the page and never a
+   * navigation slot: it is a retained rollback, not a fourth destination.
+   */
+  legacyHref?: string;
 }) {
   const initials =
     personaInitials ??
@@ -83,6 +97,16 @@ export function AppShell({
       </header>
 
       <main id="main-content">{children}</main>
+
+      {legacyHref ? (
+        <footer className="shell-footer">
+          <Link href={legacyHref}>Legacy dashboard</Link>
+          <span>
+            The pre-redesign surface, kept as the rollback for this cutover.
+          </span>
+        </footer>
+      ) : null}
+
       <ProductNavigation items={navigationItems} location="mobile" />
     </div>
   );

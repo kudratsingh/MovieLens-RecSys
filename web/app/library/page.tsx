@@ -4,49 +4,25 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { LibraryExperience } from "@/components/library/library-experience";
-import { LibraryShell } from "@/components/library/library-shell";
-import type { PersonaResponse } from "@/lib/api";
-import { proxyRecommendationApi } from "@/lib/backend";
+import { AppShell } from "@/components/shell/app-shell";
 import { requireApiAccessToken } from "@/lib/bff-auth";
+import { DEFAULT_DEMO_PERSONA_ID } from "@/lib/demo-persona";
+import { fallbackPersonaName, resolvePersonaName } from "@/lib/discover/persona";
 import {
   LIBRARY_PAGE_SIZE,
   parseLibraryUrlState,
   type LibrarySearchParams,
 } from "@/lib/library/url-state";
-import { isRecord } from "@/lib/resources/validate";
+import { productNavigationItems } from "@/lib/navigation";
 import { loadLibrary, loadTasteProfile } from "@/lib/resources/server";
 import "@/components/library/library.css";
+import "@/components/shell/shell.css";
 
 export const metadata: Metadata = {
   title: "Library",
   description:
     "Review and manage the ratings, watchlist, and watched history stored for the selected demo persona.",
 };
-
-/**
- * Resolves the persona's display name for the route's identity copy.
- *
- * This is a label, not an authorization decision — the API enforces who may
- * read the persona — so a directory that cannot be read degrades to the ID
- * rather than blocking the collection.
- */
-async function loadPersonaLabel(
-  userId: number,
-  accessToken: string,
-): Promise<string | null> {
-  try {
-    const response = await proxyRecommendationApi(accessToken, "/personas");
-    if (!response.ok) return null;
-    const payload: unknown = await response.json();
-    if (!isRecord(payload) || !Array.isArray(payload.items)) return null;
-    const persona = (payload as PersonaResponse).items.find(
-      (item) => item.user_id === userId,
-    );
-    return persona?.display_name ?? null;
-  } catch {
-    return null;
-  }
-}
 
 export default async function LibraryPage({
   searchParams,
@@ -75,19 +51,32 @@ export default async function LibraryPage({
       },
     }),
     loadTasteProfile(urlState.userId, { session }),
-    loadPersonaLabel(urlState.userId, accessToken),
+    resolvePersonaName(accessToken, urlState.userId),
   ]);
 
   const actorName = session.user.name ?? session.user.email ?? "Signed-in actor";
-  const personaLabel = persona ?? `Persona ${urlState.userId}`;
+  const personaLabel = persona ?? fallbackPersonaName(urlState.userId);
 
   return (
-    <LibraryShell actorName={actorName} personaLabel={personaLabel}>
+    <AppShell
+      actorName={actorName}
+      fixtureMode={false}
+      homeHref={`/discover?userId=${urlState.userId}`}
+      homeLabel="MovieLens — For you"
+      legacyHref="/legacy"
+      navigationItems={productNavigationItems(urlState.userId)}
+      personaLabel="Exploring as"
+      personaName={personaLabel}
+      wordmarkSubtitle="Recommendation lab"
+    >
       <div className="app-page">
         {library.status === "not-found" ? (
           <p className="library-notice">
             No registered demo persona matches user {urlState.userId}.{" "}
-            <Link href="/">Choose a persona</Link> to open its library.
+            <Link href={`/library?userId=${DEFAULT_DEMO_PERSONA_ID}`}>
+              Open the default persona
+            </Link>{" "}
+            instead.
           </p>
         ) : null}
         <LibraryExperience
@@ -99,6 +88,6 @@ export default async function LibraryPage({
           personaResolved={persona !== null}
         />
       </div>
-    </LibraryShell>
+    </AppShell>
   );
 }

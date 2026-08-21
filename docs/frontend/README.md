@@ -30,12 +30,67 @@ while keeping the ML system inspectable through progressive disclosure.
   pyramid, responsive evidence matrix, and the final PASS/HOLD finish gate.
 - [Finish-gate review](finish-gate-review.md) — the written gate applied to the
   running product: what was run, the five-second and moderated-task
-  walkthroughs, a verdict per criterion, and the recorded decision. **Currently
-  HOLD**, with the blocking items and what clears each. Its screenshot matrix,
-  with per-file provenance, is in
-  [`evidence/bundle-7a/`](evidence/bundle-7a/README.md).
+  walkthroughs, a verdict per criterion, and the recorded decision. The 7A pass
+  recorded **HOLD** on three cutover items; the
+  [re-run after the cutover](finish-gate-review.md#re-run-after-cutover-7d)
+  clears all three and records **HOLD pending participant sessions** — every
+  criterion a reviewer can settle now passes, and moderated research is the only
+  thing left between that and PASS. Screenshot matrices, with per-file
+  provenance, are in [`evidence/bundle-7a/`](evidence/bundle-7a/README.md) and
+  [`evidence/bundle-7d/`](evidence/bundle-7d/README.md).
 - [Baseline evidence](baseline-evidence.md) — current implementation evidence and
   the screenshot matrix that must be captured against the seeded demo.
+
+## Rolling the cutover back
+
+The movie-discovery product is what `/` serves. The pre-redesign dashboard is
+still deployed at `/legacy`, and pointing the front door back at it is one
+file, `web/app/page.tsx`. Written out in full, because a rollback that has
+never been read is not a rollback — the destination is one line, and the other
+two hunks are only the parameter and the import it stops needing:
+
+```diff
+ import { auth, signIn } from "@/auth";
+-import { frontDoorHref } from "@/lib/navigation";
+ import "./sign-in.css";
+
+-export default async function Home({
+-  searchParams,
+-}: {
+-  searchParams: Promise<{ user?: string | string[]; userId?: string | string[] }>;
+-}) {
+-  const [params, session] = await Promise.all([searchParams, auth()]);
++export default async function Home() {
++  const session = await auth();
+   if (!session?.user || session.error) {
+     return <SignInPage expired={session?.error === "RefreshAccessTokenError"} />;
+   }
+
+-  redirect(frontDoorHref(params));
++  redirect("/legacy");
+ }
+```
+
+Nothing else has to move. `/legacy` renders the dashboard on its own, behind
+the same session check as every other route, and the product routes keep
+working for anyone who has a link to them. The reverse direction is the same
+edit undone.
+
+`/legacy` stays until the finish gate records a participant-backed PASS. The
+handoff is explicit that the dashboard is removed **only after PASS**, in a
+dedicated PR, with a documented rollback — this section is that document, and
+the removal is still owed. Until then, treat the legacy route as deployed
+surface: it is authenticated, it is in the service-backed journey, and its
+serving-contract panel reports the policy the response carried rather than a
+constant.
+
+One consequence worth naming: the legacy dashboard is currently the only place
+in the UI that offers the four demo personas by name. The product selects a
+persona by URL (`?userId=` on Discover and Library, `?user=` on Browse, movie
+detail, and Quick Picks). A persona switcher in the product shell is recorded
+as a follow-up in the
+[finish-gate review](finish-gate-review.md#re-run-after-cutover-7d), not as
+work this cutover did.
 
 ## Governing decisions
 

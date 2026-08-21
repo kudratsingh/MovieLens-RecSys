@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  frontDoorHref,
   productNavigationItems,
   returnHrefLabel,
   safeReturnHref,
@@ -53,5 +54,36 @@ describe("primary navigation", () => {
 
     expect(items.map((item) => item.label)).toEqual(["For you", "Browse", "Library"]);
     expect(items.every((item) => item.href.includes("900000101"))).toBe(true);
+  });
+
+  it("points For you at /discover rather than at the front door", () => {
+    // The pre-cutover landing route linked `Discover` to itself, which is why
+    // /discover had no inbound link from anywhere.
+    const [forYou] = productNavigationItems(900000101);
+
+    expect(forYou.href.startsWith("/discover?")).toBe(true);
+    expect(forYou.match).toBe("/discover");
+  });
+});
+
+describe("the front door", () => {
+  it("sends a signed-in viewer to the product, not to the dashboard", () => {
+    expect(frontDoorHref({})).toBe("/discover?userId=900000101");
+  });
+
+  it("keeps the persona a link carried, under either spelling", () => {
+    expect(frontDoorHref({ userId: "900000104" })).toBe("/discover?userId=900000104");
+    // Browse and movie detail spell it `user`; a link either of them produced
+    // must not quietly land on the default persona.
+    expect(frontDoorHref({ user: "900000103" })).toBe("/discover?userId=900000103");
+    expect(frontDoorHref({ user: "900000103", userId: "900000102" })).toBe(
+      "/discover?userId=900000102",
+    );
+  });
+
+  it("falls back to the default persona rather than trusting the address", () => {
+    for (const value of ["", "abc", "-1", "0", "9e9"]) {
+      expect(frontDoorHref({ userId: value })).toBe("/discover?userId=900000101");
+    }
   });
 });

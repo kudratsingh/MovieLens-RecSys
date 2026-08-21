@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { signInThroughKeycloak } from "./keycloak";
 
 /**
- * The Bundle 7A service-backed finish gate.
+ * The Bundle 7 service-backed finish gate.
  *
  * This is the handoff's ten-step journey run end to end against the seeded
  * Compose stack with `DEV_AUTH_BYPASS=false`: real Keycloak, real FastAPI, real
@@ -36,6 +36,15 @@ import { signInThroughKeycloak } from "./keycloak";
  * state machine are the shipped ones, and only the bytes the BFF returns are
  * replaced. That is the one honest way to hold an upstream failure still long
  * enough to assert on it without teaching the product a demo mode.
+ *
+ * **The cutover.** Steps 1, 4, 5, and 10 also carry the three blocking items
+ * the 7A finish-gate review recorded: that `/` is the product and not the
+ * pre-redesign dashboard (B1), that every primary navigation reaches
+ * `/discover` (B2), and that Browse and movie detail render the shared shell
+ * with its mobile navigation and a resolved persona name (B3). They are
+ * asserted here rather than in a separate file because they are properties of
+ * the journey a viewer actually takes, and because a second file would pay for
+ * a second Keycloak round trip to prove less.
  */
 
 const DRAMA_FAN = 900000102;
@@ -120,14 +129,56 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // ---------------------------------------------------------------- step 1 --
   // Sign in through Keycloak and select a named demo persona.
   await signInThroughKeycloak(page);
+
+  // The front door is the product (B1). The sign-in round trip ends on `/`,
+  // and a signed-in viewer is handed to Discover rather than to the
+  // pre-redesign dashboard. Asserted on the URL as well as on the screen: a
+  // shell that happens to look right on a route that is still `/` is the
+  // failure the cutover exists to remove.
+  await expect(page).toHaveURL(/\/discover\?userId=\d+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+  // Every primary navigation points at the product's own routes (B2), so
+  // Discover — and through it Quick Picks, whose only entry point Discover is
+  // — can be reached by clicking rather than by typing a URL.
+  const primaryNav = page.getByRole("navigation", { name: "Primary" });
+  await expect(primaryNav.getByRole("link", { name: "For you" })).toHaveAttribute(
+    "href",
+    /^\/discover\?/,
+  );
+  await expect(primaryNav.getByRole("link", { name: "Browse" })).toHaveAttribute(
+    "href",
+    /^\/browse\?/,
+  );
+  await expect(primaryNav.getByRole("link", { name: "Library" })).toHaveAttribute(
+    "href",
+    /^\/library\?/,
+  );
+
+  // The named personas are still offered, on the retained legacy dashboard.
+  // The product selects a persona by URL and has no picker of its own; the
+  // cutover kept the dashboard rather than inventing one, and the review
+  // records that as an open follow-up rather than as work this PR did.
+  await page.getByRole("link", { name: "Legacy dashboard" }).click();
+  await expect(page).toHaveURL(/\/legacy$/);
+  await expect(page.getByText(/This is the legacy dashboard/)).toBeVisible();
   for (const persona of ["Action Fan", "Drama Fan", "Eclectic Viewer", "Cold Start"]) {
     await expect(page.getByRole("button", { name: persona })).toBeVisible();
   }
-  // The persona picker still lives on the pre-cutover landing route. When 7d
-  // removes it, this step moves to whatever selector replaces it — the
-  // assertion that matters is the one below: the product names the persona it
-  // is exploring as, separately from the signed-in actor.
   await page.getByRole("button", { name: "Drama Fan" }).click();
+
+  // The dashboard's serving-contract panel asserted `Popularity baseline` as a
+  // constant while the router served something else. It now reports what the
+  // response carried, which is checked against that response rather than
+  // against a string this test also invented.
+  const dashboardPolicy = (await readRecommendations(page, DRAMA_FAN)).serving_policy?.name;
+  expect(dashboardPolicy, "the API reported no serving policy").toBeTruthy();
+  await expect(page.getByTestId("serving-contract-policy")).toHaveText(
+    String(dashboardPolicy),
+  );
+
+  await page.getByRole("link", { name: "Open the movie-discovery product" }).click();
+  await expect(page).toHaveURL(/\/discover\?userId=\d+$/);
 
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
   const shell = page.locator(".persona-cluster");
@@ -197,6 +248,19 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   const grid = page.getByRole("list", { name: "Browse results" });
   await expect(grid).toBeVisible();
 
+  // Browse runs the shared product shell (B3). The two things its former
+  // route-owned header dropped are the ones asserted: a persona that reads as
+  // a name rather than as a database ID, and the bottom navigation the design
+  // contract requires for the three primary routes on small screens — of
+  // which Browse is one.
+  const catalogShell = page.locator(".shell-header");
+  await expect(catalogShell).toContainText("Exploring as");
+  await expect(catalogShell).toContainText("Eclectic Viewer");
+  await expect(catalogShell).not.toContainText(String(ECLECTIC));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("navigation", { name: "Primary mobile" })).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.getByRole("searchbox").fill("the");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page).toHaveURL(/[?&]q=the/);
@@ -253,6 +317,15 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   await removeWatched(page, ACTION_FAN, subject);
   await page.goto(`/movies/${subject}?user=${ACTION_FAN}`);
   const subjectTitle = (await page.getByRole("heading", { level: 1 }).innerText()).trim();
+
+  // The other half of B3: movie detail ran the same second header as Browse.
+  const detailShell = page.locator(".shell-header");
+  await expect(detailShell).toContainText("Action Fan");
+  await expect(detailShell).not.toContainText(String(ACTION_FAN));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("navigation", { name: "Primary mobile" })).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   const statePanel = page.locator(".movie-state-panel");
 
   if (await statePanel.getByRole("button", { name: "In watchlist" }).count()) {
@@ -566,6 +639,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     `/library?userId=${ACTION_FAN}`,
     `/quick-picks?user=${COLD_START}`,
     `/movies/${subject}?user=${ACTION_FAN}`,
+    // The retained rollback is a product route like any other, not an
+    // unauthenticated back door into a persona's dashboard.
+    "/legacy",
   ]) {
     await page.goto(route);
     await expect(page).toHaveURL(/\/$/);

@@ -3,6 +3,8 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 
+import { ServingContractPanel } from "@/components/legacy/serving-contract-panel";
+import "@/components/legacy/legacy-dashboard.css";
 import type {
   PersonaItem,
   PersonaResponse,
@@ -10,7 +12,19 @@ import type {
   UserDashboard,
 } from "@/lib/api";
 
-export function RecommendationDemo() {
+/**
+ * The pre-redesign Phase 3 dashboard, now reachable only at `/legacy`.
+ *
+ * It is retained as the cutover rollback, not as a surface under development.
+ * The one change the cutover made to it is the serving-contract panel above:
+ * it reports the policy the response carried instead of asserting a constant
+ * the deployed router contradicts.
+ *
+ * `intro` is server-rendered copy passed through from the route so the hero
+ * and the panel sit in the same grid while the panel keeps its data from this
+ * client component's own response.
+ */
+export function RecommendationDemo({ intro }: { intro?: React.ReactNode }) {
   const [userId, setUserId] = useState(1);
   const [inputValue, setInputValue] = useState("1");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
@@ -133,7 +147,16 @@ export function RecommendationDemo() {
   }
 
   return (
-    <section className="border-t border-white/10 pt-8">
+    <>
+      <section className="grid gap-8 pb-8 pt-14 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-12">
+        {intro}
+        <ServingContractPanel
+          modelVersion={dashboard?.recommendations.model_version ?? null}
+          policy={dashboard?.recommendations.serving_policy ?? null}
+        />
+      </section>
+
+      <section className="border-t border-white/10 pt-8">
       <div className="flex flex-col justify-between gap-5 xl:flex-row xl:items-end">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
@@ -144,7 +167,7 @@ export function RecommendationDemo() {
               <button
                 className={`rounded-full border px-4 py-2 text-sm transition ${
                   userId === persona.user_id
-                    ? "border-amber-300 bg-amber-300 text-zinc-950"
+                    ? "legacy-on-light border-amber-300 bg-amber-300"
                     : "border-white/10 bg-white/[0.035] text-zinc-300 hover:border-white/25"
                 }`}
                 key={persona.user_id}
@@ -171,7 +194,7 @@ export function RecommendationDemo() {
             value={inputValue}
           />
           <button
-            className="rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300"
+            className="legacy-on-light rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold transition hover:bg-amber-300"
             type="submit"
           >
             Explore
@@ -198,7 +221,8 @@ export function RecommendationDemo() {
           saving={saving}
         />
       ) : null}
-    </section>
+      </section>
+    </>
   );
 }
 
@@ -331,7 +355,7 @@ function RatingStudio({
                   aria-label={`${rating} stars`}
                   className={`grid size-8 place-items-center rounded-md text-sm transition ${
                     movie.state?.rating === rating
-                      ? "bg-amber-300 font-bold text-zinc-950"
+                      ? "legacy-on-light bg-amber-300 font-bold"
                       : "bg-white/[0.06] text-zinc-400 hover:bg-white/[0.12] hover:text-amber-200"
                   }`}
                   disabled={saving}

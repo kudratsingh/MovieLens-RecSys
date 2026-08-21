@@ -1,0 +1,92 @@
+/*
+ * The signed-out front door.
+ *
+ * It was the last surface in the app styled entirely with Tailwind colour
+ * utilities, and the 7d cutover put it in the accessibility gate for the first
+ * time — which is how three defects surfaced at once. Two were contrast
+ * failures, and one of them was structural: `button { color: inherit }` in the
+ * base layer out-ranks every Tailwind utility, so the primary action's
+ * `text-zinc-950` had never applied and its label rendered at 1.31:1 on amber.
+ * A utility that cannot win is not a fix, so the door now uses the same
+ * `.card-surface` / `.button-primary` / `.eyebrow` vocabulary as the product
+ * it opens, and inherits that vocabulary's contrast guarantees.
+ */
+
+.sign-in-door {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: clamp(1rem, 5vw, 3rem);
+}
+
+.sign-in-card {
+  /*
+   * `min-width: 0` is load-bearing. A flex item floors at its min-content
+   * width by default, and the longest word in the heading is wider than a
+   * 320px viewport can hold once the card's padding is taken out — which is
+   * exactly the failure mode the Library filter row shipped in 7A. The title's
+   * `overflow-wrap` below removes the floor rather than merely hiding it.
+   */
+  max-width: 34rem;
+  min-width: 0;
+  padding: clamp(1.5rem, 5vw, 2.75rem);
+  width: 100%;
+}
+
+.sign-in-mark {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  color: #160c09;
+  display: flex;
+  font-size: 0.85rem;
+  font-weight: 850;
+  height: 3rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  transform: rotate(-7deg);
+  width: 3rem;
+}
+
+.sign-in-card .eyebrow {
+  display: block;
+  margin-top: 1.75rem;
+}
+
+.sign-in-title {
+  /*
+   * `anywhere` rather than `break-word`: only `anywhere` reduces the element's
+   * min-content contribution, which is what stops one long word from setting a
+   * floor the whole page has to be wide enough for.
+   */
+  margin: 0.75rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.sign-in-card p {
+  line-height: 1.6;
+  margin: 1rem 0 0;
+}
+
+.sign-in-expired {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  padding: 0.75rem 1rem;
+}
+
+.sign-in-form {
+  margin-top: 1.75rem;
+}
+
+.sign-in-submit {
+  padding-block: 0.85rem;
+  width: 100%;
+}
+
+.sign-in-note {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}

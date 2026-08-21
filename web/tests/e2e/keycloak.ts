@@ -14,7 +14,14 @@ import { expect, type Page } from "@playwright/test";
  */
 const AUTH_ROUND_TRIP_MS = 30_000;
 
-/** Bypass-disabled sign-in through the real Keycloak demo realm. */
+/**
+ * Bypass-disabled sign-in through the real Keycloak demo realm.
+ *
+ * The round trip ends on `/`, which since the 7d cutover redirects a signed-in
+ * viewer to Discover. `Sign out` is therefore the product shell's button
+ * rather than the legacy dashboard's, which is exactly what this should be
+ * waiting for: the journey is signed in when the product is on screen.
+ */
 export async function signInThroughKeycloak(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Continue with Keycloak" }).click();

@@ -1,0 +1,17 @@
+/*
+ * One rule, for one structural defect.
+ *
+ * `button, input, select { color: inherit }` in `globals.css` is unlayered, so
+ * it out-ranks every Tailwind colour utility, which live in `@layer utilities`.
+ * Every dark-on-light control on this dashboard therefore rendered light text
+ * on a light background: the `Explore` submit was white on white, and the
+ * selected persona chip and the selected star cleared about 1.3:1 on amber.
+ *
+ * A class selector beats the bare element selector, which is all this needs.
+ * Moving the base rule into `@layer base` would fix the class of bug app-wide
+ * and is the better answer, but it changes the cascade under every route and
+ * belongs in its own change rather than inside a cutover.
+ */
+.legacy-on-light {
+  color: #09090b;
+}

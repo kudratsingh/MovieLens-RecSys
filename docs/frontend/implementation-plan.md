@@ -383,6 +383,19 @@ traceable; gesture and non-gesture paths have identical outcomes.
   320px viewport wherever the system font was wide enough — which is why the
   narrow sweep now also runs against forced wide font metrics.
 
+- [x] 7d — the cutover: `/` is the movie-discovery product for a signed-in
+  viewer and the sign-in door for everyone else; the pre-redesign dashboard
+  lives at `/legacy` with its serving-contract panel reporting the policy the
+  response carried rather than a constant; every primary navigation points at
+  `/discover`; and Browse, movie detail, and Library render the shared
+  `AppShell`, so the two parallel headers are deleted rather than left to
+  drift. The re-run gate and its per-criterion verdicts are recorded in
+  [`finish-gate-review.md`](finish-gate-review.md#re-run-after-cutover-7d),
+  with the recaptured surfaces in
+  [`evidence/bundle-7d/`](evidence/bundle-7d/README.md). Adding `/` to the
+  accessibility gate found three defects on the signed-out door — two contrast
+  failures and a 320px overflow — which are fixed here rather than filed.
+
 Remaining:
 
 - [x] the required desktop/tablet/mobile state matrix, captured with per-file
@@ -392,15 +405,17 @@ Remaining:
 - [ ] moderated movie-viewer and technical-reviewer tasks — the review walks all
   seven discovery tasks and records that one reviewer is an expert walkthrough
   rather than validation data, so participants are still required;
-- [ ] the cutover that clears the review's three blocking items: make
-  `/discover` the authenticated front door and retire the stale
-  serving-contract panel, give `/discover` an inbound link from every surface,
-  and promote the product shell onto Browse and movie detail;
+- [x] the cutover that clears the review's three blocking items — done in 7d:
+  `/discover` is the authenticated front door, the stale serving-contract panel
+  is gone, `/discover` has an inbound link from every authenticated surface,
+  and the product shell is promoted onto Browse and movie detail;
 - [ ] a rate-limiting decision — 7b's reliability facts record it as not
   implemented, so it needs either per-tenant limits against the Phase 3
   tenant-config row or an ADR that records the omission;
-- [ ] legacy dashboard removal, only after the re-run gate records PASS, with a
-  documented rollback to the preceding release.
+- [ ] legacy dashboard removal. **Retained.** The cutover moved it behind
+  `/legacy` and documented the rollback
+  ([`README.md`](README.md#rolling-the-cutover-back)); removing it needs a
+  participant-backed PASS first, and then its own PR.
 
 **Scope:**
 
