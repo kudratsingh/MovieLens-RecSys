@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A landed, 5B–5D open)
+**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A and 5D landed, 5B–5C open)
 
 **Last updated:** 2026-08-21
 
@@ -252,7 +252,14 @@ erase unrelated content; lint, typecheck, build, component, and axe checks pass.
   and in the browser reader; and a structural fixture lockout asserted in tests.
 - [ ] 5B — Discover.
 - [ ] 5C — Browse and movie detail.
-- [ ] 5D — Library.
+- [x] 5D — Library: Rated, Watchlist, and History on the Bundle 2 cursor
+  resources through the 5A boundary, loaded independently per tab; URL-owned
+  tab/sort/filter/cursor state with de-duplicated page appends; canonical
+  optimistic reconciliation with rollback, revision-conflict recovery, and
+  focus restoration; `delete rating` kept distinct from a confirmed
+  `remove from history`; persona labelling in the route and in mutation
+  feedback; and the `live-ratings-v1` summary presented as a live read of
+  current ratings rather than a model explanation.
 
 5A ships the boundary and its component states. Route data wiring stays with
 5B–5D so each slice carries its own responsive, accessibility, tenant, and
