@@ -89,7 +89,7 @@ nothing in the stack reaches the API through the host.
 | `npm run typecheck` | pass |
 | `npm test` | 43 files, 399 tests, pass |
 | `npm run build` | pass |
-| `MOVIELENS_UI_PORT=3113 npm run test:e2e:ui` | 187 tests across `mobile-390`, `tablet-768`, `desktop-1440`, pass, 43.5 s |
+| `MOVIELENS_UI_PORT=3113 npm run test:e2e:ui` | 201 across `mobile-390`, `tablet-768`, `desktop-1440` — 187 run, 14 skipped by project, pass |
 | `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:e2e` | 7 tests, pass, 13.9–15.2 s (three consecutive runs) |
 | `npx playwright test tests/e2e/finish-gate-journey.spec.ts` | pass ×3 standalone (7.4 s, 6.5 s, 6.6 s) |
 | `PLAYWRIGHT_BASE_URL=http://localhost:3001 npm run test:perf` | 5 tests, pass — 7b's gate re-run on this branch, [numbers below](#performance-gate--pass-carried-from-7b) |
@@ -111,11 +111,19 @@ above the five-signal threshold and the response reported learned serving.
 ### 3.2 CI
 
 The same gates on a clean runner, against a Compose stack built from scratch:
-[PR #63](https://github.com/kudratsingh/MovieLens-RecSys/pull/63), CI run
-[32523881379](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32523881379).
+[PR #63](https://github.com/kudratsingh/MovieLens-RecSys/pull/63) —
+[all checks](https://github.com/kudratsingh/MovieLens-RecSys/pull/63/checks).
 The `frontend` job carries the visual and accessibility gate; `browser-auth-e2e`
 carries the service-backed journey and then 7b's browser timing;
 `synthetic-load-smoke` carries the unchanged direct-API p99 gate.
+
+Worth recording because it is the point of running a gate on a machine that is
+not the author's: the service-backed journey passed on the first clean-runner
+attempt ([run 32524174806](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32524174806)),
+and the accessibility gate failed it — the Library filter row overflowed 320px
+by 10px on the runner's fonts and not on macOS. That defect and the change it
+forced in the check are described under
+[implementation fidelity](#6-implementation-fidelity--hold).
 
 ### 3.3 The service-backed journey
 
@@ -300,12 +308,28 @@ inconsistency is at the shell: two of five routes run their own header, and it
 labels the persona with a raw numeric ID where the others resolve the display
 name. [B3](#b3-browse-and-movie-detail-run-a-second-shell).
 
-One fidelity defect was found and fixed in this PR rather than filed:
-`--text-muted` failed WCAG AA against every surface darker than the page
-canvas — 4.40 on `--surface-base`, 4.13 behind a Library tab count, 3.55 on a
-poster-fallback thumbnail — which put six serious axe violations across request
-IDs, tab counts, and freshness notes. The token now clears 4.5:1 against every
-surface token, and `web/e2e/finish-gate.spec.ts` fails if that regresses.
+Two fidelity defects were found by this gate and fixed here rather than filed.
+
+**Muted text failed WCAG AA.** `--text-muted` cleared 4.5:1 against the page
+canvas but not against the surfaces the muted role is actually used on — 4.40 on
+`--surface-base`, 4.13 behind a Library tab count, 3.55 on a poster-fallback
+thumbnail — which put six serious axe violations across request IDs, tab counts,
+and freshness notes. The token now clears 4.5:1 against every surface token.
+
+**Library overflowed a 320px viewport by 10px**, and only CI saw it. The filter
+row is a flex item at its default `min-width: auto`, so its min-content width —
+the input's minimum plus the whole `Filter` button — was a floor it would not go
+below, and the button was pushed off-screen. The input inside already set
+`min-width: 0`, which only lets it shrink within a row the form had already
+refused to narrow. It fits on macOS and not on a Linux runner, because the two
+have different system fonts and this row had no slack.
+
+That second one changed the check as well as the code. The 320px sweep is a
+font-metric test whether or not it admits it, so it now runs twice — once on the
+platform's own fonts and once with a deliberately wide monospace forced onto
+text *and* form controls. A row that survives that has real slack; one that does
+not is one system-font change away from breaking, wherever it happens to be
+measured. Both fixes are guarded by `web/e2e/finish-gate.spec.ts`.
 
 ### 7. Truthfulness — HOLD
 
@@ -346,7 +370,7 @@ twelve named states:
 | Focus restoration | Drawer close, and the Library and detail confirmation cancel paths |
 | Reduced motion | The Quick Picks fling degrades under `prefers-reduced-motion`, and no transition on Discover survives the global reduce rule |
 | Forced colours | `forced-colors: active` emulated: the title keeps a colour distinct from the surface, every button carries a border, nothing overflows |
-| No horizontal overflow at 320px | Every state in the matrix, swept at 320×640 |
+| No horizontal overflow at 320px | Every state in the matrix, swept at 320×640 twice: on the platform's own fonts and with a wide monospace forced onto text and form controls, so the result describes the layout rather than the runner |
 
 ### Performance gate — PASS (carried from 7b)
 
@@ -524,7 +548,7 @@ From [the handoff](bundles-5-7-handoff.md#handoff-acceptance-checklist).
 |---|---|---|
 | Bundle 4 squash-merged and the handoff rebased onto it | ✅ | `e4af19c`, and the Bundle 5–7 PRs that followed it |
 | The first Bundle 5 PR links the governing route and truthfulness contracts | ✅ | PR #53 and `docs/frontend/frontend-system.md` |
-| No production route silently falls back to a recorded fixture | ✅ | `web/lib/resources/fixture-gate.ts` throws outside fixture mode; `resources-fixture-lockout.test.ts` asserts the server client imports no fixture; `web/e2e/discover.spec.ts` proves a live read with no API fails visibly instead of showing recorded data |
+| No production route silently falls back to a recorded fixture | ✅ | `web/lib/resources/fixture-gate.ts` throws outside fixture mode; `web/tests/unit/resources-fixture-lockout.test.ts` asserts the server client imports no fixture; `web/e2e/discover.spec.ts` proves a live read with no API fails visibly instead of showing recorded data |
 | No browser request forwards a caller-supplied bearer token | ✅ | `web/lib/resources/browser.ts` raises `ForwardedCredentialError`; `browser-auth.spec.ts` proves the public session carries no access, refresh, or ID token |
 | Every mutation reconciles a committed canonical state and revision | ✅ | Journey step 5 reads the record back independently and asserts a server-issued revision above the previous one |
 | Every user-scoped endpoint has tenant and actor authorization evidence | ✅ | `tests/tenant_isolation/` in the `tenant-isolation` CI job; journey step 10 proves the BFF answers 401 with no session |

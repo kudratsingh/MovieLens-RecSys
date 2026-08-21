@@ -377,9 +377,11 @@ traceable; gesture and non-gesture paths have identical outcomes.
   (`web/e2e/finish-gate.spec.ts`, in the `frontend` job's existing
   `test:e2e:ui` flow); the screenshot matrix with per-file provenance in
   `docs/frontend/evidence/bundle-7a/`; and the written review in
-  `docs/frontend/finish-gate-review.md`, which records **HOLD**. One defect was
-  found and fixed rather than filed: `--text-muted` failed WCAG AA on every
-  surface darker than the page canvas.
+  `docs/frontend/finish-gate-review.md`, which records **HOLD**. Two defects
+  were found and fixed rather than filed: `--text-muted` failed WCAG AA on every
+  surface darker than the page canvas, and the Library filter row overflowed a
+  320px viewport wherever the system font was wide enough — which is why the
+  narrow sweep now also runs against forced wide font metrics.
 
 Remaining:
 

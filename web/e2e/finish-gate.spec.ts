@@ -157,17 +157,42 @@ for (const state of MATRIX) {
   });
 }
 
-test("no state overflows a 320px viewport", async ({ page }, testInfo) => {
+/**
+ * A deliberately wide face, applied to text *and* form controls.
+ *
+ * The 320px sweep is a font-metric test whether or not it admits it: a row that
+ * fits on a developer's machine can overflow on a runner whose system font is
+ * wider, and that is exactly how the Library filter row shipped a 10px overflow
+ * that only CI saw. Overriding the face makes the check describe the layout
+ * rather than the machine — a row that survives a monospace at 320px has real
+ * slack, and one that does not is one system-font change away from breaking.
+ */
+const WIDE_FACE = `*, input, select, button, textarea {
+  font-family: "Courier New", "DejaVu Sans Mono", monospace !important;
+}`;
+
+test("no state overflows a 320px viewport, on narrow and wide font metrics", async ({
+  page,
+}, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-390", "One narrow-width sweep is enough");
   test.slow();
 
   const offenders: string[] = [];
   await page.setViewportSize({ width: 320, height: 640 });
-  for (const state of MATRIX) {
-    await page.goto(state.path);
-    await state.settle(page);
-    const overflow = await horizontalOverflow(page);
-    if (overflow > 1) offenders.push(`${state.id}: ${overflow}px`);
+  for (const face of ["system", "wide"] as const) {
+    for (const state of MATRIX) {
+      await page.goto(state.path);
+      await state.settle(page);
+      if (face === "wide") {
+        await page.addStyleTag({ content: WIDE_FACE });
+        // Re-layout under the new metrics before measuring.
+        await expect
+          .poll(async () => page.evaluate(() => document.fonts.status))
+          .toBe("loaded");
+      }
+      const overflow = await horizontalOverflow(page);
+      if (overflow > 1) offenders.push(`${state.id} (${face} font): ${overflow}px`);
+    }
   }
   expect(offenders.join("\n")).toBe("");
 });

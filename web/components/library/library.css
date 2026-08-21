@@ -83,6 +83,16 @@
   flex: 1 1 18rem;
   gap: var(--space-2);
   max-width: 32rem;
+  /*
+   * A flex item's default `min-width: auto` is its min-content width, and this
+   * form's min-content is the input's minimum plus the whole `Filter` button.
+   * The input inside already sets `min-width: 0`, but that only lets the input
+   * shrink *within* a row the form has already refused to narrow — so on a
+   * 320px screen with a wide system font the row stayed at its intrinsic width
+   * and pushed the button past the viewport. Letting the form shrink is what
+   * hands the reduction to the input, which is the part that should absorb it.
+   */
+  min-width: 0;
 }
 
 .library-input {
