@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { proxyRecommendationApi, validPositiveId } from "@/lib/backend";
 import { requireApiAccessToken } from "@/lib/bff-auth";
 import { requireBffMutation, securityErrorResponse } from "@/lib/bff-security";
+import { resourceRequestId } from "@/lib/resources/bff";
 
 const RESOURCES = new Set(["watched", "rating", "watchlist", "dismissal"]);
 
@@ -45,6 +46,7 @@ async function mutate(
     accessToken,
     `/users/${userId}/movies/${movieId}/${resource}${suffix}`,
     { method, body, headers },
+    resourceRequestId(request),
   );
 }
 

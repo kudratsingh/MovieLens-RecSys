@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–2 merged; Bundles 3–4 implementation complete and pending merge; Bundles 5–7 handed off, not implemented
+**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A landed, 5B–5D open)
 
 **Last updated:** 2026-08-21
 
@@ -238,6 +238,25 @@ resources.
 erase unrelated content; lint, typecheck, build, component, and axe checks pass.
 
 ## Bundle 5 — Core movie-discovery vertical slices
+
+**Progress as of 2026-08-21:**
+
+- [x] 5A — shared live-resource boundary: one server-owned client for
+  recommendation, history, catalog, movie-detail, Library, taste-summary, and
+  technical-evidence (audits/features) reads; per-resource timeouts;
+  `private, no-store` on personalized BFF responses; `X-Request-ID` generation,
+  forwarding, and echo; narrow runtime validators over the generated OpenAPI
+  types; the `loading`/`retry`/`ready`/`empty`/`forbidden`/`auth-expired`/
+  `not-found`/`upstream-error` state model with reusable region rendering and a
+  reauthentication path; caller-supplied bearer tokens refused at the BFF edge
+  and in the browser reader; and a structural fixture lockout asserted in tests.
+- [ ] 5B — Discover.
+- [ ] 5C — Browse and movie detail.
+- [ ] 5D — Library.
+
+5A ships the boundary and its component states. Route data wiring stays with
+5B–5D so each slice carries its own responsive, accessibility, tenant, and
+browser evidence.
 
 Ship small end-to-end slices rather than one all-routes visual rewrite:
 

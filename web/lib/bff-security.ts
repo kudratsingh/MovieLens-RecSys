@@ -25,7 +25,27 @@ function constantTimeEqual(left: string, right: string) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const FORWARDED_CREDENTIAL_HEADERS = ["authorization", "proxy-authorization"];
+
+/**
+ * The BFF is the only holder of the API access token. A request arriving from
+ * the browser with its own credential is either a bearer-forwarding mistake or
+ * an attempt to authorize as somebody else, and neither should be honoured by
+ * ignoring the header — the request is refused so the mistake is visible.
+ */
+export function rejectForwardedCredentials(request: Request) {
+  for (const name of FORWARDED_CREDENTIAL_HEADERS) {
+    if (request.headers.has(name)) {
+      throw new BffSecurityError(
+        "Browser requests must not supply their own API credentials",
+        403,
+      );
+    }
+  }
+}
+
 export function requireBffMutation(request: Request) {
+  rejectForwardedCredentials(request);
   const requestOrigin = request.headers.get("origin");
   const expectedOrigin = process.env.APP_ORIGIN ?? new URL(request.url).origin;
   if (!requestOrigin || requestOrigin !== expectedOrigin) {
@@ -54,9 +74,26 @@ export function requireBffMutation(request: Request) {
 
 export function securityErrorResponse(error: unknown) {
   if (error instanceof BffSecurityError) {
-    return Response.json({ detail: error.message }, { status: error.status });
+    return Response.json(
+      { detail: error.message },
+      { status: error.status, headers: { "Cache-Control": "private, no-store" } },
+    );
   }
   throw error;
+}
+
+/**
+ * Read routes have no CSRF step to hang the credential check on, so they call
+ * this first. Returning a response rather than throwing keeps the check to two
+ * lines at the top of a handler.
+ */
+export function forwardedCredentialRefusal(request: Request): Response | undefined {
+  try {
+    rejectForwardedCredentials(request);
+    return undefined;
+  } catch (error) {
+    return securityErrorResponse(error);
+  }
 }
 
 export function expireAuthSessionCookies(request: Request, response: Response) {

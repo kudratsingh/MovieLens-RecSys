@@ -3,6 +3,7 @@ import type { NextAuthRequest } from "next-auth";
 import { auth } from "@/auth";
 import type { UserDashboard } from "@/lib/api";
 import { apiAuthorization, requireApiAccessToken } from "@/lib/bff-auth";
+import { forwardedCredentialRefusal } from "@/lib/bff-security";
 
 const API_BASE_URL = process.env.RECOMMENDATION_API_URL ?? "http://localhost:8000";
 
@@ -10,6 +11,8 @@ async function dashboard(
   request: NextAuthRequest,
   context: { params: Promise<Record<string, string | string[] | undefined>> },
 ) {
+  const refusal = forwardedCredentialRefusal(request);
+  if (refusal) return refusal;
   const userId = (await context.params).userId;
   if (typeof userId !== "string") {
     return Response.json({ detail: "Invalid MovieLens user ID" }, { status: 400 });

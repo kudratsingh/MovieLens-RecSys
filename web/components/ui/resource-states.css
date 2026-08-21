@@ -86,3 +86,39 @@
     background: var(--surface-overlay);
   }
 }
+
+/* Live-resource regions (Bundle 5A). */
+
+.resource-loading {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem 0;
+}
+
+.resource-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+}
+
+.resource-state-actions:empty {
+  display: none;
+}
+
+.resource-state-meta {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  grid-column: 1 / -1;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+}
+
+.resource-auth-expired {
+  border-color: color-mix(in srgb, var(--accent-strong) 34%, var(--border-subtle));
+}
+
+.resource-retrying {
+  border-color: var(--border-strong);
+}
