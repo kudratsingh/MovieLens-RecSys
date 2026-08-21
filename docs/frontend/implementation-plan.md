@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–2 complete; Bundles 3–4 in progress
+**Status:** Bundles 0–2 merged; Bundles 3–4 implementation complete and pending merge; Bundles 5–7 handed off, not implemented
 
 **Last updated:** 2026-08-21
 
@@ -33,6 +33,10 @@ Bundles 2 + 3 + 4
 Bundle numbers describe delivery order, not one mandatory PR each. Each PR
 remains coherent and includes the tests and documentation for the behavior it
 changes.
+
+Implementation stops after Bundle 4 in the current delivery. The exact starting
+state, PR cuts, risks, commands, and acceptance criteria for the next owner are
+recorded in [the Bundles 5–7 handoff](bundles-5-7-handoff.md).
 
 ## Bundle 0 — Discovery and contracts
 
