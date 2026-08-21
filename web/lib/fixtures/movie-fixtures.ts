@@ -1,6 +1,5 @@
 import type {
   EvidenceRecord,
-  LibraryCollection,
   MovieCard,
   ResourceName,
   ResourceResult,
@@ -143,12 +142,6 @@ export const evidenceFixture: EvidenceRecord = {
   requestId: "req_demo_7f31b2",
   latencyMs: 42,
   fallbackReason: null,
-};
-
-export const libraryFixture: LibraryCollection = {
-  rated: movies.filter((movie) => movie.state.rating !== null),
-  watchlist: movies.filter((movie) => movie.state.watchlisted),
-  history: movies.filter((movie) => movie.state.watched),
 };
 
 export function recordedResource<T>(
