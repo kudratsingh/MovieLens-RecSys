@@ -5,17 +5,17 @@ The API, the model sidecar, and the audit log all have to agree on what a
 state is identified. Keeping that vocabulary in one module is what lets a
 recorded audit be replayed and compared against a later request instead of
 being a free-text note.
+
+Dependency-free on purpose, in the same spirit as ``src.feature_contract``.
+The slim API image carries no numpy, pandas, LightGBM, or Feast (ADR 0008's
+sidecar split), so a contract module the API imports must never reach into
+``src.models`` — the constants live here and the model code imports *them*.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-
-from src.models.artifacts import (
-    CANDIDATE_SOURCE_POPULARITY_FILL,
-    CANDIDATE_SOURCE_SIMILARITY,
-)
 
 __all__ = [
     "CANDIDATE_SOURCE_POPULARITY_FALLBACK",
@@ -29,6 +29,11 @@ __all__ = [
     "SCORE_SCALE_RANK",
     "id_set_digest",
 ]
+
+# Where a retrieved candidate came from. Defined here rather than beside the
+# candidate index so both the slim API and the sidecar can name a source.
+CANDIDATE_SOURCE_SIMILARITY = "item-item-cosine"
+CANDIDATE_SOURCE_POPULARITY_FILL = "popularity-fill"
 
 # Bump the suffix whenever the *meaning* of the filter changes, so a stored
 # audit can never be misread as having applied today's rules.

@@ -20,6 +20,10 @@ from typing import Any
 
 from src.features import FEATURE_COLUMNS
 from src.models.ranker.lgbm import LGBMRanker
+from src.serving.policy import (
+    CANDIDATE_SOURCE_POPULARITY_FILL,
+    CANDIDATE_SOURCE_SIMILARITY,
+)
 
 MANIFEST_SCHEMA_VERSION = 1
 
@@ -116,10 +120,6 @@ class ServingManifest:
             "trained_at": self.trained_at,
             "feature_columns": list(self.feature_columns),
         }
-
-
-CANDIDATE_SOURCE_SIMILARITY = "item-item-cosine"
-CANDIDATE_SOURCE_POPULARITY_FILL = "popularity-fill"
 
 
 @dataclass(frozen=True)
