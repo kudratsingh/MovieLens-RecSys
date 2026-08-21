@@ -1,6 +1,6 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A and 5D landed, 5B–5C open)
+**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A, 5C, and 5D landed, 5B open)
 
 **Last updated:** 2026-08-21
 
@@ -251,7 +251,18 @@ erase unrelated content; lint, typecheck, build, component, and axe checks pass.
   reauthentication path; caller-supplied bearer tokens refused at the BFF edge
   and in the browser reader; and a structural fixture lockout asserted in tests.
 - [ ] 5B — Discover.
-- [ ] 5C — Browse and movie detail.
+- [x] 5C — Browse and movie detail: Browse wired to the Bundle 3 catalog query
+  contract through the 5A boundary, with search, genre, decade, sort, and
+  cursor serialized into the URL and no invented total; deduplicated page
+  appends over the endpoint's deterministic ordering; a rejected cursor
+  restarted from the top behind a plain notice; per-tab restoration of the
+  loaded window and scroll position after a detail visit; reserved poster
+  boxes with lazy loading below the fold and deterministic source-aware
+  fallbacks for `complete`, `partial`, and `unavailable` metadata; and
+  `/movies/[movieId]` on its real detail resource with the canonical
+  watched/rating/watchlist/dismissal controls reconciled from the committed
+  response, rollback plus focus recovery on failure, and a structured
+  explanation rendered only when one is supplied.
 - [x] 5D — Library: Rated, Watchlist, and History on the Bundle 2 cursor
   resources through the 5A boundary, loaded independently per tab; URL-owned
   tab/sort/filter/cursor state with de-duplicated page appends; canonical
