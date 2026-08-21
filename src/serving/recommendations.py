@@ -9,6 +9,7 @@ by Postgres RLS even when the caller supplies IDs from the model sidecar.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import Connection, bindparam, text
 
@@ -29,7 +30,7 @@ class HistoryMovie:
     movie_id: int
     title: str
     genres: list[str]
-    rating: float
+    rating: float | None
     timestamp: int
 
 
@@ -86,9 +87,10 @@ class RecommendationService:
                 LEFT JOIN links AS l ON l."movieId" = m."movieId"
                 WHERE NOT EXISTS (
                     SELECT 1
-                    FROM ratings AS seen
-                    WHERE seen."userId" = :user_id
-                      AND seen."movieId" = r."movieId"
+                    FROM user_movie_state AS seen
+                    WHERE seen.user_id = :user_id
+                      AND seen.movie_id = r."movieId"
+                      AND (seen.watched_at IS NOT NULL OR seen.dismissed_at IS NOT NULL)
                 )
                 GROUP BY m."movieId", m.title, m.genres, l."tmdbId"
                 ORDER BY interaction_count DESC, m."movieId" ASC
@@ -123,7 +125,7 @@ class RecommendationService:
 
         genre_weights: dict[str, float] = {}
         for movie in history:
-            preference = movie.rating - 3.0
+            preference = (movie.rating if movie.rating is not None else 3.0) - 3.0
             for genre in movie.genres:
                 genre_weights[genre] = genre_weights.get(genre, 0.0) + preference
 
@@ -168,9 +170,10 @@ class RecommendationService:
                 WHERE m."movieId" IN :movie_ids
                   AND NOT EXISTS (
                     SELECT 1
-                    FROM ratings AS seen
-                    WHERE seen."userId" = :user_id
-                      AND seen."movieId" = m."movieId"
+                    FROM user_movie_state AS seen
+                    WHERE seen.user_id = :user_id
+                      AND seen.movie_id = m."movieId"
+                      AND (seen.watched_at IS NOT NULL OR seen.dismissed_at IS NOT NULL)
                   )
                 GROUP BY m."movieId", m.title, m.genres, l."tmdbId"
                 """).bindparams(bindparam("movie_ids", expanding=True))
@@ -218,12 +221,14 @@ class RecommendationService:
                     m."movieId" AS movie_id,
                     m.title,
                     m.genres,
-                    r.rating,
-                    r.timestamp
-                FROM ratings AS r
-                JOIN movies AS m ON m."movieId" = r."movieId"
-                WHERE r."userId" = :user_id
-                ORDER BY r.timestamp DESC, m."movieId" ASC
+                    state.rating,
+                    state.watched_at
+                FROM user_movie_state AS state
+                JOIN movies AS m ON m."movieId" = state.movie_id
+                WHERE state.user_id = :user_id
+                  AND state.watched_at IS NOT NULL
+                  AND state.dismissed_at IS NULL
+                ORDER BY state.watched_at DESC, m."movieId" ASC
                 LIMIT :limit
                 """),
             {"user_id": user_id, "limit": limit},
@@ -233,8 +238,8 @@ class RecommendationService:
                 movie_id=int(row.movie_id),
                 title=str(row.title),
                 genres=_split_genres(str(row.genres)),
-                rating=float(row.rating),
-                timestamp=int(row.timestamp),
+                rating=float(row.rating) if row.rating is not None else None,
+                timestamp=_timestamp(row.watched_at),
             )
             for row in rows
         ]
@@ -264,9 +269,9 @@ class RecommendationService:
             text("""
                 SELECT m."movieId" AS movie_id, m.title, m.genres, current.rating
                 FROM movies AS m
-                LEFT JOIN ratings AS current
-                  ON current."movieId" = m."movieId"
-                 AND current."userId" = :user_id
+                LEFT JOIN user_movie_state AS current
+                  ON current.movie_id = m."movieId"
+                 AND current.user_id = :user_id
                 ORDER BY m."movieId" ASC
                 LIMIT 100
                 """),
@@ -292,7 +297,13 @@ class RecommendationService:
         rating: float,
         timestamp: int,
     ) -> None:
-        """Replace one demo persona rating inside the request's RLS scope."""
+        """Compatibility write into the durable projection.
+
+        New product clients use ``FeedbackService`` so the mutation also emits
+        an idempotent append-only event. This method remains for the legacy
+        dashboard during additive route cutover and never rewrites source
+        ``ratings`` rows.
+        """
         self._require_demo_persona(connection, user_id=user_id)
         exists = connection.execute(
             text('SELECT 1 FROM movies WHERE "movieId" = :movie_id'),
@@ -301,28 +312,36 @@ class RecommendationService:
         if exists is None:
             raise UnknownMovieError(f"movie {movie_id} does not exist")
         connection.execute(
-            text('DELETE FROM ratings WHERE "userId" = :user_id AND "movieId" = :movie_id'),
-            {"user_id": user_id, "movie_id": movie_id},
-        )
-        connection.execute(
             text("""
-                INSERT INTO ratings (tenant_id, "userId", "movieId", rating, timestamp)
-                VALUES (:tenant_id, :user_id, :movie_id, :rating, :timestamp)
+                INSERT INTO user_movie_state (
+                    tenant_id, user_id, movie_id, watched_at, rating,
+                    rating_updated_at, state_version, updated_at
+                ) VALUES (
+                    :tenant_id, :user_id, :movie_id, :timestamp, :rating,
+                    :timestamp, 1, :timestamp
+                )
+                ON CONFLICT (tenant_id, user_id, movie_id) DO UPDATE SET
+                    watched_at = COALESCE(user_movie_state.watched_at, excluded.watched_at),
+                    rating = excluded.rating,
+                    rating_updated_at = excluded.rating_updated_at,
+                    watchlisted_at = NULL,
+                    state_version = user_movie_state.state_version + 1,
+                    updated_at = excluded.updated_at
                 """),
             {
                 "tenant_id": tenant_id,
                 "user_id": user_id,
                 "movie_id": movie_id,
                 "rating": rating,
-                "timestamp": timestamp,
+                "timestamp": datetime.fromtimestamp(timestamp, UTC),
             },
         )
 
     def reset_ratings(self, connection: Connection, *, user_id: int) -> int:
-        """Clear only this demo persona's ratings in the active tenant."""
+        """Clear only this demo persona's live state, never source ratings."""
         self._require_demo_persona(connection, user_id=user_id)
         result = connection.execute(
-            text('DELETE FROM ratings WHERE "userId" = :user_id'),
+            text("DELETE FROM user_movie_state WHERE user_id = :user_id"),
             {"user_id": user_id},
         )
         return int(result.rowcount)
@@ -347,3 +366,20 @@ def _affinity_reason(genres: list[str], weights: dict[str, float]) -> str:
     if matched and weights.get(matched[0], 0.0) > 0:
         return f"Matches your {matched[0]} ratings"
     return "Popular unseen movie in this tenant"
+
+
+def _timestamp(value: object) -> int:
+    if isinstance(value, datetime):
+        resolved = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        return int(resolved.timestamp())
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            resolved = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if resolved.tzinfo is None:
+                resolved = resolved.replace(tzinfo=UTC)
+            return int(resolved.timestamp())
+        except ValueError:
+            return int(float(value))
+    raise TypeError(f"unsupported watched timestamp: {value!r}")

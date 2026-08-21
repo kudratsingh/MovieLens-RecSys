@@ -30,6 +30,25 @@ def _connection() -> Connection:
     )
     connection.execute(
         text(
+            "CREATE TABLE user_movie_state ("
+            "tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, movie_id INTEGER NOT NULL, "
+            "watched_at DATETIME, rating FLOAT, rating_updated_at DATETIME, "
+            "watchlisted_at DATETIME, dismissed_at DATETIME, state_version INTEGER NOT NULL, "
+            "updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, user_id, movie_id))"
+        )
+    )
+    connection.execute(
+        text(
+            "CREATE TABLE user_feedback_events ("
+            "tenant_id TEXT NOT NULL, event_id TEXT NOT NULL, actor_user_id TEXT NOT NULL, "
+            "user_id INTEGER NOT NULL, movie_id INTEGER NOT NULL, action TEXT NOT NULL, "
+            "old_value JSON, new_value JSON NOT NULL, state_version INTEGER NOT NULL, "
+            "outcome TEXT NOT NULL, created_at DATETIME NOT NULL, "
+            "PRIMARY KEY (tenant_id, event_id))"
+        )
+    )
+    connection.execute(
+        text(
             "INSERT INTO demo_personas VALUES "
             "(900000102, 'drama-fan', 'Drama Fan', 'Drama profile', 2, TRUE), "
             "(900000101, 'action-fan', 'Action Fan', 'Action profile', 1, TRUE)"
@@ -52,6 +71,15 @@ def _connection() -> Connection:
             "('demo', 11, 3, 3.0, 120)"
         )
     )
+    connection.execute(text("""
+            INSERT INTO user_movie_state (
+                tenant_id, user_id, movie_id, watched_at, rating,
+                rating_updated_at, state_version, updated_at
+            )
+            SELECT tenant_id, "userId", "movieId", timestamp, rating,
+                   timestamp, 1, timestamp
+            FROM ratings
+            """))
     return connection
 
 
@@ -183,11 +211,11 @@ def test_rate_movie_replaces_rating_and_reset_clears_only_persona() -> None:
             timestamp=301,
         )
         rows = connection.execute(
-            text('SELECT rating FROM ratings WHERE "userId" = 900000101')
+            text("SELECT rating FROM user_movie_state WHERE user_id = 900000101")
         ).all()
         changed = service.reset_ratings(connection, user_id=900000101)
         unrelated = connection.execute(
-            text('SELECT COUNT(*) FROM ratings WHERE "userId" = 10')
+            text("SELECT COUNT(*) FROM user_movie_state WHERE user_id = 10")
         ).scalar_one()
     finally:
         connection.close()

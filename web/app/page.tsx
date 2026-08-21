@@ -1,6 +1,7 @@
 import { auth, signIn } from "@/auth";
 import { SignOutButton } from "@/components/auth-controls";
 import { RecommendationDemo } from "@/components/recommendation-demo";
+import Link from "next/link";
 
 export default async function Home() {
   const session = await auth();
@@ -22,6 +23,12 @@ export default async function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Link
+              className="text-sm text-zinc-400 transition hover:text-amber-200"
+              href="/library?userId=900000101"
+            >
+              Library
+            </Link>
             <div className="hidden text-right sm:block">
               <p className="text-xs font-medium text-zinc-200">
                 {session.user.name ?? session.user.email ?? "Signed-in actor"}

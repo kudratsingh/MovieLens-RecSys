@@ -223,3 +223,46 @@ def test_rating_write_is_confined_to_active_tenant(
     assert written.status_code == 200
     assert DEMO_RECOMMENDATION_TITLE not in default_history.text
     assert DEMO_RECOMMENDATION_TITLE in demo_history.text
+
+
+def test_library_state_and_mutations_are_tenant_scoped(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_token = mint_token("default", "alice", "alice")
+    demo_token = mint_token("demo", "demo", "demo")
+    default_headers = {"Authorization": f"Bearer {default_token}"}
+    demo_headers = {"Authorization": f"Bearer {demo_token}"}
+
+    default_library = client.get(
+        "/users/987654323/library?tab=rated",
+        headers=default_headers,
+    )
+    demo_library = client.get(
+        "/users/987654324/library?tab=history",
+        headers=demo_headers,
+    )
+    blocked_cross_tenant = client.put(
+        "/users/987654324/movies/900000004/rating",
+        json={"rating": 5.0},
+        headers=default_headers,
+    )
+    mutation = client.put(
+        "/users/987654324/movies/900000004/rating",
+        json={"rating": 4.0},
+        headers={**demo_headers, "Idempotency-Key": "a53400f5-aa61-4424-ac68-3210c00c6098"},
+    )
+    immediate_read = client.get(
+        "/users/987654324/library?tab=rated",
+        headers=demo_headers,
+    )
+
+    assert default_library.status_code == 200
+    assert demo_library.status_code == 200
+    assert DEFAULT_RECOMMENDATION_TITLE in default_library.text
+    assert DEMO_RECOMMENDATION_TITLE not in default_library.text
+    assert DEMO_RECOMMENDATION_TITLE in demo_library.text
+    assert DEFAULT_RECOMMENDATION_TITLE not in demo_library.text
+    assert blocked_cross_tenant.status_code == 404
+    assert mutation.status_code == 200
+    assert mutation.json()["state"]["rating"] == 4.0
+    assert DEMO_RECOMMENDATION_TITLE in immediate_read.text

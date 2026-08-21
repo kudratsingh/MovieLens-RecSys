@@ -1,6 +1,6 @@
 # Movie-discovery frontend: backend readiness
 
-**Status:** Bundle 0 source audit; Bundle 1 correctness update applied
+**Status:** Bundle 2 durable feedback and Library foundation implemented
 
 **Last updated:** 2026-08-21
 
@@ -19,9 +19,10 @@ implementation claim.
 | Concern | What works now | Boundary or gap |
 |---|---|---|
 | Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback | Static artifacts and snapshot features still do not update on each rating |
-| Rating feedback | Stores 0.5–5 stars, lists current rows as history, excludes rated movies, and passes unique rated movie IDs as positive candidate seeds after commit; transaction success is now acknowledged only after commit | Star magnitude is not an online model input; edit is delete-plus-insert; there is no per-title delete or independent watched state |
+| Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
-| Catalog | The shared MovieLens catalog contains 62,423 titles; user rating state can be overlaid | Endpoint returns at most 100 ID-ordered rows with no poster/year/search/filter/sort/cursor/detail contract |
+| Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, and a truthful `live-ratings-v1` summary | The resources are selected-persona mode until `/me` ownership mapping lands; visual poster metadata belongs to Bundle 3 |
+| Catalog | The shared MovieLens catalog contains 62,423 titles; live rating state is overlaid from the durable projection | Endpoint returns at most 100 ID-ordered rows with no poster/year/search/filter/sort/cursor/detail contract |
 | Demo catalog | Reviewed 24-title fixture gives deterministic demos | Merely adding titles does not add them to prediction artifacts or popularity coverage |
 | Metadata | TMDB is bounded, cached, and failure-tolerant for small recommendation sets | Cache is per process and live fan-out can block; it is unsuitable for a large poster grid |
 | Browser auth | Keycloak gives both callers the API audience; FastAPI pins the public issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly session cookies, refresh/logout, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
@@ -162,14 +163,14 @@ history. Every state table and event table follows ADR 0008: tenant FK, forced
 RLS, `USING` and `WITH CHECK` policy, minimal grants, tenant-leading keys and
 indexes, and cross-tenant tests.
 
-Proposed idempotent resources:
+Implemented persona-mode resources (normal `/me` ownership remains pending):
 
-- `PUT|DELETE /me/movies/{movie_id}/watched`
-- `PUT|DELETE /me/movies/{movie_id}/rating`
-- `PUT|DELETE /me/movies/{movie_id}/watchlist`
-- `PUT|DELETE /me/movies/{movie_id}/dismissal`
-- `GET /me/library?tab=rated|watchlist|history&cursor=...`
-- `GET /me/taste-profile`
+- `PUT|DELETE /users/{user_id}/movies/{movie_id}/watched`
+- `PUT|DELETE /users/{user_id}/movies/{movie_id}/rating`
+- `PUT|DELETE /users/{user_id}/movies/{movie_id}/watchlist`
+- `PUT|DELETE /users/{user_id}/movies/{movie_id}/dismissal`
+- `GET /users/{user_id}/library?tab=rated|watchlist|history&cursor=...`
+- `GET /users/{user_id}/taste-profile`
 
 Persona-mode equivalents require the explicit impersonation role. Mutation
 success returns the committed canonical movie state, state revision, and
