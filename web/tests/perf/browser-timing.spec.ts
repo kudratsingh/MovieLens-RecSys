@@ -69,6 +69,11 @@ const DISCOVER_PERSONA = 900000102;
 const BROWSE_PERSONA = 900000103;
 const COLD_START_PERSONA = 900000104;
 const CATALOG_PAGE_SIZE = 24;
+// `STATUS_ANCHOR` in web/components/discover/discover-experience.tsx: the route
+// gives its live region a stable id so feedback can move focus back to it, and
+// that makes it the one place on Discover worth watching for an
+// acknowledgement.
+const DISCOVER_STATUS_ID = "discover-status";
 
 // Not serial: the config already pins one worker, and a route that fails its
 // budget must not stop the remaining routes from being measured. A report that
@@ -240,11 +245,15 @@ test("Discover: fan-out render, deferred evidence, and feedback acknowledgement"
   const vitals = await readVitals(page);
   // The featured card is the first-read object, so its Watchlist control is the
   // action whose acknowledgement matters.
+  const featured = page.locator("section.featured-movie");
   const movieId = await featuredMovieId(page);
   const ackMs = await clickAndMeasureAcknowledgement(
     page,
-    page.locator("section.featured-movie").getByRole("button", { name: "Watchlist" }),
-    "#discover-status",
+    featured.getByRole("button", { name: "Watchlist", exact: true }),
+    // Discover owns a route-level status line and refreshes on committed
+    // feedback, so the acknowledgement a reader waits for is that line, not the
+    // button's own optimistic relabel.
+    { selector: `#${DISCOVER_STATUS_ID}` },
   );
 
   const measurement: RouteMeasurement = {
@@ -282,7 +291,9 @@ test("Browse: bounded grid, lazy posters, and a cursor continuation", async ({ p
   // fold, which is exactly where a grid without reserved boxes would shift.
   const loadMore = page.locator(".browse-more button");
   await expect(loadMore).toBeVisible();
-  const ackMs = await clickAndMeasureAcknowledgement(page, loadMore, ".browse-more");
+  const ackMs = await clickAndMeasureAcknowledgement(page, loadMore, {
+    element: loadMore,
+  });
   await expect(page.locator(".catalog-cell")).toHaveCount(firstPageCards * 2);
   await settle(page);
   const afterContinuation = await readVitals(page);
@@ -311,7 +322,9 @@ test("Browse: bounded grid, lazy posters, and a cursor continuation", async ({ p
   assertTiming(measurement);
 });
 
-test("Movie detail: reserved artwork and a canonical-state acknowledgement", async ({ page }) => {
+test("Movie detail: reserved artwork and a committed-state acknowledgement", async ({
+  page,
+}) => {
   // Entered the way a reader enters it — from a Browse card — so the movie
   // under test is one the catalog actually offers, and the watchlist mutation
   // stays inside what the Browse journey owns for this persona.
@@ -330,18 +343,25 @@ test("Movie detail: reserved artwork and a canonical-state acknowledgement", asy
   const path = `/movies/${movieId}?user=${BROWSE_PERSONA}`;
   await page.goto(path);
   await settle(page);
+  // Normalise before measuring: the Browse journey owns watchlist writes for
+  // this persona and may have left this title saved, and "Watchlist" and
+  // "In watchlist" are different controls to click.
+  await clearWatchlist(page, BROWSE_PERSONA, movieId);
 
   const requests = trackRequests(page);
   await page.goto(path);
   await settle(page);
 
   const vitals = await readVitals(page);
-  const controls = page.locator(".canonical-state");
-  const ackMs = await clickAndMeasureAcknowledgement(
-    page,
-    controls.getByRole("button", { name: "Watchlist" }),
-    ".canonical-state",
-  );
+  // Role and accessible name, not a wrapper class. The shared control family
+  // owns this markup and has already been reorganised once; `Watchlist` ->
+  // `In watchlist` is the contract the service-backed journeys assert on, and
+  // `exact` keeps the first from also matching the second.
+  const watchlist = page.getByRole("button", { name: "Watchlist", exact: true });
+  await expect(watchlist).toBeVisible();
+  const ackMs = await clickAndMeasureAcknowledgement(page, watchlist, {
+    element: watchlist,
+  });
 
   const measurement: RouteMeasurement = {
     route: "movie-detail",
@@ -358,11 +378,10 @@ test("Movie detail: reserved artwork and a canonical-state acknowledgement", asy
   };
   record(measurement);
 
-  // The status paragraph and its error twin share a class; only the status one
-  // carries the committed message.
-  await expect(page.locator('p.canonical-state-message[role="status"]')).toContainText(
-    /watchlist/i,
-  );
+  // The optimistic relabel is what was timed; the status line is what proves a
+  // write actually committed before this test puts the persona back.
+  await expect(page.getByRole("button", { name: "In watchlist", exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("changes no recommendation input");
   await clearWatchlist(page, BROWSE_PERSONA, movieId);
   assertStructural(measurement);
   assertTiming(measurement);
@@ -382,21 +401,31 @@ test("Library: tabbed collections and a rating-edit acknowledgement", async ({ p
 
   // Editing a star is the route's primary action and its acknowledgement is
   // optimistic, so this is the clearest read on "did something visibly happen".
-  const select = page.locator("select[id^='library-rating-']").first();
-  await expect(select).toBeVisible();
-  const original = await select.inputValue();
+  // The row is found by the control it contains rather than by a class: the
+  // Rated collection is the one that offers the half-star editor, and the
+  // journeys drive it the same way.
+  const row = page
+    .getByRole("listitem")
+    .filter({ has: page.getByRole("combobox") })
+    .first();
+  await expect(row).toBeVisible();
+  const rating = row.getByRole("combobox");
+  const original = await rating.inputValue();
+  expect(original, "the first Rated row should carry a rating to edit").not.toBe("");
   // Read the replacement off the control rather than assuming the encoding:
   // the options are half-star values written without a trailing zero ("5", not
   // "5.0"), and a hard-coded string would silently stop matching.
-  const replacement = await select.evaluate((element) => {
+  const replacement = await rating.evaluate((element) => {
     const control = element as HTMLSelectElement;
     const values = Array.from(control.options)
       .map((option) => option.value)
       .filter((value) => value !== "" && value !== control.value);
     return values[values.length - 1];
   });
-  const ackMs = await measureAcknowledgement(page, ".library-panel", async () => {
-    await select.selectOption(replacement);
+  // Armed on the row, because the row is what visibly answers: its state line
+  // rewrites optimistically while the write is still in flight.
+  const ackMs = await measureAcknowledgement(page, { element: row }, async () => {
+    await rating.selectOption(replacement);
   });
 
   const measurement: RouteMeasurement = {
@@ -414,10 +443,15 @@ test("Library: tabbed collections and a rating-edit acknowledgement", async ({ p
   };
   record(measurement);
 
-  // Put the persona back: this fixture is shared with the journey suite.
-  await expect(select).toHaveValue(replacement);
-  await select.selectOption(original);
-  await expect(select).toHaveValue(original);
+  // Put the persona back. The fixture is shared with the journey suite, and the
+  // announcement is the only evidence the first write left the browser — the
+  // row alone renders optimistically, so reverting on that would race the
+  // request it is trying to undo.
+  await expect(page.getByText(/Rating saved for .+ library/)).toBeAttached();
+  await expect(rating).toBeEnabled();
+  await rating.selectOption(original);
+  await expect(rating).toBeEnabled();
+  await expect(rating).toHaveValue(original);
   assertStructural(measurement);
   assertTiming(measurement);
 });

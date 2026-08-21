@@ -419,6 +419,20 @@ deliberately *not* applied — the stack under test is on loopback, so any
 emulated RTT would be a number the harness invented rather than one it measured,
 and it would dominate every result.
 
+The controls are addressed by role and accessible name — `Watchlist` /
+`In watchlist`, `N stars for {title}`, the Rated row's combobox — and never by a
+CSS wrapper. That is not style preference: Bundle 7c replaced the per-surface
+controls with one shared family, and the two assertions this suite had written
+against `.canonical-state` and `select[id^='library-rating-']` broke the moment
+it landed, while the journeys addressing the same controls by name did not. The
+accessible name is the contract; the markup around it is not.
+
+The timeouts follow from the same incident. One stale selector held a CI job
+open for the full 180-second test timeout, because an action with no
+`actionTimeout` inherits it. Actions and assertions are bounded at 10 seconds
+now, and the acknowledgement wait with them, so a control that moved reports
+itself in seconds instead of costing six minutes of runner time.
+
 Everything is measured inside the page rather than around it: LCP from a
 buffered `PerformanceObserver`, CLS by the web-vitals session-window definition
 rather than a naive sum, and acknowledgement as the milliseconds between a

@@ -31,10 +31,12 @@ export default defineConfig({
   testDir: "./tests/perf",
   globalSetup: "./tests/perf/global-setup.ts",
   // Each route is measured cold and warm and then driven through an
-  // interaction, all under CPU throttling. The journey suite's 30 s would be
-  // tight for that and a timeout here reads as a false performance failure.
-  timeout: 180_000,
-  expect: { timeout: 20_000 },
+  // interaction, all under CPU throttling, so the journey suite's 30 s would be
+  // tight and a timeout here would read as a false performance failure. This is
+  // a ceiling for the whole test, never a waiting budget for one step — see
+  // `actionTimeout` below.
+  timeout: 90_000,
+  expect: { timeout: 10_000 },
   fullyParallel: false,
   // A second worker would be a second throttled browser competing for the same
   // cores, which is measurement noise this harness would then report as the
@@ -48,6 +50,14 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3001",
     trace: "retain-on-failure",
+    // Without this, an action inherits the *test* timeout, so a control that
+    // moved or was renamed holds the job open for the full ceiling before
+    // saying so — one stale wrapper class cost a CI run six minutes to report
+    // a missing button. Ten seconds is far longer than any interaction here
+    // needs under a 4x CPU throttle, and short enough that a stale selector
+    // reads as the mistake it is rather than as a hang.
+    actionTimeout: 10_000,
+    navigationTimeout: 30_000,
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 3,
     isMobile: true,

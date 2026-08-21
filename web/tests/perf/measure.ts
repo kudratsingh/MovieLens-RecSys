@@ -203,78 +203,114 @@ export async function settle(page: Page): Promise<void> {
 }
 
 /**
+ * How long an acknowledgement is allowed to take before the run gives up.
+ *
+ * Not a budget — the budget is `BUDGETS.ackMs` and a breach of it is reported,
+ * not thrown. This is the "nothing happened at all" bound, and it is seconds
+ * rather than minutes on purpose: an unacknowledged action means the selector
+ * is wrong or the control is gone, and that diagnosis should cost the job a few
+ * seconds. A stale selector once held a CI job open for the full 180-second
+ * test timeout, which is six minutes of runner time to learn that a CSS class
+ * had been renamed.
+ */
+const ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
+
+/** Where the acknowledgement observer watches for a change. */
+export type AckTarget = { selector: string } | { element: Locator };
+
+/**
  * Arm the acknowledgement stopwatch on one element's visible text.
  *
- * "Visible acknowledgement" is defined here as: the text under `selector`
+ * "Visible acknowledgement" is defined here as: the text under the target
  * differs from what it said when the reader acted. That covers an optimistic
  * label flip, a status line appearing, and a busy state — every shape the
  * product actually uses — without asserting which one a given control chose.
  *
- * The clock starts on the input event itself, in the capture phase, so the
- * measurement includes the application's own dispatch and render cost and
- * excludes Playwright's round trip. Several event types are listened for
- * because not every control is a button: a `<select>` never sees a click that
- * Playwright's `selectOption` would produce.
+ * The target is either a selector, for a route-owned status region with a
+ * stable id, or a resolved element, for a control the test found by role and
+ * accessible name. The second form is what the shared movie-state family needs:
+ * its markup is an implementation detail that has already been reorganised
+ * once, while `Watchlist` -> `In watchlist` is the contract the journeys assert
+ * on. React keeps the same DOM node across that relabel, so watching the node
+ * is watching the acknowledgement itself.
+ *
+ * The clock starts on the input event, in the capture phase, so the measurement
+ * includes the application's own dispatch and render cost and excludes
+ * Playwright's round trip. Several event types are listened for because not
+ * every control is a button: a `<select>` never sees a click that Playwright's
+ * `selectOption` would produce.
  */
-export async function armAcknowledgement(page: Page, selector: string): Promise<void> {
-  await page.evaluate((target) => {
-    const state = (
-      window as unknown as {
-        __perf: { ackStart: number | null; ackEnd: number | null };
+export async function armAcknowledgement(page: Page, target: AckTarget): Promise<void> {
+  const handle =
+    "element" in target
+      ? await target.element.elementHandle({ timeout: ACKNOWLEDGEMENT_TIMEOUT_MS })
+      : null;
+  await page.evaluate(
+    ([selector, node]) => {
+      const state = (
+        window as unknown as {
+          __perf: { ackStart: number | null; ackEnd: number | null };
+        }
+      ).__perf;
+      state.ackStart = null;
+      state.ackEnd = null;
+      const read = () =>
+        (node as Element | null)?.textContent ??
+        (selector ? document.querySelector(selector)?.textContent : null) ??
+        null;
+      const before = read();
+      const check = () => {
+        if (state.ackStart === null || state.ackEnd !== null) {
+          return;
+        }
+        if (read() !== before) {
+          state.ackEnd = performance.now();
+        }
+      };
+      const start = () => {
+        if (state.ackStart === null) {
+          state.ackStart = performance.now();
+        }
+      };
+      for (const type of ["pointerdown", "click", "keydown", "change"]) {
+        document.addEventListener(type, start, { capture: true });
       }
-    ).__perf;
-    state.ackStart = null;
-    state.ackEnd = null;
-    const before = document.querySelector(target)?.textContent ?? null;
-    const check = () => {
-      if (state.ackStart === null || state.ackEnd !== null) {
-        return;
-      }
-      const now = document.querySelector(target)?.textContent ?? null;
-      if (now !== before) {
-        state.ackEnd = performance.now();
-      }
-    };
-    const start = () => {
-      if (state.ackStart === null) {
-        state.ackStart = performance.now();
-      }
-    };
-    for (const type of ["pointerdown", "click", "keydown", "change"]) {
-      document.addEventListener(type, start, { capture: true });
-    }
-    new MutationObserver(check).observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-      attributes: true,
-    });
-  }, selector);
+      new MutationObserver(check).observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+      });
+    },
+    ["selector" in target ? target.selector : null, handle] as const,
+  );
+  await handle?.dispose();
 }
 
 /** Perform one interaction and return the milliseconds until it was acknowledged. */
 export async function measureAcknowledgement(
   page: Page,
-  ackSelector: string,
+  target: AckTarget,
   act: () => Promise<void>,
 ): Promise<number> {
-  await armAcknowledgement(page, ackSelector);
+  await armAcknowledgement(page, target);
   await act();
   await page.waitForFunction(
     () => (window as unknown as { __perf: { ackEnd: number | null } }).__perf.ackEnd !== null,
     undefined,
-    { polling: "raf" },
+    { polling: "raf", timeout: ACKNOWLEDGEMENT_TIMEOUT_MS },
   );
   const vitals = await readVitals(page);
   return (vitals.ackEnd ?? 0) - (vitals.ackStart ?? 0);
 }
 
+/** Click a control and time the acknowledgement that control itself renders. */
 export async function clickAndMeasureAcknowledgement(
   page: Page,
   trigger: Locator,
-  ackSelector: string,
+  target: AckTarget,
 ): Promise<number> {
-  return measureAcknowledgement(page, ackSelector, () => trigger.click());
+  return measureAcknowledgement(page, target, () => trigger.click());
 }
 
 /**
