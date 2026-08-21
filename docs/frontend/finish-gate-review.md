@@ -96,15 +96,6 @@ nothing in the stack reaches the API through the host.
 
 Every row above was re-run after rebasing onto `876fd36` (PR #62, 7b).
 
-### 3.2 CI
-
-The same gates on a clean runner, against a Compose stack built from scratch:
-[PR #63](https://github.com/kudratsingh/MovieLens-RecSys/pull/63), CI run
-[32523881379](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32523881379).
-The `frontend` job carries the visual and accessibility gate; `browser-auth-e2e`
-carries the service-backed journey and then 7b's browser timing;
-`synthetic-load-smoke` carries the unchanged direct-API p99 gate.
-
 Seeded state at capture time, read from the API in the browser's own session:
 
 ```json
@@ -116,6 +107,15 @@ Seeded state at capture time, read from the API in the browser's own session:
 
 So the learned path was genuinely exercised, not assumed: the warm persona was
 above the five-signal threshold and the response reported learned serving.
+
+### 3.2 CI
+
+The same gates on a clean runner, against a Compose stack built from scratch:
+[PR #63](https://github.com/kudratsingh/MovieLens-RecSys/pull/63), CI run
+[32523881379](https://github.com/kudratsingh/MovieLens-RecSys/actions/runs/32523881379).
+The `frontend` job carries the visual and accessibility gate; `browser-auth-e2e`
+carries the service-backed journey and then 7b's browser timing;
+`synthetic-load-smoke` carries the unchanged direct-API p99 gate.
 
 ### 3.3 The service-backed journey
 
@@ -209,11 +209,11 @@ participant and inventing them would be worse than leaving them blank.**
 | Discovery task | Completed | Path taken | Friction observed |
 |---|---|---|---|
 | 1. Find a movie to watch tonight | Yes | `/discover` → primary movie → `Open movie` | The learned persona's #1 pick has no artwork ([N1](#n1-the-first-learned-recommendation-has-no-poster)) |
-| 2. Mark three movies watched and rate them | Yes | Detail and Discover both; rating is one press on detail, and `Watched` reveals the stars on Discover | None. The star note is explicit that magnitude is display feedback |
+| 2. Mark three movies watched and rate them | Partly — two, deliberately | Detail and Discover both; rating is one press on detail, and `Watched` reveals the stars on Discover | None. A third repeat adds no new path, and every write here has to be reversed to leave the personas as the ownership table expects. The star note is explicit that magnitude is display feedback |
 | 3. Find and change one of those ratings | Yes | `/library?tab=rated`, filter by title, edit in the row | None |
 | 4. Save a movie and retrieve it from the watchlist | Yes | Detail `Watchlist` → Library `Watchlist` tab | None. Marking watched later consumes the entry, which the contract intends but the UI does not say out loud |
 | 5. Explain why one recommendation appeared | Yes | `Why this?` → reason, policy, versions, request ID | None |
-| 6. Start from Cold Start and build a useful state | Yes | `/quick-picks?user=900000104` — one card, three equal actions, keyboard shortcuts, progress toward five | Reachable only from `/discover`, which is itself unreachable by navigation ([B2](#b2-discover-has-no-inbound-link)) |
+| 6. Start from Cold Start and build a useful state | Partly | `/quick-picks?user=900000104` — one card, three equal actions, keyboard shortcuts, progress toward five. A dismissal and its undo were driven through serving here; that a committed watched signal moves the counter is proven in `browser-auth.spec.ts` | Cold Start was **not** driven to five signals: the ownership table requires it be handed on at zero, so the learned transition itself is unproven from the UI and is asserted at the serving layer instead. Quick Picks is also reachable only from `/discover`, which is itself unreachable by navigation ([B2](#b2-discover-has-no-inbound-link)) |
 | 7. Find the serving policy and model version | Yes | `Why this?` → `Show prediction audit`. Two deliberate actions | None |
 
 Technical-reviewer walkthrough: the policy label, the reason string, the
