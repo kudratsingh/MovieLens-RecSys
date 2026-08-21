@@ -125,7 +125,11 @@ services:
   k6:
     profiles: ["load"]
     image: grafana/k6:${K6_VERSION:-2.1.0}
-    command: ["run", "/scripts/recommendations.js"]
+    # One generator service, two entry points. `recommendations.js` is the
+    # pinned p99 gate and stays the default so nothing that invokes this
+    # service without an override changes behaviour; `run_gate.sh` selects
+    # `pages.js` for the page-shaped budgets.
+    command: ["run", "${LOAD_SCRIPT:-/scripts/recommendations.js}"]
     # The generator being descheduled is itself a measurement error — it shows
     # up as dropped arrivals — so it is scheduled alongside the services it
     # measures rather than behind them.

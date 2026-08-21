@@ -97,6 +97,26 @@ jobs:
         working-directory: web
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3001
+      # Browser timing is measured separately from the k6 API numbers and must
+      # never be quoted for them. Runs after the journeys so a timing
+      # measurement can never be blamed for a journey failure, on the mobile
+      # profile pinned in playwright.perf.config.ts. CLS and the structural
+      # promises (reserved posters, lazy below-fold images, bounded catalog
+      # pages, no per-card TMDB fan-out, deferred technical data) are enforced;
+      # LCP is enforced; the acknowledgement budget is advisory until runner
+      # data exists. Adds ~20 s.
+      - name: Measure browser timing on the agreed mobile profile
+        run: npm run test:perf
+        working-directory: web
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3001
+      - name: Upload browser-timing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-timing
+          path: artifacts/browser-timing/
+          if-no-files-found: warn
       - name: Print browser-auth service logs on failure
         if: failure()
         run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml logs --tail 300 web api keycloak
@@ -239,6 +259,21 @@ jobs:
       - name: Run 60-second authenticated k6 SLO gate
         run: make demo-load-smoke
 
+      # What each route's fan-out, cursor continuation, Library read, mutation
+      # plus immediate read, and Quick Picks sequence cost, measured per step
+      # against the same warm stack. Correctness (every check, zero request
+      # errors, every mutation reverted) fails this step; the per-step latency
+      # budgets are reported and not enforced until runner data exists — see
+      # ADR 0010's page-shaped note for the promotion rule. Adds ~70 s.
+      - name: Run page-shaped load budgets
+        run: make demo-load-pages
+
+      # Request-id traceability, the auth boundary, dependency provenance,
+      # bounded pages, cursor rejection, and degraded metadata: pass/fail facts
+      # a percentile cannot express. Records rate limiting as not implemented.
+      - name: Check serving reliability promises
+        run: make demo-reliability-check
+
       # Uploaded on success too: a passing run is the baseline the next
       # failure gets compared against, and the per-second breakdown only means
       # something next to one.
@@ -247,7 +282,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: synthetic-load-smoke
-          path: artifacts/load-smoke/
+          path: |
+            artifacts/load-smoke/
+            artifacts/load-pages/
           if-no-files-found: warn
 
       - name: Dump serving logs on failure

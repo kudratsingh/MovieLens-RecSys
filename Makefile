@@ -8,6 +8,14 @@ K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 # Keep the leading `./` — Compose reads a bind-mount source without one as a
 # named volume.
 LOAD_RESULTS_DIR ?= ./artifacts/load-smoke
+# The page-shaped workloads write next to the recommendation gate's evidence
+# rather than into it: two workloads, two baselines, one uploaded artifact tree.
+PAGE_RESULTS_DIR ?= ./artifacts/load-pages
+# Whether a breached page latency budget fails the run. Correctness is always
+# enforced. PR CI leaves this false while the budgets are new (see ADR 0010's
+# page-shaped note for what promoting them requires); the nightly run sets it
+# true. Never flip this to false to make a red build green.
+PAGE_LATENCY_ENFORCED ?= false
 # Uvicorn workers on the load-serving process, in one place because the k6
 # warm-up sizes itself from the same value. A warm-up that primes fewer
 # processes than exist leaves cold ones inside the measured window.
@@ -19,7 +27,7 @@ API_LOAD_WORKERS ?= 4
 LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
 	DEMO_COMPOSE="$(DEMO_COMPOSE)" sh synthetic/load/run_gate.sh
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -177,6 +185,32 @@ demo-load-smoke:
 
 demo-load-nightly:
 	@LOAD_PROFILE=nightly K6_PUSH_INTERVAL=30s LOAD_RESULTS_DIR=./artifacts/load-nightly $(LOAD_GATE)
+
+# The page-shaped budgets: what each route's fan-out, cursor continuation,
+# library read, mutation-plus-read and quick-pick sequence cost, measured
+# per step. Separate from the recommendation gate on purpose — that one is
+# pinned and this one is still earning its thresholds.
+demo-load-pages:
+	@LOAD_PROFILE=smoke K6_PUSH_INTERVAL=2m LOAD_SCRIPT=/scripts/pages.js \
+		LOAD_WORKLOAD=pages LOAD_LATENCY_ENFORCED=$(PAGE_LATENCY_ENFORCED) \
+		LOAD_RESULTS_DIR=$(PAGE_RESULTS_DIR) $(LOAD_GATE)
+
+demo-load-pages-nightly:
+	@LOAD_PROFILE=nightly K6_PUSH_INTERVAL=30s LOAD_SCRIPT=/scripts/pages.js \
+		LOAD_WORKLOAD=pages LOAD_LATENCY_ENFORCED=true \
+		LOAD_RESULTS_DIR=./artifacts/load-pages-nightly $(LOAD_GATE)
+
+# Non-latency serving promises that a percentile cannot express: the request id
+# survives to the audit row, /healthz is reachable without a token while nothing
+# else is, dependency provenance is visible somewhere real, degraded metadata
+# renders instead of failing, and rate limiting is reported honestly as absent.
+# Runs against the same warm stack the load gate just measured.
+demo-reliability-check:
+	@mkdir -p $(PAGE_RESULTS_DIR)
+	$(DEMO_COMPOSE) --profile load run --rm -T demo-setup \
+		python -m synthetic.load.reliability \
+		--api-url http://api-load:8000 --keycloak-url http://keycloak:8080 \
+		> $(PAGE_RESULTS_DIR)/reliability.json
 
 demo-down:
 	$(DEMO_COMPOSE) down --remove-orphans
