@@ -3,8 +3,7 @@
 **Status:** Bundles 0–3 implemented: source audit, Auth.js boundary, durable Library,
 and scalable local catalog/detail. The Bundle 6 backend prerequisite —
 separate positive-history and excluded-ID serving inputs plus audit evidence —
-is implemented (PR "Bundle 6: separate positive history from exclusions in
-serving").
+is implemented (PR #54).
 
 **Last updated:** 2026-08-21
 
@@ -181,7 +180,7 @@ request ID. A response is never sent before its transaction can succeed.
 
 ### Recommendation inputs and explanations
 
-**Implemented.** Serving accepts positive watched history and excluded/dismissed
+**Implemented (PR #54).** Serving accepts positive watched history and excluded/dismissed
 IDs as different inputs. Positives come from watched-and-not-dismissed
 `user_movie_state`; exclusions are dismissals plus already-seen titles. A
 dismissed title is filtered from popularity, candidate retrieval, hydration,
@@ -245,7 +244,7 @@ may claim comparable recommendation coverage. CI should assert both:
 | `/browse` | Yes: cursor catalog, local metadata, durable state overlay, filters, load more, fallbacks, and scroll restoration | Run seeded browser/visual gates and profile full-catalog queries before expanding beyond the reviewed fixture |
 | `/library` | Yes: durable tabs, counts, state controls, filtering, and canonical reconciliation | `/me` ownership mapping and shared poster-card integration remain follow-up work |
 | `/movies/[id]` | Yes: local detail, source status, durable state, CSRF-protected rating action, and fallbacks | Add structured explanation and the broader shared state-control component later |
-| `/quick-picks` | Yes: the serving prerequisite is implemented | Watched/watchlist/dismissal resources, undo, and the Quick Picks state machine remain frontend work; separate positive/excluded inputs, five-signal routing, and audit evidence are in place |
+| `/quick-picks` | Yes: the serving prerequisite is implemented (PR #54) | Watched/watchlist/dismissal resources, undo, and the Quick Picks state machine remain frontend work; separate positive/excluded inputs, five-signal routing, and audit evidence are in place |
 | Real signed-in product | Role-gated persona mode is signed in through Auth.js | `/me` mapping remains required before claiming a private end-user profile |
 
 ## Verification gates
