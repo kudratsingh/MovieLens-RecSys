@@ -126,6 +126,73 @@ has already blown the end-to-end budget.
 No threshold changed: p99 < 100 ms, zero request errors, check rate 1, achieved
 rate above 50.
 
+### 2026-08-21 — telling preemption apart from a regression
+
+Two CI runs of the hardened gate came back p99 127 ms with 1 dropped iteration
+and p99 472 ms with 23, p50 flat at 8.8–10.2 ms in both. The cold-burst
+population and the dropped-iteration cascade were gone, which was the point of
+the previous change; what was left is a runner whose four vCPUs are shared by
+about ten containers. Raising the VU ceiling means the gate now *measures* the
+stalls it used to drop — honest, and also a gate that fails whenever the runner
+is preempted, no matter what the service did. So the second round of work is
+about giving the measurement less to compete with, and about being able to prove
+which of the two happened.
+
+**Less to compete with.** The demo overlay now assigns CFS weights rather than
+caps: `api-load` and `model-server` at 4096, `feature-server`, `k6`, `postgres`,
+`pgbouncer` and `redis` at 2048, and `keycloak`, `keycloak-postgres`,
+`prometheus`, `api` and `web` at 256. Weights only decide who wins when the host
+is oversubscribed, so an uncontended measurement is bit-for-bit what it was —
+this cannot flatter a result, only stop an unrelated process from spoiling one.
+Keycloak stays running because the gate authenticates for real, but its heap is
+pinned to 256–512 MB with the serial collector and its JIT stopped at C1, since
+its default heap is sized off container memory and it is otherwise idle during
+the measured minute; its Postgres is sized for one ten-connection pool.
+Prometheus does not start for the smoke profile at all: remote-write is a
+trend feature for the nightly run, and the 60-second smoke holds its batch until
+after the scenario anyway, so all it contributed was another process. Its
+evidence goes to the run artifact instead. `demo-load-nightly` keeps it.
+
+**Proving which happened.** `synthetic/load/probe_host_cpu.py` samples
+`/proc/stat` once a second for the whole window, and `synthetic/load/
+summarize.py` reads back k6's own sample stream and joins per-second latency
+buckets against per-second CPU steal and run-queue depth. Steal is the
+discriminator: it is time the hypervisor gave to someone else while this kernel
+had runnable work, so it cannot be caused by our own service being slow. Run
+queue is reported next to it but is deliberately *not* part of any rule — a deep
+run queue is exactly what a slow service produces, so it cannot separate the two
+cases. The table prints the ten slowest seconds into the job log, and the whole
+directory — k6 summary, raw samples, per-second table, `docker stats` and cgroup
+throttling counters from either side of the window — uploads as a CI artifact on
+success and failure alike, because a passing run is the baseline the next
+failure gets read against.
+
+**The re-measure rule.** A window whose p99 breached is re-measured exactly once,
+and only when at least three of its ten slowest seconds recorded 10% or more CPU
+steal. The second window reuses the warm stack, so it repeats the same
+measurement rather than running a different one, and its verdict is final
+whatever its own steal looks like — the rule cannot loop and cannot turn a
+failing service green. A breach with low steal is *not* re-measured: it is the
+service's and fails immediately, which is the half of the rule that keeps it
+from being a retry button. Both windows and the decision, including the label
+"re-measured after hypervisor steal: N%", are recorded in the artifact and the
+log. This is a measurement-validity rule, not a threshold: the thresholds, the
+arrival rate, the run length, and the traffic mix are all unchanged. The 10% and
+three-second constants are the honest weak point — they are reasoned rather than
+derived, because the Docker Desktop hypervisor does not report steal to its
+guest at all and no local run could produce a non-zero sample. The artifact
+carries every per-second value so they can be re-derived from real runner data
+rather than guessed at twice.
+
+**Worker count.** `api-load`'s uvicorn worker count is now a single variable
+(`API_LOAD_WORKERS`, default 4) that the k6 warm-up also sizes itself from, so
+the two can no longer drift. Four workers plus a four-worker sidecar on four
+vCPUs is oversubscribed on paper, so it was measured: with both processes capped
+to one CPU, four workers gave p99 24.94 ms and 46.26 ms across two runs and two
+workers gave 25.29 ms and 36.28 ms. The spread within each setting is as wide as
+the gap between them, so the default stays at 4 — but it is now one variable to
+change if runner data says otherwise.
+
 ## Rationale
 
 1. **Purpose-built for CI/CD load testing is the argument.** k6 was designed by Grafana Labs specifically to fit into the shape non-negotiable #11 is asking for: a scriptable load test with declarative thresholds that a CI job can wait on and fail against. Threshold declarations *are* the pass/fail signal — you write `p(99)<100` in the script and CI stops on breach without a separate assertion harness. Locust's dashboard-first workflow was designed for an operator watching a graph, not for a CI job asserting an inequality; you can bolt CI-shape usage onto Locust with `--headless --check` and post-run parsing, but that's adaptation, not fit.
@@ -153,10 +220,10 @@ rate above 50.
 ## Consequences
 
 - **New source tree.** `synthetic/load/` contains `recommendations.js`, `lib/auth.js`, and `thresholds.js`. The workload mixes warm, cold, and mixed traffic in a deterministic 7/2/3 ratio per 12 arrivals and validates policy, non-empty results, and an auditable request ID.
-- **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, quiesces the unmeasured services with `make demo-load-quiesce`, and invokes `make demo-load-smoke`. That target recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary. k6 threshold exit status is the job result; serving logs are uploaded on failure.
+- **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, quiesces the unmeasured services with `make demo-load-quiesce`, and invokes `make demo-load-smoke`. That target runs `synthetic/load/run_gate.sh`, which recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary, samples host CPU accounting for the whole window, and applies the re-measure rule. k6 threshold exit status is the job result; the evidence directory uploads on every run and serving logs are uploaded on failure.
 - **Larger run.** `make demo-load-nightly` selects the five-minute, 100-VU profile locally. A scheduled staging workflow remains pending on the environment-specific Compose bundle, so this ADR does not claim a scheduler that does not yet exist.
 - **k6 container in dev tools.** `make demo-load-smoke` and CI both resolve the image tag from `infra/ci/k6-version`; no host `brew install` is required.
-- **Prometheus config.** Prometheus's `remote_write` receiver is enabled in the compose stack; k6's `experimental-prometheus-rw` output points at it. The receiver is *not* enabled in production compose stacks — synthetic-load metrics are dev/CI-only, and mixing them with production metrics would pollute the tsdb.
+- **Prometheus config.** Prometheus's `remote_write` receiver is enabled in the compose stack; the nightly profile's `experimental-prometheus-rw` output points at it. The 60-second smoke does not start Prometheus at all (see the 2026-08-21 note) and writes its evidence to the run artifact. The receiver is *not* enabled in production compose stacks — synthetic-load metrics are dev/CI-only, and mixing them with production metrics would pollute the tsdb.
 - **Auth fixture.** The workload authenticates a dedicated Keycloak client user in the `demo` realm, then reads the stable demo persona IDs. Recommendation traffic is read-only; the resulting prediction audits are intentionally visible in the demo walkthrough.
 - **Deferred to Phase 5 / Phase 6.** Drift simulation scripts (`synthetic/drift/`) reuse this harness for programmatically shifted user preferences. A/B fixtures (`synthetic/ab_fixtures/`) reuse it for deterministic tenant+user combos in integration tests.
 

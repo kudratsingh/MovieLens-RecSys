@@ -69,3 +69,6 @@ src/features/feast_repo/data/registry.db
 
 # Docker
 *.override.yml
+
+# Load-gate evidence: regenerated per run, uploaded as a CI artifact.
+/artifacts/

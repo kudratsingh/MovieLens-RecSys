@@ -18,6 +18,8 @@ services:
       context: .
       dockerfile: infra/api/Dockerfile
     image: movielens-recsys/api:demo
+    # The browser demo is not on the measured path. See `web` above.
+    cpu_shares: 256
     environment:
       ENVIRONMENT: dev
       POSTGRES_HOST: postgres
@@ -71,9 +73,14 @@ services:
         "--port",
         "8000",
         "--workers",
-        "4",
+        "${API_LOAD_WORKERS:-4}",
         "--no-access-log",
       ]
+    # CFS weight, not a cap: it only decides who wins when the host is
+    # oversubscribed, so it cannot change an uncontended measurement. On a
+    # 4-vCPU CI runner shared by ~10 containers it is the difference between
+    # measuring the service and measuring Keycloak's JVM.
+    cpu_shares: 4096
     environment:
       ENVIRONMENT: dev
       POSTGRES_HOST: postgres
@@ -116,20 +123,32 @@ services:
     profiles: ["load"]
     image: grafana/k6:${K6_VERSION:-2.1.0}
     command: ["run", "/scripts/recommendations.js"]
+    # The generator being descheduled is itself a measurement error — it shows
+    # up as dropped arrivals — so it is scheduled alongside the services it
+    # measures rather than behind them.
+    cpu_shares: 2048
     environment:
       BASE_URL: http://api-load:8000
       KEYCLOAK_URL: http://keycloak:8080
       LOAD_PROFILE: ${LOAD_PROFILE:-smoke}
-      K6_OUT: experimental-prometheus-rw
+      API_WORKERS: ${API_LOAD_WORKERS:-4}
+      # Where handleSummary drops the machine-readable summary, and where the
+      # raw sample stream lands. The wrapper points both at a per-window
+      # subdirectory so a re-measured run keeps both windows side by side.
+      RESULTS_DIR: ${K6_RESULTS_DIR:-/results}
+      # The 60-second smoke writes evidence to the artifact instead of pushing
+      # it: remote-write is a trend feature (ADR 0010) and Prometheus is one
+      # more process competing for the runner's four vCPUs during the only
+      # minute that matters. `demo-load-nightly` adds it back.
+      K6_OUT: ${K6_OUTPUTS:-json=/results/raw-metrics.json.gz}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_PUSH_INTERVAL: ${K6_PROMETHEUS_RW_PUSH_INTERVAL:-2m}
     volumes:
       - ./synthetic/load:/scripts:ro
+      - ${LOAD_RESULTS_DIR:-./artifacts/load-smoke}:/results
     depends_on:
       api-load:
         condition: service_healthy
-      prometheus:
-        condition: service_started
 
   feature-setup:
     build:
@@ -154,6 +173,7 @@ services:
 
   feature-server:
     image: movielens-recsys/features:demo
+    cpu_shares: 2048
     environment:
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_POSTGRES_HOST: postgres
@@ -174,6 +194,7 @@ services:
 
   model-server:
     image: movielens-recsys/features:demo
+    cpu_shares: 4096
     command:
       [
         "uvicorn",
@@ -212,6 +233,9 @@ services:
       context: ./web
       dockerfile: Dockerfile
     image: movielens-recsys/web:demo
+    # `demo-load-quiesce` stops this during the gate; the weight is the
+    # fallback for anyone who runs the load profile without quiescing.
+    cpu_shares: 256
     environment:
       RECOMMENDATION_API_URL: http://api:8000
       AUTH_SECRET: ${AUTH_SECRET:-movielens-demo-auth-secret-change-outside-local-dev}
@@ -240,6 +264,46 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+
+  # Scheduling weights for the services the base Compose file owns, kept in
+  # this overlay so the plain `docker compose up` dev stack is unaffected.
+  # Everything the request path touches outranks everything it does not.
+  # Weights are relative and only bind under contention (Linux CFS); an idle
+  # or roomy host schedules exactly as it did before.
+  postgres:
+    cpu_shares: 2048
+
+  pgbouncer:
+    cpu_shares: 2048
+
+  redis:
+    cpu_shares: 2048
+
+  # Keycloak is a JVM the measured window barely touches: tokens are minted in
+  # setup() and each worker's JWKS fetch is paid during warm-up. It stays
+  # running because the gate authenticates for real, but its default heap is
+  # sized off container memory (gigabytes on a CI runner) and its JIT keeps
+  # compiling in the background. A small serial-GC heap and a bounded DB pool
+  # keep that churn off the four vCPUs the measurement needs.
+  keycloak:
+    cpu_shares: 256
+    environment:
+      # The image's own JAVA_OPTS already selects G1; it has to be turned off
+      # explicitly or the JVM refuses to start with two collectors chosen.
+      JAVA_OPTS_APPEND: "-Xms256m -Xmx512m -XX:-UseG1GC -XX:+UseSerialGC -XX:TieredStopAtLevel=1"
+      KC_DB_POOL_MAX_SIZE: "10"
+      KC_METRICS_ENABLED: "false"
+
+  keycloak-postgres:
+    cpu_shares: 256
+    # Sized for one Keycloak with a ten-connection pool, not for a general
+    # workload. The demo overlay is the only place this database is used.
+    command: ["postgres", "-c", "max_connections=50", "-c", "shared_buffers=32MB"]
+
+  # Only the k6 remote-write receiver, and the smoke profile holds its batch
+  # until after the scenario ends.
+  prometheus:
+    cpu_shares: 256
 
 volumes:
   feast_registry:

@@ -34,6 +34,10 @@ const WARMUP_BUDGET_MS = Number(__ENV.WARMUP_BUDGET_MS || 3000);
 // is a warm-up exit condition, not an SLO — the SLO is the p99 threshold.
 const WARMUP_STABLE_MS = Number(__ENV.WARMUP_STABLE_MS || 60);
 const READINESS_ATTEMPTS = Number(__ENV.READINESS_ATTEMPTS || 10);
+// Where handleSummary writes the machine-readable summary. The wrapper reads
+// it back to decide whether a breached window earned a re-measurement, so the
+// evidence has to leave the container as a file, not only as log output.
+const RESULTS_DIR = __ENV.RESULTS_DIR || "/results";
 
 const warmupRequests = new Counter("warmup_requests");
 const warmupRounds = new Counter("warmup_rounds");
@@ -397,7 +401,12 @@ export function handleSummary(data) {
     );
   }
   const prefix = notes.length > 0 ? `${notes.join("\n")}\n` : "";
-  return { stdout: `${prefix}${JSON.stringify(summary, null, 2)}\n` };
+  const rendered = `${JSON.stringify(summary, null, 2)}\n`;
+  const output = { stdout: `${prefix}${rendered}` };
+  if (RESULTS_DIR) {
+    output[`${RESULTS_DIR}/summary.json`] = rendered;
+  }
+  return output;
 }
 
 function metricValues(data, name) {
