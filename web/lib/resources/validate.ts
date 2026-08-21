@@ -111,6 +111,26 @@ function isRecommendationItem(value: unknown): boolean {
   );
 }
 
+/**
+ * The policy block is what licenses the route's copy: `learned` decides
+ * between fallback and learned-serving language, the count and threshold drive
+ * the progress toward learned serving, and `score_scale` is what stops a rank
+ * score being rendered as a match percentage. A response that cannot answer
+ * those questions cannot be described truthfully, so it fails the boundary
+ * rather than rendering with a guess.
+ */
+function isServingPolicy(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isString(value.name) &&
+    isBoolean(value.learned) &&
+    isNumber(value.positive_signal_count) &&
+    isNumber(value.threshold) &&
+    isString(value.score_scale) &&
+    isString(value.reason)
+  );
+}
+
 export function isRecommendationResponse(
   value: unknown,
 ): value is RecommendationResponse {
@@ -119,6 +139,7 @@ export function isRecommendationResponse(
     hasTenantScope(value) &&
     isString(value.model_version) &&
     isString(value.policy) &&
+    isServingPolicy(value.serving_policy) &&
     everyItem(isRecommendationItem)(value.items)
   );
 }
@@ -240,7 +261,12 @@ function isAuditPrediction(value: unknown): boolean {
     isRecord(value) &&
     isNumber(value.movie_id) &&
     isNumber(value.score) &&
-    isNumberRecord(value.features)
+    isNumberRecord(value.features) &&
+    // Rows written before candidate attribution existed report "unknown"
+    // rather than omitting the field, so a string is always expected.
+    isString(value.candidate_source) &&
+    // The seed is optional: a popularity-fill candidate has no source item.
+    (value.seed_movie_id === undefined || nullable(isNumber)(value.seed_movie_id))
   );
 }
 

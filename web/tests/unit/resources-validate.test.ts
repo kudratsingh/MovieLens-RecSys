@@ -16,6 +16,7 @@ import {
 import {
   auditResponse,
   catalogResponse,
+  fallbackRecommendationResponse,
   libraryResponse,
   movieDetailResponse,
   movieState,
@@ -33,6 +34,7 @@ function without<T extends object>(value: T, key: keyof T & string) {
 describe("runtime validators accept the published contract", () => {
   const contracts: ReadonlyArray<[string, (value: unknown) => boolean, unknown]> = [
     ["recommendations", isRecommendationResponse, recommendationResponse],
+    ["fallback recommendations", isRecommendationResponse, fallbackRecommendationResponse],
     ["catalog", isCatalogResponse, catalogResponse],
     ["movie detail", isMovieDetailResponse, movieDetailResponse],
     ["library", isLibraryResponse, libraryResponse],
@@ -47,6 +49,28 @@ describe("runtime validators accept the published contract", () => {
       expect(guard(payload)).toBe(true);
     });
   }
+
+  it("accepts a prediction with no seed, as popularity fill produces", () => {
+    expect(
+      isRecommendationAuditResponse({
+        ...auditResponse,
+        items: [
+          {
+            ...auditResponse.items[0],
+            predictions: [
+              {
+                candidate_source: "popularity-fill",
+                features: { user_interaction_count: 12 },
+                movie_id: 1,
+                score: 0.1,
+                seed_movie_id: null,
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
 
   it("accepts an empty collection and a null poster", () => {
     expect(isRecommendationResponse({ ...recommendationResponse, items: [] })).toBe(true);
@@ -96,6 +120,40 @@ describe("runtime validators reject payloads the UI cannot render", () => {
       isCatalogResponse({
         ...catalogResponse,
         items: [{ ...catalogResponse.items[0], source_status: "degraded" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a recommendation response that cannot state its serving policy", () => {
+    // Without the policy block the route cannot tell fallback from learned, so
+    // it must fail rather than render copy it cannot substantiate.
+    expect(isRecommendationResponse(without(recommendationResponse, "serving_policy"))).toBe(
+      false,
+    );
+    expect(
+      isRecommendationResponse({
+        ...recommendationResponse,
+        serving_policy: { ...recommendationResponse.serving_policy, learned: "true" },
+      }),
+    ).toBe(false);
+    expect(
+      isRecommendationResponse({
+        ...recommendationResponse,
+        serving_policy: without(recommendationResponse.serving_policy, "score_scale"),
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an audit prediction with no candidate attribution", () => {
+    expect(
+      isRecommendationAuditResponse({
+        ...auditResponse,
+        items: [
+          {
+            ...auditResponse.items[0],
+            predictions: [{ features: { a: 1 }, movie_id: 1, score: 0.1 }],
+          },
+        ],
       }),
     ).toBe(false);
   });

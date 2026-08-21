@@ -6,6 +6,7 @@ import type {
   OnlineUserFeatures,
   RecommendationAuditResponse,
   RecommendationResponse,
+  ServingPolicy,
   TasteSummaryResponse,
 } from "@/lib/api";
 
@@ -28,6 +29,37 @@ export const movieState: MovieState = {
   watchlisted_at: null,
 };
 
+/**
+ * The serving policy the API reports alongside every recommendation. Both
+ * variants are recorded because the truthful copy differs: below five positive
+ * watched signals the response is fallback, and only a `learned: true` policy
+ * licenses learned-serving language.
+ */
+export const learnedServingPolicy: ServingPolicy = {
+  excluded_count: 9,
+  filter_policy: "watched-and-dismissed-excluded-v1",
+  learned: true,
+  name: "item-item-lightgbm",
+  positive_signal_count: 8,
+  reason:
+    "learned-two-stage: item-item-cosine retrieval over 8 positive seeds, " +
+    "ranked by lgbm-ranker-2026.08",
+  // An uncalibrated LambdaRank ordering — never a probability or a match percentage.
+  score_scale: "lightgbm-rank-score",
+  threshold: 5,
+};
+
+export const fallbackServingPolicy: ServingPolicy = {
+  excluded_count: 3,
+  filter_policy: "watched-and-dismissed-excluded-v1",
+  learned: false,
+  name: "popularity",
+  positive_signal_count: 3,
+  reason: "cold-start: 3 positive watched signals below threshold 5",
+  score_scale: "tenant-interaction-count",
+  threshold: 5,
+};
+
 export const recommendationResponse: RecommendationResponse = {
   items: [
     {
@@ -45,6 +77,7 @@ export const recommendationResponse: RecommendationResponse = {
   ],
   model_version: "lgbm-ranker-2026.08",
   policy: "item-item-lightgbm",
+  serving_policy: learnedServingPolicy,
   tenant_id: "demo",
   user_id: 900000101,
 };
@@ -52,6 +85,29 @@ export const recommendationResponse: RecommendationResponse = {
 export const emptyRecommendationResponse: RecommendationResponse = {
   ...recommendationResponse,
   items: [],
+};
+
+/** A persona still below the five-signal threshold: popularity, not learned. */
+export const fallbackRecommendationResponse: RecommendationResponse = {
+  items: [
+    {
+      genres: ["Drama"],
+      metadata_source: "movielens",
+      movie_id: 109,
+      overview: null,
+      poster_url: null,
+      reason: "Popular with viewers in this tenant",
+      release_year: 2011,
+      score: 42,
+      title: "A Separation",
+      tmdb_id: null,
+    },
+  ],
+  model_version: "popularity-v1",
+  policy: "popularity",
+  serving_policy: fallbackServingPolicy,
+  tenant_id: "demo",
+  user_id: 900000104,
 };
 
 export const catalogResponse: CatalogResponse = {
@@ -118,18 +174,39 @@ export const auditResponse: RecommendationAuditResponse = {
       candidate_version: "item-item-v3",
       created_at: "2026-08-21T12:00:00Z",
       endpoint: "/users/900000101/recommendations",
+      candidate_sources: { "item-item-cosine": 96, "popularity-fill": 4 },
+      correlation_id: "bff-discover-0f9d1c22",
+      excluded_count: 9,
+      exclusion_hash: "7d1f1a0c9b3e4a52",
       fallback_reason: null,
+      feature_event_time: "2026-08-21T06:00:00Z",
       feature_latency_ms: 3.1,
       feature_version: "online-features-v2",
+      filter_policy: "watched-and-dismissed-excluded-v1",
       http_status: 200,
+      input_state_hash: "3c4a9f20b7e15d88",
+      input_state_revision: 12,
       latency_ms: 41.9,
       model_latency_ms: 18.4,
       model_version: "lgbm-ranker-2026.08",
       outcome: "served",
       policy: "item-item-lightgbm",
-      predictions: [{ features: { user_interaction_count: 12 }, movie_id: 101, score: 0.82 }],
+      positive_signal_count: 8,
+      predictions: [
+        {
+          candidate_source: "item-item-cosine",
+          features: { user_interaction_count: 12 },
+          movie_id: 101,
+          score: 0.82,
+          // The most recently watched title this candidate was retrieved from.
+          seed_movie_id: 47,
+        },
+      ],
       ranker_latency_ms: 12.7,
       ranker_version: "lgbm-ranker-2026.08",
+      reason:
+        "learned-two-stage: item-item-cosine retrieval over 8 positive seeds, " +
+        "ranked by lgbm-ranker-2026.08",
       request_id: "0f9d1c22-6a1a-4a26-9d1a-2b0f77e3f001",
       tenant_id: "demo",
       user_id: 900000101,
