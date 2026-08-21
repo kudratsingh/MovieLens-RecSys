@@ -63,7 +63,7 @@ it rather than its new home. So the honest reading of this HOLD is:
 | Service-backed ten-step browser journey | This PR | Run, green, three consecutive local passes |
 | Visual and accessibility gate | This PR | Automated and green; screenshot matrix captured |
 | Product finish review | This PR | Below |
-| Page-shaped load, browser timing (LCP/CLS/ack) | PR 7b, merged | Cited, not re-measured — see [§5, performance gate](#performance-gate--pass-carried-from-7b) |
+| Page-shaped load, browser timing (LCP/CLS/ack) | PR 7b, merged | Cited; the browser half re-run on this branch — see [§5](#performance-gate--pass-carried-from-7b) |
 | Legacy removal and cutover | PR 7d | Blocked on this verdict; see §1 |
 | Moderated research with real participants | Not scheduled | **Not met** — see [§4.2](#42-moderated-tasks) |
 
@@ -208,7 +208,7 @@ participant and inventing them would be worse than leaving them blank.**
 
 | Discovery task | Completed | Path taken | Friction observed |
 |---|---|---|---|
-| 1. Find a movie to watch tonight | Yes | `/discover` → primary movie → `Open movie` | The learned persona's #1 pick has no artwork ([N2](#n2-the-first-learned-recommendation-has-no-poster)) |
+| 1. Find a movie to watch tonight | Yes | `/discover` → primary movie → `Open movie` | The learned persona's #1 pick has no artwork ([N1](#n1-the-first-learned-recommendation-has-no-poster)) |
 | 2. Mark three movies watched and rate them | Yes | Detail and Discover both; rating is one press on detail, and `Watched` reveals the stars on Discover | None. The star note is explicit that magnitude is display feedback |
 | 3. Find and change one of those ratings | Yes | `/library?tab=rated`, filter by title, edit in the row | None |
 | 4. Save a movie and retrieve it from the watchlist | Yes | Detail `Watchlist` → Library `Watchlist` tab | None. Marking watched later consumes the entry, which the contract intends but the UI does not say out loud |
@@ -223,7 +223,7 @@ the request ID on screen matches the one the BFF propagated. The one thing a
 reviewer will notice and should: the learned response's own reason says
 "item-item-cosine retrieval over **0 positive seeds**" while the policy reports
 learned serving. The UI quotes it verbatim rather than smoothing it, which is
-the correct behaviour — see [N3](#n3-learned-serving-reports-zero-positive-seeds).
+the correct behaviour — see [N2](#n2-learned-serving-reports-zero-positive-seeds).
 
 ---
 
@@ -258,8 +258,8 @@ then `Why this?`, then the rail. Technical evidence is never above the movie —
 `finish-gate-journey.spec.ts` step 3 asserts the audit region is absent from the
 document until it is asked for.
 
-Two non-blocking observations: [N4](#n4-the-discover-empty-state-stacks-awkwardly-at-390px)
-and [N5](#n5-library-spends-the-first-mobile-viewport-on-identity-copy).
+Two non-blocking observations: [N3](#n3-the-discover-empty-state-stacks-awkwardly-at-390px)
+and [N4](#n4-library-spends-the-first-mobile-viewport-on-identity-copy).
 
 ### 3. Pattern fit — PASS
 
@@ -395,7 +395,7 @@ enforced thresholds and their artifacts stay with the job that produces them.
 
 ## 6. Non-blocking findings
 
-### N2. The first learned recommendation has no poster
+### N1. The first learned recommendation has no poster
 
 The warm persona's rank-1 title renders `ARTWORK UNAVAILABLE`. The fallback is
 well made — initials, a label, reserved dimensions, no layout movement — and
@@ -405,7 +405,7 @@ not a UI defect: 24 of the 120 reviewed titles carry complete poster metadata,
 which the handoff records as intentional. Worth an offline enrichment pass
 before this is shown to anyone as a portfolio surface.
 
-### N3. Learned serving reports zero positive seeds
+### N2. Learned serving reports zero positive seeds
 
 `reason: "learned-two-stage: item-item-cosine retrieval over 0 positive seeds,
 ranked by demo-lgbm-v1"` on a response that reports `learned: true` for a
@@ -417,7 +417,7 @@ policy whose first stage is empty. It belongs in a serving follow-up: either the
 seeded personas' history is outside the item-item index, or the seeds are being
 dropped before retrieval.
 
-### N4. The Discover empty state stacks awkwardly at 390px
+### N3. The Discover empty state stacks awkwardly at 390px
 
 The empty state puts its icon in a left column and its copy in a narrow right
 one, and the two actions wrap so that the secondary (`Rate a few in Quick picks`)
@@ -425,14 +425,14 @@ sits above the primary (`Browse the catalog`). Legible and operable — it passe
 axe, overflow, and target sizing — but the reading order inverts the intended
 priority. Evidence: `discover-empty-mobile.png`.
 
-### N5. Library spends the first mobile viewport on identity copy
+### N4. Library spends the first mobile viewport on identity copy
 
 At 390×844 the heading and the four-line actor-versus-persona disclaimer push
 the tabs to the fold and the first rated row just past it. The disclaimer is
 load-bearing and should stay, but the design contract's first-read object for
 this route is the collection, and at this width it is not.
 
-### N6. Browse restores a stored window instead of re-reading
+### N5. Browse restores a stored window instead of re-reading
 
 Returning to a Browse URL whose filter set is already in the tab's session
 storage restores that window, for up to thirty minutes, without a catalog
@@ -530,7 +530,7 @@ From [the handoff](bundles-5-7-handoff.md#handoff-acceptance-checklist).
 | Every user-scoped endpoint has tenant and actor authorization evidence | ✅ | `tests/tenant_isolation/` in the `tenant-isolation` CI job; journey step 10 proves the BFF answers 401 with no session |
 | Fallback/learned labels follow the returned policy and the five-signal threshold | ✅ | Journey step 2, asserted in both directions against live responses |
 | Watchlist, watched/rating, and dismissal keep their distinct model meanings | ✅ | Journey steps 5, 6, and 8 |
-| Browse, poster, and prediction coverage are reported separately | ✅ | `docs/frontend/catalog-contract.md`; [N2](#n2-the-first-learned-recommendation-has-no-poster) records the coverage gap rather than hiding it |
+| Browse, poster, and prediction coverage are reported separately | ✅ | `docs/frontend/catalog-contract.md`; [N1](#n1-the-first-learned-recommendation-has-no-poster) records the coverage gap rather than hiding it |
 | Bundle 7 records a written PASS or HOLD before `/legacy` is removed | ✅ | This document. **HOLD.** |
 
 ---
