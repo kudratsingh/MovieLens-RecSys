@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from src.feature_contract import FEATURE_COLUMNS
+from src.serving.policy import FILTER_POLICY_NOT_RUN
+
+# A sidecar that predates the split inputs still answers, but it cannot
+# attribute a candidate. Say so rather than inventing a source in the audit.
+CANDIDATE_SOURCE_UNKNOWN = "unknown"
 
 
 class ModelServerContractError(ValueError):
@@ -20,6 +25,8 @@ class RankedModelItem:
     movie_id: int
     score: float
     features: dict[str, float]
+    candidate_source: str = CANDIDATE_SOURCE_UNKNOWN
+    seed_movie_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,11 @@ class ModelRankingResult:
     ranker_latency_ms: float
     latency_ms: float
     items: list[RankedModelItem]
+    candidate_sources: dict[str, int] = field(default_factory=dict)
+    seed_count: int = 0
+    excluded_count: int = 0
+    filter_policy: str = FILTER_POLICY_NOT_RUN
+    feature_event_time: float | None = None
 
 
 class ModelServerClient:
@@ -55,16 +67,19 @@ class ModelServerClient:
         *,
         tenant_id: str,
         user_id: int,
-        history_movie_ids: list[int],
+        positive_history_movie_ids: list[int],
+        excluded_movie_ids: list[int] | None = None,
         limit: int,
         candidate_limit: int = 100,
     ) -> ModelRankingResult:
+        excluded = list(excluded_movie_ids or ())
         response = await self._client.post(
             "/rank",
             json={
                 "tenant_id": tenant_id,
                 "user_id": user_id,
-                "history_movie_ids": history_movie_ids,
+                "positive_history_movie_ids": positive_history_movie_ids,
+                "excluded_movie_ids": excluded,
                 "limit": limit,
                 "candidate_limit": candidate_limit,
             },
@@ -74,7 +89,10 @@ class ModelServerClient:
             return _parse_result(
                 response.json(),
                 expected_tenant=tenant_id,
-                seen_movie_ids=set(history_movie_ids),
+                # A returned id that the caller asked to suppress is a contract
+                # breach, not something to quietly drop: the caller falls back
+                # to a policy it can audit instead of shipping the leak.
+                seen_movie_ids=set(positive_history_movie_ids) | set(excluded),
                 limit=limit,
             )
         except ModelServerContractError:
@@ -140,7 +158,15 @@ def _parse_result(
                 )
             features[column] = feature_value
         returned_ids.add(movie_id)
-        items.append(RankedModelItem(movie_id=movie_id, score=score, features=features))
+        items.append(
+            RankedModelItem(
+                movie_id=movie_id,
+                score=score,
+                features=features,
+                candidate_source=_optional_source(raw, movie_id),
+                seed_movie_id=_optional_seed(raw, movie_id),
+            )
+        )
     return ModelRankingResult(
         tenant_id=tenant_id,
         candidate_policy=_nonempty_string(value, "candidate_policy"),
@@ -152,6 +178,11 @@ def _parse_result(
         ranker_latency_ms=_nonnegative_float(value, "ranker_latency_ms"),
         latency_ms=_nonnegative_float(value, "latency_ms"),
         items=items,
+        candidate_sources=_source_counts(value),
+        seed_count=_optional_count(value, "seed_count"),
+        excluded_count=_optional_count(value, "excluded_count"),
+        filter_policy=_optional_filter_policy(value),
+        feature_event_time=_optional_event_time(value),
     )
 
 
@@ -170,3 +201,93 @@ def _nonnegative_float(value: dict[str, Any], key: str) -> float:
     if not math.isfinite(result) or result < 0:
         raise ModelServerContractError(f"model-server returned invalid {key!r}")
     return result
+
+
+# The attribution block below is provenance for the audit, not a safety
+# control. It is validated when present and defaulted when absent so a sidecar
+# rollout skew degrades the explanation instead of the recommendation.
+def _optional_source(raw: dict[str, Any], movie_id: int) -> str:
+    source = raw.get("candidate_source")
+    if source is None:
+        return CANDIDATE_SOURCE_UNKNOWN
+    if not isinstance(source, str) or not source:
+        raise ModelServerContractError(
+            f"model-server returned an invalid candidate source for movie {movie_id}"
+        )
+    return source
+
+
+def _optional_seed(raw: dict[str, Any], movie_id: int) -> int | None:
+    seed = raw.get("seed_movie_id")
+    if seed is None:
+        return None
+    try:
+        resolved = int(seed)
+    except (TypeError, ValueError) as exc:
+        raise ModelServerContractError(
+            f"model-server returned an invalid seed for movie {movie_id}"
+        ) from exc
+    if resolved <= 0:
+        raise ModelServerContractError(
+            f"model-server returned an invalid seed for movie {movie_id}"
+        )
+    return resolved
+
+
+def _source_counts(value: dict[str, Any]) -> dict[str, int]:
+    raw = value.get("candidate_sources")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ModelServerContractError("model-server candidate_sources must be an object")
+    counts: dict[str, int] = {}
+    for name, count in raw.items():
+        try:
+            resolved = int(count)
+        except (TypeError, ValueError) as exc:
+            raise ModelServerContractError(
+                f"model-server returned an invalid candidate source count for {name!r}"
+            ) from exc
+        if not isinstance(name, str) or not name or resolved < 0:
+            raise ModelServerContractError(
+                f"model-server returned an invalid candidate source count for {name!r}"
+            )
+        counts[name] = resolved
+    return counts
+
+
+def _optional_count(value: dict[str, Any], key: str) -> int:
+    raw = value.get(key)
+    if raw is None:
+        return 0
+    try:
+        resolved = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ModelServerContractError(f"model-server returned an invalid {key!r}") from exc
+    if resolved < 0:
+        raise ModelServerContractError(f"model-server returned an invalid {key!r}")
+    return resolved
+
+
+def _optional_filter_policy(value: dict[str, Any]) -> str:
+    raw = value.get("filter_policy")
+    if raw is None:
+        return FILTER_POLICY_NOT_RUN
+    if not isinstance(raw, str) or not raw:
+        raise ModelServerContractError("model-server returned an invalid 'filter_policy'")
+    return raw
+
+
+def _optional_event_time(value: dict[str, Any]) -> float | None:
+    raw = value.get("feature_event_time")
+    if raw is None:
+        return None
+    try:
+        resolved = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ModelServerContractError(
+            "model-server returned an invalid 'feature_event_time'"
+        ) from exc
+    if not math.isfinite(resolved) or resolved < 0:
+        raise ModelServerContractError("model-server returned an invalid 'feature_event_time'")
+    return resolved

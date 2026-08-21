@@ -232,3 +232,89 @@ def test_rating_rejects_non_persona_user() -> None:
             RecommendationService().reset_ratings(connection, user_id=10)
     finally:
         connection.close()
+
+
+def _dismiss(connection: Connection, *, user_id: int, movie_id: int, timestamp: int) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO user_movie_state (
+                tenant_id, user_id, movie_id, dismissed_at, state_version, updated_at
+            ) VALUES ('demo', :user_id, :movie_id, :timestamp, 1, :timestamp)
+            ON CONFLICT (tenant_id, user_id, movie_id) DO UPDATE SET
+                dismissed_at = excluded.dismissed_at,
+                state_version = user_movie_state.state_version + 1,
+                updated_at = excluded.updated_at
+            """),
+        {"user_id": user_id, "movie_id": movie_id, "timestamp": timestamp},
+    )
+
+
+def test_serving_input_state_separates_positives_from_exclusions() -> None:
+    connection = _connection()
+    try:
+        _dismiss(connection, user_id=10, movie_id=3, timestamp=300)
+        state = RecommendationService().serving_input_state(connection, user_id=10)
+    finally:
+        connection.close()
+
+    # User 10 watched 1 and 2; 3 is dismissed only.
+    assert state.positive_movie_ids == [2, 1]
+    assert state.dismissed_movie_ids == [3]
+    assert sorted(state.excluded_movie_ids) == [1, 2, 3]
+    assert state.positive_signal_count == 2
+    assert state.revision == 3
+
+
+def test_serving_input_state_demotes_a_watched_movie_once_it_is_dismissed() -> None:
+    connection = _connection()
+    try:
+        _dismiss(connection, user_id=10, movie_id=2, timestamp=400)
+        state = RecommendationService().serving_input_state(connection, user_id=10)
+    finally:
+        connection.close()
+
+    assert state.positive_movie_ids == [1]
+    assert state.dismissed_movie_ids == [2]
+    assert 2 in state.excluded_movie_ids
+    assert state.positive_signal_count == 1
+
+
+def test_serving_input_state_is_empty_for_an_unknown_user() -> None:
+    connection = _connection()
+    try:
+        state = RecommendationService().serving_input_state(connection, user_id=999)
+    finally:
+        connection.close()
+
+    assert state.positive_movie_ids == []
+    assert state.excluded_movie_ids == []
+    assert state.revision == 0
+
+
+def test_popular_for_user_applies_the_caller_supplied_exclusion_set() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().popular_for_user(
+            connection, user_id=999, limit=5, excluded_movie_ids=[1]
+        )
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [2, 3]
+
+
+def test_hydrate_ranked_movies_applies_the_caller_supplied_exclusion_set() -> None:
+    connection = _connection()
+    try:
+        items = RecommendationService().hydrate_ranked_movies(
+            connection,
+            user_id=999,
+            ranked_items=[(1, 0.9), (2, 0.5), (3, 0.1)],
+            reason="learned",
+            excluded_movie_ids=[2],
+        )
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in items] == [1, 3]
+    assert [item.score for item in items] == [0.9, 0.1]

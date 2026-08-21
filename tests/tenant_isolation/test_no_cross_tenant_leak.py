@@ -5,12 +5,14 @@ highest-severity bug class. This test authenticates as tenants A and
 B against the live docker-compose stack and hits every authenticated
 endpoint, asserting the returned payload matches the caller's tenant.
 
-Covered today: ``/whoami``, ``/users/{id}/recommendations``,
-``/users/{id}/history``, ``/users/{id}/audits``, ``/personas``, and the
-rating write path. Not yet covered: ``/users/{id}/features``,
-``/users/{id}/catalog``, and ``DELETE /users/{id}/ratings``. Every new
-endpoint gains coverage here — the test's job is to be the
-tenant-isolation gate every serving PR passes through in CI.
+Covered today: ``/whoami``, ``/users/{id}/recommendations`` (including the
+serving-policy and exclusion evidence it now returns), ``/users/{id}/history``,
+``/users/{id}/audits``, ``/personas``, ``/users/{id}/features``,
+``/users/{id}/catalog``, ``/users/{id}/library``, the rating write path, and
+``DELETE /users/{id}/ratings``. Not yet covered: ``/users/{id}/movies/{id}``
+and ``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
+the test's job is to be the tenant-isolation gate every serving PR passes
+through in CI.
 """
 
 from __future__ import annotations
@@ -266,3 +268,144 @@ def test_library_state_and_mutations_are_tenant_scoped(
     assert mutation.status_code == 200
     assert mutation.json()["state"]["rating"] == 4.0
     assert DEMO_RECOMMENDATION_TITLE in immediate_read.text
+
+
+def test_serving_policy_and_exclusion_evidence_are_tenant_scoped(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """Bundle 6 reshapes the recommendation and audit payloads.
+
+    Every field it adds is derived from the caller's own tenant state, so each
+    one needs a canary: a digest or count computed from the other tenant's rows
+    would be a leak even though it is not a title.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    default_recs = client.get(f"/users/{CANARY_USER_ID}/recommendations", headers=default_headers)
+    demo_recs = client.get(f"/users/{CANARY_USER_ID}/recommendations", headers=demo_headers)
+
+    assert default_recs.status_code == 200
+    assert demo_recs.status_code == 200
+    for response in (default_recs, demo_recs):
+        policy = response.json()["serving_policy"]
+        assert policy["name"] == response.json()["policy"]
+        assert policy["threshold"] == 5
+        assert policy["filter_policy"].endswith("-v1")
+        # A rank score must never be advertised as a probability.
+        assert policy["score_scale"] in {"lightgbm-rank-score", "tenant-interaction-count"}
+        # Learned serving implies the threshold was met. The converse does
+        # not hold: a warm user can still fall back if the sidecar is down.
+        if policy["learned"]:
+            assert policy["positive_signal_count"] >= policy["threshold"]
+    assert DEMO_RECOMMENDATION_TITLE not in default_recs.text
+    assert DEFAULT_RECOMMENDATION_TITLE not in demo_recs.text
+
+    default_audits = client.get(f"/users/{CANARY_USER_ID}/audits", headers=default_headers)
+    demo_audits = client.get(f"/users/{CANARY_USER_ID}/audits", headers=demo_headers)
+
+    assert default_audits.status_code == 200
+    assert demo_audits.status_code == 200
+    for audits, tenant in ((default_audits, "default"), (demo_audits, "demo")):
+        newest = audits.json()["items"][0]
+        assert newest["tenant_id"] == tenant
+        for key in (
+            "input_state_revision",
+            "input_state_hash",
+            "exclusion_hash",
+            "positive_signal_count",
+            "excluded_count",
+            "filter_policy",
+            "candidate_sources",
+            "reason",
+        ):
+            assert key in newest
+        assert newest["reason"]
+        assert newest["excluded_count"] >= 0
+    # Each tenant sees only its own canary rows, so the digests over those rows
+    # must differ across tenants.
+    default_newest = default_audits.json()["items"][0]
+    demo_newest = demo_audits.json()["items"][0]
+    assert default_newest["exclusion_hash"] != demo_newest["exclusion_hash"]
+
+
+def test_audit_reads_reject_a_token_from_the_other_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get(f"/users/{CANARY_USER_ID}/audits")
+    authenticated = client.get(f"/users/{CANARY_USER_ID}/audits", headers=demo_headers)
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code == 200
+    assert all(item["tenant_id"] == "demo" for item in authenticated.json()["items"])
+
+
+def test_online_user_features_never_answer_for_the_other_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """`/features` reads Feast/Redis with the caller's tenant as part of the key.
+
+    The tenant-isolation job boots Postgres, pgBouncer, and Keycloak but not the
+    feature server, so this canary pins the two properties that hold either way:
+    the endpoint is authenticated, and it answers for the caller's tenant or
+    fails closed — never for the other tenant.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get(f"/users/{CANARY_USER_ID}/features")
+    default_features = client.get(f"/users/{CANARY_USER_ID}/features", headers=default_headers)
+    demo_features = client.get(f"/users/{CANARY_USER_ID}/features", headers=demo_headers)
+
+    assert unauthenticated.status_code == 401
+    for response, tenant in ((default_features, "default"), (demo_features, "demo")):
+        assert response.status_code in {200, 503}
+        if response.status_code == 200:
+            assert response.json()["tenant_id"] == tenant
+            assert response.json()["source"] == "feast-redis"
+    if default_features.status_code == 200 and demo_features.status_code == 200:
+        assert default_features.json()["tenant_id"] != demo_features.json()["tenant_id"]
+
+
+def test_catalog_state_overlay_is_confined_to_the_active_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get("/users/987654323/catalog")
+    default_catalog = client.get("/users/987654323/catalog?limit=48", headers=default_headers)
+    demo_catalog = client.get("/users/987654324/catalog?limit=48", headers=demo_headers)
+    # 987654323 is a default-tenant persona, so a demo caller must not find it.
+    cross_tenant = client.get("/users/987654323/catalog", headers=demo_headers)
+
+    assert unauthenticated.status_code == 401
+    assert default_catalog.status_code == 200
+    assert demo_catalog.status_code == 200
+    assert cross_tenant.status_code == 404
+    assert default_catalog.json()["tenant_id"] == "default"
+    assert demo_catalog.json()["tenant_id"] == "demo"
+    # Shared movie metadata is global; only the state overlay is tenant-owned.
+    for response, tenant in ((default_catalog, "default"), (demo_catalog, "demo")):
+        states = [item["state"] for item in response.json()["items"] if item["state"]]
+        assert all(state["tenant_id"] == tenant for state in states)
+
+
+def test_rating_reset_cannot_reach_a_persona_in_another_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.delete("/users/987654324/ratings")
+    blocked = client.delete("/users/987654324/ratings", headers=default_headers)
+    survivors = client.get("/users/987654324/library?tab=history", headers=demo_headers)
+
+    assert unauthenticated.status_code == 401
+    # A destructive call aimed across the tenant boundary must be a no-op, not
+    # a partially applied write, so the target's state is checked afterwards.
+    assert blocked.status_code == 404
+    assert survivors.status_code == 200
+    assert DEMO_RECOMMENDATION_TITLE in survivors.text

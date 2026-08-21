@@ -27,17 +27,25 @@ class _Ranker:
 
 
 class _OnlineResponse:
-    def __init__(self, value: dict[str, list[Any]]) -> None:
+    def __init__(
+        self,
+        value: dict[str, list[Any]],
+        timestamps: dict[str, list[Any]] | None = None,
+    ) -> None:
         self._value = value
+        self._timestamps = timestamps or {}
 
-    def to_dict(self) -> dict[str, list[Any]]:
-        return self._value
+    def to_dict(self, include_event_timestamps: bool = False) -> dict[str, list[Any]]:
+        if not include_event_timestamps:
+            return self._value
+        return {**self._value, **self._timestamps}
 
 
 class _FeatureStore:
-    def __init__(self) -> None:
+    def __init__(self, event_time: float = 1_760_000_000.0) -> None:
         self.entity_rows: list[dict[str, object]] = []
         self.call_count = 0
+        self.event_time = event_time
 
     def get_online_features(self, *, features, entity_rows):  # type: ignore[no-untyped-def]
         self.call_count += 1
@@ -45,7 +53,8 @@ class _FeatureStore:
         count = len(entity_rows)
         values = {column: [0.0] * count for column in FEATURE_COLUMNS}
         values["user_genre_affinity"] = [0.2, 0.9]
-        return _OnlineResponse(values)
+        timestamps = {f"{column}__ts": [self.event_time] * count for column in FEATURE_COLUMNS}
+        return _OnlineResponse(values, timestamps)
 
 
 def test_ranking_uses_tenant_keyed_feast_rows_and_ranker_scores() -> None:
@@ -69,7 +78,8 @@ def test_ranking_uses_tenant_keyed_feast_rows_and_ranker_scores() -> None:
     result = service.rank(
         tenant_id="demo",
         user_id=100,
-        history_movie_ids=[1],
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[],
         limit=2,
         candidate_limit=2,
     )
@@ -109,7 +119,8 @@ def test_ranking_reuses_version_scoped_online_feature_snapshot() -> None:
         service.rank(
             tenant_id="demo",
             user_id=100,
-            history_movie_ids=[1],
+            positive_history_movie_ids=[1],
+            excluded_movie_ids=[],
             limit=2,
             candidate_limit=2,
         )
@@ -139,7 +150,8 @@ def test_ranking_rejects_cross_tenant_artifact_use_before_feature_read() -> None
         service.rank(
             tenant_id="default",
             user_id=100,
-            history_movie_ids=[1],
+            positive_history_movie_ids=[1],
+            excluded_movie_ids=[],
             limit=1,
             candidate_limit=1,
         )
@@ -154,7 +166,8 @@ async def test_rank_endpoint_rejects_missing_service_credentials() -> None:
             RankRequest(
                 tenant_id="demo",
                 user_id=100,
-                history_movie_ids=[1],
+                positive_history_movie_ids=[1],
+                excluded_movie_ids=[],
                 limit=1,
                 candidate_limit=1,
             ),
