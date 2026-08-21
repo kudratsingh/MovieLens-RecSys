@@ -925,12 +925,21 @@ recommendations that `main` no longer serves. Re-running
 `npm run evidence:bundle7d` after the rebase reproduces them; running it on the
 branch before the rebase does not.
 
-**One thing the owner will hit on the rebase.** #64 also added a bullet to
-`CLAUDE.md` immediately above `Remaining Phase 3 — product track`, and this
-branch adds its own bullet in the same place. Keep both, in either order. #64's
-other documentation change — the `Resolved in PR #64` line under
-[N2](#n2-learned-serving-reports-zero-positive-seeds) — is in a region this
+**The one conflict the owner will hit on the rebase**, checked with
+`git merge-tree` rather than guessed at. It is in `CLAUDE.md`, and it is the
+only one — `finish-gate-review.md` merges cleanly, because #64's change to it
+(the `Resolved in PR #64` line under
+[N2](#n2-learned-serving-reports-zero-positive-seeds)) is in a region this
 branch does not touch.
+
+Both sides insert a bullet immediately above `Remaining Phase 3 — product
+track`, and both sides also edit that bullet. Resolve as:
+
+1. keep #64's `Item-item retrieval seeds from watched history again` bullet;
+2. keep this branch's `Frontend cutover — the product is the front door`
+   bullet after it;
+3. take **this branch's** version of `Remaining Phase 3 — product track` —
+   `main`'s still lists the cutover as outstanding work, which this branch is.
 
 ### 10.11 Re-running this section
 
