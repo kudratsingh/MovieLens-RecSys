@@ -185,6 +185,13 @@ test("a rating created on detail is findable, editable, and removable in Library
 
   await movieRow.getByRole("combobox").selectOption("3");
   await expect(movieRow.getByText(/Rated 3\.0 of 5/)).toBeVisible();
+  // A Library row renders its new value optimistically and the route announces
+  // the write only once the API has answered, so the row alone is not evidence
+  // that anything left the browser. Navigating on the optimistic render
+  // abandons the request in flight, which is what left the movie in history on
+  // the first attempt of CI run 32512812081. Every navigation below waits for
+  // the announcement that only a committed write produces.
+  await expect(page.getByText(/Rating saved for .+ library/)).toBeAttached();
 
   // History: the same interaction, reached from its own collection.
   await page.goto(`/library?userId=${userId}&tab=history&q=${encodeURIComponent(needle)}`);
@@ -194,6 +201,9 @@ test("a rating created on detail is findable, editable, and removable in Library
   // Deleting the star is not removing the watched interaction.
   await movieRow.getByRole("button", { name: "Remove rating" }).click();
   await expect(movieRow.getByText(/Not rated/)).toBeVisible();
+  await expect(
+    page.getByText(/Rating removed from .+ It is still watched history/),
+  ).toBeAttached();
   await page.reload();
   await expect(movieRow).toHaveCount(1);
 
@@ -203,6 +213,9 @@ test("a rating created on detail is findable, editable, and removable in Library
   await expect(confirm).toContainText("deletes the watched interaction and its rating");
   await confirm.getByRole("button", { name: "Remove from history" }).click();
   await expect(movieRow.getByText(/No longer watched/)).toBeVisible();
+  await expect(
+    page.getByText(/removed from .+ watched history, along with its rating/),
+  ).toBeAttached();
 
   // Back to the seeded state: Toy Story is not in Action Fan's history.
   await page.reload();
