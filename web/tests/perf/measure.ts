@@ -28,15 +28,16 @@ export const BUDGETS = {
  *
  *   CLS   always enforced. It is a property of the markup, and no amount of CPU
  *         contention can make a box with a reserved aspect ratio shift.
- *   LCP   enforced. The worst local reading across three runs under a 4x CPU
- *         throttle was 392 ms against a 2 500 ms budget, and LCP here is
- *         dominated by the server render and one poster rather than by a long
- *         JavaScript task, so it degrades gradually rather than off a cliff.
- *   ack   advisory on first landing. The thinnest margin of the three (worst
- *         local reading 16.9 ms) and the most CPU-sensitive, because it is a
- *         React state update racing a 100 ms budget. Promote it once three
- *         consecutive `browser-auth-e2e` runs on the 4-vCPU runner record it
- *         under 50 ms; ADR 0010 carries the rule.
+ *   LCP   enforced. The worst reading was 400 ms locally and 448 ms on a
+ *         4-vCPU runner, against a 2 500 ms budget under a 4x CPU throttle, and
+ *         LCP here is dominated by the server render and one poster rather than
+ *         by a long JavaScript task — so it degrades gradually rather than off
+ *         a cliff.
+ *   ack   advisory on first landing. The thinnest margin of the three and the
+ *         most CPU-sensitive, because it is a React state update racing a
+ *         100 ms budget: the worst reading went from 16.5 ms locally to 43.0 ms
+ *         on the runner. Promote it once three consecutive `browser-auth-e2e`
+ *         runs record every route under 50 ms; ADR 0010 carries the rule.
  *
  * Both switches exist so a promotion is a one-line change with a recorded
  * reason rather than an edit to an assertion.

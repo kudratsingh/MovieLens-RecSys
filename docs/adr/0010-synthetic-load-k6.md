@@ -550,13 +550,13 @@ with the realignment, and the budgets stand on the re-measured local windows.
 | Measure | PR CI | Nightly | Why |
 |---|---|---|---|
 | Page correctness (checks, request errors, unreverted mutations) | enforced | enforced | Deterministic. A wrong body is never the runner's fault. |
-| Page latency budgets (per step and per page) | **advisory** | enforced | Derived from two local runs and zero runs on the 4-vCPU runner. |
+| Page latency budgets (per step and per page) | **advisory** | enforced | Derived from six local windows and corroborated by exactly one run on a 4-vCPU runner. The promotion rule below asks for ten. |
 | Reliability checks (nine required) | enforced | enforced | Pass/fail facts, not distributions. |
 | Rate-limit behaviour | recorded | recorded | Not implemented; reported, not asserted. |
 | Browser CLS | enforced | — | A property of the markup. Contention cannot make a reserved box shift. |
 | Browser structural claims | enforced | — | Same reason. |
-| Browser LCP | enforced | — | Worst local reading 392 ms against 2 500 ms under a 4x throttle, and LCP here is dominated by the server render and one poster rather than a long JavaScript task, so it degrades gradually. |
-| Browser acknowledgement | **advisory** | — | The thinnest margin of the three (worst 16.9 ms against 100 ms) and the most CPU-sensitive: a React state update racing a 100 ms budget on a shared runner. |
+| Browser LCP | enforced | — | Worst reading 400 ms locally and 448 ms on the runner, against 2 500 ms under a 4x throttle. LCP here is dominated by the server render and one poster rather than a long JavaScript task, so it degrades gradually rather than off a cliff. |
+| Browser acknowledgement | **advisory** | — | The thinnest margin of the three and the most CPU-sensitive: a React state update racing a 100 ms budget. The worst reading went from 16.5 ms locally to 43.0 ms on the runner — a 2.3x margin, and only one observation of it. |
 
 Promotion is a one-line change with a recorded reason, never an edit to an
 assertion:
