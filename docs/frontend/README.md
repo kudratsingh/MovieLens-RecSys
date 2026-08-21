@@ -12,6 +12,9 @@ while keeping the ML system inspectable through progressive disclosure.
   information hierarchy, responsive behavior, and forbidden defaults.
 - [Implementation plan](implementation-plan.md) — sequenced frontend and backend
   bundles, dependencies, API gaps, and delivery exit criteria.
+- [Bundles 5–7 handoff](bundles-5-7-handoff.md) — exact post-Bundle-4 state,
+  remaining vertical slices, implementation order, risks, and verification
+  gates; Bundles 5–7 are explicitly not implemented in this handoff.
 - [Backend readiness](backend-readiness.md) — source-audited capabilities,
   release blockers, proposed API boundaries, and frontend-safe claims.
 - [Generated API contract](../api/README.md) — committed OpenAPI, generated
