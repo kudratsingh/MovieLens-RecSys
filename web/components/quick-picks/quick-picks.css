@@ -1,0 +1,424 @@
+.quick-picks-page {
+  display: grid;
+  gap: clamp(1.5rem, 4vw, var(--space-10));
+  grid-template-areas:
+    "header"
+    "card"
+    "aside"
+    "status";
+  margin: 0 auto;
+  max-width: 88rem;
+  min-height: calc(100dvh - 5rem);
+  padding: clamp(1.25rem, 4vw, 3rem) clamp(1rem, 4vw, 3.5rem) 6rem;
+  width: 100%;
+}
+
+.quick-picks-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  grid-area: header;
+  justify-content: space-between;
+}
+
+.quick-picks-header p {
+  margin: 0;
+}
+
+.quick-picks-persona {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+.quick-picks-header-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.quick-picks-badge {
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  padding: 0.35rem 0.7rem;
+  text-transform: uppercase;
+}
+
+.quick-pick-card,
+.quick-pick-exhausted {
+  grid-area: card;
+}
+
+.quick-pick-card {
+  align-items: start;
+  display: grid;
+  gap: clamp(1.25rem, 4vw, var(--space-12));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.quick-pick-card:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 6px;
+}
+
+.quick-pick-poster {
+  aspect-ratio: 2 / 3;
+  background: var(--poster-fallback);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  cursor: grab;
+  max-width: 22rem;
+  overflow: hidden;
+  position: relative;
+  /* The swipe surface owns both axes; the rest of the card scrolls normally. */
+  touch-action: none;
+  user-select: none;
+  width: 100%;
+}
+
+/* Without this a mouse-down drag becomes a native image drag and the pointer
+   stream is cancelled halfway through the swipe. */
+.quick-pick-poster img {
+  -webkit-user-drag: none;
+}
+
+.quick-pick-poster[data-motion="fling"] {
+  transition: transform var(--motion-standard) var(--ease-out);
+}
+
+.quick-pick-poster:active {
+  cursor: grabbing;
+}
+
+.quick-pick-poster-image {
+  object-fit: cover;
+}
+
+.quick-pick-poster-fallback {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  height: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.quick-pick-poster-fallback span:first-child {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 2.5rem;
+  text-transform: uppercase;
+}
+
+.quick-pick-copy > * {
+  margin: 0;
+}
+
+.quick-pick-copy > * + * {
+  margin-top: var(--space-4);
+}
+
+.quick-pick-copy .display-title {
+  font-size: clamp(2.2rem, 7vw, 4.5rem);
+}
+
+.quick-pick-meta,
+.quick-pick-overview,
+.quick-pick-reason {
+  color: var(--text-secondary);
+}
+
+.quick-pick-overview {
+  line-height: 1.65;
+  max-width: 42rem;
+}
+
+.quick-pick-reason {
+  border-left: 2px solid var(--accent-muted);
+  padding-left: var(--space-4);
+}
+
+.quick-pick-evidence-body {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-top: var(--space-2);
+  max-width: 42rem;
+}
+
+.quick-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.quick-pick-actions button {
+  flex: 1 1 9rem;
+  min-height: 2.75rem;
+}
+
+.quick-pick-actions kbd,
+.quick-picks-undo kbd {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 0.3rem;
+  font-size: 0.62rem;
+  padding: 0.15rem 0.35rem;
+}
+
+.quick-pick-saving {
+  font-size: 0.7rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.quick-pick-rating {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.quick-pick-rating legend {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 0 var(--space-2);
+  text-transform: uppercase;
+}
+
+.quick-pick-stars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.quick-pick-star {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+.quick-pick-star:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.quick-pick-rating:disabled .quick-pick-star {
+  cursor: wait;
+  opacity: 0.52;
+}
+
+.quick-pick-rating-note,
+.quick-pick-gesture-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin-top: var(--space-3);
+  max-width: 42rem;
+}
+
+.quick-pick-gesture-hint a {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.quick-pick-exhausted {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-4);
+  justify-items: start;
+  padding: clamp(1.5rem, 5vw, var(--space-12));
+}
+
+.quick-pick-exhausted p {
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 40rem;
+}
+
+.quick-pick-exhausted-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.quick-picks-aside {
+  display: grid;
+  gap: var(--space-4);
+  grid-area: aside;
+  align-content: start;
+}
+
+.quick-pick-progress {
+  background: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.quick-pick-progress p {
+  margin: 0;
+}
+
+.quick-pick-progress-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.quick-pick-progress-count {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-pick-progress-bar {
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  height: 0.6rem;
+  overflow: hidden;
+}
+
+.quick-pick-progress-bar span {
+  background: var(--accent);
+  display: block;
+  height: 100%;
+}
+
+.quick-pick-progress-note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.quick-pick-progress-meta {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.quick-picks-undo {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.quick-picks-error {
+  border: 1px solid var(--destructive);
+  border-radius: var(--radius-md);
+  color: var(--destructive);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.quick-picks-status {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  grid-area: status;
+  margin: 0;
+}
+
+/*
+ * Narrow screens put the poster beside the title rather than above it. A
+ * full-width poster is prettier and pushes the decision below the fold, which
+ * is the one thing this route cannot afford.
+ */
+@media (max-width: 45.99rem) {
+  .quick-pick-card {
+    gap: var(--space-4) var(--space-4);
+    grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr);
+  }
+
+  .quick-pick-poster {
+    align-self: start;
+    grid-column: 1;
+    grid-row: 1 / span 3;
+  }
+
+  .quick-pick-copy {
+    display: contents;
+  }
+
+  .quick-pick-copy > * {
+    margin-top: 0;
+  }
+
+  .quick-pick-copy > .eyebrow {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .quick-pick-copy > .display-title {
+    font-size: clamp(1.9rem, 8vw, 2.7rem);
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .quick-pick-copy > .quick-pick-meta {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .quick-pick-copy > .quick-pick-overview,
+  .quick-pick-copy > .quick-pick-reason,
+  .quick-pick-copy > .quick-pick-evidence,
+  .quick-pick-copy > .quick-pick-actions,
+  .quick-pick-copy > .quick-pick-rating,
+  .quick-pick-copy > .quick-pick-gesture-hint {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 46rem) {
+  .quick-pick-card {
+    grid-template-columns: minmax(12rem, 22rem) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 62rem) {
+  .quick-picks-page {
+    grid-template-areas:
+      "header header"
+      "card aside"
+      "status status";
+    grid-template-columns: minmax(0, 1fr) 21rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-pick-poster {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .quick-pick-progress-bar span {
+    background: Highlight;
+  }
+
+  .quick-pick-star,
+  .quick-pick-rating,
+  .quick-pick-exhausted,
+  .quick-pick-progress {
+    border: 1px solid CanvasText;
+  }
+}

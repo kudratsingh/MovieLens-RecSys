@@ -249,3 +249,80 @@ test("search, cursor continuation, detail, and watchlist survive a round trip", 
     restoredCard.getByRole("button", { name: `Add ${title} to watchlist` }),
   ).toBeVisible();
 });
+
+/**
+ * Quick Picks against the same seeded stack.
+ *
+ * A fixture can prove the deck behaves; only this can prove the decision
+ * reached serving. The sequence is the one ADR 0012 pins: a dismissal excludes
+ * the title from the next recommendation set, undo restores its eligibility,
+ * and a watched signal moves the cold-start count only once the API has
+ * committed it.
+ */
+test("Quick Picks decisions change what serving returns", async ({ page }) => {
+  test.slow();
+  const userId = 900000104;
+  await signInThroughKeycloak(page);
+
+  async function recommendedIds(): Promise<number[]> {
+    return page.evaluate(async (id) => {
+      const payload = (await fetch(`/api/users/${id}`, { cache: "no-store" }).then((response) =>
+        response.json(),
+      )) as { recommendations: { items: { movie_id: number }[] } };
+      return payload.recommendations.items.map((item) => item.movie_id);
+    }, userId);
+  }
+
+  async function signalCount(): Promise<number> {
+    const copy = (await page.locator(".quick-pick-progress-count").textContent()) ?? "";
+    return Number(copy.trim().split(" ")[0]);
+  }
+
+  await page.goto(`/quick-picks?user=${userId}`);
+  // The controls are inert markup until React attaches.
+  await expect(page.locator(".quick-picks-page")).toHaveAttribute("data-interactive", "true");
+
+  const movieId = Number(await page.locator(".quick-pick-card").getAttribute("data-movie-id"));
+  const title = (await page.getByRole("heading", { level: 1 }).innerText()).trim();
+  expect(movieId).toBeGreaterThan(0);
+  expect(await recommendedIds()).toContain(movieId);
+
+  const before = await signalCount();
+
+  await page.getByRole("button", { name: /Not for me/ }).click();
+  await expect(page.getByRole("status")).toContainText(`${title}: not for me saved.`);
+  expect(await recommendedIds()).not.toContain(movieId);
+  // A dismissal is an exclusion, never a positive signal.
+  expect(await signalCount()).toBe(before);
+
+  // Located by class: a MovieLens title carries parentheses, which a name
+  // pattern would read as a group.
+  await page.locator("button.quick-picks-undo").click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+  expect(await recommendedIds()).toContain(movieId);
+  expect(await signalCount()).toBe(before);
+
+  // The panel caps its display at the threshold, so the expectation does too.
+  const expected = Math.min(before + 1, 5);
+  await page.getByRole("button", { name: /^Watched/ }).click();
+  await expect(page.locator(".quick-pick-progress-count")).toHaveText(
+    `${expected} of 5 positive watched signals`,
+  );
+  expect(await recommendedIds()).not.toContain(movieId);
+
+  // Leave the persona as it was found so the journey can be run again.
+  const cleanup = await page.evaluate(
+    async ([user, movie]) => {
+      const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((body: { csrfToken: string }) => body.csrfToken);
+      const response = await fetch(`/api/users/${user}/movies/${movie}/watched`, {
+        method: "DELETE",
+        headers: { "x-csrf-token": csrfToken, "Idempotency-Key": crypto.randomUUID() },
+      });
+      return response.status;
+    },
+    [userId, movieId],
+  );
+  expect(cleanup).toBe(200);
+});
