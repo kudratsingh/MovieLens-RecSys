@@ -1,7 +1,7 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -16,6 +16,18 @@ format:
 
 typecheck:
 	mypy src/ synthetic/
+
+api-contract:
+	python -m scripts.generate_openapi
+
+api-contract-check:
+	python -m scripts.generate_openapi --check
+
+web-api-types:
+	cd web && npm run api:types
+
+web-api-types-check:
+	cd web && npm run api:types:check
 
 test:
 	pytest tests/ -v

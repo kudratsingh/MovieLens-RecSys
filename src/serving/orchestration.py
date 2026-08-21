@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import Connection
 from starlette.concurrency import run_in_threadpool
 
+from src.evaluation.protocol import COLD_START_THRESHOLD
 from src.serving.audit import PredictionAudit
 from src.serving.models import (
     ModelRankingResult,
@@ -72,7 +73,12 @@ class RecommendationCoordinator:
             user_id=user_id,
             limit=500,
         )
-        if not history:
+        # A movie contributes at most one positive history signal. The legacy
+        # ratings table does not yet enforce uniqueness, so deduplicate here as
+        # a serving safety net until user_movie_state becomes the canonical
+        # projection.
+        history_movie_ids = list(dict.fromkeys(movie.movie_id for movie in history))
+        if len(history_movie_ids) < COLD_START_THRESHOLD:
             return await self._popularity(
                 connection,
                 user_id=user_id,
@@ -83,7 +89,7 @@ class RecommendationCoordinator:
             learned = await self._models.rank(
                 tenant_id=tenant_id,
                 user_id=user_id,
-                history_movie_ids=[movie.movie_id for movie in history],
+                history_movie_ids=history_movie_ids,
                 limit=limit,
                 candidate_limit=max(100, limit * 10),
             )

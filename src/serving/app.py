@@ -30,11 +30,13 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel
+from fastapi.openapi.utils import get_openapi
+from pydantic import BaseModel, Field
 from sqlalchemy import Connection, create_engine
 
 from src.auth import AuthMiddleware, JwksCache
@@ -176,13 +178,23 @@ class CatalogResponse(BaseModel):
 
 
 class RatingRequest(BaseModel):
-    rating: float
+    rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5, allow_inf_nan=False)
 
 
 class RatingMutationResponse(BaseModel):
     tenant_id: str
     user_id: int
     changed: int
+
+
+class CurrentActorResponse(BaseModel):
+    tenant_id: str
+    user_id: str
+    realm: str
+    authorized_party: str
+    roles: list[str]
+    tenant_display_name: str
+    redis_prefix: str
 
 
 class OnlineUserFeaturesResponse(BaseModel):
@@ -262,6 +274,59 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+def _openapi_schema() -> dict[str, Any]:
+    if app.openapi_schema is not None:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    components = schema.setdefault("components", {})
+    components.setdefault("securitySchemes", {})["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Keycloak access token with aud=movielens-api",
+    }
+    components.setdefault("schemas", {})["ErrorResponse"] = {
+        "type": "object",
+        "title": "ErrorResponse",
+        "required": ["detail"],
+        "properties": {"detail": {"type": "string"}},
+    }
+    for path, path_item in schema.get("paths", {}).items():
+        if path == "/healthz":
+            continue
+        for method, operation in path_item.items():
+            if method not in {"get", "put", "post", "patch", "delete"}:
+                continue
+            operation["security"] = [{"BearerAuth": []}]
+            responses = operation.setdefault("responses", {})
+            for status, description in (
+                ("401", "Missing or invalid access token"),
+                ("403", "Authenticated actor is not authorized"),
+                ("500", "Request transaction failed"),
+            ):
+                responses.setdefault(
+                    status,
+                    {
+                        "description": description,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                            }
+                        },
+                    },
+                )
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi_schema  # type: ignore[method-assign]
+
 # Middleware is added at module import, before the first request. Starlette
 # evaluates the last-added middleware first: AuthMiddleware opens the RLS
 # transaction, then the audit middleware persists before that transaction
@@ -272,13 +337,25 @@ app.add_middleware(
     jwks=_jwks,
     app_engine=_app_engine,
     expected_audience=_settings.keycloak_audience,
+    allowed_authorized_parties=_settings.keycloak_authorized_parties,
     dev_auth_bypass=_settings.dev_auth_bypass,
     dev_bypass_tenant=_settings.dev_bypass_tenant,
     dev_bypass_user=_settings.dev_bypass_user,
 )
 
 
-@app.get("/healthz")
+def _require_demo_persona_access(request: Request) -> None:
+    principal = request.state.principal
+    if not principal.can_access_demo_personas(
+        trusted_service_client=_settings.keycloak_service_client_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="demo persona access requires the demo-impersonator role",
+        )
+
+
+@app.get("/healthz", operation_id="healthCheck")
 async def healthz() -> dict[str, str]:
     """Unauthenticated liveness probe. Skipped by the auth middleware
     (see ``_UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
@@ -289,26 +366,33 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/whoami")
-async def whoami(request: Request) -> dict[str, str]:
+@app.get(
+    "/whoami",
+    response_model=CurrentActorResponse,
+    operation_id="getCurrentActor",
+)
+async def whoami(request: Request) -> CurrentActorResponse:
     """Authenticated echo of the resolved identity."""
     principal = request.state.principal
     try:
         tenant = _tenant_router.resolve(principal.tenant_id)
     except UnknownTenantError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return {
-        "tenant_id": principal.tenant_id,
-        "user_id": principal.user_id,
-        "realm": principal.realm,
-        "tenant_display_name": tenant.display_name,
-        "redis_prefix": tenant.redis_prefix,
-    }
+    return CurrentActorResponse(
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        realm=principal.realm,
+        authorized_party=principal.authorized_party,
+        roles=sorted(principal.roles),
+        tenant_display_name=tenant.display_name,
+        redis_prefix=tenant.redis_prefix,
+    )
 
 
 @app.get(
     "/users/{user_id}/recommendations",
     response_model=RecommendationResponse,
+    operation_id="recommendMovies",
 )
 async def recommendations(
     user_id: int,
@@ -316,6 +400,7 @@ async def recommendations(
     limit: int = Query(default=10, ge=1, le=50),
 ) -> RecommendationResponse:
     """Run learned two-stage serving or an explicit popularity fallback."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     decision = await _recommendation_coordinator.recommend(
@@ -389,6 +474,7 @@ async def recommendations(
 @app.get(
     "/users/{user_id}/audits",
     response_model=RecommendationAuditResponse,
+    operation_id="listRecommendationAudits",
 )
 async def recommendation_audits(
     user_id: int,
@@ -396,6 +482,7 @@ async def recommendation_audits(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> RecommendationAuditResponse:
     """Return newest prediction audits visible inside the request tenant."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     items = _audits.list_for_user(connection, user_id=user_id, limit=limit)
@@ -409,6 +496,7 @@ async def recommendation_audits(
 @app.get(
     "/users/{user_id}/history",
     response_model=HistoryResponse,
+    operation_id="listRatingHistory",
 )
 async def history(
     user_id: int,
@@ -416,6 +504,7 @@ async def history(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> HistoryResponse:
     """Return recent interactions for the demo's watch-history panel."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     items = _recommendations.recent_history(connection, user_id=user_id, limit=limit)
@@ -435,9 +524,10 @@ async def history(
     )
 
 
-@app.get("/personas", response_model=PersonaResponse)
+@app.get("/personas", response_model=PersonaResponse, operation_id="listDemoPersonas")
 async def personas(request: Request) -> PersonaResponse:
     """Return stable synthetic identities for the current tenant's demo."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     items = _recommendations.list_demo_personas(connection)
@@ -455,9 +545,14 @@ async def personas(request: Request) -> PersonaResponse:
     )
 
 
-@app.get("/users/{user_id}/features", response_model=OnlineUserFeaturesResponse)
+@app.get(
+    "/users/{user_id}/features",
+    response_model=OnlineUserFeaturesResponse,
+    operation_id="getOnlineUserFeatures",
+)
 async def online_user_features(user_id: int, request: Request) -> OnlineUserFeaturesResponse:
     """Expose the tenant-keyed Redis-backed Feast read used by online ranking."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     try:
         values = await _feature_server.get_user_features(
@@ -473,9 +568,14 @@ async def online_user_features(user_id: int, request: Request) -> OnlineUserFeat
     )
 
 
-@app.get("/users/{user_id}/catalog", response_model=CatalogResponse)
+@app.get(
+    "/users/{user_id}/catalog",
+    response_model=CatalogResponse,
+    operation_id="listDemoCatalog",
+)
 async def catalog(user_id: int, request: Request) -> CatalogResponse:
     """Return rateable movies and current ratings for one demo persona."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     try:
@@ -489,7 +589,11 @@ async def catalog(user_id: int, request: Request) -> CatalogResponse:
     )
 
 
-@app.put("/users/{user_id}/ratings/{movie_id}", response_model=RatingMutationResponse)
+@app.put(
+    "/users/{user_id}/ratings/{movie_id}",
+    response_model=RatingMutationResponse,
+    operation_id="setMovieRating",
+)
 async def rate_movie(
     user_id: int,
     movie_id: int,
@@ -497,8 +601,7 @@ async def rate_movie(
     request: Request,
 ) -> RatingMutationResponse:
     """Create or replace one rating for a tenant-scoped demo persona."""
-    if payload.rating < 0.5 or payload.rating > 5 or payload.rating * 2 % 1 != 0:
-        raise HTTPException(status_code=422, detail="rating must be 0.5–5.0 in half-star steps")
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     try:
@@ -521,9 +624,14 @@ async def rate_movie(
     )
 
 
-@app.delete("/users/{user_id}/ratings", response_model=RatingMutationResponse)
+@app.delete(
+    "/users/{user_id}/ratings",
+    response_model=RatingMutationResponse,
+    operation_id="resetDemoRatings",
+)
 async def reset_ratings(user_id: int, request: Request) -> RatingMutationResponse:
     """Clear a demo persona so the cold-start experience can be rebuilt."""
+    _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
     try:

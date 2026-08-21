@@ -40,6 +40,18 @@ def test_defaults_match_docker_compose(clean_env: None) -> None:
     assert s.postgres_db == "movielens"
     assert s.postgres_port == 5432
     assert s.postgres_host == "localhost"
+    assert s.keycloak_audience == "movielens-api"
+    assert s.keycloak_authorized_parties == ("movielens-api", "movielens-web")
+    assert s.keycloak_service_client_id == "movielens-api"
+
+
+def test_service_client_must_be_an_authorized_party(clean_env: None) -> None:
+    with pytest.raises(RuntimeError, match="keycloak_service_client_id"):
+        Settings(
+            _env_file=None,
+            keycloak_authorized_parties=("movielens-web",),
+            keycloak_service_client_id="movielens-api",
+        )
 
 
 def test_database_url_format(clean_env: None) -> None:

@@ -1,65 +1,16 @@
-export interface RecommendationItem {
-  movie_id: number;
-  title: string;
-  genres: string[];
-  tmdb_id: string | null;
-  score: number;
-  reason: string;
-  poster_url: string | null;
-  overview: string | null;
-  release_year: number | null;
-  metadata_source: string;
-}
+import type { components } from "./api.generated";
 
-export interface RecommendationResponse {
-  tenant_id: string;
-  user_id: number;
-  model_version: string;
-  policy: string;
-  items: RecommendationItem[];
-}
-
-export interface HistoryItem {
-  movie_id: number;
-  title: string;
-  genres: string[];
-  rating: number;
-  timestamp: number;
-}
-
-export interface HistoryResponse {
-  tenant_id: string;
-  user_id: number;
-  items: HistoryItem[];
-}
+export type RecommendationItem = components["schemas"]["RecommendationItem"];
+export type RecommendationResponse = components["schemas"]["RecommendationResponse"];
+export type HistoryItem = components["schemas"]["HistoryItem"];
+export type HistoryResponse = components["schemas"]["HistoryResponse"];
+export type CatalogItem = components["schemas"]["CatalogItem"];
+export type CatalogResponse = components["schemas"]["CatalogResponse"];
+export type PersonaItem = components["schemas"]["PersonaItem"];
+export type PersonaResponse = components["schemas"]["PersonaResponse"];
 
 export interface UserDashboard {
   recommendations: RecommendationResponse;
   history: HistoryResponse;
   catalog: CatalogResponse;
-}
-
-export interface CatalogItem {
-  movie_id: number;
-  title: string;
-  genres: string[];
-  rating: number | null;
-}
-
-export interface CatalogResponse {
-  tenant_id: string;
-  user_id: number;
-  items: CatalogItem[];
-}
-
-export interface PersonaItem {
-  user_id: number;
-  slug: string;
-  display_name: string;
-  description: string;
-}
-
-export interface PersonaResponse {
-  tenant_id: string;
-  items: PersonaItem[];
 }
