@@ -6,11 +6,11 @@ The public surface is intentionally small:
     refresh on signature-verification failure so a Keycloak-side key
     rotation propagates without any request seeing a false negative.
   * ``AuthMiddleware`` — FastAPI middleware that validates a Bearer
-    token, resolves its issuer URL to a tenant slug (realm-per-tenant),
-    and attaches ``(tenant_id, user_id)`` to ``request.state`` for
-    downstream handlers. Also opens a Postgres transaction and runs
-    ``SET LOCAL app.tenant_id`` so RLS on tenant-scoped tables filters
-    correctly.
+    token, validates its resource audience and calling client, resolves its
+    issuer URL to a registered tenant slug (realm-per-tenant), and attaches a
+    principal with tenant, actor, client, and roles to ``request.state``. It
+    also opens a Postgres transaction and runs ``SET LOCAL app.tenant_id`` so
+    RLS on tenant-scoped tables filters correctly.
   * ``RequestPrincipal`` — the resolved-identity object handlers pull
     off ``request.state.principal`` (rather than reaching into the
     token themselves).

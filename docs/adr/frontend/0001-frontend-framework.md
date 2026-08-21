@@ -3,6 +3,14 @@
 **Status:** Accepted
 **Date:** 2026-06-01
 
+**Scope note (2026-08-21):** This ADR remains authoritative for the Next.js,
+TypeScript, and Tailwind framework decision. Its product-scope assumptions that
+catalog search and real browser authentication are non-goals, and its planned
+Next.js-owned TMDB proxy, are superseded by
+[ADR 0002](0002-movie-discovery-experience.md), FastAPI's implemented metadata
+ownership, and the expanded Phase 3 scope. The context below is retained as the
+historical rationale for choosing the framework.
+
 ## Context
 
 [CLAUDE.md](../../../CLAUDE.md) commits to shipping a Next.js + TypeScript + Tailwind frontend alongside Phase 3 serving. The frontend is not an end-user product — it's a portfolio surface whose job is to make the ML-engineering work visible: feature attribution panels, model/version selection, champion-vs-challenger comparison, and (in Phase 5) a model-health indicator. Catalog search, real auth, and admin dashboards are explicit non-goals; Grafana owns admin views.

@@ -248,8 +248,8 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
 
     ``AuthMiddleware`` is registered outside this middleware, so the RLS-bound
     connection remains open until the audit insert completes. An insert failure
-    therefore fails the request; the successful transaction commits on the
-    response background boundary immediately after the body is flushed.
+    therefore fails the request; ``AuthMiddleware`` commits the successful
+    transaction before returning the response.
     """
 
     def __init__(self, app: ASGIApp, *, audits: RecommendationAuditService) -> None:

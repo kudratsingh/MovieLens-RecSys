@@ -37,7 +37,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item candidates through Feast + LightGBM, persists RLS-scoped prediction audits, and enforces an authenticated k6 p99 gate; programmatic cold-start cohorts, environment-specific Compose, and browser-side Keycloak auth remain |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item candidates through Feast + LightGBM, persists RLS-scoped prediction audits, and enforces an authenticated k6 p99 gate; the server-side browser session/E2E, programmatic cold-start cohorts, and environment-specific Compose remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -49,6 +49,10 @@ Most public recsys repos are notebooks that train a model and report a number. T
 - **[Design decisions (ADRs)](docs/adr/)** — every significant choice is written down with alternatives and consequences. Recruiters: [ADR 0001 (evaluation protocol)](docs/adr/0001-evaluation-protocol.md) is the strongest single entry point.
 - **[Working demo plan](docs/demo-plan.md)** — the concrete Phase 3 vertical-slice sequence, definition of done, walkthrough, and remaining delivery bundles.
 - **[Local demo runbook](docs/demo-runbook.md)** — clean-checkout startup, seeding, smoke validation, walkthrough, reset, and troubleshooting.
+- **[Movie-discovery frontend plan](docs/frontend/)** — product discovery,
+  route contracts, backend readiness, implementation bundles, and finish gate.
+- **[Generated API contract](docs/api/)** — committed OpenAPI and generated
+  TypeScript types with Python and Node CI drift checks.
 - **Time-respecting evaluation** — temporal train/holdout/test split with a fixed cutoff timestamp. No random splits on time-series data, ever.
 - **Stage-specific metrics** — the candidate stage is scored on recall over its full retrieval window (recall@500), the ranker on NDCG@10 over its output. Both metrics flow through one harness with `EvalResult.k` stamped on every result so they can't be confused.
 - **Per-policy MLflow attribution** — every candidate model embeds a popularity fallback for cold users; per-policy metrics partition the holdout by which routing branch actually served each user. So you know whether the learned model is doing work or the fallback is.
@@ -75,7 +79,9 @@ ADRs live under [`docs/adr/`](docs/adr/). Backend ADRs use a flat numeric line; 
 | [0009](docs/adr/0009-feature-store-feast.md) | Feast over direct SQL or a hand-rolled online feature cache | Pins point-in-time historical reads and tenant-keyed Redis serving behind one schema |
 | [0010](docs/adr/0010-synthetic-load-k6.md) | k6 for synthetic load | Turns the p99 SLO into an authenticated CI pass/fail contract |
 | [0011](docs/adr/0011-cold-start-coverage.md) | Controlled synthetic cold-start cohorts | Makes zero- and short-history behavior measurable by cohort |
+| [0012](docs/adr/0012-browser-identity-feedback-and-online-freshness.md) | Browser identity, durable movie state, and online-freshness semantics | Separates actor from demo persona, pins feedback effects, and prevents success before commit |
 | [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js + Tailwind for the portfolio frontend | Real Server Components, route handlers, image optimization for poster grids |
+| [frontend/0002](docs/adr/frontend/0002-movie-discovery-experience.md) | Poster-first movie discovery with progressive ML disclosure | Replaces the rating wall with Discover, Browse, Library, detail, and optional Quick Picks routes |
 
 ADRs are written as substantive documents (typical length 100–180 lines), each treating alternatives with analysis rather than a single rejection sentence and including consequences and second-order effects.
 
@@ -125,7 +131,7 @@ The full plan with lessons-per-phase lives in the project's design notes. The sh
 
 - **Phase 1 — Foundation** *(complete)*. Postgres + DVC + MLflow + docker-compose, temporal split per ADR 0001, evaluation harness as single source of truth, popularity + CF/ALS baselines.
 - **Phase 2 — Two-stage architecture, offline** *(complete)*. Item-item and two-tower candidate generators, provisional feature module, LightGBM ranker, and stage-specific metrics (recall@500 / NDCG@10) through the same harness.
-- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, and the authenticated k6 SLO gate are in place. Programmatic cold-start cohorts, environment-specific Compose, and browser-side Keycloak auth remain.
+- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, and the authenticated k6 SLO gate are in place. The movie-discovery product contract is documented under [`docs/frontend/`](docs/frontend/); the server-side browser session/E2E, durable multi-state feedback, programmatic cold-start cohorts, generic audits, and environment-specific Compose remain.
 - **Phase 4 — Orchestration + promotion gate.** Prefect DAGs, automated evaluation-gated promotion against the incumbent champion.
 - **Phase 5 — Monitoring + drift.** Per-tenant Grafana dashboards, Evidently drift detection, synthetic drift simulation that proves the alert path fires.
 - **Phase 6 — A/B + shadow deploys.** Tenant-aware champion/challenger routing, shadow-mode logging, statistical significance for online experiments.

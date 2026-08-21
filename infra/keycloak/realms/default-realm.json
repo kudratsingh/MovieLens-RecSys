@@ -14,7 +14,8 @@
   "ssoSessionMaxLifespan": 36000,
   "roles": {
     "realm": [
-      { "name": "user", "description": "Ordinary API user for the default tenant" }
+      { "name": "user", "description": "Ordinary API user for the default tenant" },
+      { "name": "demo-impersonator", "description": "May select synthetic MovieLens demo personas" }
     ]
   },
   "users": [
@@ -49,7 +50,21 @@
       "webOrigins": ["http://localhost:3001"],
       "attributes": {
         "access.token.lifespan": "300"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "movielens-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "movielens-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "movielens-web",
@@ -64,7 +79,21 @@
       "webOrigins": ["http://localhost:3001"],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "movielens-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "movielens-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ]
 }

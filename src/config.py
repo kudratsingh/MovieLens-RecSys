@@ -78,10 +78,20 @@ class Settings(BaseSettings):
     # enough that we're not fetching JWKS every request, short enough
     # that a Keycloak-side key rotation propagates within one TTL.
     jwks_cache_ttl_seconds: int = 300
-    # The audience/client_id we expect on every access token. Every
-    # realm's movielens-api client is named identically per the seed
-    # realm JSONs — a token issued for a different client is rejected.
+    # The resource audience every access token must contain. Both the
+    # confidential load/API client and the public PKCE browser client receive
+    # this audience through the realm's OIDC audience mapper.
     keycloak_audience: str = "movielens-api"
+    # `azp` identifies the client that obtained the token. Both callers are
+    # intentional; an admin-console or unrelated realm client remains rejected.
+    keycloak_authorized_parties: tuple[str, ...] = (
+        "movielens-api",
+        "movielens-web",
+    )
+    # The confidential client is the only caller that may impersonate demo
+    # personas without an explicit realm role. Keep this separate from the
+    # resource audience so deployments can rename either setting safely.
+    keycloak_service_client_id: str = "movielens-api"
     # Dev-only bypass. When True, the middleware skips token validation
     # and treats every request as coming from `dev_bypass_tenant`. The
     # constructor asserts this is only set when environment == "dev".
@@ -161,6 +171,10 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 f"dev_auth_bypass=True is only permitted when environment='dev'; "
                 f"got environment={self.environment!r}. Refusing to construct Settings."
+            )
+        if self.keycloak_service_client_id not in self.keycloak_authorized_parties:
+            raise RuntimeError(
+                "keycloak_service_client_id must be listed in " "keycloak_authorized_parties"
             )
         if (
             self.environment != "dev"

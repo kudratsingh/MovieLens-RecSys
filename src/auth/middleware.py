@@ -28,7 +28,6 @@ from typing import Any
 import jwt
 from fastapi import Request, Response
 from sqlalchemy import Engine, text
-from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -45,6 +44,7 @@ _COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="request
 # other endpoint requires a valid Bearer token or fails the middleware
 # before reaching a handler.
 _UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(["/healthz"])
+_TENANT_EXISTS = text("SELECT 1 FROM public.tenants WHERE id = :tid")
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,20 @@ class RequestPrincipal:
     # downstream code doesn't couple to "realm slug == tenant id"
     # if that ever changes.
     realm: str
+    authorized_party: str
+    roles: frozenset[str]
+
+    def can_access_demo_personas(self, *, trusted_service_client: str) -> bool:
+        """Return whether this actor may select arbitrary demo personas.
+
+        The confidential service client is trusted for synthetic load and
+        isolation harnesses. Browser actors need the explicit realm role;
+        merely belonging to the tenant is insufficient.
+        """
+        return (
+            self.authorized_party in {trusted_service_client, "dev-bypass"}
+            or "demo-impersonator" in self.roles
+        )
 
 
 class UnauthenticatedError(Exception):
@@ -69,6 +83,10 @@ class UnauthenticatedError(Exception):
 
 class UnauthorizedError(Exception):
     """Token was present but failed validation (signature, exp, aud, iss)."""
+
+
+class UnregisteredTenantError(Exception):
+    """The verified token realm has no matching tenant registry row."""
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -88,6 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         jwks: JwksCache,
         app_engine: Engine,
         expected_audience: str,
+        allowed_authorized_parties: tuple[str, ...] | None = None,
         dev_auth_bypass: bool = False,
         dev_bypass_tenant: str = "default",
         dev_bypass_user: str = "dev-user",
@@ -96,6 +115,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._jwks = jwks
         self._engine = app_engine
         self._expected_audience = expected_audience
+        self._allowed_authorized_parties = frozenset(
+            allowed_authorized_parties or (expected_audience,)
+        )
         self._dev_bypass = dev_auth_bypass
         self._dev_bypass_tenant = dev_bypass_tenant
         self._dev_bypass_user = dev_bypass_user
@@ -132,11 +154,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # request.state.db is scoped to the tenant. Rollback on any
         # exception; commit on clean return.
         # psycopg2 is synchronous. Keep the same request transaction and RLS
-        # semantics, but move connection setup and rollback off the event loop.
-        # A successful response attaches commit to Starlette's background
-        # boundary: the audit insert must succeed before the response exists,
-        # while WAL fsync runs immediately after the body is flushed instead of
-        # consuming the recommendation latency budget.
+        # semantics, but move connection setup, rollback, and commit off the
+        # event loop. Commit is awaited before returning the response: a client
+        # must never receive success for a mutation or fail-closed audit that
+        # can still fail to become durable.
         transaction_context = self._engine.begin()
         conn = await run_in_threadpool(transaction_context.__enter__)
         try:
@@ -145,8 +166,25 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 text("SET LOCAL app.tenant_id = :tid"),
                 {"tid": principal.tenant_id},
             )
+            tenant_exists = await run_in_threadpool(
+                conn.execute,
+                _TENANT_EXISTS,
+                {"tid": principal.tenant_id},
+            )
+            if tenant_exists.scalar_one_or_none() is None:
+                raise UnregisteredTenantError(
+                    f"unknown tenant for verified realm: {principal.tenant_id!r}"
+                )
             request.state.db = conn
             response = await call_next(request)
+        except UnregisteredTenantError as exc:
+            await run_in_threadpool(
+                transaction_context.__exit__,
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            return JSONResponse({"detail": str(exc)}, status_code=403)
         except BaseException as exc:
             await run_in_threadpool(
                 transaction_context.__exit__,
@@ -155,11 +193,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 exc.__traceback__,
             )
             raise
-        background = BackgroundTasks()
-        background.add_task(_commit_transaction, transaction_context)
-        if response.background is not None:
-            background.tasks.append(response.background)
-        response.background = background
+        try:
+            await _commit_transaction(transaction_context)
+        except Exception:
+            logger.exception(
+                "request transaction commit failed tenant=%s path=%s",
+                principal.tenant_id,
+                request.url.path,
+            )
+            return JSONResponse(
+                {"detail": "request transaction commit failed"},
+                status_code=500,
+            )
         return response
 
     def _resolve_principal(self, request: Request) -> RequestPrincipal:
@@ -171,6 +216,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 tenant_id=self._dev_bypass_tenant,
                 user_id=self._dev_bypass_user,
                 realm=self._dev_bypass_tenant,
+                authorized_party="dev-bypass",
+                roles=frozenset({"demo-impersonator"}),
             )
 
         auth_header = request.headers.get("Authorization", "")
@@ -209,25 +256,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 signing_key,
                 algorithms=[signing_jwk.get("alg", "RS256")],
                 issuer=issuer,
-                # Audience is validated below against `azp` — Keycloak
-                # collapses the `aud` claim into `azp` for tokens issued
-                # to the same client, so `jwt.decode(audience=...)`
-                # would reject the token unconditionally.
-                options={"require": ["exp", "iss", "sub"]},
+                audience=self._expected_audience,
+                options={"require": ["exp", "iss", "sub", "aud"]},
             )
         except jwt.InvalidTokenError as exc:
             raise UnauthorizedError(f"token verification failed: {exc}") from exc
 
-        # Keycloak-idiomatic authorized-party check. `azp` names the
-        # client that requested the token; must match the client we
-        # expect API traffic from. A token issued for a different
-        # client (e.g. an admin-console token) never reaches a handler.
+        # `aud` above proves this API is an intended resource. `azp` names the
+        # client that obtained the token and must be one of the explicit API or
+        # browser callers. A token issued for an admin console or unrelated
+        # client never reaches a handler even if it contains a broad audience.
         azp = payload.get("azp")
-        if azp != self._expected_audience:
+        if azp not in self._allowed_authorized_parties:
             raise UnauthorizedError(f"unexpected authorized party (azp={azp!r})")
 
+        realm_access = payload.get("realm_access")
+        raw_roles = realm_access.get("roles", []) if isinstance(realm_access, dict) else []
+        roles = frozenset(role for role in raw_roles if isinstance(role, str))
         user_id = str(payload.get("sub"))
-        return RequestPrincipal(tenant_id=realm, user_id=user_id, realm=realm)
+        return RequestPrincipal(
+            tenant_id=realm,
+            user_id=user_id,
+            realm=realm,
+            authorized_party=str(azp),
+            roles=roles,
+        )
 
     @staticmethod
     def _realm_from_issuer(issuer: str) -> str:
@@ -255,10 +308,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 async def _commit_transaction(transaction_context: Any) -> None:
-    # Response-finalization commits must not consume Starlette's shared AnyIO
-    # thread tokens. Under sustained audit traffic, slow WAL flushes could
-    # otherwise queue the next request's connection setup, SET LOCAL, or audit
-    # insert behind work whose response has already been sent.
+    # Commit is part of the response's correctness and latency boundary, but it
+    # still must not consume Starlette's shared AnyIO thread tokens. A dedicated
+    # executor keeps WAL flushes from queuing connection setup, SET LOCAL, or
+    # audit inserts for unrelated requests.
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(_COMMIT_EXECUTOR, _commit_transaction_sync, transaction_context)
 

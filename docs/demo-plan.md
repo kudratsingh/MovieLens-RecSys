@@ -40,8 +40,9 @@ and learned serving path are implemented:
   and tenant-isolation checks in GitHub Actions.
 - A Docker-only clean-checkout environment with schema bootstrap, seed, and
   behavioral smoke commands.
-- An interactive rating loop that immediately refreshes a tenant-safe,
-  rating-weighted genre-affinity baseline.
+- An interactive rating loop that records explicit stars, requests refreshed
+  tenant-safe results, excludes watched titles after commit, and uses watched
+  movie IDs—not star magnitude—in the deployed learned path.
 - A pinned Feast repository with Postgres historical snapshots, Redis online
   materialization, a dedicated feature-server container, and parity/isolation CI.
 - A deterministic item-item cosine index and LightGBM LambdaRank booster packaged
@@ -152,16 +153,22 @@ Acceptance proof:
 
 Goal: turn the portfolio surface from a read-only list into a usable recommender demo.
 
+> Historical scope: this bundle originally shipped the rating-weighted
+> genre-affinity baseline. Bundle D5 later replaced the deployed recommendation
+> path with item-item candidates plus LightGBM. In the current path, the star
+> value is stored for display while the watched movie ID supplies positive
+> history. ADR 0012 proposes the durability and state contract for the redesign.
+
 - Expose a compact rateable catalog for registered demo personas.
 - Save 1–5 star feedback through the request-scoped RLS connection.
 - Re-rank unseen candidates using rating-weighted genre affinity.
-- Refresh history and recommendations immediately after each rating.
+- Request refreshed history and recommendations after each rating response.
 - Allow a selected demo profile to be reset to cold start.
 - Reject writes for arbitrary non-persona user IDs.
 
 Acceptance proof:
 
-- A Cold Start profile can rate a movie and immediately gain history.
+- A Cold Start profile can rate a movie and gain history after the write commits.
 - Warm feedback reports the genre-affinity policy; reset returns to popularity.
 - Rating and reset writes cannot cross tenant boundaries.
 - A real production container build and browser-facing API flow pass.
@@ -221,7 +228,7 @@ Implementation notes:
 - The model sidecar validates and loads the manifest once during lifespan
   startup. Per request it only retrieves candidates, reads tenant-keyed Redis
   features, and predicts. The API sends the current RLS-scoped history so a
-  newly rated item is excluded immediately even before the next materialization.
+  newly rated item is excluded after commit even before the next materialization.
 
 ### Bundle D6 — Audit logging and synthetic load gate
 
@@ -245,9 +252,10 @@ Acceptance proof:
 Implementation notes:
 
 - `recommendation_audits` is forced-RLS and written inside the same
-  tenant-scoped request transaction as serving reads. An insert failure fails
-  the request; the successful transaction commit runs immediately after the
-  response body is flushed so WAL fsync is not counted as network latency.
+  tenant-scoped request transaction as serving reads. ADR 0012 moved successful
+  transaction commit before the response: an audit or mutation commit failure
+  can no longer follow a reported 2xx. WAL durability is therefore inside the
+  response SLO and must remain covered by the authenticated load gate.
 - Learned audits retain each returned score and the exact eight online feature
   values used by LightGBM. Cold and degraded paths record explicit fallback
   reasons and empty feature snapshots rather than pretending the ranker ran.
@@ -345,11 +353,15 @@ Explicitly deferred to later phases:
 - [x] Feast/Redis feature path and parity test.
 - [x] Learned two-stage model serving.
 - [x] Audit logging and k6 latency gate.
-- [ ] Recorded, repeatable portfolio walkthrough.
+- [ ] Baseline screenshots captured before the first visual implementation change.
+- [ ] Movie-discovery Discover → Browse → Library → feedback loop passes its finish gate.
+- [ ] Recorded, repeatable portfolio walkthrough of the finished product loop.
 
 ## Immediate next step
 
-Record the repeatable portfolio walkthrough from `docs/demo-runbook.md`,
-including one learned response, its prediction audit, the cold-start fallback,
-and the smoke-load summary. Then continue Phase 3 with ADR 0011's programmatic
-cold-start cohorts.
+Capture the baseline evidence specified in `docs/frontend/baseline-evidence.md`,
+then review ADR 0012 and implement the identity/feedback correctness foundation
+from `docs/frontend/implementation-plan.md`. Build the movie-discovery vertical
+slices against those contracts and record the final walkthrough from
+`docs/demo-runbook.md` only after the Discover → Library → feedback → refreshed
+prediction loop passes its browser, isolation, accessibility, and load gates.
