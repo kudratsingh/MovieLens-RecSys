@@ -168,10 +168,11 @@ the design rather than hidden inside implementation:
   switching is an explicit role-gated demo capability until `/me` ownership is
   implemented.
 - **Browser auth:** the API audience/calling-client contract now accepts the
-  intended `movielens-web` PKCE token while rejecting unrelated clients. The
-  remaining browser path needs server-side BFF session/token handling,
-  refresh/logout, CSRF/origin checks, and a tested internal/public issuer
-  arrangement.
+  intended `movielens-web` PKCE token while rejecting unrelated clients.
+  Bundle 1 now provides the server-owned encrypted session, refresh/logout,
+  CSRF/origin checks, pinned public issuer, internal Compose routing, and a
+  bypass-disabled browser proof. `/me` ownership remains separate from the
+  explicitly role-gated persona mode.
 - **Independent loading:** Discover, Browse, Library, and technical evidence
   need separate BFF resources and error boundaries. Page-shaped fan-out must be
   load tested because each authenticated API request currently holds a database

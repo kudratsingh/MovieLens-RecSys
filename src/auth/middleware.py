@@ -106,6 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         jwks: JwksCache,
         app_engine: Engine,
         expected_audience: str,
+        expected_issuer_base_url: str | None = None,
         allowed_authorized_parties: tuple[str, ...] | None = None,
         dev_auth_bypass: bool = False,
         dev_bypass_tenant: str = "default",
@@ -115,6 +116,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._jwks = jwks
         self._engine = app_engine
         self._expected_audience = expected_audience
+        self._expected_issuer_base_url = (
+            expected_issuer_base_url or "http://localhost:8080"
+        ).rstrip("/")
         self._allowed_authorized_parties = frozenset(
             allowed_authorized_parties or (expected_audience,)
         )
@@ -244,6 +248,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             raise UnauthenticatedError("token has no iss claim")
 
         realm = self._realm_from_issuer(issuer)
+        expected_issuer = f"{self._expected_issuer_base_url}/realms/{realm}"
+        if issuer != expected_issuer:
+            raise UnauthenticatedError("token issuer is not a trusted Keycloak realm URL")
 
         signing_jwk = self._jwks.find_signing_key(realm, kid)
         if signing_jwk is None:

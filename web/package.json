@@ -8,15 +8,20 @@
     "start": "next start -p 3001",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts",
+    "evidence:baseline": "playwright test tests/e2e/capture-baseline.spec.ts",
     "api:types": "openapi-typescript ../docs/api/openapi.json -o lib/api.generated.ts",
     "api:types:check": "node scripts/check-api-types.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
+    "next-auth": "^5.0.0-beta.32",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -25,6 +30,7 @@
     "eslint-config-next": "16.2.6",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }

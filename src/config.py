@@ -73,7 +73,14 @@ class Settings(BaseSettings):
 
     # --- Auth (Keycloak, added in Bundle #1b) --------------------------------
 
+    # Internal URL used by the API to fetch discovery/JWKS. In Compose this is
+    # the service DNS name; it is deliberately separate from the issuer URL
+    # embedded in browser-facing tokens.
     keycloak_base_url: str = "http://localhost:8080"
+    # Public origin Keycloak writes into the token issuer claim. Signature
+    # verification is not sufficient without pinning this trusted issuer
+    # origin: a same-key token must not be able to invent another issuer URL.
+    keycloak_public_base_url: str = "http://localhost:8080"
     # JWKS cache TTL in seconds. ADR 0007 §risks pins 5 minutes: long
     # enough that we're not fetching JWKS every request, short enough
     # that a Keycloak-side key rotation propagates within one TTL.

@@ -24,7 +24,7 @@ implementation claim.
 | Catalog | The shared MovieLens catalog contains 62,423 titles; user rating state can be overlaid | Endpoint returns at most 100 ID-ordered rows with no poster/year/search/filter/sort/cursor/detail contract |
 | Demo catalog | Reviewed 24-title fixture gives deterministic demos | Merely adding titles does not add them to prediction artifacts or popularity coverage |
 | Metadata | TMDB is bounded, cached, and failure-tolerant for small recommendation sets | Cache is per process and live fan-out can block; it is unsuitable for a large poster grid |
-| Browser auth | Keycloak now gives both `movielens-api` and `movielens-web` tokens the API audience; FastAPI validates audience plus calling client, rejects unregistered realms, and role-gates browser persona selection | BFF session, refresh/logout, CSRF, Compose issuer routing, and a bypass-disabled browser E2E remain |
+| Browser auth | Keycloak gives both callers the API audience; FastAPI pins the public issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly session cookies, refresh/logout, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
 | BFF loading | The current dashboard proxy fetches recommendations, history, and catalog concurrently; TypeScript types are now generated from committed OpenAPI | One failed request still fails the entire dashboard and BFF bodies are not yet runtime validated |
 | Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit | Other reads and mutations have no generic request audit or retention policy |
 | Performance | Authenticated recommendation k6 gate enforces p99 below 100 ms for its pinned workload | It does not measure page-shaped BFF fan-out, real poster enrichment, catalog paging, or mutation-plus-refresh |
@@ -75,7 +75,7 @@ It must not say:
 
 ### Identity and browser session
 
-The target browser flow is:
+The implemented browser flow is:
 
 ```text
 browser
@@ -90,6 +90,11 @@ Normal product resources should use `/me/...` after a tenant-scoped mapping
 from OIDC subject to internal user exists. The portfolio persona selector may
 continue under role-gated target-user routes. Every request must also reject a
 realm that lacks a registered tenant.
+
+The checked-in browser E2E exercises the seeded demo actor and the real PKCE
+callback with API bypass disabled. Unit tests separately force access-token
+refresh success and rejection, and mutation tests pin Origin plus Auth.js
+double-submit CSRF validation.
 
 ### Catalog and movie detail
 

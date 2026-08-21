@@ -60,6 +60,10 @@ Thumbs.db
 *.log
 logs/
 
+# Browser-test runtime artifacts (reviewed evidence under docs/ is committed).
+web/test-results/
+web/playwright-report/
+
 # Feast registry is derived by `feast apply` / the materializer.
 src/features/feast_repo/data/registry.db
 

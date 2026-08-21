@@ -337,6 +337,7 @@ app.add_middleware(
     jwks=_jwks,
     app_engine=_app_engine,
     expected_audience=_settings.keycloak_audience,
+    expected_issuer_base_url=_settings.keycloak_public_base_url,
     allowed_authorized_parties=_settings.keycloak_authorized_parties,
     dev_auth_bypass=_settings.dev_auth_bypass,
     dev_bypass_tenant=_settings.dev_bypass_tenant,

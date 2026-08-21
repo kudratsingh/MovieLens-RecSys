@@ -56,9 +56,39 @@ def wait_for_readiness(
             raise DemoSmokeError(f"{name} is not ready at {url}: {last_error}")
 
 
-def run_behavior_smoke(client: httpx.Client, *, web_url: str) -> SmokeSummary:
-    base_url = web_url.rstrip("/")
-    personas_payload = _get_json(client, f"{base_url}/api/personas", "persona API")
+def run_behavior_smoke(
+    client: httpx.Client,
+    *,
+    web_url: str,
+    api_url: str | None = None,
+    keycloak_url: str | None = None,
+) -> SmokeSummary:
+    """Check warm/cold behavior through the authenticated API.
+
+    ``web_url`` remains the backwards-compatible fixture path for unit tests.
+    The real Compose smoke supplies ``api_url`` plus ``keycloak_url`` and uses
+    a short-lived confidential service token; browser-session behavior is
+    covered separately by Playwright.
+    """
+    if (api_url and keycloak_url) or (not api_url and not keycloak_url):
+        pass
+    else:
+        raise DemoSmokeError("api_url and keycloak_url must be supplied together")
+
+    direct_api = api_url is not None
+    base_url = (api_url or web_url).rstrip("/")
+    headers = (
+        {"Authorization": f"Bearer {service_access_token(client, keycloak_url)}"}
+        if direct_api and keycloak_url
+        else None
+    )
+    persona_path = "/personas" if direct_api else "/api/personas"
+    personas_payload = _get_json(
+        client,
+        f"{base_url}{persona_path}",
+        "persona API",
+        headers=headers,
+    )
     persona_items = _require_list(personas_payload, "items", "persona API")
     by_slug = {
         str(item["slug"]): item
@@ -70,8 +100,20 @@ def run_behavior_smoke(client: httpx.Client, *, web_url: str) -> SmokeSummary:
     if missing:
         raise DemoSmokeError(f"persona API is missing required personas: {missing}")
 
-    action = _dashboard(client, base_url, int(by_slug["action-fan"]["user_id"]))
-    cold = _dashboard(client, base_url, int(by_slug["cold-start"]["user_id"]))
+    action = _dashboard(
+        client,
+        base_url,
+        int(by_slug["action-fan"]["user_id"]),
+        direct_api=direct_api,
+        headers=headers,
+    )
+    cold = _dashboard(
+        client,
+        base_url,
+        int(by_slug["cold-start"]["user_id"]),
+        direct_api=direct_api,
+        headers=headers,
+    )
     action_history = _dashboard_items(action, "history")
     action_recommendations = _dashboard_items(action, "recommendations")
     cold_history = _dashboard_items(cold, "history")
@@ -107,8 +149,35 @@ def run_behavior_smoke(client: httpx.Client, *, web_url: str) -> SmokeSummary:
     )
 
 
-def _dashboard(client: httpx.Client, base_url: str, user_id: int) -> dict[str, Any]:
-    return _get_json(client, f"{base_url}/api/users/{user_id}", f"dashboard user {user_id}")
+def _dashboard(
+    client: httpx.Client,
+    base_url: str,
+    user_id: int,
+    *,
+    direct_api: bool,
+    headers: dict[str, str] | None,
+) -> dict[str, Any]:
+    if not direct_api:
+        return _get_json(
+            client,
+            f"{base_url}/api/users/{user_id}",
+            f"dashboard user {user_id}",
+            headers=headers,
+        )
+    return {
+        "recommendations": _get_json(
+            client,
+            f"{base_url}/users/{user_id}/recommendations?limit=8",
+            f"recommendations user {user_id}",
+            headers=headers,
+        ),
+        "history": _get_json(
+            client,
+            f"{base_url}/users/{user_id}/history?limit=8",
+            f"history user {user_id}",
+            headers=headers,
+        ),
+    }
 
 
 def _dashboard_items(payload: dict[str, Any], section: str) -> list[dict[str, Any]]:
@@ -135,9 +204,53 @@ def _require_list(payload: dict[str, Any], key: str, source: str) -> list[dict[s
     return value
 
 
-def _get_json(client: httpx.Client, url: str, name: str) -> dict[str, Any]:
+def service_access_token(client: httpx.Client, keycloak_url: str) -> str:
+    url = f"{keycloak_url.rstrip('/')}/realms/demo/protocol/openid-connect/token"
     try:
-        response = client.get(url)
+        response = client.post(
+            url,
+            data={
+                "client_id": "movielens-api",
+                "client_secret": "movielens-api-secret-dev-only",
+                "grant_type": "client_credentials",
+            },
+        )
+        response.raise_for_status()
+        token = response.json().get("access_token")
+    except (httpx.HTTPError, ValueError) as exc:
+        raise DemoSmokeError(f"Keycloak service token failed at {url}") from exc
+    if not isinstance(token, str) or not token:
+        raise DemoSmokeError("Keycloak service token response has no access_token")
+    return token
+
+
+def fetch_recent_audits(
+    client: httpx.Client,
+    *,
+    api_url: str,
+    keycloak_url: str,
+    user_id: int = 900000101,
+    limit: int = 3,
+) -> dict[str, Any]:
+    """Fetch recent demo audits with the same short-lived service identity."""
+    token = service_access_token(client, keycloak_url)
+    return _get_json(
+        client,
+        f"{api_url.rstrip('/')}/users/{user_id}/audits?limit={limit}",
+        f"audits user {user_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+def _get_json(
+    client: httpx.Client,
+    url: str,
+    name: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    try:
+        response = client.get(url, headers=headers)
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
@@ -153,6 +266,7 @@ def main() -> None:
     parser.add_argument("--web-url", default="http://localhost:3001")
     parser.add_argument("--keycloak-url", default="http://localhost:8080")
     parser.add_argument("--readiness-only", action="store_true")
+    parser.add_argument("--audits-only", action="store_true")
     args = parser.parse_args()
 
     with httpx.Client(timeout=5.0) as client:
@@ -165,7 +279,20 @@ def main() -> None:
         if args.readiness_only:
             print("Demo dependencies are ready: FastAPI, Next.js, and Keycloak.")
             return
-        summary = run_behavior_smoke(client, web_url=args.web_url)
+        if args.audits_only:
+            audits = fetch_recent_audits(
+                client,
+                api_url=args.api_url,
+                keycloak_url=args.keycloak_url,
+            )
+            print(json.dumps(audits, indent=2, sort_keys=True))
+            return
+        summary = run_behavior_smoke(
+            client,
+            web_url=args.web_url,
+            api_url=args.api_url,
+            keycloak_url=args.keycloak_url,
+        )
     print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
 
 

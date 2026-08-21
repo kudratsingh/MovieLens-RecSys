@@ -40,6 +40,8 @@ def test_defaults_match_docker_compose(clean_env: None) -> None:
     assert s.postgres_db == "movielens"
     assert s.postgres_port == 5432
     assert s.postgres_host == "localhost"
+    assert s.keycloak_base_url == "http://localhost:8080"
+    assert s.keycloak_public_base_url == "http://localhost:8080"
     assert s.keycloak_audience == "movielens-api"
     assert s.keycloak_authorized_parties == ("movielens-api", "movielens-web")
     assert s.keycloak_service_client_id == "movielens-api"

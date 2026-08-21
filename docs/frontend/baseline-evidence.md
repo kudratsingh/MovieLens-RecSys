@@ -1,16 +1,16 @@
 # Movie-discovery frontend: baseline evidence
 
-**Status:** Source audit complete; rendered screenshot capture pending a running
-seeded demo and browser harness
+**Status:** Source audit and authenticated rendered screenshot matrix complete
 
 **Baseline revision:** `c73b967e17ebbba1d31673cbd191d9c1706e6b1d`
 
 **Date:** 2026-08-21
 
-**Capture attempt:** Browser control reported no available browser on
-2026-08-21. No rendered evidence is claimed from that attempt. Connect the
-in-app browser or browser extension, start and seed the demo, then capture the
-matrix below before the first visual implementation change.
+**Capture:** Playwright captured the seeded, bypass-disabled Keycloak demo on
+2026-08-21. The matrix is committed under
+[`docs/frontend/evidence/baseline/`](evidence/baseline/). The authenticated
+wrapper adds actor/logout controls, while the dashboard under evaluation
+remains the pre-redesign rating-first baseline.
 
 ## Purpose
 
@@ -35,8 +35,8 @@ finish gate.
 
 ## Baseline screenshot matrix
 
-Capture the current seeded demo before the first visual implementation change.
-Use stable data and disable nondeterministic animation.
+The current seeded demo was captured before the first visual redesign. Stable
+persona fixtures were used and no nondeterministic animation is present.
 
 | Viewport | Persona/state | Required evidence |
 |---|---|---|

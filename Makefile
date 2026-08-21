@@ -1,7 +1,7 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-smoke demo-load-nightly demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -71,6 +71,12 @@ web-lint:
 web-typecheck:
 	cd web && npm run typecheck
 
+web-test:
+	cd web && npm test
+
+web-e2e:
+	cd web && npm run test:e2e
+
 web-build:
 	cd web && npm run build
 
@@ -137,7 +143,7 @@ demo-smoke:
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-audits:
-	$(DEMO_COMPOSE) run --rm demo-setup python -c "import json, httpx; response = httpx.get('http://api:8000/users/900000101/audits?limit=3'); response.raise_for_status(); print(json.dumps(response.json(), indent=2))"
+	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --audits-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
 demo-load-smoke:
 	K6_VERSION=$(K6_VERSION) LOAD_PROFILE=smoke K6_PROMETHEUS_RW_PUSH_INTERVAL=2m $(DEMO_COMPOSE) --profile load up -d --force-recreate --wait --wait-timeout 120 feature-server model-server api-load
