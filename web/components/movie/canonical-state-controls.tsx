@@ -144,44 +144,52 @@ export function CanonicalStateControls({
         </p>
       ) : null}
 
-      {display.watched ? (
-        <fieldset className="canonical-rating">
-          <legend>Your rating</legend>
-          <div className="canonical-rating-stars">
-            {STARS.map((value) => (
-              <button
-                aria-disabled={busy}
-                aria-label={`${value} ${value === 1 ? "star" : "stars"} for ${title}`}
-                aria-pressed={display.rating === value}
-                className={
-                  display.rating !== null && value <= display.rating
-                    ? "rating-active"
-                    : undefined
-                }
-                key={value}
-                onClick={act({ resource: "rating", method: "PUT", rating: value })}
-                type="button"
-              >
-                <Icon name="star" />
-              </button>
-            ))}
-            {display.rating !== null ? (
-              <button
-                aria-disabled={busy}
-                className="button-quiet"
-                onClick={act({ resource: "rating", method: "DELETE" })}
-                type="button"
-              >
-                Clear rating
-              </button>
-            ) : null}
-          </div>
-          <p className="canonical-rating-note">
-            A rating records watched history. Star magnitude is display feedback
-            today, not a graded training signal.
-          </p>
-        </fieldset>
-      ) : null}
+      {/*
+        The rating panel is always reachable, not gated behind "Mark watched".
+        Setting a rating *is* recording a watched interaction on the API side,
+        so hiding the stars until watched would make the shorter path to the
+        same committed state unreachable — and would leave a viewer who wants
+        to rate something clicking two buttons to say one thing. Watchlist
+        stays the primary action for an unseen movie; this sits below it and
+        says plainly what a star commits to.
+      */}
+      <fieldset className="canonical-rating">
+        <legend>Your rating</legend>
+        <div className="canonical-rating-stars">
+          {STARS.map((value) => (
+            <button
+              aria-disabled={busy}
+              aria-label={`${value} ${value === 1 ? "star" : "stars"} for ${title}`}
+              aria-pressed={display.rating === value}
+              className={
+                display.rating !== null && value <= display.rating
+                  ? "rating-active"
+                  : undefined
+              }
+              key={value}
+              onClick={act({ resource: "rating", method: "PUT", rating: value })}
+              type="button"
+            >
+              <Icon name="star" />
+            </button>
+          ))}
+          {display.rating !== null ? (
+            <button
+              aria-disabled={busy}
+              className="button-quiet"
+              onClick={act({ resource: "rating", method: "DELETE" })}
+              type="button"
+            >
+              Clear rating
+            </button>
+          ) : null}
+        </div>
+        <p className="canonical-rating-note">
+          {display.watched
+            ? "Star magnitude is display feedback today, not a graded training signal."
+            : "Rating this records it as watched history. Star magnitude is display feedback today, not a graded training signal."}
+        </p>
+      </fieldset>
 
       {/*
         Two regions rather than one whose role flips: a live region has to be

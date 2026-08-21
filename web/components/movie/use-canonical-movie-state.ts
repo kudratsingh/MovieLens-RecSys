@@ -89,9 +89,12 @@ function successMessage(action: MovieStateAction, title: string): string {
         ? `Dismissed ${title}. It is excluded from recommendations and can be undone.`
         : `Restored ${title}. It can be recommended again.`;
     case "rating":
+      // "Rating saved." leads on purpose: it is the phrase the Library journey
+      // waits on, and a confirmation that starts by naming what happened reads
+      // better than one that starts by qualifying it.
       return action.method === "PUT"
-        ? `Saved ${action.rating} stars for ${title}. A rating records watched history; star magnitude is not a graded model signal.`
-        : `Removed your rating for ${title}. It stays in watched history.`;
+        ? `Rating saved. ${action.rating} ${action.rating === 1 ? "star" : "stars"} for ${title} — a rating records watched history, and star magnitude is not a graded model signal.`
+        : `Rating removed. ${title} stays in watched history.`;
   }
 }
 

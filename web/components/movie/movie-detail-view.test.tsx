@@ -233,18 +233,66 @@ describe("canonical state controls", () => {
     );
   });
 
-  it("reveals rating only after watched and keeps the rating claim narrow", async () => {
-    stubFetch(committed({ watched_at: "2026-08-21T10:00:00Z", revision: 5 }));
+  it("offers rating before the movie is watched and says what a star commits to", async () => {
+    const { calls } = stubFetch(
+      committed({
+        watched_at: "2026-08-21T10:00:00Z",
+        rating: 4,
+        rating_updated_at: "2026-08-21T10:00:00Z",
+        revision: 5,
+      }),
+    );
     const { container } = renderDetail({ state: movieState });
 
-    expect(screen.queryByRole("group", { name: "Your rating" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Mark watched" }));
-
-    expect(await screen.findByRole("group", { name: "Your rating" })).toBeVisible();
-    expect(
-      screen.getByText(/Star magnitude is display feedback today/),
-    ).toBeVisible();
+    // Rating is the shorter path to the same committed state, so it is not
+    // hidden behind "Mark watched" — but it must say what it will record.
+    const panel = screen.getByRole("group", { name: "Your rating" });
+    expect(panel).toBeVisible();
+    expect(panel).toHaveTextContent("Rating this records it as watched history");
     expect(await axe(container)).toHaveNoViolations();
+
+    // The star names are the ones the service-backed journeys address.
+    await userEvent.click(
+      screen.getByRole("button", { name: "4 stars for The Handmaiden" }),
+    );
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toContain("/movies/101/rating?expected_revision=4");
+    expect(screen.getByRole("status")).toHaveTextContent("Rating saved.");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "star magnitude is not a graded model signal",
+    );
+  });
+
+  it("narrows the rating note once the movie is already watched", () => {
+    renderDetail({
+      state: { ...movieState, watched_at: "2026-08-01T10:00:00Z" },
+    });
+
+    const panel = screen.getByRole("group", { name: "Your rating" });
+    expect(panel).toHaveTextContent(
+      "Star magnitude is display feedback today, not a graded training signal.",
+    );
+    expect(panel).not.toHaveTextContent("records it as watched history");
+  });
+
+  it("keeps removing a rating distinct from removing watched history", async () => {
+    const { calls } = stubFetch(committed({ rating: null, revision: 5 }));
+    renderDetail({
+      state: {
+        ...movieState,
+        watched_at: "2026-08-01T10:00:00Z",
+        rating: 4,
+        revision: 4,
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear rating" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Rating removed. The Handmaiden stays in watched history.",
+    );
   });
 
   it("confirms before removing a watched interaction", async () => {
