@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { signInThroughKeycloak } from "./keycloak";
+import { COLD_START, clearDismissal, resetColdStart } from "./personas";
 
 /**
  * The service-backed browser journeys, run against the bypass-disabled demo
@@ -18,13 +19,14 @@ import { signInThroughKeycloak } from "./keycloak";
  * | 900000103 Eclectic Viewer | Browse — watchlist only               |
  * | 900000104 Cold Start      | PKCE, then Quick Picks                |
  *
- * Cold Start is the one deliberate share, and the order matters. The PKCE
- * journey's cleanup is a whole-persona reset — `DELETE /ratings` clears every
- * state row the persona has — which is only safe on the one persona the seeder
- * leaves empty. Running it first therefore hands Quick Picks exactly the
- * zero-signal state its cold-start policy assertion needs. Nothing else may
- * write to 900000104, and nothing may leave it at or above the five watched
- * signals that end the cold-start policy.
+ * Cold Start is the one deliberate share, and its rule is the strict one:
+ * **every journey that touches it hands it on with zero positive signals**, in
+ * a `finally`, tolerating whatever it found on arrival. Not "below five" — the
+ * seeder leaves this persona empty, the run's cold-start assertions are about a
+ * persona with nothing to learn from, and the k6 page workload's teardown reads
+ * that emptiness back at the end. `resetColdStart` in `./personas` is the only
+ * restore that achieves it, and its comment explains why the obvious candidates
+ * do not.
  *
  * The destructive rating and history work lives on Action Fan for the same
  * reason: it is a warm persona whose seeded history does not contain the movie
@@ -32,15 +34,17 @@ import { signInThroughKeycloak } from "./keycloak";
  *
  * Each journey below restores what it changed and tolerates finding the
  * persona already changed, so the file can be re-run against a stack a
- * previous run left mid-flight.
+ * previous run left mid-flight. `persona-hygiene.spec.ts` runs last and fails
+ * the run if any of them forgot.
  */
 
 test("real Keycloak PKCE session reaches the role-gated demo API and logs out", async ({
   page,
 }) => {
-  // Cold Start: see the ownership note above. This is the only journey allowed
-  // to run the whole-persona reset below.
-  const personaId = 900000104;
+  // Cold Start: see the ownership note above. This journey rates a title, and
+  // a rating implies watched, so it owes the run a zero-signal restore.
+  const personaId = COLD_START;
+  const subject = 1;
   await signInThroughKeycloak(page);
 
   // The front door hands a signed-in viewer to the product rather than to the
@@ -71,54 +75,75 @@ test("real Keycloak PKCE session reaches the role-gated demo API and logs out", 
   await expect(page.getByText("Recorded persona")).toBeVisible();
   await page.goto("/");
 
-  const durableMutation = await page.evaluate(async (userId) => {
-    const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((body: { csrfToken: string }) => body.csrfToken);
-    const headers = { "Content-Type": "application/json", "x-csrf-token": csrfToken };
-    await fetch(`/api/users/${userId}/ratings`, { method: "DELETE", headers });
-    const mutation = await fetch(`/api/users/${userId}/ratings`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ movie_id: 1, rating: 4 }),
-    });
-    const [movieDetail, immediateRead] = await Promise.all([
-      fetch(`/api/users/${userId}/movies/1`, { cache: "no-store" }).then((response) =>
-        response.json(),
-      ),
-      fetch(`/api/users/${userId}`, { cache: "no-store" }).then((response) =>
-        response.json(),
-      ),
-    ]);
-    await fetch(`/api/users/${userId}/ratings`, { method: "DELETE", headers });
-    return {
-      mutationStatus: mutation.status,
-      rating: movieDetail.item.state?.rating,
-      historyContainsMovie: immediateRead.history.items.some(
-        (item: { movie_id: number }) => item.movie_id === 1,
-      ),
-    };
-  }, personaId);
-  expect(durableMutation).toEqual({
-    mutationStatus: 200,
-    rating: 4,
-    historyContainsMovie: true,
-  });
+  // Start from the persona's seeded state rather than from whatever a previous
+  // run left on this title.
+  await resetColdStart(page);
 
-  // The same write as the one that just succeeded, minus the CSRF token. It is
-  // refused in the BFF before it can reach the API, so it is deliberately
-  // aimed at this journey's own persona: borrowing another journey's persona
-  // would suggest the refusal was about who is being written to, and would put
-  // a second writer on a row this file promises not to touch.
-  const rejectedMutation = await page.evaluate(async (userId) => {
-    const response = await fetch(`/api/users/${userId}/ratings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ movie_id: 1, rating: 4 }),
+  let restored: number[] = [];
+  try {
+    const durableMutation = await page.evaluate(
+      async ({ userId, movieId }) => {
+        const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
+          .then((response) => response.json())
+          .then((body: { csrfToken: string }) => body.csrfToken);
+        const headers = { "Content-Type": "application/json", "x-csrf-token": csrfToken };
+        const mutation = await fetch(`/api/users/${userId}/ratings`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ movie_id: movieId, rating: 4 }),
+        });
+        const [movieDetail, immediateRead] = await Promise.all([
+          fetch(`/api/users/${userId}/movies/${movieId}`, { cache: "no-store" }).then(
+            (response) => response.json(),
+          ),
+          fetch(`/api/users/${userId}`, { cache: "no-store" }).then((response) =>
+            response.json(),
+          ),
+        ]);
+        return {
+          mutationStatus: mutation.status,
+          rating: movieDetail.item.state?.rating,
+          historyContainsMovie: immediateRead.history.items.some(
+            (item: { movie_id: number }) => item.movie_id === movieId,
+          ),
+        };
+      },
+      { userId: personaId, movieId: subject },
+    );
+    expect(durableMutation).toEqual({
+      mutationStatus: 200,
+      rating: 4,
+      historyContainsMovie: true,
     });
-    return response.status;
-  }, personaId);
-  expect(rejectedMutation).toBe(403);
+
+    // The same write as the one that just succeeded, minus the CSRF token. It
+    // is refused in the BFF before it can reach the API, so it is deliberately
+    // aimed at this journey's own persona: borrowing another journey's persona
+    // would suggest the refusal was about who is being written to, and would
+    // put a second writer on a row this file promises not to touch.
+    const rejectedMutation = await page.evaluate(
+      async ({ userId, movieId }) => {
+        const response = await fetch(`/api/users/${userId}/ratings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ movie_id: movieId, rating: 4 }),
+        });
+        return response.status;
+      },
+      { userId: personaId, movieId: subject },
+    );
+    expect(rejectedMutation).toBe(403);
+  } finally {
+    // Before the sign-out below, which takes the session this needs with it.
+    restored = await resetColdStart(page);
+  }
+  // The rating above implied a watched interaction, so the restore had work to
+  // do. Asserting that it did it is what stops this journey from quietly
+  // handing Quick Picks — and the k6 workload after it — a persona with one
+  // signal on it again.
+  expect(restored, "the Cold Start restore did not remove the rated title").toEqual([
+    subject,
+  ]);
 
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
@@ -330,10 +355,15 @@ test("search, cursor continuation, detail, and watchlist survive a round trip", 
  * the title from the next recommendation set, undo restores its eligibility,
  * and a watched signal moves the cold-start count only once the API has
  * committed it.
+ *
+ * Spending that signal is the point of the journey, so putting it back is not
+ * optional bookkeeping: the persona's exit state is zero positive signals, and
+ * the restore is in a `finally` because a failure half way through the deck
+ * would otherwise leave the signal behind.
  */
 test("Quick Picks decisions change what serving returns", async ({ page }) => {
   test.slow();
-  const userId = 900000104;
+  const userId = COLD_START;
   await signInThroughKeycloak(page);
 
   async function recommendedIds(): Promise<number[]> {
@@ -361,53 +391,50 @@ test("Quick Picks decisions change what serving returns", async ({ page }) => {
 
   const before = await signalCount();
 
-  // The journeys above mutate this same persona, so the top pick may already
-  // carry a state row the queue cannot see — a recommendation carries no
-  // revision, so a first write can only assert zero. That conflict is what the
-  // deck is built to correct: it re-reads the canonical record, and the next
-  // attempt asserts a revision the server issued. Retrying once exercises that
-  // path rather than papering over it.
-  const notForMe = page.getByRole("button", { name: /Not for me/ });
-  const status = page.getByRole("status");
-  await notForMe.click();
-  await expect(status).not.toBeEmpty();
-  if (!((await status.textContent()) ?? "").includes(`${title}: not for me saved.`)) {
-    await expect(page.locator(".quick-picks-error")).toContainText("try again");
+  let restored: number[] = [];
+  try {
+    // The journeys above mutate this same persona, so the top pick may already
+    // carry a state row the queue cannot see — a recommendation carries no
+    // revision, so a first write can only assert zero. That conflict is what
+    // the deck is built to correct: it re-reads the canonical record, and the
+    // next attempt asserts a revision the server issued. Retrying once
+    // exercises that path rather than papering over it.
+    const notForMe = page.getByRole("button", { name: /Not for me/ });
+    const status = page.getByRole("status");
     await notForMe.click();
+    await expect(status).not.toBeEmpty();
+    if (!((await status.textContent()) ?? "").includes(`${title}: not for me saved.`)) {
+      await expect(page.locator(".quick-picks-error")).toContainText("try again");
+      await notForMe.click();
+    }
+    await expect(status).toContainText(`${title}: not for me saved.`);
+    expect(await recommendedIds()).not.toContain(movieId);
+    // A dismissal is an exclusion, never a positive signal.
+    expect(await signalCount()).toBe(before);
+
+    // Located by class: a MovieLens title carries parentheses, which a name
+    // pattern would read as a group.
+    await page.locator("button.quick-picks-undo").click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+    expect(await recommendedIds()).toContain(movieId);
+    expect(await signalCount()).toBe(before);
+
+    // The panel caps its display at the threshold, so the expectation does too.
+    const expected = Math.min(before + 1, 5);
+    await page.getByRole("button", { name: /^Watched/ }).click();
+    await expect(page.locator(".quick-pick-progress-count")).toHaveText(
+      `${expected} of 5 positive watched signals`,
+    );
+    expect(await recommendedIds()).not.toContain(movieId);
+  } finally {
+    // Undo already cleared the dismissal on the way through; this covers the
+    // runs that failed before reaching it.
+    await clearDismissal(page, movieId);
+    restored = await resetColdStart(page);
   }
-  await expect(status).toContainText(`${title}: not for me saved.`);
-  expect(await recommendedIds()).not.toContain(movieId);
-  // A dismissal is an exclusion, never a positive signal.
-  expect(await signalCount()).toBe(before);
-
-  // Located by class: a MovieLens title carries parentheses, which a name
-  // pattern would read as a group.
-  await page.locator("button.quick-picks-undo").click();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
-  expect(await recommendedIds()).toContain(movieId);
-  expect(await signalCount()).toBe(before);
-
-  // The panel caps its display at the threshold, so the expectation does too.
-  const expected = Math.min(before + 1, 5);
-  await page.getByRole("button", { name: /^Watched/ }).click();
-  await expect(page.locator(".quick-pick-progress-count")).toHaveText(
-    `${expected} of 5 positive watched signals`,
+  // Zero positive signals is the persona's exit state, and the title this
+  // journey deliberately watched is the one the restore had to find.
+  expect(restored, "the Cold Start restore did not remove the watched pick").toContain(
+    movieId,
   );
-  expect(await recommendedIds()).not.toContain(movieId);
-
-  // Leave the persona as it was found so the journey can be run again.
-  const cleanup = await page.evaluate(
-    async ([user, movie]) => {
-      const csrfToken = await fetch("/api/auth/csrf", { cache: "no-store" })
-        .then((response) => response.json())
-        .then((body: { csrfToken: string }) => body.csrfToken);
-      const response = await fetch(`/api/users/${user}/movies/${movie}/watched`, {
-        method: "DELETE",
-        headers: { "x-csrf-token": csrfToken, "Idempotency-Key": crypto.randomUUID() },
-      });
-      return response.status;
-    },
-    [userId, movieId],
-  );
-  expect(cleanup).toBe(200);
 });

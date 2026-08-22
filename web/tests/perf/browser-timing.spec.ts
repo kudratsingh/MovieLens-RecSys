@@ -59,9 +59,13 @@ import {
  * | 900000104 Cold Start      | PKCE, then Quick Picks  | **reads only**              |
  *
  * Cold Start is measured and never written. The ownership note requires it to
- * stay below five watched signals, and Quick Picks is the one route whose whole
- * point is that counter: classifying a movie there to time the animation would
- * spend the signal the journey is asserting on.
+ * be handed on at *zero* watched signals — not merely below five — and Quick
+ * Picks is the one route whose whole point is that counter: classifying a movie
+ * there to time the animation would spend a signal this suite has no `finally`
+ * to give back, and would break the run's last honest reading of an empty
+ * persona. This suite runs after the journeys, so `persona-hygiene.spec.ts` has
+ * already certified that zero; leaving it at zero is this suite's whole
+ * obligation.
  */
 
 const LIBRARY_PERSONA = 900000101;

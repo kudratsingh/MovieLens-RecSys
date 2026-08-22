@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { signInThroughKeycloak } from "./keycloak";
+import { COLD_START, clearDismissal, resetColdStart } from "./personas";
 
 /**
  * The Bundle 7 service-backed finish gate.
@@ -26,10 +27,14 @@ import { signInThroughKeycloak } from "./keycloak";
  * | 900000104 Cold Start      | 2, 8 — the fallback label, dismissal and undo |
  *
  * Cold Start is read-only apart from one dismissal that is undone in the same
- * step, so it is handed on at the zero positive signals its cold-start policy
- * assertion depends on. Every write below is reversed, and each reversal
- * tolerates finding the persona already restored, so the file can be re-run
- * against a stack a previous run left mid-flight.
+ * step, and its exit state is the strict one the whole run depends on: **zero
+ * positive signals**, not merely fewer than five. Step 8 restores it in a
+ * `finally` even though a dismissal is not a positive signal, because a failure
+ * part way through the deck can leave one behind. Every write below is
+ * reversed, each reversal tolerates finding the persona already restored so the
+ * file can be re-run against a stack a previous run left mid-flight, and
+ * `persona-hygiene.spec.ts` runs after this file and fails the run if any
+ * journey forgot.
  *
  * **Failure injection.** Step 9 uses Playwright `route` interception at the BFF
  * boundary rather than a fixture: the page, the components, and the resource
@@ -50,7 +55,6 @@ import { signInThroughKeycloak } from "./keycloak";
 const DRAMA_FAN = 900000102;
 const ACTION_FAN = 900000101;
 const ECLECTIC = 900000103;
-const COLD_START = 900000104;
 
 /** The whole journey is one test, and it signs in once. */
 test.describe.configure({ mode: "serial" });
@@ -513,27 +517,40 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     Number(((await page.locator(".quick-pick-progress-count").textContent()) ?? "").trim().split(" ")[0]);
   const signalsBefore = await signalCount();
 
-  const notForMe = page.getByRole("button", { name: /Not for me/ });
-  const status = page.getByRole("status");
-  await notForMe.click();
-  await expect(status).not.toBeEmpty();
-  // A recommendation carries no revision, so a first write can only assert
-  // zero; if another journey already wrote this row the deck re-reads the
-  // canonical record and the retry asserts a revision the server issued.
-  if (!((await status.textContent()) ?? "").includes(`${pickTitle}: not for me saved.`)) {
-    await expect(page.locator(".quick-picks-error")).toContainText("try again");
+  try {
+    const notForMe = page.getByRole("button", { name: /Not for me/ });
+    const status = page.getByRole("status");
     await notForMe.click();
-  }
-  await expect(status).toContainText(`${pickTitle}: not for me saved.`);
-  expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
-    .not.toContain(pickId);
-  expect(await signalCount(), "a dismissal moved the positive signal count").toBe(signalsBefore);
+    await expect(status).not.toBeEmpty();
+    // A recommendation carries no revision, so a first write can only assert
+    // zero; if another journey already wrote this row the deck re-reads the
+    // canonical record and the retry asserts a revision the server issued.
+    if (!((await status.textContent()) ?? "").includes(`${pickTitle}: not for me saved.`)) {
+      await expect(page.locator(".quick-picks-error")).toContainText("try again");
+      await notForMe.click();
+    }
+    await expect(status).toContainText(`${pickTitle}: not for me saved.`);
+    expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
+      .not.toContain(pickId);
+    expect(await signalCount(), "a dismissal moved the positive signal count").toBe(
+      signalsBefore,
+    );
 
-  await page.locator("button.quick-picks-undo").click();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(pickTitle);
-  expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
-    .toContain(pickId);
-  expect(await signalCount()).toBe(signalsBefore);
+    await page.locator("button.quick-picks-undo").click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(pickTitle);
+    expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
+      .toContain(pickId);
+    expect(await signalCount()).toBe(signalsBefore);
+  } finally {
+    // Nothing above is meant to leave a positive signal, and on the happy path
+    // the undo has already put the dismissal back too. Both are restored anyway:
+    // a step that fails between the dismissal and the undo — or a deck control
+    // that classifies rather than dismisses — would otherwise hand the rest of
+    // the run a persona that is no longer empty, which is precisely the class of
+    // leak this file's ownership note promises not to produce.
+    await clearDismissal(page, pickId);
+    await resetColdStart(page);
+  }
 
   // ---------------------------------------------------------------- step 9 --
   // Expire auth, fail one upstream resource, fail poster metadata, and recover.
