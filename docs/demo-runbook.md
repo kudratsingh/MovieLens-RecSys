@@ -69,20 +69,79 @@ version-scoped feature cache cannot retain the previous snapshot.
 
 Open <http://localhost:3001>.
 
-1. Select **Action Fan**. Show the recent action/thriller history, top-eight
-   unseen recommendations, `item-item-cosine+lightgbm` policy, and the
-   `demo-itemitem-v1/demo-lgbm-v1` model version.
-2. Select **Drama Fan**. Point out the contrasting drama/romance history and
-   changed unseen set.
-3. Select **Eclectic Viewer**. Show the broader multi-genre taste signal.
-4. Select **Cold Start**. Confirm the history panel explicitly identifies the
-   zero-history state while recommendations still load.
-5. Give several movies 1–5 stars. Show the immediate history update, learned
-   policy, and refreshed unseen recommendations. Candidate generation consumes
-   the live history, so the newly seen movie is excluded without retraining.
-6. Use **Reset this profile** to return the selected persona to cold start.
-7. If a TMDB token is configured, point out the real posters and release years.
-   Otherwise show that the fallback artwork keeps the same flow usable.
+1. **Sign in.** The front door is the sign-in surface and nothing else — the demo
+   runs with the dev bypass disabled, so **Continue with Keycloak** starts the
+   real authorization-code + PKCE flow. Point out that the tokens stay in an
+   encrypted HttpOnly server session and never enter browser storage, and that
+   the signed-in actor is named separately from the MovieLens persona being
+   explored. After sign-in, `/` redirects to `/discover?userId=900000101`: the
+   product is the first thing a signed-in viewer meets, not a dashboard.
+2. **Discover, as Action Fan.** The featured movie leads and the ranked rail
+   follows. The policy label reads `Ranked by the learned model` for a warm
+   persona and `Popular while we learn` for a cold one — it follows the
+   `serving_policy` the response reported and is never inferred when the response
+   states it. Switch persona in the address (`?userId=900000104`) to show Cold
+   Start on the fallback label, with the five-signal routing rule stated as
+   policy rather than guessed at. Recommendations and watch history load as
+   independent regions, so a dead history query cannot take the movie decision
+   with it.
+3. **`Why this?`** Open the drawer beside the featured movie: the API's own item
+   reason, the serving policy, the model version, the tenant, and the correlation
+   ID — every row built only from a field the response actually carried, and a
+   missing field drops its row rather than blanking the panel. Then **Show
+   prediction audit** for the durable audit row and the online feature values.
+   That is two deliberate actions, neither on the server render, so the evidence
+   can never delay the first movie. The ranker score appears only inside this
+   disclosure, labelled as an uncalibrated ordering on the scale the response
+   named — never as a match percentage.
+4. **Browse, and back again.** Move to **Browse**. Type into `Search titles`, add
+   a genre and a decade, change the sort: each of those is written into the URL,
+   and each edit drops the cursor, because the endpoint binds a cursor to the
+   query that produced it. **Load more movies** appends the next page
+   de-duplicated, with no invented total. Open a movie, then use **Back to
+   Browse** — the accumulated window and the scroll position come back instead of
+   restarting at the top.
+5. **Movie state.** On the detail page use `Watchlist`, then `Mark watched`, then
+   a star rating, and point out what each one claims. Watchlist is
+   organizational and seeds no candidates. Watched is one positive interaction.
+   The panel says in as many words that star magnitude is display feedback today
+   rather than a graded training signal. Removing watched history is the only
+   destructive action, so it sits behind `Confirm removing <title> from watched
+   history` and states the consequence before it can be committed. `Not for me`
+   is a reversible exclusion — `Undo not for me` puts it back — and never becomes
+   a negative training label.
+6. **Library.** The **Rated**, **Watchlist**, and **History** tabs each load
+   independently, so one failing tab leaves the others and the ratings summary
+   readable. Find the title just rated. `Remove rating` is quiet, unconfirmed,
+   and leaves the movie in History; `Remove from history` is styled apart and
+   confirmed, because it destroys a signal rather than adding one. That
+   distinction is the one worth dwelling on — the two used to look like the same
+   button. The taste summary is labelled `live-ratings-v1` and presented as a
+   live read of current ratings, not as a model explanation.
+7. **Quick Picks.** Reach it from Discover's **Rate a few in Quick picks** link;
+   it is deliberately not a fourth navigation slot. One movie at a time, with
+   `Not for me` (J), `Watchlist` (K), `Watched` (L), and `Undo` (U) available
+   identically as buttons, keys, and swipes. The card advances only after the API
+   commits, so a failure keeps the card and returns focus to the control that
+   failed. The progress panel reads `<n> of 5 positive watched signals` and says
+   how many more are needed before learned serving can be used — it reports the
+   count the response carried and never announces a policy transition it has not
+   observed.
+8. **`/legacy`.** Follow the **Legacy dashboard** link in the shell footer. This
+   is the pre-redesign Phase 3 surface, kept as the documented rollback for the
+   cutover and labelled as such on screen. Its serving-contract panel reports the
+   `Serving policy`, `Learned ranking`, and model version the response actually
+   carried — or `Not read yet` — rather than the static `Popularity baseline`
+   claim that used to contradict the deployed router. It is also the only place
+   the four personas are offered as named chips; the product selects a persona by
+   URL.
+9. **Posters, and putting a persona back.** If a TMDB token is configured, point
+   out the real posters and release years; otherwise show that the deterministic
+   fallback artwork keeps the same flow usable. The product exposes no reset
+   control, so to return a persona to cold start use `Clear ratings` on
+   `/legacy`, or call `DELETE /users/{id}/ratings` directly — it drops every
+   durable movie-state row for that persona. `make demo-seed` restores all four
+   personas to the seeded fixture and is safe to re-run.
 
 ## Audit and latency proof
 
