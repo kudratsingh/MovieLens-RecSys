@@ -4,7 +4,7 @@
 
 A two-stage movie recommender on MovieLens 25M, built end-to-end with the engineering discipline of a production ML platform — ADR-gated decisions, time-respecting splits, stage-specific evaluation, and per-policy attribution. The point is the engineering around the model, not the leaderboard.
 
-**Status:** Phase 1 (foundation) complete · Phase 2 (two-stage offline) complete · Phase 3 (serving, auth, multi-tenancy) in progress.
+**Status:** Phase 1 (foundation) complete · Phase 2 (two-stage offline) complete · Phase 3 (serving, auth, multi-tenancy, synthetic load) in progress — the authenticated movie-discovery frontend is delivered and `/` is cut over to it.
 
 ## Architecture
 
@@ -39,7 +39,7 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item + LightGBM, persists prediction audits and durable multi-state feedback, exposes an authenticated cursor Library, and passes real Keycloak browser auth plus the k6 p99 gate; catalog/detail, remaining product routes, programmatic cold-start cohorts, and environment-specific Compose remain |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item + LightGBM, persists prediction audits and durable movie state, and passes real Keycloak browser auth, the pinned k6 p99 gate, page-shaped load budgets, and a browser timing gate. The movie-discovery frontend (Discover, Browse, movie detail, Library, Quick Picks) is delivered behind one shell and `/` serves it, with the pre-redesign dashboard retained at `/legacy` pending a participant-backed finish-gate PASS. Programmatic cold-start cohorts, per-tenant champion routing, generic request audits, a rate-limiting decision, and environment-specific Compose remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
@@ -53,6 +53,10 @@ Most public recsys repos are notebooks that train a model and report a number. T
 - **[Local demo runbook](docs/demo-runbook.md)** — clean-checkout startup, seeding, smoke validation, walkthrough, reset, and troubleshooting.
 - **[Movie-discovery frontend plan](docs/frontend/)** — product discovery,
   route contracts, backend readiness, implementation bundles, and finish gate.
+- **[UI finish-gate review](docs/frontend/finish-gate-review.md)** — the gate
+  applied to the running product rather than to a plan: what was run, a verdict
+  per criterion, the blocking items and how they were cleared, and the
+  non-blocking findings left open.
 - **[Generated API contract](docs/api/)** — committed OpenAPI and generated
   TypeScript types with Python and Node CI drift checks.
 - **Time-respecting evaluation** — temporal train/holdout/test split with a fixed cutoff timestamp. No random splits on time-series data, ever.
@@ -61,7 +65,9 @@ Most public recsys repos are notebooks that train a model and report a number. T
 - **A `phase-2-candidates` MLflow experiment** with directly comparable runs across popularity, CF/ALS, item-item, and two-tower — same harness, same holdout, same K.
 - **Versioned learned serving artifacts** — a SHA-256-pinned manifest binds the item-item index, LightGBM booster, tenant, and ordered Feast feature contract. The model sidecar loads that bundle once at startup; requests never fit or rebuild models.
 - **Durable prediction audits** — every recommendation stores the exact ranked items, scores, online feature values, model versions, fallback reason, and candidate/feature/ranker/total latency behind the same Postgres RLS boundary as serving data.
-- **A measured latency contract** — a pinned k6 container drives authenticated warm, cold, and mixed traffic. The 60-second smoke profile gates p99 below 100 ms, zero request errors, correct responses, and more than 50 requests/second in CI.
+- **A measured latency contract** — a pinned k6 container drives authenticated warm, cold, and mixed traffic. The 60-second smoke profile gates p99 below 100 ms, zero request errors, correct responses, and more than 50 requests/second in CI. It also measures the service rather than the runner: it quiesces what it does not measure, warms every worker before the window opens, fails warm traffic that quietly degrades to the popularity fallback, and re-measures a breached window exactly once — and only when the host's own CPU-steal record shows the runner was preempted. The thresholds themselves have never moved.
+- **Page-shaped budgets and browser timing, kept separate from it** — each route's real fan-out, cursor continuation, and mutation-plus-immediate-read sequence is driven as a tagged per-step k6 workload against derived budgets, while LCP, CLS, and time-to-visible-acknowledgement are measured in a throttled mobile browser. A percentile over one endpoint is not a page, and the two are not allowed to stand in for each other.
+- **A serving contract that refuses to overclaim** — `serving_policy` reports whether the learned two-stage path actually ran, how many positive seeds retrieval used, and what scale `items[].score` is on. A retrieval that no seed reached is labelled `unseeded-retrieval` with `learned: false` rather than borrowing the learned name, and the UI's copy follows the reported flag instead of inferring one. A rank score is never rendered as a match percentage.
 - **Reproducibility-by-default** — `make train-*` on a fixed seed produces the same model artifact hash. Non-determinism is treated as a bug to find, not tolerate.
 
 ## Design decisions
@@ -125,7 +131,7 @@ The broader Phase 3 work extends the same contracts to its remaining surfaces.
 | Frontend | Next.js + TypeScript + Tailwind |
 | Monitoring | Prometheus + Grafana; Evidently from Phase 5 |
 | Containers | Docker + docker-compose |
-| CI/CD | GitHub Actions (ruff, black, strict mypy, pytest, feature parity, tenant isolation, k6 SLO gate, frontend lint/typecheck/build) |
+| CI/CD | GitHub Actions (ruff, black, strict mypy, pytest, feature parity, tenant isolation, k6 SLO gate + page-shaped budgets, frontend lint/typecheck/build/accessibility, service-backed browser journeys, Compose validation) |
 
 ## Phase plan (abbreviated)
 
@@ -133,7 +139,7 @@ The full plan with lessons-per-phase lives in the project's design notes. The sh
 
 - **Phase 1 — Foundation** *(complete)*. Postgres + DVC + MLflow + docker-compose, temporal split per ADR 0001, evaluation harness as single source of truth, popularity + CF/ALS baselines.
 - **Phase 2 — Two-stage architecture, offline** *(complete)*. Item-item and two-tower candidate generators, provisional feature module, LightGBM ranker, and stage-specific metrics (recall@500 / NDCG@10) through the same harness.
-- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, encrypted browser sessions with PKCE/refresh/logout/CSRF, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, durable movie state, an authenticated cursor Library, and the k6 SLO gate are in place. The movie-discovery implementation runs through [`docs/frontend/`](docs/frontend/); catalog/detail, remaining product routes, programmatic cold-start cohorts, generic audits, and environment-specific Compose remain.
+- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, encrypted browser sessions with PKCE/refresh/logout/CSRF, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, durable movie state, a local catalog read model, and the k6 SLO gate are in place. The movie-discovery frontend — Discover, Browse, movie detail, Library, and Quick Picks behind one shell, with the ML evidence behind progressive disclosure — is delivered and cut over; it runs through [`docs/frontend/`](docs/frontend/), and its [finish gate](docs/frontend/finish-gate-review.md) passes every criterion a reviewer can settle, holding only on moderated participant research. Programmatic cold-start cohorts, per-tenant champion routing, generic audits, a rate-limiting decision, and environment-specific Compose remain.
 - **Phase 4 — Orchestration + promotion gate.** Prefect DAGs, automated evaluation-gated promotion against the incumbent champion.
 - **Phase 5 — Monitoring + drift.** Per-tenant Grafana dashboards, Evidently drift detection, synthetic drift simulation that proves the alert path fires.
 - **Phase 6 — A/B + shadow deploys.** Tenant-aware champion/challenger routing, shadow-mode logging, statistical significance for online experiments.
@@ -149,7 +155,8 @@ docs/
   adr/                  # backend ADRs (flat numeric line) + index
     frontend/           # frontend ADRs (own numeric line)
   api/                  # committed OpenAPI contract (generated by scripts/generate_openapi.py)
-  frontend/             # movie-discovery product discovery, design contracts, plan, testing strategy
+  frontend/             # movie-discovery product discovery, design contracts, plan, testing strategy,
+                        #   finish-gate review, and evidence/ screenshot matrices per bundle
   demo-plan.md          # Phase 3 vertical-slice plan and delivery bundles
   demo-runbook.md       # clean-checkout demo startup, walkthrough, reset, troubleshooting
   eda.md                # MovieLens 25M exploratory analysis writeup
@@ -171,7 +178,10 @@ src/
   training/             # offline training/evaluation entrypoints plus demo artifact packaging
 synthetic/
   personas/             # stable named demo users, catalog manifest, idempotent seeder
-  load/                 # authenticated k6 warm/cold/mixed SLO workloads
+  load/                 # recommendations.js + thresholds.js  — the pinned authenticated p99 gate
+                        # pages.js + page_thresholds.js       — page-shaped per-step budgets
+                        # run_gate.sh, summarize.py, probe_host_cpu.py — run, decide, explain
+                        # reliability.py                      — non-latency serving promises
   smoke/                # behavioral smoke check the demo and CI run against the live stack
 tests/
   unit/                 # model contracts, eval protocol, auth, tenancy, serving, demo fixtures
@@ -179,7 +189,13 @@ tests/
   learned_serving/      # end-to-end two-stage path against the seeded stores
   tenant_isolation/     # cross-tenant leakage canaries against Postgres RLS + Keycloak
   integration/          # placeholder; expands with the rest of Phase 3
-web/                    # Next.js + TypeScript + Tailwind frontend (generated API types under web/lib)
+web/                    # Next.js + TypeScript + Tailwind frontend
+  app/                  # /, /discover, /browse, /movies/[movieId], /library, /quick-picks, /legacy,
+                        #   /ui-preview, and the BFF route handlers under app/api
+  lib/                  # resources/ (the one server-owned API client), movie-state/ (the one write
+                        #   path), api.generated.ts (typed from docs/api/openapi.json)
+  e2e/                  # fixture-mode Playwright: responsive, accessibility, and finish-gate matrices
+  tests/                # unit/ (Vitest + RTL + axe), e2e/ (service-backed journeys), perf/ (LCP/CLS/ack)
 infra/                  # API + model Dockerfiles, Keycloak realms, pgBouncer, MLflow image, Postgres init, k6 pin
 ```
 
@@ -208,6 +224,8 @@ make train-twotower       # Phase 2 candidate → MLflow phase-2-candidates
 make train-ranker         # Phase 2 ranker    → MLflow phase-2-ranker
 make serve                # uvicorn on :8000 with reload (needs infra-up + db-migrate)
 make web-dev              # Next.js dev server on :3001 (make web-install first)
+make web-test             # Vitest unit, component, and accessibility suite
+make web-e2e              # service-backed Playwright journeys (needs the seeded demo stack)
 ```
 
 MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>. Keycloak admin: <http://localhost:8080> (dev credentials live in `docker-compose.yml`). API: <http://localhost:8000>.
@@ -223,18 +241,37 @@ make demo-up
 make demo-seed
 make demo-smoke
 make demo-audits
-make demo-load-smoke
 ```
 
-Open <http://localhost:3001>. Select a persona, rate movies from 1–5 stars, and
-watch its history and unseen recommendations refresh. Warm personas show the
+Open <http://localhost:3001> and sign in through Keycloak — the demo stack runs
+with the dev bypass disabled, so this is the real authorization-code + PKCE
+flow. `/` lands on Discover: a featured recommendation whose policy label
+follows what the response actually reported, a ranked rail, and `Why this?` →
+`Show prediction audit` to reach the prediction audit and the online feature
+values behind two deliberate actions. From there, browse the catalog, open a
+movie, save it, mark it watched, rate it, find and edit that state in Library,
+and take one decision at a time in Quick Picks. Warm personas show the
 `item-item-cosine+lightgbm` policy and checksum-pinned model versions; Cold
-Start shows the explicit `popularity` fallback. `make demo-audits` prints the
-latest exact predictions, features, versions, and stage timings, while
-`make demo-load-smoke` runs the 60-second authenticated p99 gate. Use
-`make demo-down` to stop while preserving state, `make demo-reset` to recreate
-only the demo-owned volumes, and
-`make demo-logs` when a dependency fails. See the
+Start shows the explicit `popularity` fallback. The pre-redesign dashboard is
+still deployed at `/legacy`, linked from the footer.
+
+`make demo-audits` prints the latest exact predictions, features, versions, and
+stage timings. The measurement gates run against the same stack:
+
+```bash
+cd web && npm run test:perf   # browser LCP, CLS, acknowledgement on the mobile profile
+
+make demo-load-quiesce        # stop what the load gate must not measure (api, web, setup jobs)
+make demo-load-smoke          # 60-second authenticated p99 gate on the recommendation path
+make demo-load-pages          # page-shaped API workloads, measured per step
+make demo-reliability-check   # request-id traceability, auth boundary, degraded metadata
+```
+
+`demo-load-quiesce` stops the browser demo's `api` and `web` containers, so run
+the walkthrough and `npm run test:perf` before it, or `make demo-up` again
+afterwards. Use `make demo-down` to stop while preserving state,
+`make demo-reset` to recreate only the demo-owned volumes, and `make demo-logs`
+when a dependency fails. See the
 [complete demo runbook](docs/demo-runbook.md) for the walkthrough and recovery
 steps.
 

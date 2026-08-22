@@ -1,6 +1,11 @@
 # Movie-discovery frontend: implementation plan
 
-**Status:** Bundles 0–4 complete; Bundle 5 in progress (5A, 5C, and 5D landed, 5B landing)
+**Status:** Bundles 0–7 delivered. The cutover is done — `/` serves the
+movie-discovery product and the pre-redesign dashboard is retained at `/legacy`
+with a documented rollback. The [finish-gate review](finish-gate-review.md)
+passes all seven criteria after the cutover and holds only on moderated
+research with real participants; legacy removal waits on that PASS and then
+gets its own PR.
 
 **Last updated:** 2026-08-21
 
@@ -13,7 +18,9 @@ and test contracts are real.
 
 The current dashboard remains available behind a temporary legacy route or
 feature flag until the authenticated Discover → Library → feedback → refreshed
-prediction loop passes browser and load gates.
+prediction loop passes browser and load gates. That loop now passes them, and
+Bundle 7d moved the dashboard to `/legacy`; it stays there until the gate
+records a participant-backed PASS.
 
 ## Dependency map
 
@@ -34,9 +41,10 @@ Bundle numbers describe delivery order, not one mandatory PR each. Each PR
 remains coherent and includes the tests and documentation for the behavior it
 changes.
 
-Implementation stops after Bundle 4 in the current delivery. The exact starting
-state, PR cuts, risks, commands, and acceptance criteria for the next owner are
-recorded in [the Bundles 5–7 handoff](bundles-5-7-handoff.md).
+Bundles 5–7 were delivered against
+[the Bundles 5–7 handoff](bundles-5-7-handoff.md), which is now a historical
+record of the state they started from rather than a forward plan. Per-bundle
+progress is recorded in the sections below.
 
 ## Bundle 0 — Discovery and contracts
 
@@ -390,7 +398,7 @@ traceable; gesture and non-gesture paths have identical outcomes.
   `/discover`; and Browse, movie detail, and Library render the shared
   `AppShell`, so the two parallel headers are deleted rather than left to
   drift. The re-run gate and its per-criterion verdicts are recorded in
-  [`finish-gate-review.md`](finish-gate-review.md#re-run-after-cutover-7d),
+  [`finish-gate-review.md`](finish-gate-review.md#10-re-run-after-cutover-7d),
   with the recaptured surfaces in
   [`evidence/bundle-7d/`](evidence/bundle-7d/README.md). Adding `/` to the
   accessibility gate found three defects on the signed-out door — two contrast

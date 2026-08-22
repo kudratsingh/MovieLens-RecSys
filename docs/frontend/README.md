@@ -4,6 +4,13 @@ This directory owns the product and delivery contract for the MovieLens
 portfolio frontend. The frontend should feel like a movie-discovery product
 while keeping the ML system inspectable through progressive disclosure.
 
+**Status:** Bundles 0–7 delivered. The cutover is done — `/` serves the product
+and the pre-redesign dashboard is retained at `/legacy` with the rollback
+written out [below](#rolling-the-cutover-back). The
+[finish-gate review](finish-gate-review.md) passes all seven criteria after the
+cutover; the remaining HOLD is moderated research with real participants, and
+legacy removal waits on that PASS.
+
 ## Documents
 
 - [Product discovery](product-discovery.md) — users, jobs, current-state audit,
@@ -15,9 +22,11 @@ while keeping the ML system inspectable through progressive disclosure.
 - [Frontend system](frontend-system.md) — tokens, route/client boundaries, typed
   fixture semantics, the shared movie-state control family and write path, and
   automated checks.
-- [Bundles 5–7 handoff](bundles-5-7-handoff.md) — exact post-Bundle-4 state,
-  remaining vertical slices, implementation order, risks, and verification
-  gates; Bundles 5–7 are explicitly not implemented in this handoff.
+- [Bundles 5–7 handoff](bundles-5-7-handoff.md) — **historical.** The
+  post-Bundle-4 state, the remaining vertical slices, implementation order,
+  risks, and verification gates, written before Bundles 5–7 were built. Those
+  bundles have since been delivered against it; read the
+  [implementation plan](implementation-plan.md) for what actually landed.
 - [Backend readiness](backend-readiness.md) — source-audited capabilities,
   release blockers, proposed API boundaries, and frontend-safe claims.
 - [Catalog and movie-detail contract](catalog-contract.md) — paging, local
@@ -32,7 +41,7 @@ while keeping the ML system inspectable through progressive disclosure.
   running product: what was run, the five-second and moderated-task
   walkthroughs, a verdict per criterion, and the recorded decision. The 7A pass
   recorded **HOLD** on three cutover items; the
-  [re-run after the cutover](finish-gate-review.md#re-run-after-cutover-7d)
+  [re-run after the cutover](finish-gate-review.md#10-re-run-after-cutover-7d)
   clears all three and records **HOLD pending participant sessions** — every
   criterion a reviewer can settle now passes, and moderated research is the only
   thing left between that and PASS. Screenshot matrices, with per-file
@@ -89,7 +98,7 @@ in the UI that offers the four demo personas by name. The product selects a
 persona by URL (`?userId=` on Discover and Library, `?user=` on Browse, movie
 detail, and Quick Picks). A persona switcher in the product shell is recorded
 as a follow-up in the
-[finish-gate review](finish-gate-review.md#re-run-after-cutover-7d), not as
+[finish-gate review](finish-gate-review.md#10-re-run-after-cutover-7d), not as
 work this cutover did.
 
 ## Governing decisions
