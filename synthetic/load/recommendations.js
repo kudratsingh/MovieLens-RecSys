@@ -4,6 +4,7 @@ import http from "k6/http";
 import { Counter, Trend } from "k6/metrics";
 
 import { authorizationHeaders, mintAccessToken } from "./lib/auth.js";
+import { canaryThresholds } from "./canary_thresholds.js";
 import { recommendationThresholds } from "./thresholds.js";
 
 const PROFILE = __ENV.LOAD_PROFILE || "smoke";
@@ -64,6 +65,19 @@ const profiles = {
     maxVUs: 400,
     rate: 600,
   },
+  // Post-deploy correctness canary, run by the `loadcheck` job against a
+  // deployed environment. Same workload shape and same checks as `smoke` at a
+  // deliberately small arrival rate: every request writes an audit row to the
+  // production database, and what this run has to establish is that the
+  // deployment serves the learned path correctly at all — not how fast it does
+  // it on a host nobody controls. Its pass/fail contract is
+  // `canary_thresholds.js`; see that file for why the p99 gate is not it.
+  "prod-canary": {
+    duration: "60s",
+    preAllocatedVUs: 5,
+    maxVUs: 20,
+    rate: 5,
+  },
 };
 
 if (!(PROFILE in profiles)) {
@@ -71,6 +85,10 @@ if (!(PROFILE in profiles)) {
 }
 
 const selected = profiles[PROFILE];
+// The pinned SLO thresholds stay attached to every profile that measures a
+// controlled host; only the deployed canary swaps in the weaker contract.
+const selectedThresholds =
+  PROFILE === "prod-canary" ? canaryThresholds : recommendationThresholds;
 
 export const options = {
   batchPerHost: 16,
@@ -86,7 +104,7 @@ export const options = {
       duration: selected.duration,
     },
   },
-  thresholds: recommendationThresholds,
+  thresholds: selectedThresholds,
   summaryTrendStats: ["avg", "min", "med", "p(50)", "p(95)", "p(99)", "max"],
 };
 
