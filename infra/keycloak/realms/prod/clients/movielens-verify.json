@@ -1,0 +1,18 @@
+{
+  "clientId": "movielens-verify",
+  "name": "MovieLens verification harnesses",
+  "description": "Confidential client for the release verify job, the cross-tenant canary and the load canary. It holds the password grant that movielens-api deliberately gives up, and it is never named as KEYCLOAK_SERVICE_CLIENT_ID, so a leaked verify token gets no azp bypass and still needs the demo-impersonator role to touch a persona.",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "bearerOnly": false,
+  "standardFlowEnabled": false,
+  "directAccessGrantsEnabled": true,
+  "serviceAccountsEnabled": false,
+  "clientAuthenticatorType": "client-secret",
+  "redirectUris": [],
+  "webOrigins": [],
+  "attributes": {
+    "access.token.lifespan": "300"
+  }
+}

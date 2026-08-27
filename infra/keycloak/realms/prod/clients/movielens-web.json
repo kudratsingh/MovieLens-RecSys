@@ -1,0 +1,15 @@
+{
+  "clientId": "movielens-web",
+  "name": "MovieLens frontend (Next.js)",
+  "description": "Public client with PKCE for the Next.js BFF. It holds no secret: web/auth.ts pins token_endpoint_auth_method to none and the authorization code is bound to the PKCE verifier instead.",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": true,
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "redirectUris": ["${APP_ORIGIN}/api/auth/callback/keycloak"],
+  "webOrigins": ["${APP_ORIGIN}"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256"
+  }
+}

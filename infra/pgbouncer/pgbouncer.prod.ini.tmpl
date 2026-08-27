@@ -1,0 +1,67 @@
+; pgBouncer config template for the production stack. Rendered at container
+; start by infra/pgbouncer/entrypoint.sh into /etc/pgbouncer/pgbouncer.prod.ini
+; — the copy inside a running container is a build artifact, so changes belong
+; here and in the service's environment, never in the container.
+;
+; The dev stack keeps its own bind-mounted infra/pgbouncer/pgbouncer.ini. The
+; two agree on everything ADR 0008 depends on — transaction pooling, the
+; forced-user aliases, ignore_startup_parameters, and the admin console the API
+; asserts against at boot — and differ only where production has to: real
+; client authentication, TLS to the upstream where it is offered, and every
+; credential arriving from the environment rather than from a file in a public
+; repository.
+
+[databases]
+; Aliases, not databases. Each one pins the upstream role, which is what gives
+; pgBouncer a pool per role: an app_user connection can never reuse a server
+; connection that was opened as admin_user. The API's APP_USER_DB_NAME is
+; movielens_app (src/config.py), so everything it does arrives on the RLS side.
+;
+; The dev config also exposes a bare movielens alias with no forced user.
+; Production drops it: nothing in the deployed topology reaches Postgres
+; through the pooler as an arbitrary role — the release and materialization
+; paths connect direct — and an unforced alias would hand any client holding a
+; valid password a pool of its own.
+movielens_app = host=${PGB_UPSTREAM_HOST} port=${PGB_UPSTREAM_PORT} dbname=${PGB_UPSTREAM_DB} user=app_user
+movielens_admin = host=${PGB_UPSTREAM_HOST} port=${PGB_UPSTREAM_PORT} dbname=${PGB_UPSTREAM_DB} user=admin_user
+
+[pgbouncer]
+; A literal * rather than an explicit 0.0.0.0, so the listener also binds
+; IPv6: the private network the API reaches this on can resolve to an IPv6
+; address.
+listen_addr = *
+listen_port = ${PGBOUNCER_LISTEN_PORT}
+
+${PGB_AUTH_SECTION}
+
+; Per ADR 0008 §risks: session mode keeps SET LOCAL app.tenant_id alive past
+; the transaction that set it, which is the cross-tenant leakage class. The API
+; refuses to boot unless the admin console reports this value back to it
+; (src/serving/startup_checks.py).
+pool_mode = transaction
+
+; Sized as the dev stack is: enough for the API's workers plus the load
+; harness, with a small reserve so a burst queues rather than fails.
+max_client_conn = ${PGB_MAX_CLIENT_CONN}
+default_pool_size = ${PGB_DEFAULT_POOL_SIZE}
+reserve_pool_size = ${PGB_RESERVE_POOL_SIZE}
+reserve_pool_timeout = ${PGB_RESERVE_POOL_TIMEOUT}
+
+; psycopg2 sends both of these as startup parameters and pgBouncer rejects
+; unknown ones. app.tenant_id is deliberately absent: the middleware sets it
+; with SET LOCAL inside the request transaction, not at connection startup.
+ignore_startup_parameters = extra_float_digits,search_path
+
+; TLS on the pooler-to-Postgres hop. prefer encrypts it when the upstream
+; offers TLS and still connects when it does not, which covers both a managed
+; Postgres and a plain one on a private network. Client-side TLS is
+; deliberately not configured: every client is on that same private network,
+; and terminating TLS here would mean shipping a certificate with the image.
+server_tls_sslmode = ${PGB_SERVER_TLS_SSLMODE}
+
+; The admin console. The API opens the pgbouncer pseudo-database as this user
+; at boot and asserts SHOW POOLS and SHOW CONFIG both report transaction mode,
+; so these two lines are a hard runtime dependency rather than an operator
+; convenience — drop them and the service stops booting.
+admin_users = ${PGBOUNCER_ADMIN_USER}
+stats_users = ${PGBOUNCER_ADMIN_USER}
