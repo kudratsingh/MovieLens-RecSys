@@ -11,8 +11,9 @@ blockers before deployment. The working branch is
 The four model-server Uvicorn processes each allowed LightGBM/OpenMP and BLAS
 to create a native thread team sized to the whole host. Under concurrent rank
 traffic, process parallelism multiplied by native parallelism, producing a
-periodic CPU backlog. That backlog caused both the clean-start learned-serving
-timeouts and the low-steal p99 failure from PR #68.
+periodic CPU backlog. That backlog is what the local reproduction measured and
+what the clean-start learned-serving timeouts came from. It is **not** what
+fails the gate on GitHub's runner — see "What CI showed" below.
 
 `docker-compose.demo.yml` now sets these values on `model-server`:
 
@@ -77,22 +78,54 @@ found`). A lockfile install was started, reported that local Node 20.10 is below
 one dependency's preferred engine range, and was stopped when the owner asked
 to conserve usage. No browser result should be claimed from this session.
 
+## What CI showed
+
+With the pins on the branch the `synthetic-load-smoke` job failed twice more
+(runs 33031225997 and 33031336242): p99 198.97 ms and 164.14 ms, 6 and 8
+dropped iterations, zero errors, zero silent fallbacks, 0% CPU steal, run queue
+1–2. The artifacts, read next to PR #68's failure and the two passing runs on
+the same commit range, say the runner's tail is not the model server's:
+
+- cold traffic (popularity fallback; never touches model-server or
+  feature-server) breaches exactly like warm traffic — cold p99 174.61 ms vs
+  warm 146.37 ms on the second run, 429.60 vs 417.62 on PR #68;
+- failing runs have a *faster* median (8.4–9.2 ms) than passing runs
+  (10.6–11.3 ms, p99 15–19 ms, no second over 100 ms) — different runner
+  hardware, same code;
+- all of the time is `http_req_waiting`; nothing in connect/blocked.
+
+Every request shares auth → pgBouncer → the RLS request transaction → the audit
+insert → a synchronous commit (one `fdatasync`). The working hypothesis is
+storage under the Postgres volume on some runner VMs. Do not rerun the gate to
+fish for a green, and do not touch thresholds or durability.
+
+The gate now records the evidence to settle it (this branch, ADR 0010's second
+2026-08-26 note): `server-side.json` (audit-row handler latency vs k6, per
+traffic class and policy; WAL/IO counter deltas; `track_io_timing` and
+`track_wal_io_timing` on in `docker-compose.yml`), a per-second `srv_p99`
+column, and an `fdatasync` baseline burst on Postgres's volume
+(`disk-fsync.jsonl`). Continuous fsync sampling is opt-in
+(`LOAD_FSYNC_PROBE=on`) because it perturbs the gate. The decision rule is
+unchanged.
+
 ## Exact next steps
 
-1. Use Node 22 (the frontend container and CI runtime), then run `cd web && npm
-   ci`. Install the pinned Chromium binary if Playwright requests it.
-2. With the freshly seeded demo stack still running, run `make web-e2e`.
-3. Run the proportional static gates: Compose config, frontend lint/typecheck,
-   and the focused repository tests. Python/FAISS tests on macOS must be
-   serialized with one OMP/BLAS/MKL/VECLIB thread.
-4. Commit and push this branch if it was not already preserved, open a
-   substantial PR, and let the real `synthetic-load-smoke` CI job validate the
-   fix on GitHub's runner.
-5. Squash-merge only after every required check is green, delete the feature
-   branch, then update PR #68 onto the new `main`. PR #68 is the separate MVP
-   release/deployment handoff and was the only open PR at the start of this
-   work.
-6. After both PRs merge, select the deployment target. Railway remains the
+1. Read the instrumented `synthetic-load-smoke` artifact from PR #69's next
+   run: `breakdown.txt`'s "server-side vs k6" block and the `srv_p99` column in
+   the slowest seconds. Handler fast while the request is slow, on a runner
+   whose handler percentiles match the passing runs, means the runner's
+   storage; handler slow means the service.
+2. Decide from that evidence, in ADR 0010, between a storage-stall
+   measurement-validity rule beside the steal rule and taking the runner's disk
+   out of the measurement. Neither changes a threshold or the commit-before-
+   response contract.
+3. Browser journeys are covered by the `browser-auth-e2e` job on the same
+   commit (green on both PR #69 runs); a local `make web-e2e` needs Node 22 and
+   `cd web && npm ci` first.
+4. Squash-merge only after every required check is green, delete the feature
+   branch. PR #68 has already merged; the deployment work continues on
+   `feat/production-deployment` from the reviewed plan.
+5. After both PRs merge, select the deployment target. Railway remains the
    recommended fastest MVP path; DigitalOcean plus Coolify trades more owner
    operations for a lower fixed cost; AWS remains the scale-ready but heaviest
    option. Production work cannot be finalized until the owner chooses one.

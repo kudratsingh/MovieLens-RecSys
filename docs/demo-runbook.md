@@ -210,6 +210,15 @@ those limits lets each process create a host-sized OpenMP team and invalidates
 both clean-start readiness and the latency baseline through internal CPU
 oversubscription.
 
+That is the local shape. GitHub's runner did not accept the same code at face
+value — two runs with the pins in place still breached, at p99 198.97 ms and
+164.14 ms, with cold traffic breaching exactly like warm — which ADR 0010's
+second 2026-08-26 note records as a shared-path tail, not a ranker one. The
+breakdown therefore now prints the handler's own percentiles beside k6's, per
+traffic class and per serving policy, with a per-second `srv_p99` column, an
+`fdatasync` baseline for Postgres's volume, and the WAL/IO counter deltas across
+the window.
+
 Everything the run produced lands under `artifacts/load-smoke/`, which CI
 uploads on pass and fail alike:
 
@@ -223,8 +232,20 @@ artifacts/load-smoke/
     ├── host-cpu.jsonl                # /proc/stat deltas, one line per second
     ├── raw-metrics.json.gz           # every k6 sample, for re-deriving anything
     ├── decision.json                 # the measurement-validity verdict
+    ├── server-side.json              # audit rows for the window + WAL/IO counters after
+    ├── server-side-before.json       # the same counters before the window
+    ├── disk-fsync.jsonl              # fdatasync latency on Postgres's volume
+    ├── started-at.txt                # the window's own start, which bounds the export
     └── k6-stdout.txt, k6-exit, breakdown.txt
 ```
+
+The server-side export is what tells a slow *request* apart from a slow
+*handler*: the audit row's `latency_ms` is timed around the handler only, so the
+difference between it and k6's number is auth, pooling, the audit insert, and
+the commit's `fdatasync`. `disk-fsync.jsonl` holds a burst before the window by
+default; `LOAD_FSYNC_PROBE=on` samples during it as well, which is diagnostic
+only — an `fdatasync` flushes the device, and the probe measurably slows the
+service it is watching.
 
 The per-second table is the thing to read first when the gate fails. A slow
 opening second is a cold cache; a tail smeared across the middle is contention;
@@ -388,7 +409,11 @@ permanently delete the isolated demo Postgres and Keycloak data.
   with a moved p99 is a contention signature, but the contention can still be
   inside the service: use the recorded CPU-steal decision before blaming the
   host, confirm `make demo-load-quiesce` ran, and verify the model-server native
-  thread limits above. Then inspect
+  thread limits above. Then compare `srv_p99` with the k6 p99 in the slowest
+  seconds: a fast handler under a slow request puts the time in auth, pooling,
+  or the commit's `fdatasync` — read the `fdatasync` baseline and the WAL sync
+  time in the same breakdown before blaming the ranker — while a slow handler
+  is the service. Then inspect
   `api-load`, `model-server`, `feature-server`, `pgbouncer`, and `postgres`
   with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
