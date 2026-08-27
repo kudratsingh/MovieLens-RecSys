@@ -205,6 +205,41 @@ workers gave 25.29 ms and 36.28 ms. The spread within each setting is as wide as
 the gap between them, so the default stays at 4 — but it is now one variable to
 change if runner data says otherwise.
 
+### 2026-08-26 — bound native ranker parallelism per process
+
+The expanded catalog and durable response transaction exposed a different kind
+of oversubscription. PR #68's otherwise-green handoff run failed at p99 429.52
+ms with 20 dropped iterations, while all requests were correct, no warm response
+quietly fell back, and the host recorded 0% CPU steal. The low-steal rule made
+the result final: this was service contention, not an environmental remeasure.
+
+A local clean-process reproduction made the failure larger and easier to read:
+p50 81.57 ms, p95 551.37 ms, p99 903.64 ms, 52 dropped iterations, and seven
+warm `ReadTimeout` fallbacks. Its worker warm-up took 2.34 seconds, observed 15
+first-round learned-path fallbacks, and still ended with a 376 ms slowest
+request. Durable audits showed cached Feast reads below 1 ms while ranker and
+whole-request stalls arrived in periodic clusters. The run queue reached 24
+with 0% steal and no cgroup throttling.
+
+The four Uvicorn processes were not the defect by themselves. Each process also
+allowed LightGBM/OpenMP and the linked BLAS runtime to size a native thread team
+to the whole host. Concurrent rank calls therefore multiplied process
+parallelism by host-sized native parallelism. The model-server runtime now pins
+`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
+`VECLIB_MAXIMUM_THREADS` to `1`. Uvicorn's four processes remain the explicit
+serving parallelism; the 0.5-second sidecar timeout, workload, traffic mix, and
+all thresholds remain unchanged.
+
+With only those runtime limits changed, the same clean-process local gate
+passed at p50 7.24 ms, p95 12.50 ms, p99 48.99 ms, and 54.18 requests/second
+across 3,300 requests, with zero errors, dropped iterations, or silent learned
+fallbacks. Warm-up fell to 666 ms, returned the correct policy on every request,
+and ended at 42.2 ms slowest. A separate `demo-up -> demo-seed -> demo-smoke`
+run then recreated the sidecars and passed on its first smoke request without
+manual priming. These variables are a serving invariant, not a local test
+convenience; the production deployment must carry the same values unless a
+measured worker/thread topology replaces them.
+
 ### 2026-08-21 — page-shaped workloads and browser timing
 
 The recommendation gate measures one endpoint. It is the SLO and it does not

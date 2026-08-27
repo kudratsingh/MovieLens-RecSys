@@ -201,6 +201,15 @@ margin. The accepted 2026-08-20 implementation baseline reported p50 6.31 ms,
 p95 14.27 ms, p99 41.30 ms, 54.08 measured requests/second, zero request
 errors, and zero dropped iterations across 3,301 measured requests.
 
+The current 2026-08-26 regression-fix run, after the catalog and durable-state
+work landed, reported p50 7.24 ms, p95 12.50 ms, p99 48.99 ms, 54.18 measured
+requests/second, zero request errors, zero dropped iterations, and zero silent
+learned fallbacks across 3,300 measured requests. The four model-server
+processes intentionally run with one native LightGBM/BLAS thread each. Removing
+those limits lets each process create a host-sized OpenMP team and invalidates
+both clean-start readiness and the latency baseline through internal CPU
+oversubscription.
+
 Everything the run produced lands under `artifacts/load-smoke/`, which CI
 uploads on pass and fail alike:
 
@@ -360,6 +369,10 @@ permanently delete the isolated demo Postgres and Keycloak data.
 - **Warm personas show `popularity`:** inspect `model-server`, `feature-server`,
   and `api` with `make demo-logs`, then rerun `make demo-seed`. The API falls
   back deliberately when artifacts, online features, or the sidecar are invalid.
+  If the audit reason is `model-server-unavailable: ReadTimeout`, confirm the
+  effective model-server environment still sets `OMP_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS` to
+  `1`; do not compensate by raising the 0.5-second sidecar timeout.
 - **`make demo-audits` returns no rows:** generate a recommendation for Action
   Fan first. If the request succeeded but no row appears, inspect `api`; audit
   persistence is part of the request transaction and should fail the request
@@ -372,8 +385,10 @@ permanently delete the isolated demo Postgres and Keycloak data.
   and `api-load`. A non-zero `dropped_iterations` means the load generator
   could not start every arrival, so the percentiles understate the tail; treat
   the run as capacity-limited rather than as evidence either way. A flat p50
-  with a moved p99 is contention, not a regression: check what else is running
-  on the host and confirm `make demo-load-quiesce` ran. Then inspect
+  with a moved p99 is a contention signature, but the contention can still be
+  inside the service: use the recorded CPU-steal decision before blaming the
+  host, confirm `make demo-load-quiesce` ran, and verify the model-server native
+  thread limits above. Then inspect
   `api-load`, `model-server`, `feature-server`, `pgbouncer`, and `postgres`
   with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
