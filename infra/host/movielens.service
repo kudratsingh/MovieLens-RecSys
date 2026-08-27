@@ -1,0 +1,52 @@
+# The stack, as something the box brings up on its own.
+#
+# This unit exists for exactly one job: a reboot -- Hetzner's or an unattended
+# kernel upgrade's -- must end with the site serving again, with no operator
+# and no CI run involved. Every container already carries a restart policy, but
+# a restart policy only survives a Docker daemon restart, not a `down`, and
+# nothing else on the box would ever issue the `up`.
+#
+# Deploys do NOT go through this unit. infra/deploy/deploy.sh drives the
+# release sequence directly (pull, release jobs, up, verify, roll back on
+# failure), because a deploy is a sequence with a verdict and systemd has no
+# opinion about the verdict. The two agree on the command that starts the
+# stack, which is what keeps a boot and a deploy from producing different
+# containers.
+#
+# Type=oneshot with RemainAfterExit=yes because `up -d` returns as soon as the
+# containers are created: there is no long-lived process for systemd to
+# supervise here, and the thing worth recording is "the stack has been brought
+# up", which is what RemainAfterExit means.
+
+[Unit]
+Description=MovieLens recommender production stack
+Documentation=https://github.com/kudratsingh/MovieLens-RecSys
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/movielens
+User=deploy
+Group=deploy
+# The deploy user's membership of the `docker` group is what makes the socket
+# readable; systemd picks the supplementary groups up from /etc/group.
+
+# Ten minutes: a cold boot starts two Postgres servers, a JVM and a model
+# sidecar that warms every worker against real online features before it
+# reports healthy. Without --wait this would return in seconds and report
+# success while the site was still 502ing, which is a worse lie than a slow
+# unit.
+TimeoutStartSec=600
+ExecStart=/usr/bin/docker compose -p movielens-prod -f docker-compose.prod.yml --env-file .env.prod up -d --wait --wait-timeout 480
+
+# `stop`, never `down`: down removes the containers and the network, and on a
+# shutdown that buys nothing while making the next boot slower. Volumes are
+# never touched either way -- but `stop` makes that obvious to whoever reads
+# this unit at 02:00.
+ExecStop=/usr/bin/docker compose -p movielens-prod -f docker-compose.prod.yml --env-file .env.prod stop
+
+[Install]
+WantedBy=multi-user.target

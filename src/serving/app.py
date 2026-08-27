@@ -3,6 +3,8 @@ FastAPI entrypoint per ADR 0007 + 0008.
 
 The authenticated surface currently includes:
   * ``GET /healthz`` — unauthenticated, always 200.
+  * ``GET /readyz`` — unauthenticated deploy probe; reports the
+    database, JWKS, and both sidecars, and gates only on the first two.
   * ``GET /whoami`` — authenticated, returns the resolved
     ``(tenant_id, user_id)`` plus tenant metadata.
   * ``GET /users/{user_id}/recommendations`` — tenant-scoped item-item
@@ -22,6 +24,12 @@ Every response carries ``X-Request-ID``. A well-formed inbound value is
 adopted so a caller's correlation id survives the hop; otherwise one is
 minted. Recommendation audits store it alongside their own row identity.
 
+Every authenticated response also carries the ``X-RateLimit-*`` view of the
+calling ``(tenant, subject)`` token bucket, and a caller that empties it gets
+a 429 with ``Retry-After`` (ADR 0014). The limiter is installed everywhere
+except a dev box, where the synthetic-load harnesses deliberately drive one
+Keycloak identity far past any sane per-subject rate.
+
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
 locks its middleware stack (Starlette forbids ``add_middleware`` after
@@ -34,6 +42,7 @@ and the process exits non-zero.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -42,13 +51,14 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, create_engine, text
+from sqlalchemy import Connection, Engine, create_engine, text
 from starlette.concurrency import run_in_threadpool
 
 from src.auth import AuthMiddleware, JwksCache
+from src.auth.middleware import UNAUTHENTICATED_PATHS
 from src.config import Settings
 from src.serving.audit import (
     RecommendationAuditContext,
@@ -75,6 +85,14 @@ from src.serving.feedback import (
 )
 from src.serving.models import ModelServerClient
 from src.serving.orchestration import RecommendationCoordinator
+from src.serving.ratelimit import (
+    LIMIT_HEADER,
+    REMAINING_HEADER,
+    RESET_HEADER,
+    RETRY_AFTER_HEADER,
+    RateLimitMiddleware,
+    TokenBucketLimiter,
+)
 from src.serving.recommendations import (
     RecommendationService,
     UnknownDemoPersonaError,
@@ -102,24 +120,16 @@ _app_engine = create_engine(
     future=True,
 )
 
-# Admin engine for cross-tenant metadata reads (public.tenants).
-# BYPASSRLS. Only the tenant router uses it — handlers don't need
-# admin access, and gating it here (not via a helper anyone can import)
-# keeps the "who can bypass RLS" surface small.
-_admin_engine = create_engine(
-    _settings.admin_user_database_url,
-    pool_pre_ping=True,
-    pool_size=2,
-    max_overflow=2,
-    future=True,
-)
-
 _jwks = JwksCache(
     keycloak_base_url=_settings.keycloak_base_url,
     ttl_seconds=_settings.jwks_cache_ttl_seconds,
 )
 
-_tenant_router = TenantRouter(_admin_engine)
+# The tenant registry is cross-tenant by design and carries no RLS policy, and
+# app_user holds SELECT on it (migration 0002). Reading it on the app engine is
+# what lets this process hold no BYPASSRLS credential at all: an SSRF or RCE in
+# the request-serving path now reaches only a role RLS applies to.
+_tenant_router = TenantRouter(_app_engine)
 _recommendations = RecommendationService()
 _feedback = FeedbackService()
 _audits = RecommendationAuditService()
@@ -131,6 +141,23 @@ _model_server = ModelServerClient(
 )
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _catalog = CatalogService()
+
+# One bucket set per worker process (ADR 0014). Built unconditionally so its
+# configuration is validated at import even where the middleware is not
+# installed — a deployment should learn about a nonsensical RATE_LIMIT_BURST
+# from a boot failure, not from the first request after someone turns the
+# limiter on.
+_rate_limiter = TokenBucketLimiter(
+    requests_per_minute=_settings.rate_limit_requests_per_minute,
+    burst=_settings.rate_limit_burst,
+)
+
+# Deliberately not the serving clients: their timeouts are latency budgets for a
+# user-facing request, and a probe that reports "unavailable" because a sidecar
+# took 0.5 s to answer would be reporting on the budget rather than on the
+# sidecar. Nothing here waits long enough to hold a deploy open either.
+_READINESS_PROBE_TIMEOUT_SECONDS = 2.0
+_readiness_probe = httpx.AsyncClient(timeout=_READINESS_PROBE_TIMEOUT_SECONDS)
 
 
 class RecommendationItem(BaseModel):
@@ -148,6 +175,21 @@ class RecommendationItem(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class ReadinessResponse(BaseModel):
+    """What a deploy gate reads off ``/readyz``.
+
+    ``database`` and ``jwks`` decide the status code because they are the
+    dependencies this process cannot serve a single authenticated request
+    without. The two sidecars are reported rather than gated — see the handler.
+    """
+
+    status: Literal["ready", "not-ready"]
+    database: Literal["ok", "error"]
+    jwks: Literal["ok", "error"]
+    model_server: Literal["ok", "unavailable"]
+    feature_server: Literal["ok", "unavailable"]
 
 
 class ServingPolicyResponse(BaseModel):
@@ -390,29 +432,68 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     (dev: docker-compose; CI: GitHub Actions; prod: later) surfaces
     the failure before any traffic reaches the app.
     """
-    run_startup_checks(
-        settings=_settings,
-        app_engine=_app_engine,
-        admin_engine=_admin_engine,
-    )
+    run_startup_checks(settings=_settings, app_engine=_app_engine)
     logger.info(
-        "MovieLens API ready — environment=%s dev_auth_bypass=%s",
+        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s",
         _settings.environment,
         _settings.dev_auth_bypass,
+        _rate_limiter.describe() if _settings.rate_limit_active else "disabled",
     )
     yield
     await _feature_server.aclose()
     await _model_server.aclose()
+    await _readiness_probe.aclose()
     _app_engine.dispose()
-    _admin_engine.dispose()
 
+
+API_DESCRIPTION = (
+    "Two-stage recommender service (candidate → ranker) per CLAUDE.md.\n\n"
+    "Every authenticated response carries `X-RateLimit-Limit` (the bucket's "
+    "capacity, i.e. the largest instantaneous burst), `X-RateLimit-Remaining` "
+    "and `X-RateLimit-Reset` (whole seconds until the bucket is full again) "
+    "for the calling `(tenant, subject)` token bucket; exhausting it answers "
+    "429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). "
+    "`/healthz` and `/readyz` are exempt and carry no such headers.\n\n"
+    "The bucket lives in the worker process that served the request, so a "
+    "service running N uvicorn workers admits up to N times the configured "
+    "rate and `X-RateLimit-Remaining` is not monotonic across a sequence of "
+    "requests from one client. Treat the headers as a per-worker view of one "
+    "caller's allowance, not as a cluster-wide quota."
+)
 
 app = FastAPI(
     title="MovieLens Recommender API",
-    description="Two-stage recommender service (candidate → ranker) per CLAUDE.md.",
+    description=API_DESCRIPTION,
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Documented on the 429 rather than on every response of every operation: they
+# are on every authenticated response (see API_DESCRIPTION), and repeating the
+# block ~150 times would bloat the committed contract and the types generated
+# from it without telling a client anything the description does not. Defined
+# once under components/headers and referenced, for the same reason.
+_RATE_LIMIT_HEADER_COMPONENTS: dict[str, Any] = {
+    RETRY_AFTER_HEADER: {
+        "description": "Whole seconds until one token is available again.",
+        "schema": {"type": "integer", "minimum": 1},
+    },
+    LIMIT_HEADER: {
+        "description": "Token-bucket capacity for this (tenant, subject), per worker.",
+        "schema": {"type": "integer", "minimum": 1},
+    },
+    REMAINING_HEADER: {
+        "description": "Whole tokens left in this worker's bucket; 0 on a 429.",
+        "schema": {"type": "integer", "minimum": 0},
+    },
+    RESET_HEADER: {
+        "description": "Whole seconds until this worker's bucket is full again.",
+        "schema": {"type": "integer", "minimum": 0},
+    },
+}
+_RATE_LIMIT_RESPONSE_HEADERS: dict[str, Any] = {
+    name: {"$ref": f"#/components/headers/{name}"} for name in _RATE_LIMIT_HEADER_COMPONENTS
+}
 
 
 def _openapi_schema() -> dict[str, Any]:
@@ -437,8 +518,12 @@ def _openapi_schema() -> dict[str, Any]:
         "required": ["detail"],
         "properties": {"detail": {"type": "string"}},
     }
+    components.setdefault("headers", {}).update(_RATE_LIMIT_HEADER_COMPONENTS)
     for path, path_item in schema.get("paths", {}).items():
-        if path == "/healthz":
+        # The middleware's own list, not a copy of it: a route the contract
+        # says needs a bearer token but the middleware waves through (or the
+        # reverse) is a lie clients build against.
+        if path in UNAUTHENTICATED_PATHS:
             continue
         for method, operation in path_item.items():
             if method not in {"get", "put", "post", "patch", "delete"}:
@@ -451,19 +536,22 @@ def _openapi_schema() -> dict[str, Any]:
                 ("403", "Authenticated actor is not authorized"),
                 ("404", "Requested persona or movie does not exist"),
                 ("409", "Idempotency, state revision, or transition conflict"),
+                ("429", "Rate limit exceeded for this tenant and subject"),
                 ("500", "Request transaction failed"),
             ):
-                responses.setdefault(
-                    status,
-                    {
-                        "description": description,
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/ErrorResponse"}
-                            }
-                        },
+                documented: dict[str, Any] = {
+                    "description": description,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                        }
                     },
-                )
+                }
+                # The one status a client is expected to act on rather than
+                # report, so it is the one whose headers are in the contract.
+                if status == "429":
+                    documented["headers"] = _RATE_LIMIT_RESPONSE_HEADERS
+                responses.setdefault(status, documented)
     app.openapi_schema = schema
     return schema
 
@@ -473,10 +561,19 @@ app.openapi = _openapi_schema  # type: ignore[method-assign]
 # Middleware is added at module import, before the first request. Starlette
 # evaluates the last-added middleware first: RequestIdMiddleware resolves the
 # correlation id and owns the response header, AuthMiddleware opens the RLS
-# transaction, then the audit middleware persists before that transaction
-# commits. Request-id resolution is outermost so even a 401 carries the header
-# the caller can correlate on.
+# transaction, the rate limiter charges the verified identity's bucket, then
+# the audit middleware persists before that transaction commits. Request-id
+# resolution is outermost so even a 401 carries the header the caller can
+# correlate on.
 app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
+# Between auth and the audit writer, and only where it is active. It needs the
+# resolved principal, so it cannot run outside AuthMiddleware; and a throttled
+# request must not reach the audit writer, because it produced no prediction to
+# record and a limiter that turns each rejected request into a database write
+# amplifies the burst it exists to shed. The cost it cannot avoid from here is
+# the request transaction AuthMiddleware has already opened — see ADR 0014.
+if _settings.rate_limit_active:
+    app.add_middleware(RateLimitMiddleware, limiter=_rate_limiter)
 app.add_middleware(
     AuthMiddleware,
     jwks=_jwks,
@@ -505,12 +602,56 @@ def _require_demo_persona_access(request: Request) -> None:
 @app.get("/healthz", operation_id="healthCheck")
 async def healthz() -> dict[str, str]:
     """Unauthenticated liveness probe. Skipped by the auth middleware
-    (see ``_UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
+    (see ``UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
     connectivity is deliberately not checked here — pool_pre_ping
     recycles dead connections, and a health endpoint that depends on
     Postgres would false-positive during rolling restarts.
     """
     return {"status": "ok"}
+
+
+@app.get(
+    "/readyz",
+    response_model=ReadinessResponse,
+    operation_id="readinessCheck",
+    responses={
+        503: {
+            "model": ReadinessResponse,
+            "description": "The database or the auth provider is unreachable",
+        }
+    },
+)
+async def readyz(response: Response) -> ReadinessResponse:
+    """Report dependency state for the deploy gate; 503 if the API can't serve."""
+    # Reaching this handler already proves the startup assertions passed — the
+    # connected role has neither BYPASSRLS nor SUPERUSER, pgBouncer is in
+    # transaction pool mode — because a failed assertion exits the process
+    # before it serves anything. What is left to check per probe is that the
+    # two dependencies this process owns still answer. Either one down means no
+    # authenticated request can succeed, so either one down is the 503.
+    #
+    # The sidecars are reported and deliberately not gated on. On a first
+    # deploy the model server materializes features against the schema the
+    # release job creates, so gating readiness on it closes a dependency loop
+    # — and a popularity-serving API beats no API. Whether the learned path is
+    # genuinely learned is the post-deploy verification's question; this
+    # endpoint only makes a degraded sidecar visible without reading logs.
+    database, jwks_state, model_server, feature_server = await asyncio.gather(
+        run_in_threadpool(_probe_database, _app_engine),
+        run_in_threadpool(_probe_jwks, _jwks, _settings.model_tenant_id),
+        _probe_sidecar("model-server", _settings.model_server_url, "/healthz"),
+        _probe_sidecar("feature-server", _settings.feast_feature_server_url, "/health"),
+    )
+    ready = database == "ok" and jwks_state == "ok"
+    if not ready:
+        response.status_code = 503
+    return ReadinessResponse(
+        status="ready" if ready else "not-ready",
+        database=database,
+        jwks=jwks_state,
+        model_server=model_server,
+        feature_server=feature_server,
+    )
 
 
 @app.get(
@@ -1224,6 +1365,56 @@ async def _feedback_mutation(
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _mutation_response(result)
+
+
+# Every probe below catches broadly on purpose. A readiness endpoint reports;
+# it never raises. Whatever stopped a dependency from answering — a dead pool, a
+# revoked grant, a truncated JSON body — is the same answer to the only question
+# being asked, and a probe that 500s tells the deploy gate strictly less than
+# one that says "error".
+def _probe_database(engine: Engine) -> Literal["ok", "error"]:
+    """Round-trip one query through pgBouncer on the RLS-applied role.
+
+    The query names ``public.tenants`` rather than a bare literal because that
+    read is what the tenant router depends on now that this process holds no
+    BYPASSRLS engine: a missing GRANT or an unmigrated database would otherwise
+    stay invisible until a request hit ``/whoami``.
+    """
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1 FROM public.tenants LIMIT 1"))
+    except Exception:
+        logger.warning("Readiness probe: database is not usable", exc_info=True)
+        return "error"
+    return "ok"
+
+
+def _probe_jwks(jwks: JwksCache, realm: str) -> Literal["ok", "error"]:
+    """Fetch the signing keys for the realm this deployment serves.
+
+    Realm-per-tenant (ADR 0007) means the serving tenant names the realm, so
+    the tenant the sidecar is pinned to is the realm whose tokens this
+    deployment actually validates. Deliberately not a forced refresh: the
+    middleware answers a request from this same cache, so a probe that ignored
+    it would report a failure on traffic that would still succeed.
+    """
+    try:
+        jwks.get_jwks(realm)
+    except Exception:
+        logger.warning("Readiness probe: JWKS for realm=%s is not fetchable", realm, exc_info=True)
+        return "error"
+    return "ok"
+
+
+async def _probe_sidecar(name: str, base_url: str, path: str) -> Literal["ok", "unavailable"]:
+    """Ask one private sidecar whether it is answering. Never gates readiness."""
+    try:
+        response = await _readiness_probe.get(f"{base_url.rstrip('/')}{path}")
+        response.raise_for_status()
+    except Exception as exc:
+        logger.info("Readiness probe: %s is unavailable (%s)", name, exc)
+        return "unavailable"
+    return "ok"
 
 
 def _movie_state_response(state: MovieState) -> MovieStateResponse:

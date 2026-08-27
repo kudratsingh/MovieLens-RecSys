@@ -8,10 +8,16 @@ it, and does a movie with no artwork take a page down. Those are pass/fail
 facts, not distributions, so they are checked once against the same warm stack
 the load gate just measured rather than sampled under load.
 
-One of them is deliberately allowed to report "not implemented": there is no
-rate limiting in `src/serving/` today, and this file records that as a measured
-absence with the evidence behind it. Recording a gap honestly is the point —
-inventing a limiter to have something to assert would be worse than the gap.
+Rate limiting used to be the one check allowed to report "not implemented".
+ADR 0014's token bucket closed that gap, so the check is now required and
+asserts the contract a client codes against: the `X-RateLimit-*` headers on an
+admitted request, a 429 carrying `Retry-After` and a JSON detail once the
+bucket is drained, and no third behaviour. A target that advertises a bucket it
+never enforces fails, and so does one that refuses without saying when to come
+back. What the check still cannot assert is that a limiter is *configured* —
+against a dev stack, where the synthetic-load harnesses deliberately drive one
+Keycloak identity past any sane per-subject rate, ADR 0014 turns it off — so a
+target with no limiter is recorded plainly rather than inferred over.
 
 Writes a JSON report to stdout and a readable table to stderr, so a Make target
 can capture the machine-readable half into the run artifact while the human
@@ -36,10 +42,30 @@ import httpx
 # immediately afterwards can legitimately miss it. Bounded polling, not a sleep.
 AUDIT_POLL_ATTEMPTS = 20
 AUDIT_POLL_INTERVAL_S = 0.25
-# Enough consecutive requests that any per-minute or per-second limiter worth
-# the name would have engaged, and few enough to stay inside a CI job.
-RATE_LIMIT_PROBE_REQUESTS = 60
+# The documented defaults are a burst of 120 refilled at 600/minute (ADR 0014,
+# src/config.py), so `burst + limit` is the window in which a drained bucket
+# has to show itself. It is deliberately not `burst + 1`, because the bucket
+# lives in the worker process: this client's keep-alive connection usually pins
+# one worker and one bucket, and then 120 back-to-back requests outrun a
+# 10-per-second refill within a couple of seconds. An edge proxy or a reconnect
+# can spread the probe across all N workers instead, and then the bucket that
+# drains first needs roughly `N x burst` requests plus whatever refilled while
+# they were in flight. 720 covers the two workers a CX22 API runs with room to
+# spare; a wider fan-out fails loudly and is fixed with
+# --rate-limit-probe-requests rather than by editing this.
+#
+# The probe also has to outrun the refill to drain anything at all: at ten
+# tokens a second, a client that manages fewer than ten requests a second never
+# reaches the floor however many it sends. That is a property of a token bucket
+# rather than a tuning problem, which is why the check reports "advertises a
+# bucket but admitted all N" in words instead of inferring a verdict from a
+# window it could not close.
+RATE_LIMIT_PROBE_REQUESTS = 720
 RATE_LIMIT_HEADER_PREFIXES = ("x-ratelimit", "ratelimit", "retry-after")
+RATE_LIMIT_LIMIT_HEADER = "x-ratelimit-limit"
+RATE_LIMIT_REMAINING_HEADER = "x-ratelimit-remaining"
+RATE_LIMIT_RESET_HEADER = "x-ratelimit-reset"
+RETRY_AFTER_HEADER = "retry-after"
 
 WARM_PERSONA = 900000101
 CATALOG_MAX_LIMIT = 48
@@ -84,6 +110,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--client-secret", default="movielens-api-secret-dev-only")
     parser.add_argument("--username", default="demo")
     parser.add_argument("--password", default="demo")
+    parser.add_argument(
+        "--rate-limit-probe-requests",
+        type=int,
+        default=RATE_LIMIT_PROBE_REQUESTS,
+        help=(
+            "how many rapid authenticated requests the rate-limit check may send "
+            "before it gives up looking for a 429; raise it for a service running "
+            "more workers or a larger burst than the documented defaults"
+        ),
+    )
     args = parser.parse_args(argv)
 
     target = Target(
@@ -98,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     with httpx.Client(timeout=15.0) as client:
         token = _mint_token(client, target)
-        checks = list(_run_checks(client, target, token))
+        checks = list(_run_checks(client, target, token, int(args.rate_limit_probe_requests)))
 
     report = {
         "target": target.api_url,
@@ -115,7 +151,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 1 if report["required_failures"] else 0
 
 
-def _run_checks(client: httpx.Client, target: Target, token: str) -> Iterator[Check]:
+def _run_checks(
+    client: httpx.Client, target: Target, token: str, probe_requests: int
+) -> Iterator[Check]:
     yield _check_readiness(client, target)
     yield _check_auth_boundary(client, target)
     request_id, echo_check = _check_request_id_echo(client, target, token)
@@ -123,10 +161,13 @@ def _run_checks(client: httpx.Client, target: Target, token: str) -> Iterator[Ch
     yield _check_request_id_persisted(client, target, token, request_id)
     yield _check_minted_request_id(client, target, token)
     yield _check_dependency_visibility(client, target, token)
-    yield _check_rate_limiting(client, target, token)
     yield _check_degraded_metadata(client, target, token)
     yield _check_bounded_pages(client, target, token)
     yield _check_cursor_rejection(client, target, token)
+    # Last, and it has to stay last: it drains this identity's rate-limit
+    # bucket on purpose, and every check above authenticates as the same
+    # subject, so running it earlier would throttle them into failing.
+    yield _check_rate_limiting(client, target, token, probe_requests)
 
 
 # --- readiness and the auth boundary ----------------------------------------
@@ -322,49 +363,136 @@ def _check_dependency_visibility(client: httpx.Client, target: Target, token: st
 # --- rate limiting ----------------------------------------------------------
 
 
-def _check_rate_limiting(client: httpx.Client, target: Target, token: str) -> Check:
-    """Report what the service does under a rapid burst, including nothing.
+def _check_rate_limiting(
+    client: httpx.Client, target: Target, token: str, probe_requests: int
+) -> Check:
+    """A caller that hammers the API is refused, and told when to come back.
 
-    Advisory by design. `src/serving/` has no limiter, and `src/serving/tenancy/`
-    says so; the per-tenant quota column exists but nothing reads it yet. This
-    records the measured behaviour so the gap is evidence rather than folklore,
-    and so the day a limiter lands, this check starts describing it without
-    being rewritten.
+    The contract under test is ADR 0014's, from the client's side: an admitted
+    request carries the three `X-RateLimit-*` headers, a drained bucket answers
+    429 with `Retry-After` and an `ErrorResponse` body, and nothing else ever
+    happens. Every failure mode below is one a client would have to work around
+    at three in the morning — a 429 with no `Retry-After` leaves it guessing, a
+    bucket advertised but never enforced makes its backoff code dead, and a
+    third status code means the limiter is failing rather than limiting.
+
+    The probe stops at the first refusal: what matters is that the bucket has a
+    floor, not how far past it the service will keep counting.
     """
     statuses: dict[int, int] = {}
     limit_headers: dict[str, str] = {}
-    for _ in range(RATE_LIMIT_PROBE_REQUESTS):
+    admitted_headers: dict[str, str] = {}
+    throttled: httpx.Response | None = None
+    sent = 0
+
+    for _ in range(probe_requests):
         response = client.get(
             f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit=1", headers=_auth(token)
         )
+        sent += 1
         statuses[response.status_code] = statuses.get(response.status_code, 0) + 1
-        for name, value in response.headers.items():
-            if name.lower().startswith(RATE_LIMIT_HEADER_PREFIXES):
-                limit_headers[name.lower()] = value
-    throttled = statuses.get(429, 0)
-    implemented = throttled > 0 or bool(limit_headers)
+        observed = {
+            name.lower(): value
+            for name, value in response.headers.items()
+            if name.lower().startswith(RATE_LIMIT_HEADER_PREFIXES)
+        }
+        limit_headers.update(observed)
+        if response.status_code == 200 and observed:
+            admitted_headers = observed
+        if response.status_code == 429:
+            throttled = response
+            break
+
+    enforced = throttled is not None
+    advertised = bool(limit_headers)
+    problems: list[str] = []
+
+    unexpected = sorted(set(statuses) - {200, 429})
+    if unexpected:
+        problems.append(f"unexpected status codes under a burst: {unexpected}")
+
+    if throttled is not None:
+        headers = {name.lower(): value for name, value in throttled.headers.items()}
+        if statuses.get(200):
+            # Only when the probe saw one: an earlier check can legitimately
+            # have drained the bucket, and a probe that opened on a 429 has
+            # already proved everything a 200 would have.
+            problems.extend(_rate_limit_header_problems(admitted_headers, "an admitted response"))
+        problems.extend(_rate_limit_header_problems(headers, "the 429"))
+        if _positive_int(headers.get(RETRY_AFTER_HEADER)) is None:
+            problems.append("the 429 carried no usable Retry-After, so a client cannot back off")
+        if headers.get(RATE_LIMIT_REMAINING_HEADER) != "0":
+            problems.append(
+                f"the 429 reported {RATE_LIMIT_REMAINING_HEADER}="
+                f"{headers.get(RATE_LIMIT_REMAINING_HEADER)!r}, not 0"
+            )
+        if not str(_json(throttled).get("detail") or "").strip():
+            problems.append("the 429 body carried no detail")
+    elif advertised:
+        problems.append(
+            f"the service advertises a bucket ({sorted(limit_headers)}) but admitted all "
+            f"{sent} requests; either the limit is larger than this probe window or the "
+            "headers describe a limiter that never engages — raise "
+            "--rate-limit-probe-requests or check RATE_LIMIT_* on the target"
+        )
+
+    if enforced:
+        reset = _positive_int(limit_headers.get(RATE_LIMIT_RESET_HEADER))
+        outcome = (
+            f"throttled after {sent} rapid requests with HTTP 429, "
+            f"Retry-After={limit_headers.get(RETRY_AFTER_HEADER)}s"
+            + (f", bucket full again in {reset}s" if reset else "")
+        )
+    elif advertised:
+        outcome = f"headers present but no 429 within {sent} requests"
+    else:
+        # Not a silent pass: the summary says which stacks are allowed to look
+        # like this, so a deployed environment that lost its limiter reads as
+        # wrong to a human even though the check cannot fail it from out here.
+        outcome = (
+            f"no limiter on this target — {sent} rapid requests, no 429, no X-RateLimit-* "
+            "headers. Expected only where ADR 0014 turns it off (a dev stack, where the "
+            "load harnesses drive one identity far past any per-subject rate); every "
+            "deployed environment should show the enforced branch"
+        )
+
     return Check(
         name="rate_limiting",
-        # Not a pass/fail contract: an absent limiter is a recorded gap, and a
-        # present one only has to answer 429 rather than fail or hang.
-        passed=set(statuses) <= {200, 429},
-        required=False,
-        summary=(
-            f"{RATE_LIMIT_PROBE_REQUESTS} rapid authenticated requests -> statuses {statuses}; "
-            + (
-                f"rate limiting IS implemented ({throttled} throttled, headers "
-                f"{sorted(limit_headers)})"
-                if implemented
-                else "rate limiting is NOT implemented (no 429, no X-RateLimit-* headers)"
-            )
-        ),
+        passed=not problems,
+        required=True,
+        summary=outcome if not problems else "; ".join(problems),
         evidence={
-            "requests": RATE_LIMIT_PROBE_REQUESTS,
+            "requests_sent": sent,
+            "probe_window": probe_requests,
             "statuses": {str(code): count for code, count in sorted(statuses.items())},
-            "implemented": implemented,
+            "enforced": enforced,
+            "advertised": advertised,
             "limit_headers": limit_headers,
+            "throttled_detail": _json(throttled).get("detail") if throttled is not None else None,
+            "problems": problems,
         },
     )
+
+
+def _rate_limit_header_problems(headers: dict[str, str], where: str) -> list[str]:
+    """The three headers a client plans its request rate from must be usable."""
+    if not headers:
+        return [f"{where} carried no X-RateLimit-* headers"]
+    problems: list[str] = []
+    for name in (RATE_LIMIT_LIMIT_HEADER, RATE_LIMIT_REMAINING_HEADER, RATE_LIMIT_RESET_HEADER):
+        raw = headers.get(name)
+        if raw is None:
+            problems.append(f"{where} is missing {name}")
+        elif not raw.isdigit():
+            problems.append(f"{where} carried a non-numeric {name}={raw!r}")
+    return problems
+
+
+def _positive_int(raw: str | None) -> int | None:
+    if raw is None or not raw.isdigit():
+        return None
+    value = int(raw)
+    return value if value > 0 else None
 
 
 # --- degraded metadata and bounded pages ------------------------------------
@@ -377,18 +505,25 @@ def _check_degraded_metadata(client: httpx.Client, target: Target, token: str) -
     the normal path rather than an edge case: if a missing poster could fail a
     page, most of Browse would be broken.
     """
-    catalog = _json(
-        client.get(
-            f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit={CATALOG_MAX_LIMIT}&sort=title",
-            headers=_auth(token),
-        )
+    catalog_response = client.get(
+        f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit={CATALOG_MAX_LIMIT}&sort=title",
+        headers=_auth(token),
     )
+    catalog = _json(catalog_response)
     items = catalog.get("items")
     if not isinstance(items, list) or not items:
+        # Same reason as _no_cursor_summary: an empty item list after a 429 is a
+        # limit, not a fixture, and the two get fixed in different places.
+        reason = (
+            f"HTTP {catalog_response.status_code}"
+            if catalog_response.status_code != 200
+            else "an empty item list"
+        )
         return Check(
             name="degraded_metadata",
             passed=False,
-            summary="catalog returned no items, so degraded metadata could not be exercised",
+            summary=(f"catalog answered {reason}, so degraded metadata could not be exercised"),
+            evidence={"catalog_status": catalog_response.status_code},
         )
     posterless = [item for item in items if not item.get("poster_url")]
     if not posterless:
@@ -479,21 +614,45 @@ def _check_bounded_pages(client: httpx.Client, target: Target, token: str) -> Ch
     )
 
 
+def _no_cursor_summary(response: httpx.Response) -> str:
+    """Say why the first page carried no cursor, and name throttling as throttling.
+
+    This whole suite runs as one subject inside a few seconds, so it competes
+    with itself for that subject's token bucket (ADR 0014). A throttled catalog
+    read returns a body with no ``page`` key, and reporting that as "the fixture
+    has only one page" sends whoever reads it to look at the seed data instead
+    of at the limit. Say which one it was.
+    """
+    if response.status_code == 429:
+        retry_after = response.headers.get("retry-after", "?")
+        return (
+            f"the first catalog page was rate limited (HTTP 429, Retry-After={retry_after}s), "
+            "so no continuation cursor could be read. This suite and `verify --all` share one "
+            "subject's bucket -- see ADR 0014"
+        )
+    if response.status_code != 200:
+        return (
+            f"the first catalog page answered HTTP {response.status_code}, "
+            "so no continuation cursor could be read"
+        )
+    return "the first catalog page offered no continuation cursor to test"
+
+
 def _check_cursor_rejection(client: httpx.Client, target: Target, token: str) -> Check:
     """A cursor that no longer matches its query is refused, not silently re-run."""
-    first = _json(
-        client.get(
-            f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit=24&sort=title",
-            headers=_auth(token),
-        )
+    first_response = client.get(
+        f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit=24&sort=title",
+        headers=_auth(token),
     )
+    first = _json(first_response)
     page = first.get("page") or {}
     cursor = page.get("next_cursor")
     if not isinstance(cursor, str):
         return Check(
             name="cursor_rejection",
             passed=False,
-            summary="the first catalog page offered no continuation cursor to test",
+            summary=_no_cursor_summary(first_response),
+            evidence={"first_page_status": first_response.status_code},
         )
     # The cursor goes into the URL rather than into `params`: httpx replaces a
     # URL's query string when both are given, which would quietly drop the

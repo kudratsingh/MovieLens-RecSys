@@ -1,0 +1,415 @@
+name: Deploy production
+
+# The only path by which anything reaches the production host.
+#
+# The trigger is CI's *completion* rather than the push that started it. The
+# images a deploy pulls are built by CI's `publish-images` job, so a workflow
+# that fired on the push itself would race the thing it depends on and reach the
+# box before the tag existed. `workflow_run` fires once CI has concluded and
+# carries the commit CI ran on in `workflow_run.head_sha`.
+#
+# That conclusion is checked rather than trusted. `conclusion == 'success'` is a
+# statement about a run, and a run stays green when a job is skipped or deleted;
+# the gate below turns it into a statement about each required job by name, on
+# that exact SHA.
+#
+# Nothing is built here and nothing is copied here. The host holds the
+# repository at /opt/movielens and its secrets at /opt/movielens/.env.prod, so
+# this workflow checks out no code and its entire payload is one SSH command
+# naming a commit. Everything the release actually does — pull, run the release
+# job, start the stack, verify, roll back on a failed verification — lives in
+# infra/deploy/deploy.sh, on the box, where an operator can run exactly the same
+# thing by hand during an incident.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to deploy (40-character SHA). Defaults to the tip of main."
+        required: false
+        type: string
+      rollback:
+        description: "Return the host to its recorded previous release instead of deploying."
+        required: false
+        type: boolean
+        default: false
+
+# One lane to the box, shared with production-canary.yml: a canary that runs
+# `make prod-verify` while a release is halfway through reports on a system that
+# is mid-change. Queued runs wait rather than cancel — cancelling a release
+# between `docker compose pull` and `up -d` leaves the host in neither the old
+# state nor the new one.
+concurrency:
+  group: production-hetzner
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  # Every job in .github/workflows/ci.yml that runs unconditionally, plus
+  # `publish-images`. Requiring the whole set rather than a hand-picked subset
+  # is deliberate: a job that is deleted, renamed or skipped still leaves its
+  # run green, and "the run is green" is then a statement about nothing.
+  # tests/unit/test_deploy_workflows.py holds both lists against ci.yml so they
+  # cannot drift apart silently.
+  #
+  # `publish-images` is required rather than conditional even though it carries
+  # an `if`. Its condition is an event guard (push to main), not a path filter,
+  # and a skipped `publish-images` means this commit has no images in GHCR at
+  # all — `docker compose pull` on the box would fail on a tag that was never
+  # pushed. Refusing here says so in a place with a log.
+  #
+  # `api-contract-check` and `web-api-types-check` are named as gates in the
+  # deployment plan but are *steps*, not jobs: `python -m scripts.generate_openapi
+  # --check` inside `lint`, and `npm run api:types:check` inside `frontend`.
+  # Requiring those two jobs is what requiring those two checks means, and the
+  # unit test asserts the steps are still where this comment says they are.
+  REQUIRED_CHECKS: >-
+    browser-auth-e2e
+    changed-paths
+    demo-compose
+    feature-parity
+    frontend
+    lint
+    publish-images
+    synthetic-load-smoke
+    tenant-isolation
+    test
+  # Jobs ci.yml gates on a path filter. On a push to `main` that filter has no
+  # base commit to diff against and deliberately turns every gate on, so these
+  # are `success` on exactly the runs this workflow normally reads. `skipped` is
+  # accepted — and reported as a warning — because a workflow_dispatch aimed at
+  # an older commit reads that commit's pull_request run, where the filter can
+  # legitimately have decided a gate was not needed by the change.
+  CONDITIONAL_CHECKS: >-
+    realm-drift
+    serving-artifacts
+  CI_WORKFLOW_FILE: ci.yml
+
+jobs:
+  gate:
+    name: Resolve the commit and require a green CI run
+    # On the workflow_run path this is the guard that matters: `types:
+    # [completed]` fires for a failed run too, and a deploy triggered by a red
+    # CI run is precisely the thing this workflow exists to prevent. The branch
+    # is asserted as well as filtered, because `on.workflow_run.branches` and
+    # the run's own head_branch are two different facts.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Deliberately without `environment:`. The production environment carries a
+    # required reviewer, and a reviewer should be asked to approve a release
+    # whose CI is already proven green — not asked first and told afterwards
+    # that the commit never passed.
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      rollback: ${{ steps.resolve.outputs.rollback }}
+    steps:
+      - name: Resolve the commit this run acts on
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+
+          rollback=false
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_ROLLBACK}" = "true" ]; then
+            rollback=true
+          fi
+
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            sha="${RUN_HEAD_SHA}"
+          elif [ -n "${INPUT_SHA}" ]; then
+            sha="${INPUT_SHA}"
+          else
+            sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')
+          fi
+
+          # This value is interpolated into a remote command line further down.
+          # A 40-character hex string is the only shape that reaches the box.
+          if ! printf '%s' "${sha}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::'${sha}' is not a 40-character commit SHA. Refusing to deploy."
+            exit 1
+          fi
+
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "rollback=${rollback}" >> "$GITHUB_OUTPUT"
+          echo "Target commit ${sha} (rollback=${rollback})."
+
+      # A rollback ships nothing new: it returns the box to the release recorded
+      # in /opt/movielens/.release/previous, which passed this same gate when it
+      # was deployed. There is no new commit here to assert anything about, and
+      # blocking a rollback on a CI query is how an incident gets longer.
+      - name: Require every CI check to be green on this commit
+        if: steps.resolve.outputs.rollback != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # No wait loop: on the workflow_run path CI has already concluded by
+          # definition, and a workflow_dispatch aimed at a commit whose CI is
+          # still running should be told so rather than silently held open for
+          # an hour.
+          runs=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?head_sha=${COMMIT_SHA}&per_page=100")
+
+          # The API returns runs newest first; a re-run keeps the same id and
+          # bumps run_attempt, so the newest entry of a kind is the one that
+          # counts. A push run is preferred over a pull_request run for the same
+          # commit: only a push run carries `publish-images`, and ci.yml's path
+          # filter has no base commit to diff on a push and therefore runs every
+          # gate.
+          run_json=$(jq -c '
+            [.workflow_runs[]] as $all
+            | (($all | map(select(.event == "push")) | first) // ($all | first)) // empty' <<<"$runs")
+
+          if [ -z "$run_json" ]; then
+            echo "::error::No ${CI_WORKFLOW_FILE} run exists for ${COMMIT_SHA}. Refusing to deploy."
+            exit 1
+          fi
+
+          run_id=$(jq -r '.id' <<<"$run_json")
+          run_url=$(jq -r '.html_url' <<<"$run_json")
+          status=$(jq -r '.status' <<<"$run_json")
+          conclusion=$(jq -r '.conclusion' <<<"$run_json")
+
+          if [ "$status" != "completed" ]; then
+            echo "::error::CI run ${run_id} for ${COMMIT_SHA} is '${status}', not completed. Refusing to deploy. ${run_url}"
+            exit 1
+          fi
+
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI run ${run_id} for ${COMMIT_SHA} concluded '${conclusion}'. Refusing to deploy. ${run_url}"
+            exit 1
+          fi
+
+          # A green run is necessary and not sufficient: a skipped job does not
+          # fail its run, and neither does a job that no longer exists. Every
+          # required check has to be present and successful in its own right.
+          jobs_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100&filter=latest")
+
+          failed=0
+          {
+            echo "### Required CI checks on \`${COMMIT_SHA}\`"
+            echo
+            echo "Run: [${run_id}](${run_url})"
+            echo
+            echo "| Check | Conclusion |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for check in $REQUIRED_CHECKS; do
+            result=$(jq -r --arg n "$check" \
+              'first(.jobs[] | select(.name == $n) | .conclusion) // "absent"' <<<"$jobs_json")
+            echo "| \`${check}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$result" != "success" ]; then
+              echo "::error::Required CI check '${check}' is '${result}' on ${COMMIT_SHA}."
+              failed=1
+            fi
+          done
+
+          for check in $CONDITIONAL_CHECKS; do
+            result=$(jq -r --arg n "$check" \
+              'first(.jobs[] | select(.name == $n) | .conclusion) // "absent"' <<<"$jobs_json")
+            echo "| \`${check}\` | ${result} (conditional) |" >> "$GITHUB_STEP_SUMMARY"
+            case "$result" in
+              success) ;;
+              skipped)
+                echo "::warning::Conditional CI check '${check}' was skipped on ${COMMIT_SHA}; ci.yml's path filter decided this change did not need it."
+                ;;
+              *)
+                echo "::error::Conditional CI check '${check}' is '${result}' on ${COMMIT_SHA}."
+                failed=1
+                ;;
+            esac
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Refusing to deploy ${COMMIT_SHA}: not every required CI check is green."
+            exit 1
+          fi
+
+          echo "Every required CI check is green on ${COMMIT_SHA}."
+
+  deploy:
+    name: Release to the production host
+    needs: gate
+    runs-on: ubuntu-latest
+    # The `production` GitHub environment holds DEPLOY_SSH_KEY and
+    # DEPLOY_KNOWN_HOSTS and carries the required reviewer. The rollback lives
+    # inside infra/deploy/deploy.sh rather than in a second job here for the
+    # same reason: a separate job would re-enter the approval gate, and a
+    # rollback that waits for a reviewer at 02:00 is not a rollback.
+    environment: production
+    timeout-minutes: 60
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
+      DEPLOY_ROLLBACK: ${{ needs.gate.outputs.rollback }}
+    steps:
+      # The key is held by an agent for the life of the job and never written to
+      # disk. The host key is pinned from DEPLOY_KNOWN_HOSTS: an SSH session
+      # that accepts whatever key answers on port 22 authenticates the deploy
+      # user to an unknown server, which for a step that runs shell commands as
+      # a Docker-capable account is the whole game. Disabling host-key checking
+      # appears nowhere in this repository's workflows, and a unit test greps
+      # for the flag that would do it. Pinning a new box means running
+      # `ssh-keyscan` once into the DEPLOY_KNOWN_HOSTS secret.
+      - name: Open an SSH agent holding the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOST}" ] || [ -z "${DEPLOY_USER}" ]; then
+            echo "::error::The production environment must set the DEPLOY_HOST and DEPLOY_USER variables."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_SSH_KEY}" ] || [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::error::The production environment must set the DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS secrets."
+            exit 1
+          fi
+
+          umask 077
+          mkdir -p "${RUNNER_TEMP}/ssh"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${RUNNER_TEMP}/ssh/known_hosts"
+
+          eval "$(ssh-agent -s)" > /dev/null
+          if ! printf '%s\n' "${DEPLOY_SSH_KEY}" | ssh-add - 2> /dev/null; then
+            echo "::error::ssh-add refused DEPLOY_SSH_KEY. It has to be a complete PEM private key, newlines included."
+            exit 1
+          fi
+          {
+            echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+            echo "SSH_AGENT_PID=${SSH_AGENT_PID}"
+          } >> "$GITHUB_ENV"
+
+          echo "Deploy target ${DEPLOY_USER}@${DEPLOY_HOST}, host key pinned from DEPLOY_KNOWN_HOSTS."
+
+      # `git fetch --tags origin && git checkout --detach <sha>` is what makes
+      # the box's checkout match the images: deploy.sh reads compose files,
+      # Makefile targets and the release job from the working tree, so a tree at
+      # a different commit than IMAGE_TAG is a stack described by one release
+      # and running another. Detached on purpose — no branch on the box can
+      # drift, and a rollback is another detached checkout rather than a reset.
+      #
+      # The whole release runs inside deploy.sh: record current→previous, pull
+      # at this SHA, run the release job, `up -d`, `make prod-verify`, and on a
+      # failed verification roll back to the recorded previous release and
+      # verify that. It prints DEPLOY-OK <sha> or ROLLBACK-OK <sha> as its last
+      # word, and this job believes the sentinel rather than the exit code — a
+      # remote command that dies with the connection can exit 0 through some
+      # shells, and "the SSH call returned" is not "the release landed".
+      - name: Run the release on the host
+        id: release
+        run: |
+          set -euo pipefail
+
+          if [ "${DEPLOY_ROLLBACK}" = "true" ]; then
+            remote="cd /opt/movielens && infra/deploy/deploy.sh --rollback"
+            sentinel="ROLLBACK-OK"
+          else
+            remote="cd /opt/movielens && git fetch --tags origin && git checkout --detach ${DEPLOY_SHA} && infra/deploy/deploy.sh ${DEPLOY_SHA}"
+            sentinel="DEPLOY-OK"
+          fi
+          echo "sentinel=${sentinel}" >> "$GITHUB_OUTPUT"
+
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" "${remote}" 2>&1 \
+            | tee "${RUNNER_TEMP}/release.log"
+          ssh_status=${PIPESTATUS[0]}
+          set -e
+
+          fail() {
+            echo "::error::$1"
+            {
+              echo "### Release failed"
+              echo ""
+              echo "$1"
+              echo ""
+              echo '```'
+              tail -n 60 "${RUNNER_TEMP}/release.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          # Checked before the sentinel is looked for, because it is the one
+          # failure with a specific thing to say. ROLLBACK-OK during a deploy
+          # means deploy.sh could not verify the new release and put the
+          # previous one back: the box is serving and the run still has to be
+          # red, or somebody reads a green tick and believes the commit shipped.
+          if [ "${sentinel}" = "DEPLOY-OK" ] \
+            && grep -Eq "(^|[[:space:]])ROLLBACK-OK([[:space:]]|$)" "${RUNNER_TEMP}/release.log"; then
+            fail "${DEPLOY_SHA} failed verification and the host rolled back to its previous release. The site is up on the previous release; this commit did not ship."
+          fi
+
+          if ! grep -Eq "(^|[[:space:]])${sentinel}([[:space:]]|$)" "${RUNNER_TEMP}/release.log"; then
+            fail "The host never printed ${sentinel}; the release did not complete (ssh exit ${ssh_status})."
+          fi
+          if [ "${ssh_status}" -ne 0 ]; then
+            fail "The host printed ${sentinel} but the release command exited ${ssh_status}."
+          fi
+
+          echo "${sentinel} for ${DEPLOY_SHA}."
+
+      # Read back even when the release failed — that is the run whose rollback
+      # target somebody actually needs. deploy.sh records current→previous
+      # before it pulls anything, so `previous` names the release that was
+      # serving when this run started whether or not the new one landed.
+      - name: Upload the recorded rollback target
+        if: always()
+        env:
+          RELEASE_SENTINEL: ${{ steps.release.outputs.sentinel }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/rollback-target
+
+          recorded=$(ssh -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+            -o BatchMode=yes -o ConnectTimeout=20 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'cd /opt/movielens/.release 2>/dev/null && { printf "current=%s\n" "$(cat current 2>/dev/null)"; printf "previous=%s\n" "$(cat previous 2>/dev/null)"; }' \
+            || echo "unreadable=true")
+
+          {
+            echo "attempted=${DEPLOY_SHA}"
+            echo "rollback_requested=${DEPLOY_ROLLBACK}"
+            echo "sentinel=${RELEASE_SENTINEL}"
+            printf '%s\n' "${recorded}"
+          } | tee artifacts/rollback-target/release-state.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the rollback target
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-target
+          path: artifacts/rollback-target/
+          if-no-files-found: warn
+
+      - name: Close the SSH agent
+        if: always()
+        run: ssh-agent -k > /dev/null 2>&1 || true

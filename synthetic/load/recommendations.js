@@ -4,6 +4,7 @@ import http from "k6/http";
 import { Counter, Trend } from "k6/metrics";
 
 import { authorizationHeaders, mintAccessToken } from "./lib/auth.js";
+import { canaryThresholds } from "./canary_thresholds.js";
 import { recommendationThresholds } from "./thresholds.js";
 
 const PROFILE = __ENV.LOAD_PROFILE || "smoke";
@@ -64,6 +65,19 @@ const profiles = {
     maxVUs: 400,
     rate: 600,
   },
+  // Post-deploy correctness canary, run by the `loadcheck` job against a
+  // deployed environment. Same workload shape and same checks as `smoke` at a
+  // deliberately small arrival rate: every request writes an audit row to the
+  // production database, and what this run has to establish is that the
+  // deployment serves the learned path correctly at all — not how fast it does
+  // it on a host nobody controls. Its pass/fail contract is
+  // `canary_thresholds.js`; see that file for why the p99 gate is not it.
+  "prod-canary": {
+    duration: "60s",
+    preAllocatedVUs: 5,
+    maxVUs: 20,
+    rate: 5,
+  },
 };
 
 if (!(PROFILE in profiles)) {
@@ -71,6 +85,10 @@ if (!(PROFILE in profiles)) {
 }
 
 const selected = profiles[PROFILE];
+// The pinned SLO thresholds stay attached to every profile that measures a
+// controlled host; only the deployed canary swaps in the weaker contract.
+const selectedThresholds =
+  PROFILE === "prod-canary" ? canaryThresholds : recommendationThresholds;
 
 export const options = {
   batchPerHost: 16,
@@ -86,7 +104,7 @@ export const options = {
       duration: selected.duration,
     },
   },
-  thresholds: recommendationThresholds,
+  thresholds: selectedThresholds,
   summaryTrendStats: ["avg", "min", "med", "p(50)", "p(95)", "p(99)", "max"],
 };
 
@@ -220,6 +238,24 @@ function assertWarmUpResponse(response, userId, round, enforcePolicy) {
   const expected = expectedPolicy(userId);
   const learnedExpected = expected !== POPULARITY_POLICY;
   const policy = response.status === 200 ? response.json("serving_policy") : null;
+  if (response.status === 429) {
+    // Every request this script makes -- warm-up and measured window alike --
+    // authenticates as one Keycloak subject, so under ADR 0014 it charges one
+    // token bucket. The warm-up is the burstiest thing here by design: it fires
+    // WARMUP_PER_PERSONA x personas per round, in parallel, as fast as the
+    // stack answers, and against the documented default of 120 requests/minute
+    // with a burst of 30 it drains that bucket before the measured window opens.
+    // Say that, rather than sending whoever reads it to re-seed a database that
+    // is fine.
+    throw new Error(
+      `${stage} failed for user ${userId}: HTTP 429. Body: ${response.body}. ` +
+        "This is the rate limiter (ADR 0014), not the serving stack: the whole " +
+        "harness runs as one subject and the warm-up is its burstiest phase. " +
+        "Raise RATE_LIMIT_REQUESTS_PER_MINUTE / RATE_LIMIT_BURST on the API " +
+        "under measurement, or run the profile against a target with the " +
+        "limiter off. Do not exempt the client.",
+    );
+  }
   if (!policy || typeof policy.name !== "string") {
     throw new Error(
       `${stage} failed for user ${userId}: HTTP ${response.status} with no serving_policy. ` +

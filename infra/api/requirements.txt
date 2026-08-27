@@ -1,12 +1,20 @@
 # Dependencies imported by the API, auth, schema bootstrap, and demo seed paths.
 # Training, orchestration, tracking, and DVC dependencies do not belong in the
 # serving image.
-alembic>=1.13
-fastapi
-httpx
-prometheus-client
-psycopg2-binary
-pydantic-settings
-pyjwt[crypto]>=2.8
-sqlalchemy>=2.0
-uvicorn[standard]
+#
+# Exact pins, not floors: an image rebuilt for a rollback has to install what
+# the image it replaces installed, and a floor turns a redeploy into an
+# unreviewed dependency upgrade. The versions below are the ones the reviewed
+# `movielens-recsys/api:demo` image resolved; refresh them deliberately by
+# rebuilding and reading `pip freeze` out of the new image. Transitive
+# dependencies are still resolved by pip: this is a pinned direct set, not a
+# hash-locked lockfile.
+alembic==1.19.1
+fastapi==0.141.1
+httpx==0.28.1
+prometheus-client==0.26.0
+psycopg2-binary==2.9.12
+pydantic-settings==2.15.0
+pyjwt[crypto]==2.13.0
+sqlalchemy==2.0.52
+uvicorn[standard]==0.52.4

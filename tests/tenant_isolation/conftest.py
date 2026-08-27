@@ -5,7 +5,12 @@ with migrations applied and both `default` + `demo` realms seeded.
 
 Skips every test when the stack isn't reachable so the file can live
 in the same repo as unit tests without breaking CI on runners that
-don't boot Docker.
+don't boot Docker — *unless* the caller declared that a stack is
+mandatory by setting ``REQUIRE_TENANT_ISOLATION_STACK=1``, in which
+case an absent stack is a failure. The distinction matters because a
+skip and a pass look identical in a job summary: pointed at a
+deployment, this file would otherwise report success while executing
+nothing, on the one bug class the project calls highest-severity.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from src.config import Settings
+from synthetic.tenant_isolation.remote_canary import REQUIRE_STACK_ENV, live_stack_required
 
 _KEYCLOAK_URL = "http://localhost:8080"
 _API_CLIENT_ID = "movielens-api"
@@ -35,6 +41,15 @@ def _stack_reachable() -> bool:
 
 
 if not _stack_reachable():
+    if live_stack_required():
+        pytest.fail(
+            f"{REQUIRE_STACK_ENV}=1 was set, so these tests must run: Keycloak did not "
+            f"answer at {_KEYCLOAK_URL}/realms/default and the cross-tenant leakage "
+            "canaries were never executed. Skipping here would report a pass for a "
+            "gate that never ran — bring the stack up, or point the deployed-stack "
+            "canary (`python -m synthetic.tenant_isolation.remote_canary`) at the target.",
+            pytrace=False,
+        )
     pytest.skip(
         "docker-compose stack not reachable at localhost:8080 — "
         "run `make infra-up && make db-migrate` before invoking these tests",

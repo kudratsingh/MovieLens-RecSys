@@ -28,7 +28,7 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
             if "operationId" not in operation:
                 continue
             operation_ids.append(operation["operationId"])
-            if path == "/healthz":
+            if path in {"/healthz", "/readyz"}:
                 assert "security" not in operation
             else:
                 assert operation["security"] == [{"BearerAuth": []}]
@@ -39,6 +39,7 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
     assert len(operation_ids) == len(set(operation_ids))
     assert set(operation_ids) == {
         "healthCheck",
+        "readinessCheck",
         "getCurrentActor",
         "recommendMovies",
         "listRecommendationAudits",
@@ -61,6 +62,23 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
         "dismissMovie",
         "undoMovieDismissal",
     }
+
+
+def test_readiness_contract_documents_both_probe_outcomes() -> None:
+    """A deploy gate reads the status code; an operator reads the body. Both
+    outcomes are in the contract so neither is folded into a generic error."""
+    schema = _schema()
+    operation = schema["paths"]["/readyz"]["get"]
+
+    assert set(operation["responses"]) == {"200", "503"}
+    for status in ("200", "503"):
+        assert operation["responses"][status]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ReadinessResponse"
+        }
+    readiness = schema["components"]["schemas"]["ReadinessResponse"]["properties"]
+    assert readiness["status"]["enum"] == ["ready", "not-ready"]
+    assert readiness["database"]["enum"] == ["ok", "error"]
+    assert readiness["model_server"]["enum"] == ["ok", "unavailable"]
 
 
 def test_rating_schema_exposes_half_star_and_range_constraints() -> None:

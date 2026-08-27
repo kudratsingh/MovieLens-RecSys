@@ -1,0 +1,214 @@
+name: Production canary
+
+# The only continuous health signal this deployment has. A single-node stack has
+# no deploy-time health check that keeps watching: once `docker compose up -d
+# --wait` has seen every container healthy, nothing notices a model sidecar that
+# lost its Redis, an expired client secret, or a warm persona that has quietly
+# started being served the popularity fallback at HTTP 200.
+#
+# So every thirty minutes this runs `make prod-verify` on the box over SSH —
+# `python -m src.release.verify --all` in the private `verify` service followed
+# by the non-latency reliability harness. That is the whole post-deploy matrix,
+# including tenant isolation, the learned-path assertion and the audit SLI
+# rollup, and it is what decides the run.
+#
+# It ships nothing. There is no checkout here, no `git fetch`, no image pull and
+# no tag to pull one at: a canary must measure what is running, never change it.
+#
+# `make prod-load` is *not* on the schedule. The production-mode rehearsal
+# measured what happens when it is: at ADR 0014's shipped defaults a single
+# keep-alive subject at 5 requests/second had 37.9% of its requests refused,
+# because keep-alive pins a connection to one worker and the effective
+# single-client limit is one worker's bucket rather than workers × limit. A
+# canary that reports a red loadcheck every half hour for a limiter behaving
+# exactly as configured teaches everyone to ignore the canary. It stays
+# available on demand, and stays advisory when it runs: the SLO's only authority
+# is the pinned k6 gate in CI (ADR 0010).
+
+on:
+  schedule:
+    # Every 30 minutes. Scheduled runs only ever fire on the default branch.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      run_loadcheck:
+        description: "Also run the advisory `make prod-load` (rate-limit refusals expected — see ADR 0014)."
+        type: boolean
+        default: false
+
+# Shared with deploy-production.yml on purpose: a canary that runs the verify
+# matrix while a release is halfway through would report on a system that is
+# mid-change, and its `verify` container would be talking to a half-restarted
+# stack. Queued runs wait rather than cancel.
+concurrency:
+  group: production-hetzner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: Verify the running deployment
+    runs-on: ubuntu-latest
+    # A second GitHub environment holding the same DEPLOY_* values as
+    # `production` but with no protection rules. `production` carries a required
+    # reviewer, and a reviewer prompt on a job that fires every thirty minutes
+    # means no canary at all — the runs would queue for approval and be
+    # superseded before anyone read them. What differs is only that this
+    # environment gates nothing, which is acceptable because every command below
+    # reads the running stack and changes nothing.
+    environment: production-canary
+    timeout-minutes: 45
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+    steps:
+      - name: Open an SSH agent holding the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOST}" ] || [ -z "${DEPLOY_USER}" ]; then
+            echo "::error::The production-canary environment must set the DEPLOY_HOST and DEPLOY_USER variables."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_SSH_KEY}" ] || [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::error::The production-canary environment must set the DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS secrets."
+            exit 1
+          fi
+
+          umask 077
+          mkdir -p "${RUNNER_TEMP}/ssh"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${RUNNER_TEMP}/ssh/known_hosts"
+
+          eval "$(ssh-agent -s)" > /dev/null
+          if ! printf '%s\n' "${DEPLOY_SSH_KEY}" | ssh-add - 2> /dev/null; then
+            echo "::error::ssh-add refused DEPLOY_SSH_KEY. It has to be a complete PEM private key, newlines included."
+            exit 1
+          fi
+          {
+            echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+            echo "SSH_AGENT_PID=${SSH_AGENT_PID}"
+          } >> "$GITHUB_ENV"
+
+      # `--all` prints VERIFY-OK; a partial run prints VERIFY-SUBSET-OK, which
+      # this match deliberately does not accept — a canary that silently ran half
+      # the matrix is worse than one that failed. The grep is the check rather
+      # than the exit status alone, because the verify container's own exit code
+      # travels back through SSH and a broken pipe is indistinguishable from a
+      # clean zero.
+      - name: Run the verification matrix
+        id: verify
+        run: |
+          set -euo pipefail
+
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'cd /opt/movielens && make prod-verify' 2>&1 \
+            | tee "${RUNNER_TEMP}/verify.log"
+          ssh_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "${ssh_status}" -eq 0 ] \
+            && grep -Eq "(^|[[:space:]])VERIFY-OK([[:space:]]|$)" "${RUNNER_TEMP}/verify.log"; then
+            {
+              echo "### Canary verify: VERIFY-OK"
+              echo ""
+              # The audit SLI line (V-9) is one JSON object per run and is the
+              # only place the last 24 hours of production latency,
+              # learned-vs-fallback ratio and fallback reasons are visible at all.
+              echo '```'
+              grep -F 'recommendation_audit_sli' "${RUNNER_TEMP}/verify.log" | tail -n 1 \
+                || echo "(no audit SLI line in this run)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Canary verify: FAILED"
+              echo ""
+              echo "\`make prod-verify\` exited ${ssh_status} without a clean VERIFY-OK."
+              echo ""
+              echo '```'
+              tail -n 60 "${RUNNER_TEMP}/verify.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # Advisory, and only ever on demand. `make prod-load` runs the `loadcheck`
+      # service: k6's own thresholds (checks rate == 1, http_req_failed rate == 0
+      # and the warm-traffic learned assertion) decide whether that container
+      # exits clean, and a failure surfaces here as a warning rather than a
+      # verdict. Promoting it to a gate is one `exit 1` below and should be a
+      # deliberate decision — but not before the shared rate-limit bucket ADR
+      # 0014 names as the follow-up exists, because until then this profile's
+      # refusals measure the limiter and not the service.
+      - name: Run the advisory loadcheck
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_loadcheck }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'cd /opt/movielens && make prod-load' 2>&1 \
+            | tee "${RUNNER_TEMP}/loadcheck.log"
+          load_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "### Canary loadcheck (advisory)"
+            echo ""
+            echo "\`make prod-load\` exited ${load_status}."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # handleSummary prints one pretty-printed JSON object as the final
+          # thing k6 writes, so the last balanced `{` … `}` block in the log is
+          # the summary. Anything that fails to parse is reported as such rather
+          # than guessed at.
+          summary=$(awk '
+            /^\{$/ { buf = $0 "\n"; inblock = 1; next }
+            inblock { buf = buf $0 "\n" }
+            /^\}$/ { if (inblock) { last = buf; inblock = 0 } }
+            END { printf "%s", last }' "${RUNNER_TEMP}/loadcheck.log")
+
+          if [ -n "${summary}" ] && jq -e . > /dev/null 2>&1 <<<"${summary}"; then
+            {
+              echo "| profile | p50 ms | p95 ms | p99 ms | rps | checks | errors |"
+              echo "| --- | --- | --- | --- | --- | --- | --- |"
+              jq -r '"| \(.profile) | \(.latency_ms.p50) | \(.latency_ms.p95) | \(.latency_ms.p99) | \(.throughput_rps) | \(.check_rate) | \(.error_rate) |"' <<<"${summary}"
+              echo ""
+              echo "Latency is recorded with no verdict. The SLO's only authority is the pinned k6 gate in CI (ADR 0010)."
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            silent=$(jq -r '.silent_learned_fallbacks // 0' <<<"${summary}")
+            if [ "${silent}" != "0" ]; then
+              echo "::warning::${silent} warm responses degraded to a non-learned policy at HTTP 200."
+            fi
+          else
+            echo "No parseable k6 summary in the loadcheck output." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::The loadcheck produced no parseable k6 summary (exit ${load_status})."
+          fi
+
+          if [ "${load_status}" -ne 0 ]; then
+            echo "::warning::make prod-load exited ${load_status}. The profile offers 5 req/s from one subject against ADR 0014's 10-per-second refill, so refusals here mean the limiter is configured below its documented defaults -- check that before reading this as a service fault."
+          fi
+
+      - name: Close the SSH agent
+        if: always()
+        run: ssh-agent -k > /dev/null 2>&1 || true

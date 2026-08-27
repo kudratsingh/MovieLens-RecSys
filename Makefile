@@ -1,6 +1,20 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
+# --- Production-mode rehearsal stack ----------------------------------------
+# A second, deliberately separate Compose project: its own name, its own
+# volumes, its own images (:prod, not :demo) and no published port except the
+# TLS edge, so it can run alongside the demo stack without either one touching
+# the other's state. Nothing here reads docker-compose.yml -- the dev stack's
+# trust authentication and published data-store ports are exactly what this
+# stack exists not to inherit.
+PROD_ENV_FILE ?= .env.prod
+PROD_COMPOSE = docker compose -p movielens-prod -f docker-compose.prod.yml --env-file $(PROD_ENV_FILE)
+# The release, verification and backup jobs sit behind the `jobs` profile so
+# `up` never starts them. `run` enables a service's own profile on its own;
+# `build` and `down` have to be told.
+PROD_COMPOSE_ALL = $(PROD_COMPOSE) --profile jobs
+
 # Where the load gate leaves its evidence: the k6 summary, the raw sample
 # stream, the per-second latency table, and container CPU snapshots from either
 # side of the measured window. CI uploads it whether the gate passed or failed,
@@ -27,7 +41,75 @@ API_LOAD_WORKERS ?= 4
 LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
 	DEMO_COMPOSE="$(DEMO_COMPOSE)" sh synthetic/load/run_gate.sh
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+# How long `prod-verify` pauses between its two stages. Both authenticate as
+# the same `verify` account, so under ADR 0014 they charge one token bucket:
+# `verify --all` spends ~30 of it and the reliability suite then spends ~40
+# more within seconds. At the *first* defaults (120/minute, burst 30) the tail
+# of the second stage came back 429 -- which surfaced as `cursor_rejection`
+# reporting a catalog page that "offered no continuation cursor", because a
+# throttled read has no `page` key. At the shipped defaults (600/minute, burst
+# 120) those ~70 requests fit inside one burst and the collision no longer
+# happens, so this pause is no longer what makes the target work.
+#
+# It is kept anyway, for 20 seconds of a several-minute target: the limit is a
+# tuning knob and the failure it prevents is a confusing one to re-diagnose, so
+# lowering the limit should cost a slower verify rather than a red run that
+# blames the catalog. Raising the API's limit to make a chained target fit
+# would still be the wrong repair.
+PROD_VERIFY_COOLDOWN_SECONDS ?= 20
+
+# --- Deterministic serving-artifact build -----------------------------------
+# The committed bundle in infra/model-bundle/ is rebuilt and hash-compared by
+# CI on linux/amd64, while most work on this project happens on arm64 macOS.
+# LightGBM's text model is not byte-identical across architectures, so the
+# build runs inside the features image pinned to linux/amd64 rather than
+# against the host interpreter: the bundle is produced on the architecture
+# that checks it. That is also why these targets do not simply invoke
+# `python -m src.training.demo_artifacts` the way the other train-* targets do.
+#
+# ARTIFACT_AS_OF is a literal and is never computed. It becomes the manifest's
+# trained_at, which is what makes manifest.json byte-stable across rebuilds,
+# and it sits after the frozen persona fixture's last event so every seeded
+# rating is in scope (synthetic/personas/seed.py pins both).
+ARTIFACT_AS_OF := 2026-09-01T00:00:00+00:00
+ARTIFACT_PLATFORM ?= linux/amd64
+ARTIFACT_IMAGE ?= movielens-recsys/features:artifacts
+ARTIFACT_DIR ?= infra/model-bundle
+# The build reads the ratings table directly as admin_user. The defaults reach
+# the demo Compose stack's Postgres; CI overrides them to reach its own.
+ARTIFACT_NETWORK ?= movielens-demo_default
+ARTIFACT_DB_HOST ?= postgres
+ARTIFACT_DB_PORT ?= 5432
+ARTIFACT_DB_NAME ?= movielens
+ARTIFACT_DB_USER ?= admin_user
+ARTIFACT_DB_PASSWORD ?= admin_user
+ARTIFACT_TENANT ?= demo
+# The thread pins repeat what the features image already bakes: this is the
+# one invocation whose output is compared byte for byte, so it states its own
+# conditions rather than inheriting them. PYTHONHASHSEED keeps any
+# string-keyed iteration stable for the same reason. The model-server token is
+# set only because the image declares ENVIRONMENT=production and Settings
+# refuses its dev default there; this container never speaks to the sidecar.
+# The pgBouncer admin password is here for exactly the same reason and with
+# exactly as little meaning: this build talks to Postgres directly as
+# admin_user and never opens the pooler's admin console. Both are non-default
+# literals rather than ENVIRONMENT=dev, because disarming every production
+# guard inside the one build whose point is reproducibility is the worse trade.
+ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
+	--network $(ARTIFACT_NETWORK) \
+	-e ADMIN_USER_DB_HOST=$(ARTIFACT_DB_HOST) \
+	-e ADMIN_USER_DB_PORT=$(ARTIFACT_DB_PORT) \
+	-e ADMIN_USER_DB_NAME=$(ARTIFACT_DB_NAME) \
+	-e ADMIN_USER_DB_USER=$(ARTIFACT_DB_USER) \
+	-e ADMIN_USER_DB_PASSWORD=$(ARTIFACT_DB_PASSWORD) \
+	-e MODEL_TENANT_ID=$(ARTIFACT_TENANT) \
+	-e MODEL_SERVER_AUTH_TOKEN=serving-artifact-build \
+	-e PGBOUNCER_ADMIN_PASSWORD=serving-artifact-build \
+	-e PYTHONHASHSEED=0 \
+	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
+	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
+
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -81,6 +163,36 @@ train-twotower:
 
 train-ranker:
 	python -m src.training.ranker
+
+# Non-negotiable #5's entry point: a fixed seed and a fixed as-of produce the
+# same artifact hashes. It is the serving-bundle build under the name the
+# non-negotiable uses.
+train: serving-artifacts
+
+serving-artifacts-image:
+	docker build --platform $(ARTIFACT_PLATFORM) \
+		-f infra/features/Dockerfile -t $(ARTIFACT_IMAGE) .
+
+# Training logs go to stderr; stdout carries the bundle out of the container as
+# a tar stream, which sidesteps the uid mismatch a writable bind mount would
+# hit between the image's `feastuser` and whatever user CI runs as. It lands in
+# a file rather than a pipe so that a failed build fails this target instead of
+# handing an empty archive to a tar that shrugs.
+serving-artifacts: serving-artifacts-image
+	@mkdir -p $(ARTIFACT_DIR) artifacts
+	$(ARTIFACT_RUN) $(ARTIFACT_IMAGE) sh -c \
+		'python -m src.training.demo_artifacts --train-only \
+			--as-of $(ARTIFACT_AS_OF) --output-dir /tmp/bundle >&2 \
+			&& tar -c -C /tmp/bundle .' > artifacts/serving-bundle.tar
+	tar -x -C $(ARTIFACT_DIR) -f artifacts/serving-bundle.tar
+
+# Rebuilds into a scratch directory inside the container and fails if the
+# committed bundle differs. The mount is read-only: a check must never be able
+# to repair what it is checking.
+serving-artifacts-check: serving-artifacts-image
+	$(ARTIFACT_RUN) -v "$(CURDIR)/$(ARTIFACT_DIR):/app/committed:ro" $(ARTIFACT_IMAGE) \
+		python -m src.training.demo_artifacts --check \
+			--as-of $(ARTIFACT_AS_OF) --output-dir /app/committed
 
 serve:
 	uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --reload
@@ -203,7 +315,8 @@ demo-load-pages-nightly:
 # Non-latency serving promises that a percentile cannot express: the request id
 # survives to the audit row, /healthz is reachable without a token while nothing
 # else is, dependency provenance is visible somewhere real, degraded metadata
-# renders instead of failing, and rate limiting is reported honestly as absent.
+# renders instead of failing, and rate limiting answers 429 with a Retry-After
+# where ADR 0014 turns it on.
 # Runs against the same warm stack the load gate just measured.
 demo-reliability-check:
 	@mkdir -p $(PAGE_RESULTS_DIR)
@@ -222,6 +335,199 @@ demo-reset:
 
 demo-logs:
 	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server model-server postgres pgbouncer keycloak redis
+
+# --- Production ------------------------------------------------------------
+# These targets run the production stack, on the box and on a laptop. The order
+# below is the release's real order, and it is not the demo stack's: Keycloak
+# has to exist before its realms, the realms have to exist before the API can
+# become ready (/readyz probes the serving realm's JWKS), and the schema has to
+# exist before the sidecar's feature materialization can fence on it. Compose
+# expresses only the first hop of that with depends_on, so the rest is these
+# targets -- which is also why infra/deploy/deploy.sh drives them rather than
+# spelling the sequence out a second time.
+#
+# The two halves of the same file:
+#
+#   on the box   deploy.sh exports IMAGE_TAG=<sha> and calls prod-pull,
+#                prod-release, prod-serve and prod-verify. Nothing builds.
+#   on a laptop  up-prod builds the images locally at the default tag and
+#                prod-seed runs the same release steps against them.
+#
+# Nothing on this stack is destructive to `movielens-demo`: different project,
+# different volumes, different image tags.
+
+# Every secret in the stack is generated, so there is no default env file to
+# fall back on. Failing here, with the two commands that fix it, beats failing
+# four services later on an interpolation error.
+prod-env-guard:
+	@test -f $(PROD_ENV_FILE) || { \
+		echo "$(PROD_ENV_FILE) is missing."; \
+		echo "  cp infra/deploy/production.env.example $(PROD_ENV_FILE)"; \
+		echo "  then replace every REPLACE_ME__ value with:"; \
+		echo "    python -c \"import secrets; print(secrets.token_urlsafe(48))\""; \
+		exit 1; }
+
+# The laptop entry point: build every image from this checkout, then bring the
+# stores up. The box never runs this -- it pulls what CI built and tested.
+up-prod: prod-env-guard
+	$(PROD_COMPOSE_ALL) build
+	$(MAKE) prod-stores
+
+# The data tier and identity, with the one-time role provisioning in between.
+# Separate from up-prod because a deploy needs exactly this and no build: the
+# release jobs cannot run until Postgres has the roles migration 0001 expects
+# and pgBouncer can authenticate against them.
+prod-stores: prod-env-guard
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 240 postgres-app postgres-keycloak redis edge
+	$(PROD_COMPOSE) run --rm -T postgres-provision
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 pgbouncer keycloak
+
+# Every image the compose model names, at whatever IMAGE_TAG is in the
+# environment, followed by the assertion that matters: they are all here now.
+# Without it a failed pull would be quietly repaired by `up` building the image
+# from the checkout the box happens to have -- a release running something CI
+# never tested, with nothing in the log to say so.
+#
+# DEPLOY_SKIP_PULL=1 skips the fetch and *only* the fetch: the presence check
+# below still runs, so the rehearsal proves the same property the box does --
+# every image the release needs is on this machine at this tag. It exists
+# because the local rehearsal drives the real deploy.sh against locally built
+# images that were tagged by hand, and GHCR has nothing to serve for a SHA that
+# was never pushed. It is never set on the box; there the pull is the point.
+prod-pull: prod-env-guard
+	@if [ "$${DEPLOY_SKIP_PULL:-0}" = "1" ]; then \
+		echo "DEPLOY_SKIP_PULL=1: skipping the registry fetch; the images must already be local"; \
+	else \
+		$(PROD_COMPOSE_ALL) pull; \
+	fi
+	@for image in $$($(PROD_COMPOSE_ALL) config --images | sort -u); do \
+		docker image inspect "$$image" >/dev/null 2>&1 || { \
+			echo "missing after pull: $$image"; exit 1; }; \
+	done
+	@echo "all images present at IMAGE_TAG=$${IMAGE_TAG:-main}"
+
+# Realms, clients, the audience mapper and the three named accounts. Separate
+# from prod-seed so R-6 can run it twice and confirm the second run reports no
+# change -- a non-idempotent provisioning script is the kind of thing that only
+# shows up on the second deploy.
+prod-keycloak-provision: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T keycloak-provision
+
+# The laptop's whole release: the state half and then the serving half. It is
+# the same two steps a deploy runs, in the same order, which is what makes a
+# rehearsal worth running. The serving tier is deliberately last -- the API
+# cannot become ready until both the realm and the migrations exist, and a
+# service that can never pass its healthcheck is a worse signal than one that
+# has not been asked to start yet.
+prod-seed: prod-env-guard
+	$(MAKE) prod-release
+	$(MAKE) prod-serve
+
+# Everything a release does to state, and nothing that serves traffic: roles,
+# realms, migrations, seed, feature materialization. Run before the new
+# containers start, because the schema has to be ahead of the code that
+# queries it. Idempotent end to end -- it runs on every deploy including a
+# rollback, where the schema step correctly applies nothing.
+prod-release: prod-env-guard
+	$(MAKE) prod-stores
+	$(MAKE) prod-keycloak-provision
+	$(PROD_COMPOSE) run --rm -T release
+	$(PROD_COMPOSE) run --rm -T materialize
+
+# The serving tier. This is where a deploy's outage is: Compose recreates the
+# containers whose image changed, and --wait holds until every one of them is
+# healthy again -- which for the sidecar means warm, not merely listening.
+prod-serve: prod-env-guard
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 feature-server model-server api web
+
+# The post-deploy matrix, in the order the rows depend on each other: the
+# in-deployment checks first (readiness, issuer equality, realm invariants,
+# cold-start and learned serving, the write path, artifact provenance, the
+# audit SLI), then cross-tenant isolation, then the non-latency serving
+# promises. Each one exits non-zero on a finding, so `make` stops at the first.
+#
+# The reliability harness rides in the verify service rather than one of its
+# own: it is in the same image, it wants the same identity, and the API
+# image's entrypoint execs an unrecognised mode as given.
+# The `canary` service is deliberately NOT run here. `verify --all` runs the
+# same module as its V-6 row, so running it twice sweeps the isolation
+# subject's 20 persona routes twice inside a second. At the first rate-limit
+# defaults that was 40 requests against a 30-token burst, and the tail of the
+# second sweep came back 429 -- with the canary reporting "expected 403 from
+# the persona guard" on a request the limiter had answered before the guard
+# ever saw it. The shipped burst of 120 absorbs 40, so today this is the
+# harmless redundancy it always was rather than a failure; it stays out
+# because a second identical sweep proves nothing either way. The standalone
+# service stays in the compose file: it is the form an operator points at a
+# target by hand, with every identity on the command line.
+prod-verify: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T verify
+	@echo "waiting $(PROD_VERIFY_COOLDOWN_SECONDS)s for the verify subject's rate-limit bucket to refill"
+	@sleep $(PROD_VERIFY_COOLDOWN_SECONDS)
+	$(PROD_COMPOSE) run --rm -T verify sh -c \
+		'exec python -m synthetic.load.reliability \
+			--api-url "$$API_URL" --keycloak-url "$$KEYCLOAK_URL" \
+			--realm "$$VERIFY_REALM" --client-id "$$VERIFY_CLIENT_ID" \
+			--client-secret "$$VERIFY_CLIENT_SECRET" \
+			--username "$$VERIFY_USERNAME" --password "$$VERIFY_PASSWORD"'
+
+# V-10. Deliberately weaker than the pinned CI gate, which needs Compose
+# --force-recreate, docker stats and a cgroup probe and has no remote form:
+# correctness and the warm-traffic learned assertion are enforced, p99 is
+# recorded with no verdict. CI keeps the verdict.
+prod-load: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T loadcheck
+
+# R-12. Proves the pre-deploy schema step declines to act when the database is
+# ahead of the image running it -- the difference between a rollback that ends
+# an incident and one that starts a second.
+prod-rollback-rehearsal: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T rollback-rehearsal
+
+prod-backup: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T backup
+
+# --- Deploys ----------------------------------------------------------------
+# Both are one line into infra/deploy/deploy.sh, which owns the sequence, the
+# release record in .release/ and the automatic rollback.
+#
+# `env -u IMAGE_TAG MAKEFLAGS=` is not decoration. A variable set on make's
+# command line is exported to every sub-make as an override, and it beats an
+# environment variable set inside the recipe -- so `make prod-deploy
+# IMAGE_TAG=<sha>` would silently force IMAGE_TAG=<sha> on the sub-makes
+# deploy.sh runs during a *rollback*, and the rollback would redeploy the
+# release it was rolling back from. Clearing both here is what lets deploy.sh's
+# own exports decide which images each step pulls.
+prod-deploy:
+	@test -n "$(IMAGE_TAG)" || { \
+		echo "usage: make prod-deploy IMAGE_TAG=<40-character git sha>"; exit 1; }
+	env -u IMAGE_TAG MAKEFLAGS= bash infra/deploy/deploy.sh $(IMAGE_TAG)
+
+# No argument: the release to go back to is the one recorded in
+# .release/previous, and a rollback that took a SHA from whoever is typing at
+# 02:00 would be a rollback to whatever they remembered.
+prod-rollback:
+	env -u IMAGE_TAG MAKEFLAGS= bash infra/deploy/deploy.sh --rollback
+
+# The edge's own CA root, for trusting https://app.localtest.me in a browser
+# (R-5) or with curl --cacert. The containers that need it read it from the
+# shared volume instead.
+prod-edge-ca: prod-env-guard
+	@$(PROD_COMPOSE) exec -T edge cat /edge-ca/root.crt
+
+prod-logs: prod-env-guard
+	$(PROD_COMPOSE) logs --tail=200 edge web api model-server feature-server \
+		keycloak pgbouncer postgres-app postgres-keycloak redis
+
+prod-down: prod-env-guard
+	$(PROD_COMPOSE_ALL) down --remove-orphans
+
+# Destructive to movielens-prod only. The whole point of the rehearsal is that
+# the release sequence works from empty volumes with no manual priming, so this
+# is the state every rehearsal run starts from.
+prod-reset: prod-env-guard
+	$(PROD_COMPOSE_ALL) down --volumes --remove-orphans
+	$(MAKE) up-prod
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)

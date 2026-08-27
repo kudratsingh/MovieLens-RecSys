@@ -72,3 +72,9 @@ src/features/feast_repo/data/registry.db
 
 # Load-gate evidence: regenerated per run, uploaded as a CI artifact.
 /artifacts/
+
+# The deployed-release record deploy.sh keeps in the host's checkout. It is
+# per-host state, not source: committing it would make one box's rollback
+# target everyone's, and `git status` in /opt/movielens has to stay clean or
+# the workflow's `git checkout --detach` starts refusing.
+/.release/

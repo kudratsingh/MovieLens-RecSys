@@ -1,13 +1,16 @@
 """
 Tenant router — reads ``public.tenants`` for tenant metadata.
 
-Runs on the admin_user engine (BYPASSRLS) because ``public.tenants`` is
-a cross-tenant registry by definition (see ADR 0008 §decision — the
-tenant registry lives at the ``public`` level and is not RLS-scoped).
-Using admin_user here keeps the tenant lookup consistent regardless of
-which application role happens to be querying, and doesn't require the
-lookup to run inside the per-request tenant-scoped transaction the auth
-middleware opens.
+``public.tenants`` is a cross-tenant registry by definition (ADR 0008
+§decision — the tenant registry lives at the ``public`` level and is not
+RLS-scoped), and ``app_user`` holds SELECT on it (migration 0002). So the
+lookup runs on whichever engine the caller already has; the serving app hands
+it the RLS-applied app engine rather than keeping a BYPASSRLS credential alive
+in the request-serving process to read two columns.
+
+The engine is passed in rather than the request connection because the lookup
+doesn't need — and shouldn't depend on — the per-request tenant-scoped
+transaction the auth middleware opens.
 """
 
 from __future__ import annotations
@@ -49,8 +52,8 @@ class TenantRouter:
     ``TenantConfig`` — same read path, additional columns.
     """
 
-    def __init__(self, admin_engine: Engine) -> None:
-        self._engine = admin_engine
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
 
     def resolve(self, tenant_id: str) -> TenantConfig:
         """Return the ``TenantConfig`` for ``tenant_id``. Raises

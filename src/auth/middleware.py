@@ -1,9 +1,10 @@
 """
 Auth middleware per ADR 0007 + ADR 0008.
 
-Every request except ``/healthz`` passes through here. Successful auth
-attaches a ``RequestPrincipal(tenant_id, user_id)`` to ``request.state``
-and opens a per-request Postgres transaction with
+Every request except the two unauthenticated probes — ``/healthz`` and
+``/readyz``, see ``UNAUTHENTICATED_PATHS`` — passes through here.
+Successful auth attaches a ``RequestPrincipal(tenant_id, user_id)`` to
+``request.state`` and opens a per-request Postgres transaction with
 ``SET LOCAL app.tenant_id = '<tenant_id>'`` so RLS on tenant-scoped
 tables filters correctly for whatever the handler queries next.
 
@@ -40,10 +41,17 @@ logger = logging.getLogger(__name__)
 _COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="request-commit")
 
 
-# Endpoints that skip auth. `/healthz` per ADR 0007's decision — every
-# other endpoint requires a valid Bearer token or fails the middleware
-# before reaching a handler.
-_UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(["/healthz"])
+# Endpoints that skip auth. `/healthz` per ADR 0007's decision, and `/readyz`
+# because a platform deploy probe sends no Authorization header — behind auth it
+# would 401 forever and no deployment would ever promote. Both answer with fixed
+# dependency states: no tenant id, no user id, no catalog, nothing a token could
+# have scoped. Every other endpoint requires a valid Bearer token or fails the
+# middleware before reaching a handler.
+#
+# Public because the OpenAPI generator in src.serving.app reads it to decide
+# which operations carry a bearer-token security requirement. A second copy of
+# this list there would let the published contract and the enforcement drift.
+UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(["/healthz", "/readyz"])
 _TENANT_EXISTS = text("SELECT 1 FROM public.tenants WHERE id = :tid")
 
 
@@ -131,7 +139,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if request.url.path in _UNAUTHENTICATED_PATHS:
+        if request.url.path in UNAUTHENTICATED_PATHS:
             return await call_next(request)
 
         try:

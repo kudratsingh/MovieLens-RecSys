@@ -1,0 +1,102 @@
+# The TLS edge, for the deployment and for the local rehearsal of it.
+#
+# One file, two issuers. On the Hetzner box this terminates TLS for the two
+# public hostnames with certificates from Let's Encrypt; on a laptop it does
+# the same job with certificates from Caddy's own CA, so the rehearsal proves
+# everything downstream of an https hostname without depending on a public DNS
+# record or a reachable certificate authority. What that "everything" is: an
+# https issuer minted behind a proxy, the API pinning it, Auth.js selecting
+# __Secure- cookie names from AUTH_URL, and the BFF comparing a mutation's
+# Origin against a public origin rather than an internal one. Before this edge
+# existed every KEYCLOAK_PUBLIC_BASE_URL in the tree was http://localhost:8080.
+#
+# The only difference between the two modes is the argument to `tls` below.
+# EDGE_TLS=acme resolves it to ACME_EMAIL, which is Caddy's shorthand for "get
+# publicly-trusted certificates for this site and register the account under
+# this address"; EDGE_TLS=internal resolves it to the literal `internal`, which
+# is the local CA. The edge's entrypoint in docker-compose.prod.yml is what
+# maps one to the other, and it is also what publishes the matching trust
+# anchor into the edge_ca volume -- Caddy's own root locally, the system CA
+# bundle under ACME -- so every container downstream can point SSL_CERT_FILE at
+# one path in both modes and verify what this edge serves.
+#
+# PUBLIC_APP_HOST / PUBLIC_AUTH_HOST are the deployment's two hostnames and the
+# only two names in the topology that ever get a domain. Their defaults are the
+# rehearsal's: app.localtest.me and auth.localtest.me both resolve to 127.0.0.1
+# with no DNS server and no /etc/hosts entry, which is what makes an https
+# rehearsal possible on a laptop. The compose file carries the same two names
+# as network aliases on this container, so a job inside the network resolves
+# them to this edge rather than to itself.
+#
+{
+	# Nothing drives this edge remotely and the admin API has no
+	# authentication of its own, so leaving it listening would put a
+	# config-rewrite endpoint on the same private network as every service.
+	admin off
+
+	# Deliberately no `local_certs` here. It is the global form of what the
+	# per-site `tls` lines below already say, and a global that pins the
+	# issuer would silently win over the ACME argument in production -- the
+	# failure would be a valid-looking edge serving a certificate no browser
+	# trusts.
+
+	# The edge's own log. Access logs for the sites below are enabled
+	# per-site; this one carries provisioning and certificate events, which
+	# is where a hostname mismatch or a failed ACME challenge shows up first.
+	log {
+		output stderr
+		format console
+	}
+}
+
+# The product. Next.js serves both the pages and the BFF route handlers, so
+# this one upstream carries the browser session, the PKCE callback and every
+# mutation.
+{$PUBLIC_APP_HOST:app.localtest.me} {
+	tls {$EDGE_TLS_ISSUER:internal}
+
+	encode zstd gzip
+
+	# reverse_proxy sets X-Forwarded-For, X-Forwarded-Proto and
+	# X-Forwarded-Host on its own and strips any inbound copy, and it
+	# preserves the original Host header. Auth.js is pinned to AUTH_URL
+	# rather than trusting either, but the headers are what make the
+	# request look to the app the way it looks behind any edge.
+	reverse_proxy web:3001 {
+		# A first request after a cold start can wait on Next's server
+		# boot; the default 3 s dial timeout would turn that into a 502
+		# during the first page load after a deploy.
+		transport http {
+			dial_timeout 10s
+		}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
+
+# Identity. Keycloak is the only other service that gets a public name.
+{$PUBLIC_AUTH_HOST:auth.localtest.me} {
+	tls {$EDGE_TLS_ISSUER:internal}
+
+	# The admin console is served from this same hostname and there is no
+	# path-level ACL in front of it. That is a recorded, accepted risk
+	# (ADR 0013) rather than an oversight: the console is protected by
+	# Keycloak's own authentication, the bootstrap account is deleted once
+	# provisioning is done, and blocking /admin here would rehearse a
+	# topology nobody is going to run.
+	reverse_proxy keycloak:8080 {
+		# Keycloak's JVM start is 8-15 s and the first request after a
+		# deploy can land inside it.
+		transport http {
+			dial_timeout 20s
+		}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}

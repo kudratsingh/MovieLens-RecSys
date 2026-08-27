@@ -11,7 +11,10 @@ Three checks, run in ``lifespan`` before FastAPI accepts requests:
   2. **pgBouncer is in transaction pool mode.** Session mode would
      preserve ``SET LOCAL app.tenant_id`` across the connection's
      lifetime and cross-request-leak. Verified by connecting to
-     pgBouncer's admin console and reading ``SHOW POOLS``.
+     pgBouncer's admin console and reading both ``SHOW POOLS`` (which
+     reports the mode each live pool actually runs in, including a
+     per-database override) and ``SHOW CONFIG`` (which reports the
+     configured default, and answers even when no pool exists yet).
 
   3. **dev_auth_bypass is off in non-dev.** Settings.__init__ already
      asserts this at construction — this second check is redundant
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 import psycopg2
 from sqlalchemy import Engine, text
@@ -45,9 +49,13 @@ def run_startup_checks(
     *,
     settings: Settings,
     app_engine: Engine,
-    admin_engine: Engine,
 ) -> None:
-    """Run every startup check. Raises on the first failure."""
+    """Run every startup check. Raises on the first failure.
+
+    Takes only the app engine: the serving process holds no BYPASSRLS engine
+    any more, and the one assertion that ever needed an engine is the one that
+    proves *this* engine's role cannot bypass RLS.
+    """
     _check_app_engine_not_bypassrls(app_engine)
     _check_pgbouncer_transaction_mode(settings)
     _check_dev_bypass_only_in_dev(settings)
@@ -78,78 +86,94 @@ def _check_app_engine_not_bypassrls(engine: Engine) -> None:
 
 def _check_pgbouncer_transaction_mode(settings: Settings) -> None:
     """Connect to pgBouncer's admin console (special ``pgbouncer``
-    database) and run ``SHOW POOLS`` — every entry's mode field must
-    read 'transaction'. Session mode would preserve SET LOCAL across
-    transactions on the same connection and defeat isolation.
+    database) and assert transaction pool mode two ways: ``SHOW POOLS``
+    for the mode each live pool is actually running in, and ``SHOW
+    CONFIG`` for the configured default. Session mode would preserve
+    SET LOCAL across transactions on the same connection and defeat
+    isolation.
+
+    Both queries run, always. ``SHOW POOLS`` alone is silent when no
+    pool exists yet, and ``SHOW CONFIG`` alone cannot see a per-database
+    ``pool_mode=session`` override in the ``[databases]`` section — so
+    neither one is sufficient on its own.
 
     Uses psycopg2 directly because pgBouncer's admin protocol doesn't
     play well with SQLAlchemy's connection introspection (the
     'pgbouncer' pseudo-database doesn't accept prepared statements).
     """
-    # pgbouncer_admin is defined in infra/pgbouncer/userlist.txt +
-    # pgbouncer.ini's admin_users list; trust auth in dev.
+    # The admin role is listed in pgbouncer.ini's admin_users; the dev
+    # credentials live in infra/pgbouncer/userlist.txt and Settings
+    # refuses the default password outside dev.
     # autocommit=True is required — pgBouncer's admin protocol
     # rejects BEGIN, which psycopg2 emits by default for query batches.
     conn = psycopg2.connect(
         host=settings.app_user_db_host,
         port=settings.app_user_db_port,
-        user="pgbouncer_admin",
-        password="pgbouncer_admin",
+        user=settings.pgbouncer_admin_user,
+        password=settings.pgbouncer_admin_password.get_secret_value(),
         dbname="pgbouncer",
     )
     conn.autocommit = True
     try:
         cur = conn.cursor()
-        cur.execute("SHOW POOLS")
-        rows = cur.fetchall()
-        cols = [d.name for d in cur.description]
-        # Column names differ across pgBouncer versions; find the one
-        # that names a pool mode.
-        mode_col = None
-        for candidate in ("pool_mode", "sv_used"):
-            if candidate in cols:
-                mode_col = cols.index(candidate)
-                break
-        # 1.24+ ships 'pool_mode' as an explicit column. Older versions
-        # split into per-mode counters. Fall back to a config query
-        # if the column isn't there.
-        if mode_col is not None:
-            db_col = cols.index("database")
-            for row in rows:
-                db_name = row[db_col]
-                mode = row[mode_col]
-                # The pseudo-'pgbouncer' database is the admin console
-                # itself; it always reports statement mode and isn't a
-                # pool we care about. Skip it.
-                if db_name == "pgbouncer":
-                    continue
-                if mode and mode != "transaction":
-                    raise StartupCheckError(
-                        f"pgBouncer pool_mode is {mode!r} on database {db_name!r}; "
-                        f"only 'transaction' is safe under ADR 0008. "
-                        f"Check infra/pgbouncer/pgbouncer.ini."
-                    )
-        else:
-            cur.execute("SHOW CONFIG")
-            config_rows = cur.fetchall()
-            config_cols = [d.name for d in cur.description]
-            key_col = config_cols.index("key")
-            val_col = config_cols.index("value")
-            found = False
-            for row in config_rows:
-                if row[key_col] == "pool_mode":
-                    found = True
-                    if row[val_col] != "transaction":
-                        raise StartupCheckError(
-                            f"pgBouncer pool_mode = {row[val_col]!r}; "
-                            f"only 'transaction' is safe under ADR 0008."
-                        )
-                    break
-            if not found:
-                raise StartupCheckError("pgBouncer SHOW CONFIG returned no pool_mode entry")
+        _assert_live_pools_are_transaction_mode(cur)
+        _assert_configured_pool_mode_is_transaction(cur)
     finally:
         conn.close()
     logger.info("Startup check: pgBouncer pool_mode = transaction (ok).")
+
+
+def _assert_live_pools_are_transaction_mode(cur: Any) -> None:
+    """Every pool pgBouncer currently holds must report transaction mode.
+    This is what catches a per-database override that the global config
+    value would not reveal.
+    """
+    cur.execute("SHOW POOLS")
+    rows = cur.fetchall()
+    cols = [d.name for d in cur.description]
+    # 1.24+ ships 'pool_mode' as an explicit column. Older versions report
+    # only per-mode counters, in which case there is nothing per-pool to
+    # read here and the SHOW CONFIG assertion carries the check alone.
+    if "pool_mode" not in cols:
+        logger.info("pgBouncer SHOW POOLS has no pool_mode column; relying on SHOW CONFIG.")
+        return
+    mode_col = cols.index("pool_mode")
+    db_col = cols.index("database")
+    for row in rows:
+        db_name = row[db_col]
+        mode = row[mode_col]
+        # The pseudo-'pgbouncer' database is the admin console itself; it
+        # always reports statement mode and isn't a pool we care about.
+        if db_name == "pgbouncer":
+            continue
+        if mode and mode != "transaction":
+            raise StartupCheckError(
+                f"pgBouncer pool_mode is {mode!r} on database {db_name!r}; "
+                f"only 'transaction' is safe under ADR 0008. "
+                f"Check infra/pgbouncer/pgbouncer.ini."
+            )
+
+
+def _assert_configured_pool_mode_is_transaction(cur: Any) -> None:
+    """The pooler's configured default must be transaction mode, whether or
+    not a pool happens to exist yet. A missing entry is a failure, not a
+    pass — an admin console that cannot answer the question has not
+    answered it.
+    """
+    cur.execute("SHOW CONFIG")
+    config_rows = cur.fetchall()
+    config_cols = [d.name for d in cur.description]
+    key_col = config_cols.index("key")
+    val_col = config_cols.index("value")
+    for row in config_rows:
+        if row[key_col] == "pool_mode":
+            if row[val_col] != "transaction":
+                raise StartupCheckError(
+                    f"pgBouncer pool_mode = {row[val_col]!r}; "
+                    f"only 'transaction' is safe under ADR 0008."
+                )
+            return
+    raise StartupCheckError("pgBouncer SHOW CONFIG returned no pool_mode entry")
 
 
 def _check_dev_bypass_only_in_dev(settings: Settings) -> None:

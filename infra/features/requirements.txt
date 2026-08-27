@@ -1,7 +1,25 @@
+# Dependencies for the Feast feature server and the model sidecar.
+#
+# Exact pins, not floors. lightgbm is the one that matters most: the booster
+# this image trains and the booster it later loads have to be produced by the
+# same version for the reproducibility check on the serving bundle to mean
+# anything. The versions below are the ones the reviewed
+# `movielens-recsys/features:demo` image resolved; refresh them deliberately by
+# rebuilding and reading `pip freeze` out of the new image. uvicorn is held at
+# the version Feast's own dependency range resolves to, which is older than the
+# API image's — the two images are pinned independently on purpose.
+# alembic is not here to run migrations — the release job in the API image owns
+# those. It is here so `bootstrap materialize --wait-for-schema` can read this
+# image's own migration set: without it the fence cannot tell "the database is
+# behind" from "the database is ahead of this image", and a rollback's
+# pre-deploy would wait out its whole timeout and fail the deploy. Pinned to
+# the same version as infra/api/requirements.txt so both images agree on what
+# a revision graph is.
+alembic==1.19.1
 feast[postgres,redis]==0.65.0
-fastapi
-lightgbm
-psycopg2-binary
-pydantic-settings
-sqlalchemy>=2.0
-uvicorn[standard]
+fastapi==0.141.1
+lightgbm==4.7.0
+psycopg2-binary==2.9.12
+pydantic-settings==2.15.0
+sqlalchemy==2.0.52
+uvicorn[standard]==0.34.0

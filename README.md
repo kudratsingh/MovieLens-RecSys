@@ -39,10 +39,22 @@ The status reflects what is actually merged on `main`, not what is planned.
 |---|---|---|
 | 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
 | 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item + LightGBM, persists prediction audits and durable movie state, and passes real Keycloak browser auth, the pinned k6 p99 gate, page-shaped load budgets, and a browser timing gate. The movie-discovery frontend (Discover, Browse, movie detail, Library, Quick Picks) is delivered behind one shell and `/` serves it, with the pre-redesign dashboard retained at `/legacy` pending a participant-backed finish-gate PASS. Programmatic cold-start cohorts, per-tenant champion routing, generic request audits, a rate-limiting decision, and environment-specific Compose remain |
+| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item + LightGBM, persists prediction audits and durable movie state, and passes real Keycloak browser auth, the pinned k6 p99 gate, page-shaped load budgets, and a browser timing gate. The movie-discovery frontend (Discover, Browse, movie detail, Library, Quick Picks) is delivered behind one shell and `/` serves it, with the pre-redesign dashboard retained at `/legacy` pending a participant-backed finish-gate PASS. Programmatic cold-start cohorts, per-tenant champion routing, generic request audits, and dev/staging Compose remain |
 | 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
 | 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
 | 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
+
+## Deployment
+
+Production is a single Hetzner CX22 running `docker-compose.prod.yml` behind a Caddy edge, with two
+public hostnames and everything else — the API included — on the host's private Docker network.
+CI publishes `linux/amd64` images to GHCR tagged with the commit SHA, and a merge to `main` deploys
+over SSH: pull at that SHA, run the release jobs, bring the serving tier up, then run the post-deploy
+verification matrix, **rolling back to the previous release automatically if it fails**. The choice
+and its single-host consequences are in [ADR 0013](docs/adr/0013-production-deployment-target.md);
+the step-by-step is [`docs/deployment-runbook.md`](docs/deployment-runbook.md). The same Compose file
+is the local production-mode rehearsal, which is what makes the rehearsal evidence about production
+rather than about a lookalike.
 
 ## Why this exists / what's interesting
 
@@ -196,7 +208,10 @@ web/                    # Next.js + TypeScript + Tailwind frontend
                         #   path), api.generated.ts (typed from docs/api/openapi.json)
   e2e/                  # fixture-mode Playwright: responsive, accessibility, and finish-gate matrices
   tests/                # unit/ (Vitest + RTL + axe), e2e/ (service-backed journeys), perf/ (LCP/CLS/ack)
-infra/                  # API + model Dockerfiles, Keycloak realms, pgBouncer, MLflow image, Postgres init, k6 pin
+infra/                  # API + model Dockerfiles, Keycloak realms, pgBouncer, Caddy edge, MLflow image,
+                        #   Postgres init, k6 pin
+  host/                 # bootstrap.sh + the systemd units that make the production host
+  deploy/               # deploy.sh, the env contract, the one-time role SQL
 ```
 
 ## Local development

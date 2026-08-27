@@ -66,6 +66,27 @@ class LGBMRankerConfig:
     # with ADR 0001's K=10.
     ndcg_eval_at: tuple[int, ...] = (10,)
 
+    # --- Reproducibility pins (non-negotiable #5) ---------------------------
+    #
+    # A seed alone does not make a booster reproducible. LightGBM accumulates
+    # gradients into histogram bins in whatever order its worker threads
+    # finish, so floating-point addition happens in a different order on a
+    # 4-core machine than on a 12-core one and the resulting trees differ.
+    # Pinning one thread removes the ordering entirely; `deterministic` tells
+    # LightGBM to prefer reproducible accumulation over speed wherever it
+    # still has the choice.
+    #
+    # `force_row_wise` matters for the same reason and is easy to miss: with
+    # neither strategy forced, LightGBM *times* row-wise against col-wise on
+    # the first iteration and keeps the faster one, so the tree structure ends
+    # up depending on how loaded the build host was. Row-wise is the
+    # documented choice for a narrow feature matrix (eight columns) on a
+    # single thread, and LightGBM warns that `deterministic` wants one of the
+    # two forced anyway.
+    num_threads: int = 1
+    deterministic: bool = True
+    force_row_wise: bool = True
+
 
 @dataclass
 class LGBMRanker:
@@ -116,6 +137,9 @@ class LGBMRanker:
             "bagging_freq": self.config.bagging_freq,
             "lambda_l2": self.config.lambda_l2,
             "seed": self.config.seed,
+            "num_threads": self.config.num_threads,
+            "deterministic": self.config.deterministic,
+            "force_row_wise": self.config.force_row_wise,
             "verbose": -1,
         }
         self._booster = lgb.train(

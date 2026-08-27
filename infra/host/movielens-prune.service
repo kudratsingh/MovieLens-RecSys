@@ -1,0 +1,35 @@
+# Reclaim the disk every release leaves behind.
+#
+# A CX22 has 40 GB and a deploy pulls seven images tagged with a commit SHA, so
+# the box accumulates a full image set per release and would fill in a couple
+# of months of merges. A full disk on this box does not degrade gracefully:
+# Postgres refuses writes, the audit insert that every recommendation depends
+# on fails closed, and the first symptom is 500s rather than a disk alert.
+#
+# Two deliberate limits on what this removes:
+#
+#   * `--filter until=168h` keeps the last week of images. That is the window
+#     in which a rollback might still want an older release's layers locally --
+#     `deploy.sh --rollback` pulls them again in any case, but pulling seven
+#     images during an incident is a slower rollback than reusing them.
+#   * volumes are never pruned, by this unit or any other. `docker volume
+#     prune` would take both Postgres data directories and the Redis AOF with
+#     it the moment a deploy had the containers stopped, which is the single
+#     most destructive command available on this box. There is no flag here
+#     that can reach a volume, and that is the point.
+#
+# Images in use by a running container are never candidates, so the running
+# release is safe regardless of its age.
+
+[Unit]
+Description=MovieLens weekly Docker image prune
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/movielens
+User=deploy
+Group=deploy
+ExecStart=/usr/bin/docker image prune --all --force --filter until=168h
+TimeoutStartSec=600

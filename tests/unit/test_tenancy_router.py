@@ -10,6 +10,11 @@ These tests use an in-memory SQLite database with a stub
 ``public.tenants`` table so we don't need a live Postgres for the
 router's unit-level contract. The integration test (Postgres + RLS)
 lives in ``tests/tenant_isolation/``.
+
+The engine is whatever the caller passes — the serving app hands over its
+RLS-applied app engine, since ``public.tenants`` carries no RLS policy and
+``app_user`` holds SELECT on it (migration 0002). Nothing here depends on the
+role, which is the point: the router never needed BYPASSRLS.
 """
 
 from __future__ import annotations

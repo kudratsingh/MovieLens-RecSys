@@ -1,11 +1,30 @@
-"""Readiness and behavioral smoke checks for the local demo stack."""
+"""Readiness and behavioral smoke checks for a deployed demo stack.
+
+The checks themselves are GET-only and deployment-agnostic, so this is the most
+valuable command to run immediately after a deploy. What used to stop it from
+travelling was authentication: realm, client and grant were hardcoded to the
+local dev realm. They are flags now, mirroring ``synthetic/load/reliability.py``,
+so the same assertions can be pointed at a production realm with a password
+grant. Every default is the local demo stack's value, so an argument-free run --
+which is what CI and every ``make demo-*`` target does -- behaves exactly as it
+did before the flags existed.
+
+Against a deployment, where the confidential client issues no tokens and the
+verification account carries the persona role instead::
+
+    python -m synthetic.smoke.demo \\
+        --api-url http://api.internal:8000 --web-url http://web.internal:3001 \\
+        --keycloak-url http://keycloak.internal:8080 \\
+        --realm demo --client-id movielens-verify --client-secret ... \\
+        --grant-type password --username verify --password ...
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,20 +44,68 @@ class SmokeSummary:
     cold_recommendation_count: int
 
 
+SUPPORTED_GRANT_TYPES = ("client_credentials", "password")
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    """Which Keycloak identity the smoke authenticates as.
+
+    The defaults are the local demo stack's confidential client. A deployment
+    that has replaced those credentials -- which every non-local one must -- runs
+    the same checks by passing its own realm, client and user. The password grant
+    exists because a deployed realm need not expose a confidential client to a
+    verification job; a purpose-built account with the persona role is a smaller
+    thing to hand out than a client secret.
+    """
+
+    realm: str = "demo"
+    client_id: str = "movielens-api"
+    client_secret: str = "movielens-api-secret-dev-only"
+    grant_type: str = "client_credentials"
+    username: str | None = None
+    password: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.grant_type not in SUPPORTED_GRANT_TYPES:
+            raise DemoSmokeError(
+                f"unsupported grant type {self.grant_type!r}: "
+                f"expected one of {', '.join(SUPPORTED_GRANT_TYPES)}"
+            )
+        if self.grant_type == "password" and not (self.username and self.password):
+            raise DemoSmokeError("the password grant needs both --username and --password")
+
+    def token_form(self) -> dict[str, str]:
+        form = {"grant_type": self.grant_type, "client_id": self.client_id}
+        # A public client has no secret, and Keycloak rejects an empty one
+        # rather than ignoring it.
+        if self.client_secret:
+            form["client_secret"] = self.client_secret
+        if self.grant_type == "password":
+            form["username"] = self.username or ""
+            form["password"] = self.password or ""
+        return form
+
+
+DEFAULT_AUTH = AuthConfig()
+
+
 def wait_for_readiness(
     client: httpx.Client,
     *,
     api_url: str,
     web_url: str,
     keycloak_url: str,
+    auth: AuthConfig | None = None,
     attempts: int = 60,
     interval_seconds: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
+    realm = (auth or DEFAULT_AUTH).realm
     checks = {
         "FastAPI": f"{api_url.rstrip('/')}/healthz",
         "Next.js": web_url.rstrip("/"),
-        "Keycloak demo realm": f"{keycloak_url.rstrip('/')}/realms/demo",
+        f"Keycloak {realm} realm": f"{keycloak_url.rstrip('/')}/realms/{realm}",
     }
     for name, url in checks.items():
         last_error = "no response"
@@ -62,6 +129,7 @@ def run_behavior_smoke(
     web_url: str,
     api_url: str | None = None,
     keycloak_url: str | None = None,
+    auth: AuthConfig | None = None,
 ) -> SmokeSummary:
     """Check warm/cold behavior through the authenticated API.
 
@@ -78,7 +146,7 @@ def run_behavior_smoke(
     direct_api = api_url is not None
     base_url = (api_url or web_url).rstrip("/")
     headers = (
-        {"Authorization": f"Bearer {service_access_token(client, keycloak_url)}"}
+        {"Authorization": f"Bearer {service_access_token(client, keycloak_url, auth)}"}
         if direct_api and keycloak_url
         else None
     )
@@ -204,17 +272,15 @@ def _require_list(payload: dict[str, Any], key: str, source: str) -> list[dict[s
     return value
 
 
-def service_access_token(client: httpx.Client, keycloak_url: str) -> str:
-    url = f"{keycloak_url.rstrip('/')}/realms/demo/protocol/openid-connect/token"
+def service_access_token(
+    client: httpx.Client,
+    keycloak_url: str,
+    auth: AuthConfig | None = None,
+) -> str:
+    config = auth or DEFAULT_AUTH
+    url = f"{keycloak_url.rstrip('/')}/realms/{config.realm}/protocol/openid-connect/token"
     try:
-        response = client.post(
-            url,
-            data={
-                "client_id": "movielens-api",
-                "client_secret": "movielens-api-secret-dev-only",
-                "grant_type": "client_credentials",
-            },
-        )
+        response = client.post(url, data=config.token_form())
         response.raise_for_status()
         token = response.json().get("access_token")
     except (httpx.HTTPError, ValueError) as exc:
@@ -231,9 +297,10 @@ def fetch_recent_audits(
     keycloak_url: str,
     user_id: int = 900000101,
     limit: int = 3,
+    auth: AuthConfig | None = None,
 ) -> dict[str, Any]:
     """Fetch recent demo audits with the same short-lived service identity."""
-    token = service_access_token(client, keycloak_url)
+    token = service_access_token(client, keycloak_url, auth)
     return _get_json(
         client,
         f"{api_url.rstrip('/')}/users/{user_id}/audits?limit={limit}",
@@ -260,14 +327,33 @@ def _get_json(
     return payload
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Check the local MovieLens demo stack.")
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Check a MovieLens demo stack.")
     parser.add_argument("--api-url", default="http://localhost:8000")
     parser.add_argument("--web-url", default="http://localhost:3001")
     parser.add_argument("--keycloak-url", default="http://localhost:8080")
     parser.add_argument("--readiness-only", action="store_true")
     parser.add_argument("--audits-only", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--realm", default=DEFAULT_AUTH.realm)
+    parser.add_argument("--client-id", default=DEFAULT_AUTH.client_id)
+    parser.add_argument("--client-secret", default=DEFAULT_AUTH.client_secret)
+    parser.add_argument(
+        "--grant-type",
+        default=DEFAULT_AUTH.grant_type,
+        choices=SUPPORTED_GRANT_TYPES,
+    )
+    parser.add_argument("--username", default=DEFAULT_AUTH.username)
+    parser.add_argument("--password", default=DEFAULT_AUTH.password)
+    args = parser.parse_args(argv)
+
+    auth = AuthConfig(
+        realm=str(args.realm),
+        client_id=str(args.client_id),
+        client_secret=str(args.client_secret),
+        grant_type=str(args.grant_type),
+        username=args.username,
+        password=args.password,
+    )
 
     with httpx.Client(timeout=5.0) as client:
         wait_for_readiness(
@@ -275,6 +361,7 @@ def main() -> None:
             api_url=args.api_url,
             web_url=args.web_url,
             keycloak_url=args.keycloak_url,
+            auth=auth,
         )
         if args.readiness_only:
             print("Demo dependencies are ready: FastAPI, Next.js, and Keycloak.")
@@ -284,6 +371,7 @@ def main() -> None:
                 client,
                 api_url=args.api_url,
                 keycloak_url=args.keycloak_url,
+                auth=auth,
             )
             print(json.dumps(audits, indent=2, sort_keys=True))
             return
@@ -292,6 +380,7 @@ def main() -> None:
             web_url=args.web_url,
             api_url=args.api_url,
             keycloak_url=args.keycloak_url,
+            auth=auth,
         )
     print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
 

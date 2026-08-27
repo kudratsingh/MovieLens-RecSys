@@ -1,0 +1,28 @@
+{
+  "candidate": {
+    "artifact_type": "item-item-cosine",
+    "filename": "candidate-index.json",
+    "sha256": "3634f49dabf10119a28e6e38aae59075a8ecc426818a8f6752db8e77bb91c49f",
+    "version": "demo-itemitem-v1"
+  },
+  "feature_columns": [
+    "user_interaction_count",
+    "user_days_active",
+    "user_days_since_last_interaction",
+    "item_popularity_all_time",
+    "item_popularity_30d",
+    "item_popularity_7d",
+    "item_age_days",
+    "user_genre_affinity"
+  ],
+  "feature_version": "feast-phase3-v1",
+  "ranker": {
+    "artifact_type": "lightgbm-lambdarank",
+    "filename": "ranker.txt",
+    "sha256": "d9fae084d862aeeb0f9f9ad2becbee0efca31400d4fdae2186532df7dbab70a9",
+    "version": "demo-lgbm-v1"
+  },
+  "schema_version": 1,
+  "tenant_id": "demo",
+  "trained_at": "2026-09-01T00:00:00+00:00"
+}

@@ -38,11 +38,41 @@ jobs:
             echo "API runtime image exceeds 400 MB: $size bytes"
             exit 1
           }
+      # ENVIRONMENT=dev is not decoration: the image bakes
+      # `ENV ENVIRONMENT=production` so a deployment that forgets the variable
+      # fails closed, and importing src.serving.model_server builds Settings(),
+      # which refuses the default dev model-server token outside dev. The probe
+      # is checking that the runtime's imports resolve, not that a production
+      # credential set is present.
       - name: Build and verify model runtime image
         run: |
           docker build --tag movielens-model-ci --file infra/features/Dockerfile .
-          docker run --rm movielens-model-ci python -c \
+          docker run --rm -e ENVIRONMENT=dev movielens-model-ci python -c \
             "import fastapi, feast, lightgbm, pandas, uvicorn; import src.serving.model_server"
+
+      # The production stack has never been booted by any job, so `config` is
+      # the cheapest place to learn that its model is even valid. Every
+      # credential in that file is a `${VAR:?...}`, so this is also the check
+      # that the committed example is a *complete* variable contract: a
+      # variable the example forgot fails here rather than at `make up-prod`.
+      # The example stands in for the operator's gitignored `.env.prod`, which
+      # CI has no business generating.
+      - name: Validate production Compose model
+        run: |
+          docker compose --env-file infra/deploy/production.env.example \
+            -f docker-compose.prod.yml config --quiet
+
+      # R-1's premise, asserted rather than remembered: the production stack
+      # does not carry the auth bypass at all — absent, not "false", so a typo
+      # during an incident cannot turn it back on.
+      - name: Verify the production model declares no auth bypass
+        run: |
+          rendered=$(docker compose --env-file infra/deploy/production.env.example \
+            -f docker-compose.prod.yml config)
+          if grep -q "DEV_AUTH_BYPASS" <<< "$rendered"; then
+            echo "docker-compose.prod.yml names DEV_AUTH_BYPASS; production carries no such variable"
+            exit 1
+          fi
 
   frontend:
     runs-on: ubuntu-latest
@@ -82,7 +112,7 @@ jobs:
         run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml up -d --build --wait --wait-timeout 180 api web
       - name: Wait for imported demo realm
         run: |
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --fail --silent http://localhost:8080/realms/demo/.well-known/openid-configuration > /dev/null; then
               exit 0
             fi
@@ -197,7 +227,7 @@ jobs:
       # sub-second.
       - name: Wait for Keycloak
         run: |
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -sSf http://localhost:8080/realms/default > /dev/null; then
               echo "Keycloak ready"; exit 0
             fi
@@ -225,7 +255,15 @@ jobs:
       - name: Apply Alembic migrations
         run: alembic upgrade head
 
+      # A skip and a pass are the same green tick in a job summary, and this is
+      # the suite for the bug class the project calls highest-severity. The
+      # conftest skips itself when no stack answers on localhost:8080; this
+      # switch turns that skip into a collection failure naming the switch, so
+      # a stack that failed to come up above can never be reported as isolation
+      # proven.
       - name: Run tenant-isolation suite
+        env:
+          REQUIRE_TENANT_ISOLATION_STACK: "1"
         run: pytest tests/tenant_isolation/ -v
 
       - name: Dump service logs on failure
@@ -290,3 +328,289 @@ jobs:
       - name: Dump serving logs on failure
         if: failure()
         run: make demo-logs
+
+  # --- Deployment prerequisites ----------------------------------------------
+  # The three jobs below gate the production release rather than the product,
+  # and they are the only jobs here that do not run on every change. GitHub
+  # applies `on.<event>.paths` to a whole workflow, so a per-job path filter has
+  # to be computed once and consumed through `needs`: a docs-only PR should not
+  # pay for a features-image build or a Keycloak boot. Every pre-existing job
+  # deliberately keeps running on everything.
+  changed-paths:
+    runs-on: ubuntu-latest
+    outputs:
+      serving-artifacts: ${{ steps.filter.outputs.serving-artifacts }}
+      realms: ${{ steps.filter.outputs.realms }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The filter diffs against the PR's base commit, which the default
+          # shallow clone does not contain.
+          fetch-depth: 0
+
+      - name: Decide which deployment gates this change needs
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA}" ]; then
+            changed=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+            echo "Changed files:"
+            printf '%s\n' "${changed}"
+          else
+            # A push to main is the squashed result of a reviewed PR. Run every
+            # gate rather than infer intent from a commit range — and note that
+            # the deploy workflow reads a *push* run and requires each gate to
+            # have concluded successfully, so a gate that skipped itself on main
+            # would block the deploy rather than speed it up.
+            changed=""
+          fi
+
+          decide() {
+            if [ -z "${BASE_SHA}" ] || printf '%s\n' "${changed}" | grep -Eq "$2"; then
+              echo "$1=true" >> "${GITHUB_OUTPUT}"
+              echo "gate $1: required"
+            else
+              echo "$1=false" >> "${GITHUB_OUTPUT}"
+              echo "gate $1: not required by this change"
+            fi
+          }
+
+          # The committed bundle is a pure function of the persona fixture, the
+          # training and model code, the feature contract, the schema the
+          # fixture is seeded through, and the image that builds it.
+          decide serving-artifacts '^(infra/model-bundle/|infra/features/|synthetic/personas/|src/(models|training|features|data)/|src/(config|feature_contract)\.py|alembic/|alembic\.ini|Makefile|pyproject\.toml|docker-compose\.yml|\.github/workflows/ci\.yml)'
+          decide realms '^(infra/keycloak/|tests/unit/test_realm_drift\.py|docker-compose\.yml|\.github/workflows/ci\.yml)'
+
+  # Non-negotiable #5 in its first mechanical form: rebuild the committed
+  # serving bundle from the fixture it was built from and fail if a single
+  # manifest field moved. `make serving-artifacts-check` runs the rebuild inside
+  # the linux/amd64 features image, so the architecture that publishes the
+  # bundle is the architecture that checks it; this job supplies the Postgres
+  # the training read goes to. Editing synthetic/personas/catalog.json without
+  # rebuilding the bundle is what this job exists to turn red.
+  serving-artifacts:
+    runs-on: ubuntu-latest
+    needs: [changed-paths, test]
+    if: needs.changed-paths.outputs.serving-artifacts == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+
+      # Its own Compose project, so the network name the build container joins
+      # is this job's and cannot collide with another job's stack.
+      - name: Start the bundle's source of truth
+        run: docker compose -p movielens-artifacts up -d --wait postgres
+
+      # The bundle is a pure function of these rows: training raises
+      # "tenant 'demo' has no ratings to train on" if the seed is skipped.
+      # Both steps reach Postgres on localhost; the rebuild below reaches it
+      # over the Compose network from inside the features image.
+      - name: Seed the reviewed persona fixture
+        run: |
+          python -m src.data.demo_setup
+          python -c "from synthetic.personas.seed import main; main()"
+
+      - name: Rebuild the committed bundle and compare
+        run: make serving-artifacts-check ARTIFACT_NETWORK=movielens-artifacts_default
+
+      - name: Dump Postgres logs on failure
+        if: failure()
+        run: docker compose -p movielens-artifacts logs postgres
+
+      - name: Stop the bundle's source of truth
+        if: always()
+        run: docker compose -p movielens-artifacts down --volumes --remove-orphans
+
+  # ADR 0007's risk section promised a realm-drift check and no job has ever run
+  # one. Two questions, one job. Does a Keycloak that imported the committed
+  # seeds report the realms those seeds describe — import drops a property it
+  # does not recognise in silence, so a seed can claim a setting no server ever
+  # applied. And do the production templates keep every security-relevant
+  # setting those seeds carry, or has production quietly become the looser of
+  # the two? tests/unit/test_realm_drift.py answers both.
+  realm-drift:
+    runs-on: ubuntu-latest
+    needs: [changed-paths]
+    if: needs.changed-paths.outputs.realms == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+
+      # A fresh volume matters: `--import-realm` never overwrites a realm that
+      # already exists, so only a first boot proves what the current seeds
+      # produce.
+      - name: Import the committed realm seeds
+        run: docker compose -p movielens-realm-drift -f docker-compose.yml up -d keycloak
+
+      - name: Wait for the imported realms
+        run: |
+          for realm in default demo; do
+            imported=false
+            for _ in $(seq 1 60); do
+              if curl --fail --silent "http://localhost:8080/realms/${realm}" > /dev/null; then
+                imported=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "${imported}" != true ]; then
+              echo "Keycloak did not import realm ${realm}"
+              exit 1
+            fi
+          done
+
+      # `kc.sh export` starts a second Keycloak runtime inside the running
+      # container and its management interface collides with the server's own
+      # port 9000: the export still writes every file and then exits non-zero.
+      # Moving that port is what makes an export usable against a live server.
+      #
+      # `--users skip` keeps accounts and their credential hashes out of the
+      # file. Client secrets are still written in plain text, which is why the
+      # export stays inside the job and is never uploaded as an artifact — the
+      # comparison's verdict is in the log, and regenerating the export takes
+      # half a minute.
+      - name: Export the realms Keycloak actually built
+        run: |
+          docker compose -p movielens-realm-drift -f docker-compose.yml exec -T keycloak \
+            /opt/keycloak/bin/kc.sh export --dir /tmp/realm-export --users skip \
+            --http-management-port 9001
+          mkdir -p artifacts/realm-export
+          docker compose -p movielens-realm-drift -f docker-compose.yml cp \
+            keycloak:/tmp/realm-export/. artifacts/realm-export/
+
+      # REQUIRE_REALM_EXPORT turns "no export here" into a failure rather than a
+      # skip, for the same reason the tenant-isolation job sets its switch: a
+      # gate that silently executed nothing reports the same green tick as one
+      # that passed.
+      - name: Compare the export and the production templates against the seeds
+        env:
+          REALM_EXPORT_DIR: artifacts/realm-export
+          REQUIRE_REALM_EXPORT: "1"
+        run: pytest tests/unit/test_realm_drift.py -v
+
+      - name: Dump Keycloak logs on failure
+        if: failure()
+        run: docker compose -p movielens-realm-drift -f docker-compose.yml logs --tail 200 keycloak
+
+      - name: Stop Keycloak
+        if: always()
+        run: docker compose -p movielens-realm-drift -f docker-compose.yml down --volumes --remove-orphans
+
+  # --- Release images --------------------------------------------------------
+  # The production host never builds anything. It pulls, which makes this job
+  # the only place the images it runs come from, and `needs` naming every other
+  # job in this file is what makes "published" mean "passed everything". A red
+  # gate anywhere above leaves the tags where they were and gives the deploy
+  # workflow nothing new to pull.
+  #
+  # Two tags per image. The 40-character commit SHA is what a deploy pins and
+  # what a rollback returns to; `main` is the moving convenience tag
+  # docker-compose.prod.yml defaults IMAGE_TAG to, for an operator on the box
+  # who wants whatever is current. Nothing here ever deletes a tag: a rollback
+  # is only possible while the previous release's SHA tag still exists, which is
+  # also why infra/host's prune timer removes images by age and never volumes.
+  publish-images:
+    needs:
+      - browser-auth-e2e
+      - changed-paths
+      - demo-compose
+      - feature-parity
+      - frontend
+      - lint
+      - realm-drift
+      - serving-artifacts
+      - synthetic-load-smoke
+      - tenant-isolation
+      - test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # GHCR namespaces are lowercase and this repository is `MovieLens-RecSys`,
+      # so `github.repository` cannot be used verbatim. The literal is the same
+      # string infra/deploy/production.env.example defaults IMAGE_REPOSITORY to,
+      # and tests/unit/test_deploy_workflows.py holds the two together — a
+      # publish job and a host that disagree about the namespace is a deploy
+      # that pulls a tag nobody pushed.
+      IMAGE_REPOSITORY: ghcr.io/kudratsingh/movielens-recsys
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+
+      # The default `docker` driver cannot push straight to a registry, so this
+      # job builds on a docker-container builder instead.
+      - name: Enable a buildx builder that can push
+        run: docker buildx create --name release --driver docker-container --use
+
+      # linux/amd64 only, and stated rather than inherited: the target is a
+      # Hetzner CX22 (x86-64) while the machine this repository is usually
+      # developed on is arm64, and an image built on the wrong architecture
+      # fails on the box rather than here.
+      #
+      # `--provenance=false` keeps each published reference a plain
+      # single-platform image rather than an index carrying an attestation
+      # manifest. Nothing on the host consumes an attestation, and a plain image
+      # is what `docker compose pull` and `docker image prune` reason about
+      # most predictably.
+      #
+      # The k6 image takes its version from the ARG default in
+      # infra/k6/Dockerfile rather than a --build-arg here, because a Dockerfile
+      # cannot read infra/ci/k6-version to build its own FROM line. The
+      # duplicate pin is asserted in tests/unit/test_deploy_workflows.py, not
+      # trusted: a canary running a different k6 than the gate quietly undoes
+      # ADR 0010.
+      - name: Build and push every image the production stack runs
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "### Published images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # name, build context, Dockerfile. Every service in
+          # docker-compose.prod.yml that carries a `build:` block is here and
+          # nothing else — a service missing from this table is a service the
+          # box would have to build for itself.
+          while read -r name context dockerfile; do
+            [ -n "${name}" ] || continue
+            echo "::group::${name}"
+            docker buildx build \
+              --platform linux/amd64 \
+              --provenance=false \
+              --file "${dockerfile}" \
+              --tag "${IMAGE_REPOSITORY}/${name}:${IMAGE_TAG}" \
+              --tag "${IMAGE_REPOSITORY}/${name}:main" \
+              --push \
+              "${context}"
+            echo "::endgroup::"
+            echo "- \`${IMAGE_REPOSITORY}/${name}\` at \`${IMAGE_TAG}\` and \`main\`" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done <<'IMAGES'
+          api . infra/api/Dockerfile
+          features . infra/features/Dockerfile
+          web ./web ./web/Dockerfile
+          pgbouncer . infra/pgbouncer/Dockerfile
+          keycloak . infra/keycloak/Dockerfile
+          backup . infra/backup/Dockerfile
+          k6 . infra/k6/Dockerfile
+          IMAGES

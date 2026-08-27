@@ -1,0 +1,34 @@
+# The nightly backup, as the box runs it.
+#
+# The job itself is the `backup` service in docker-compose.prod.yml: pg_dump of
+# both databases, encrypted client-side with age, pushed to an off-box remote
+# with rclone. This unit is only the thing that starts it, and it is a
+# systemd timer rather than a cron line so that a failed run shows up in
+# `systemctl status` and the journal alongside everything else, with an exit
+# code rather than a mail nobody reads.
+#
+# Backups are the entire recovery story for a single box. There is no second
+# node, no snapshot replica, and a provider-side snapshot of a running Postgres
+# volume is a crash-consistent copy of a database, not a dump -- so this
+# running, and the restore drill in the runbook proving it can be read back, is
+# what stands between a failed disk and starting over.
+
+[Unit]
+Description=MovieLens nightly database backup
+Requires=docker.service
+After=docker.service movielens.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/movielens
+User=deploy
+Group=deploy
+
+# --rm so a failed run leaves no container behind to confuse the next one, -T
+# because there is no terminal here and rclone's progress output would
+# otherwise try to draw one. `run` enables the service's own `jobs` profile.
+ExecStart=/usr/bin/docker compose -p movielens-prod -f docker-compose.prod.yml --env-file .env.prod run --rm -T backup
+
+# Two databases and an upload, on a box that is also serving. The dump itself
+# is seconds at this data volume; the timeout is for a slow remote.
+TimeoutStartSec=1800

@@ -1,0 +1,26 @@
+# 04:00 UTC, nightly.
+#
+# UTC is stated in the calendar expression rather than assumed from the box's
+# timezone: a host that gets moved to a local zone would otherwise silently
+# shift the window, and every other timestamp in this system -- audit rows,
+# retention arithmetic in the backup script, the k6 evidence -- is UTC.
+#
+# 04:00 is a quiet hour for a portfolio site in every timezone that matters,
+# and it is far enough from the deploy path that a merge to main landing at
+# midnight has finished long before the dump starts.
+
+[Unit]
+Description=Nightly MovieLens database backup
+Documentation=file:///opt/movielens/docs/deployment-runbook.md
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+
+# A box that was off or rebooting at 04:00 still gets its backup, on the next
+# boot, instead of skipping a night in silence. RandomizedDelaySec keeps the
+# dump off the same second as anything else that fires on the hour.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

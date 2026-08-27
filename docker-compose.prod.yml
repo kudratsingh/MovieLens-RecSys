@@ -1,0 +1,1050 @@
+# Production. This file is what runs on the Hetzner box, and the same file is
+# what a laptop rehearses it with -- one topology, not a deployment and a
+# separate approximation of one. The only differences between the two are
+# environment: EDGE_TLS picks the certificate issuer, PUBLIC_APP_HOST /
+# PUBLIC_AUTH_HOST pick the hostnames, and IMAGE_TAG picks whether the services
+# run images pulled from GHCR or images `make up-prod` just built locally.
+#
+# What it is not is a second demo stack. Every difference from
+# docker-compose.demo.yml is a difference production actually has, and each one
+# exists because no CI job and no local run had ever booted this application
+# with ENVIRONMENT != dev -- both guards in src/config.py and both startup
+# checks in src/serving/startup_checks.py are inert until something does:
+#
+#   * ENVIRONMENT=production everywhere, and no DEV_AUTH_BYPASS variable at all
+#     -- not "false", absent, so a typo cannot turn it back on;
+#   * every credential arrives from a gitignored .env.prod (.gitignore blocks
+#     `.env.*`), generated with `secrets.token_urlsafe(48)`. On the box that
+#     file is /opt/movielens/.env.prod at mode 0600, owned by `deploy`;
+#   * no POSTGRES_HOST_AUTH_METHOD=trust: pgBouncer authenticates with
+#     scram-sha-256 against real roles (infra/pgbouncer/entrypoint.sh);
+#   * no published data-store ports. The only thing bound on the host is the
+#     TLS edge -- on a single box, a published port is a port on the public
+#     internet, and ufw is the second line rather than the first;
+#   * no long-lived service mounts the repository. The pgBouncer config is
+#     rendered from the environment, the Feast registry and the serving bundle
+#     are baked into the features image, and the realm templates ride inside
+#     the Keycloak image. The box does have a checkout, at /opt/movielens, but
+#     it is there for this file and the deploy script -- not for the services,
+#     whose contents have to be pinned by image digest for a rollback to mean
+#     anything. What still bind-mounts is the edge's Caddyfile and two
+#     operator-run jobs: the one-time provisioning SQL and the rollback
+#     rehearsal's script;
+#   * a Caddy edge terminating TLS on the two public hostnames, from Let's
+#     Encrypt on the box and from a local CA on a laptop. The edge carries both
+#     hostnames as network aliases so a container resolving the public name
+#     reaches the edge rather than leaving the network.
+#
+# Deploys run infra/deploy/deploy.sh, which drives the Makefile's prod-*
+# targets in the order the release sequence needs; see
+# infra/deploy/production.env.example for the variable contract,
+# infra/host/ for what the box itself is set up with, and
+# docs/deployment-runbook.md for the whole procedure.
+#
+# The project name is pinned here rather than left to the directory name so a
+# stray `docker compose -f docker-compose.prod.yml down -v` can never take the
+# demo stack's volumes with it, and so the systemd unit and an operator's
+# shell always address the same project.
+name: movielens-prod
+
+# Anchors for the variable groups more than one service repeats verbatim. A
+# divergence between two copies of the same DSN is a silent split-brain
+# (src/features/online.py setdefaults Feast's variables from the admin_user
+# ones), so the copies are one definition.
+x-feast-store: &feast-store
+  FEAST_POSTGRES_HOST: postgres-app
+  FEAST_POSTGRES_PORT: "5432"
+  FEAST_POSTGRES_DB: movielens
+  FEAST_POSTGRES_USER: admin_user
+  FEAST_POSTGRES_PASSWORD: ${ADMIN_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+  FEAST_REPO_PATH: src/features/feast_repo
+  # Feast's own comma-separated k=v form, not a redis:// URL. Derived from the
+  # password rather than carried as its own variable so the two cannot drift.
+  REDIS_CONNECTION_STRING: redis:6379,password=${REDIS_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+
+x-admin-db: &admin-db
+  ADMIN_USER_DB_HOST: postgres-app
+  ADMIN_USER_DB_PORT: "5432"
+  ADMIN_USER_DB_NAME: movielens
+  ADMIN_USER_DB_USER: admin_user
+  ADMIN_USER_DB_PASSWORD: ${ADMIN_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+
+# The API's own database identity: app_user, through pgBouncer's forced-user
+# alias, so RLS applies to everything a request handler touches.
+x-app-db: &app-db
+  APP_USER_DB_HOST: pgbouncer
+  APP_USER_DB_PORT: "6432"
+  APP_USER_DB_NAME: movielens_app
+  APP_USER_DB_USER: app_user
+  APP_USER_DB_PASSWORD: ${APP_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+  PGBOUNCER_ADMIN_USER: pgbouncer_admin
+  PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+
+# The three settings that must agree exactly, in one place. The tenant is
+# derived from the token's issuer, so KEYCLOAK_PUBLIC_BASE_URL is a trust
+# boundary and not a convenience: the middleware rebuilds
+# {this}/realms/{realm} and 401s anything else.
+x-keycloak-client: &keycloak-client
+  KEYCLOAK_BASE_URL: http://keycloak:8080
+  KEYCLOAK_PUBLIC_BASE_URL: https://${PUBLIC_AUTH_HOST:-auth.localtest.me}
+  KEYCLOAK_AUDIENCE: movielens-api
+  # JSON, never CSV. src/config.py types this tuple[str, ...] and
+  # pydantic-settings parses it as JSON; the comma form raises SettingsError
+  # and crash-loops the container with no partial mode.
+  KEYCLOAK_AUTHORIZED_PARTIES: '["movielens-api","movielens-web","movielens-verify"]'
+  # Deliberately not movielens-verify: RequestPrincipal.can_access_demo_personas
+  # trusts the service client by azp alone, and the isolation canary
+  # authenticates as a client that must not get that bypass.
+  KEYCLOAK_SERVICE_CLIENT_ID: movielens-api
+  JWKS_CACHE_TTL_SECONDS: "300"
+
+# --- The box's memory budget ------------------------------------------------
+# One CX22: 2 vCPU, 4 GB, and every long-lived service below carries a
+# mem_limit. They are ceilings, not reservations -- they sum to more RAM than
+# the box has, deliberately, because sizing each service to its own worst case
+# and then summing would leave a third of the machine idle to protect against a
+# peak that never happens in all ten at once. What each limit buys is a
+# blast radius: one service that leaks is killed and restarted by the kernel
+# instead of taking the whole box into swap-death, and `docker inspect` reports
+# an OOMKilled container instead of an operator guessing.
+#
+# The numbers come from a rehearsal of this file at API_WORKERS=2 and
+# MODEL_SERVER_WORKERS=2, measured with `docker stats` on a warm stack that had
+# just run the release sequence and the post-deploy matrix. Resident, largest
+# first: keycloak 471 MiB, model-server 295, api 158, feature-server 141, web
+# 57, postgres-keycloak 49, postgres-app 38, edge 37, redis 12, pgbouncer 2 --
+# 1.26 GiB in total against the box's 4 GiB. The ceilings are set above each of
+# those with room for the parts that grow with traffic rather than at rest:
+# Postgres page cache, an extra model worker's booster, JVM metaspace.
+#
+# The release jobs (release, materialize, backup, verify) deliberately carry no
+# limit. They run one at a time, they are the memory-hungriest things that ever
+# run here, and a job killed halfway through a migration or a dump is a much
+# worse outcome than one that swaps for thirty seconds.
+#
+# infra/host/bootstrap.sh gives the box a swapfile for the same reason: the
+# peak is a deploy, when the release jobs run while the previous release's
+# containers are still up.
+
+services:
+  # --- data stores ---------------------------------------------------------
+
+  postgres-app:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: recsys
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      POSTGRES_DB: movielens
+    volumes:
+      - postgres_app_data:/var/lib/postgresql/data
+    # No published port and no trust auth. The one-time role provisioning runs
+    # as a job on this network (see postgres-provision), not from the host.
+    # shared_buffers is the stock 128MB and the working set is one
+    # tenant's catalog and movie state, so this is mostly page cache and
+    # per-connection memory -- and pgBouncer caps how many of those there
+    # can be.
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recsys -d movielens"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Keycloak's schema is opaque, is backed up on a different cadence, and
+  # should not share a lifecycle with application data (ADR 0007). Merging the
+  # two to save a container is explicitly rejected in ADR 0013.
+  postgres-keycloak:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      POSTGRES_DB: keycloak
+    volumes:
+      - postgres_keycloak_data:/var/lib/postgresql/data
+    # Keycloak's schema is small and almost entirely read: realms,
+    # clients, a handful of accounts and the session tables.
+    mem_limit: 256m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Redis is the sole online feature store, not a cache: the feature views
+  # declare 3650-day TTLs and a missing feature becomes 0.0 rather than an
+  # error, so an eviction would silently degrade every ranking score with no
+  # failure anywhere. noeviction is what stops the store emptying; the
+  # model-server's warm-up assertion is what makes an already-empty store fail
+  # the boot instead of serving zeros.
+  redis:
+    image: redis:7
+    # The password is read from the environment inside the container rather
+    # than interpolated into the command line, so it never appears in
+    # `docker compose config` output or in the host's process table.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD"
+        --maxmemory-policy noeviction
+        --appendonly yes --appendfsync everysec --dir /data
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    volumes:
+      - redis_data:/data
+    # Deliberately a container limit with no `maxmemory` behind it. The
+    # online store holds one tenant's feature snapshots -- kilobytes, not
+    # megabytes -- and the failure modes are not symmetrical: a maxmemory
+    # with noeviction refuses writes, and one with an eviction policy
+    # empties the store silently while every ranking score quietly
+    # degrades to 0.0 features. A container the kernel kills restarts
+    # with its AOF intact and shows up as an outage, which is the loud
+    # failure of the three.
+    mem_limit: 128m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # --- one-time database provisioning --------------------------------------
+
+  # The roles migration 0001 expects to already exist, with generated
+  # passwords instead of the literals that migration hard-codes, plus the
+  # pgbouncer_auth lookup role and its SECURITY DEFINER function. Runs as the
+  # superuser; every later step runs as migrator, admin_user or app_user.
+  #
+  # This is the Compose form of the runbook's one-time provisioning block. It
+  # is idempotent, so `make prod-seed` can re-run it, and it is a job rather
+  # than a docker-entrypoint-initdb.d script because the same SQL has to be
+  # runnable by hand against a managed Postgres that has no initdb hook.
+  postgres-provision:
+    profiles: ["jobs"]
+    image: postgres:16
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        set -eu;
+        psql -v ON_ERROR_STOP=1
+        -v app_password="$$APP_USER_DB_PASSWORD"
+        -v admin_password="$$ADMIN_USER_DB_PASSWORD"
+        -v migrator_password="$$MIGRATOR_DB_PASSWORD"
+        -v pgbouncer_auth_password="$$PGBOUNCER_AUTH_PASSWORD"
+        -f /provision/provision-roles.sql;
+        psql -v ON_ERROR_STOP=1 -f /provision/pgbouncer-auth.sql;
+        echo PROVISION-ROLES-OK
+    environment:
+      PGHOST: postgres-app
+      PGPORT: "5432"
+      PGDATABASE: movielens
+      PGUSER: recsys
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # The role statements are built with format(... %L ...), so the password
+      # is in the SQL text the server executes. Postgres already defaults to
+      # log_statement=none; stating it means a server that was configured
+      # otherwise does not end up with four generated credentials in its log.
+      PGOPTIONS: "-c log_statement=none"
+      # Read by psql as :'app_password' and friends. Passing them as variables
+      # is what keeps every password out of the committed SQL file.
+      APP_USER_DB_PASSWORD: ${APP_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      ADMIN_USER_DB_PASSWORD: ${ADMIN_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      MIGRATOR_DB_PASSWORD: ${MIGRATOR_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      PGBOUNCER_AUTH_PASSWORD: ${PGBOUNCER_AUTH_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    volumes:
+      - ./infra/deploy/provision-roles.sql:/provision/provision-roles.sql:ro
+      - ./infra/postgres/pgbouncer-auth.sql:/provision/pgbouncer-auth.sql:ro
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+    restart: "no"
+
+  # --- connection pooling ---------------------------------------------------
+
+  # ADR 0008's enforcer of last resort. Transaction pool mode is what stops
+  # `SET LOCAL app.tenant_id` outliving the transaction that set it, and the
+  # API refuses to boot unless the admin console reports it back.
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: infra/pgbouncer/Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/pgbouncer:${IMAGE_TAG:-main}
+    environment:
+      PGB_UPSTREAM_HOST: postgres-app
+      PGB_UPSTREAM_PORT: "5432"
+      PGB_UPSTREAM_DB: movielens
+      PGBOUNCER_LISTEN_PORT: "6432"
+      PGBOUNCER_ADMIN_USER: pgbouncer_admin
+      PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      PGBOUNCER_AUTH_USER: pgbouncer_auth
+      PGBOUNCER_AUTH_PASSWORD: ${PGBOUNCER_AUTH_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # R-7 ran the stack in both modes and userlist is the one that works.
+      # auth_query's lookup hands pgBouncer a SCRAM verifier, which verifies a
+      # client but cannot be replayed as a password, and both aliases below pin
+      # a forced user -- so the client leg succeeded, the server leg failed with
+      # `server login failed: FATAL password authentication failed for user
+      # "app_user"`, and nothing could reach Postgres through the pooler at all.
+      # userlist renders the two passwords into a 0600 file at container start
+      # and authenticates in both directions. Switching back is a variable
+      # change with no rebuild; the lookup role and its function stay
+      # provisioned so it stays that cheap.
+      PGBOUNCER_AUTH_MODE: ${PGBOUNCER_AUTH_MODE:-userlist}
+      APP_USER_DB_PASSWORD: ${APP_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      ADMIN_USER_DB_PASSWORD: ${ADMIN_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+    # A single-threaded connection multiplexer with a handful of pools.
+    mem_limit: 64m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U app_user -d movielens_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # --- identity -------------------------------------------------------------
+
+  keycloak:
+    build:
+      context: .
+      dockerfile: infra/keycloak/Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/keycloak:${IMAGE_TAG:-main}
+    # `start --optimized`, never start-dev: the augmentation is baked into the
+    # image, and --optimized refuses to start if a build option is contradicted
+    # at runtime. No --import-realm either -- an import never overwrites an
+    # existing realm, so realms come from the keycloak-provision job.
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres-keycloak
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      KC_HOSTNAME: https://${PUBLIC_AUTH_HOST:-auth.localtest.me}
+      KC_HOSTNAME_STRICT: "true"
+      # Absent everywhere in the tree before this file. Without it Keycloak
+      # builds http:// absolute URLs behind the edge and the OIDC redirect loop
+      # breaks -- which is exactly the failure the demo stack cannot reproduce.
+      KC_PROXY_HEADERS: xforwarded
+      # Only because TLS terminates at the edge.
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: "8080"
+      KC_HEALTH_ENABLED: "true"
+      # An explicit heap rather than MaxRAMPercentage: the percentage is of
+      # whatever the container's memory limit happens to be, so it silently
+      # follows a limit change, and Keycloak's steady-state heap is the number
+      # worth pinning. 512m max inside a 768m limit leaves room for metaspace,
+      # code cache and thread stacks, which live outside the heap and are what
+      # the kernel OOM-kills the JVM over.
+      JAVA_OPTS_APPEND: ${JAVA_OPTS_KC_HEAP:--Xms128m -Xmx512m}
+      # Used once by keycloak-provision, then deleted in a real deployment and
+      # the account disabled -- and a rehearsal keeps them because it
+      # re-provisions from empty volumes on every reset.
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    depends_on:
+      postgres-keycloak:
+        condition: service_healthy
+    # The JVM: a 512m max heap plus metaspace, code cache and thread
+    # stacks. This is the largest resident process on the box after the
+    # model sidecar, and the one most likely to be killed if the limits
+    # are wrong -- see JAVA_OPTS_KC_HEAP above.
+    mem_limit: 768m
+    restart: unless-stopped
+    # The image carries bash, sed, grep, cat, java and kcadm and nothing else --
+    # no curl, no wget -- so the probe is bash's own /dev/tcp. The path is the
+    # master realm's discovery document rather than the demo realm's: on a first
+    # deploy the demo realm does not exist yet, and probing a realm that the
+    # provisioning job has not created would deadlock the first start forever.
+    healthcheck:
+      test:
+        - "CMD"
+        - "bash"
+        - "-c"
+        - "exec 3<>/dev/tcp/127.0.0.1/8080; printf 'GET /realms/master/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '200 OK' <&3"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # J2. Manual, idempotent, and the reason the Keycloak image ships the realm
+  # templates: the job that provisions a server is the same artifact as the
+  # server it provisions. Every kcadm call starts a JVM, so a first run takes
+  # minutes rather than seconds.
+  keycloak-provision:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/keycloak:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/keycloak/Dockerfile
+    entrypoint: ["/opt/keycloak/provision.sh"]
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      APP_ORIGIN: https://${PUBLIC_APP_HOST:-app.localtest.me}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      KC_API_CLIENT_SECRET: ${KC_API_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
+      KC_VERIFY_CLIENT_SECRET: ${VERIFY_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
+      WALKTHROUGH_PASSWORD: ${WALKTHROUGH_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      VERIFY_PASSWORD: ${VERIFY_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      ISOLATION_PASSWORD: ${ISOLATION_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      KC_HUMAN_ADMIN_USERNAME: ${KC_HUMAN_ADMIN_USERNAME:-recsys-admin}
+      KC_HUMAN_ADMIN_PASSWORD: ${KC_HUMAN_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      KEYCLOAK_WAIT_SECONDS: "300"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  # --- TLS edge -------------------------------------------------------------
+
+  # The only host-published service in the stack: ports 80 and 443 on the box
+  # are this container, and everything else in the topology is reachable only
+  # from inside the Compose network. It terminates TLS for both public
+  # hostnames -- from Let's Encrypt on the box, from Caddy's own CA on a
+  # laptop -- which is what lets one file be both the deployment and the
+  # rehearsal of it. What the rehearsal exercises is not Caddy but everything
+  # downstream of an https hostname: KC_PROXY_HEADERS, the issuer claim,
+  # AUTH_URL selecting __Secure- cookie names, and the BFF's Origin check.
+  #
+  # It depends on nothing, deliberately. Caddy resolves reverse-proxy upstreams
+  # at dial time, so it can start before web and keycloak; the reverse would be
+  # a dependency cycle, since web has to wait for this service's trust anchor.
+  edge:
+    image: caddy:2-alpine
+    # Two jobs before Caddy is exec'd into: resolve EDGE_TLS to the single
+    # argument the Caddyfile's `tls` line takes, and publish the trust anchor
+    # for whatever this edge is about to serve into the edge_ca volume.
+    #
+    # The second one is why this is a script rather than a bare `caddy run`.
+    # Every container downstream points SSL_CERT_FILE (or NODE_EXTRA_CA_CERTS)
+    # at /etc/ssl/edge-ca/root.crt in both modes, and both modes have to put
+    # something there that verifies what this edge serves -- otherwise the
+    # release job's https preflight fails against its own configuration rather
+    # than against a real fault. Locally that anchor is Caddy's internal root,
+    # which lives under a 0700 directory because the signing key is in there
+    # too, so it is republished at 0644; it also does not exist until Caddy has
+    # provisioned it, which is why the copy is a loop in the background rather
+    # than a one-shot before the exec. Under ACME the anchor is the system CA
+    # bundle: the certificates are publicly trusted, and copying the bundle is
+    # what stops SSL_CERT_FILE pointing at an empty or missing file and
+    # rejecting Let's Encrypt.
+    #
+    # The healthcheck is that published file, in both modes, so nothing
+    # downstream ever starts before it can verify this edge -- and under ACME
+    # the stack does not block on certificate issuance, which needs public DNS
+    # to have propagated and can take minutes on a first deploy.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        case "$${EDGE_TLS:-internal}" in
+        internal)
+          EDGE_TLS_ISSUER=internal
+          (
+            while [ ! -s /data/caddy/pki/authorities/local/root.crt ]; do sleep 1; done
+            cp /data/caddy/pki/authorities/local/root.crt /edge-ca/root.crt
+            chmod 0644 /edge-ca/root.crt
+          ) &
+          ;;
+        acme)
+          if [ -z "$${ACME_EMAIL:-}" ]; then
+            echo "EDGE_TLS=acme needs ACME_EMAIL: Let's Encrypt registers the account against it" >&2
+            exit 1
+          fi
+          EDGE_TLS_ISSUER="$$ACME_EMAIL"
+          cp /etc/ssl/certs/ca-certificates.crt /edge-ca/root.crt
+          chmod 0644 /edge-ca/root.crt
+          ;;
+        *)
+          echo "EDGE_TLS must be 'acme' (public certificates) or 'internal' (local CA)" >&2
+          exit 1
+          ;;
+        esac
+        export EDGE_TLS_ISSUER
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "${PROD_EDGE_HTTP_PORT:-80}:80"
+      - "${PROD_EDGE_HTTPS_PORT:-443}:443"
+    environment:
+      # `acme` on the box, `internal` for the rehearsal. The default is the
+      # rehearsal's, because an unset variable that silently asked Let's
+      # Encrypt for a certificate for app.localtest.me would burn rate limit
+      # against a name nobody can validate.
+      EDGE_TLS: ${EDGE_TLS:-internal}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      PUBLIC_APP_HOST: ${PUBLIC_APP_HOST:-app.localtest.me}
+      PUBLIC_AUTH_HOST: ${PUBLIC_AUTH_HOST:-auth.localtest.me}
+    volumes:
+      - ./infra/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - edge_ca:/edge-ca
+    networks:
+      default:
+        # These aliases are what let the release and verify jobs fetch the
+        # *public* issuer document over https from inside the network -- the
+        # check that catches the likeliest first-deploy failure of all. They
+        # matter in both modes and for different reasons: locally, because
+        # localtest.me resolves to 127.0.0.1 and inside a container that is the
+        # container itself; on the box, because a container resolving the
+        # public name would otherwise leave the network, hit the host's own
+        # public address and depend on the provider hairpinning it back.
+        aliases:
+          - ${PUBLIC_APP_HOST:-app.localtest.me}
+          - ${PUBLIC_AUTH_HOST:-auth.localtest.me}
+    # Caddy proxying two hostnames. 64m looked ample and the rehearsal measured
+    # 36 MiB of it at rest, which is too little headroom for a Go runtime under
+    # a connection burst -- so 128m, and it is still the second-smallest
+    # ceiling here.
+    mem_limit: 128m
+    restart: unless-stopped
+    # The published CA root, not the listener, is what downstream containers
+    # wait for: Caddy provisions its internal CA while loading the config and
+    # binds its listeners immediately after, and a job that starts before the
+    # root certificate is readable cannot verify anything the edge serves.
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /edge-ca/root.crt"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # --- application ----------------------------------------------------------
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/api:${IMAGE_TAG:-main}
+    # `serve`, not a spelled-out uvicorn line. The two render the same
+    # process, but a bare `uvicorn ...` here lands in the entrypoint's
+    # `exec "$@"` fall-through and skips the settings preflight the `serve`
+    # branch performs -- and that preflight is what turns a bad variable into
+    # an exit code instead of workers that die and respawn forever inside a
+    # container that stays "running". PORT and API_WORKERS below drive the
+    # shape. The service is private and terminates no TLS, so it needs neither
+    # --proxy-headers nor --forwarded-allow-ips.
+    command: ["serve", "--no-access-log"]
+    environment:
+      <<: [*app-db, *keycloak-client]
+      ENVIRONMENT: production
+      PORT: "8000"
+      # Two, because the CX22 has two vCPUs. The pinned k6 gate's p99 baseline
+      # was measured at four workers on a four-core CI runner: four processes
+      # on two cores would buy a shorter queue at the price of scheduling them
+      # against each other. The p99 the SLO is written against is measured in
+      # CI, at CI's shape; this is the box's. Raise it with the box, never to
+      # chase a slow response.
+      API_WORKERS: "${API_WORKERS:-2}"
+      # /readyz probes the JWKS for this realm, so the coupling is deliberate
+      # rather than inherited from a default.
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      MODEL_SERVER_URL: http://model-server:6570
+      # Do not raise. The release handoff forbids inflating this to paper over
+      # cold workers, and the sidecar's lifespan warm-up removes the reason
+      # anyone would want to.
+      MODEL_SERVER_TIMEOUT_SECONDS: "0.5"
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      FEAST_FEATURE_SERVER_URL: http://feature-server:6566
+      # No ADMIN_USER_* (the BYPASSRLS engine is gone; app_user already holds
+      # SELECT on public.tenants), no POSTGRES_* (the migrator DSN lives only
+      # on release), no TMDB token (no TMDB route exists), and above all no
+      # DEV_AUTH_BYPASS -- absent, not false.
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Per worker this is FastAPI, httpx and asyncpg and nothing heavier:
+    # the booster, the candidate index and pandas all live in the model
+    # sidecar, which is why the API image never imports them.
+    mem_limit: 512m
+    restart: on-failure:10
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+  # Never gets a domain. It holds the booster and the
+  # candidate index and answers only the API.
+  model-server:
+    build:
+      context: .
+      dockerfile: infra/features/Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/features:${IMAGE_TAG:-main}
+    command:
+      - "uvicorn"
+      - "src.serving.model_server:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "6570"
+      - "--workers"
+      - "${MODEL_SERVER_WORKERS:-2}"
+      - "--no-access-log"
+    environment:
+      <<: [*feast-store, *admin-db]
+      ENVIRONMENT: production
+      PORT: "6570"
+      # The worker count is on the command line where the process cannot read
+      # it back, so /healthz reports null without this. It is the same number
+      # in both places on purpose.
+      MODEL_SERVER_WORKERS: "${MODEL_SERVER_WORKERS:-2}"
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      # src/serving/model_server.py builds Settings() at import time, and both
+      # of the production guards in src/config.py fire at construction whether
+      # or not the process ever uses the value. This sidecar reaches Postgres
+      # directly as admin_user and never opens the pooler's admin console, but
+      # without this it refuses to start -- the same trap the release job's
+      # MODEL_SERVER_AUTH_TOKEN above documents, from the other side.
+      PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # The baked bundle. No volume on either sidecar: the artifact is a build
+      # input, which is what makes "one volume per service, not shareable" a
+      # non-issue rather than a workaround, and makes a model rollback an image
+      # rollback.
+      MODEL_ARTIFACT_DIR: /app/models/serving
+      MODEL_MANIFEST_NAME: manifest.json
+      MODEL_FEATURE_CACHE_MAX_ENTRIES: "256"
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      # ADR 0010 treats these as a serving invariant rather than a local test
+      # convenience. The image bakes them; restating them here is what makes
+      # the deployed topology auditable from the compose file alone.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres-app:
+        condition: service_healthy
+    # The largest single allocation in the topology, and the one worth
+    # spending the box's memory on: each worker holds the LightGBM
+    # booster and the item-item index resident, plus pandas and numpy.
+    # A limit that clipped this would not degrade gracefully -- the
+    # sidecar's warm-up assertion fails the healthcheck and the API
+    # serves the popularity fallback at HTTP 200.
+    mem_limit: 1g
+    restart: on-failure:10
+    # /healthz answers 503 until every worker has completed a representative
+    # rank against real online features, so "healthy" here means warm. urlopen
+    # raises on 503, which is the behaviour this relies on. The start period
+    # covers the measured ~10 s first-worker warm-up.
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6570/healthz', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+
+  feature-server:
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/features:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/features/Dockerfile
+    # No start-command override: the image CMD already serves Feast on 6566.
+    environment:
+      <<: *feast-store
+      # Feast's server builds no Settings, but every container in the stack
+      # answering "production" to "which environment is this?" is worth more
+      # than the variable costs.
+      ENVIRONMENT: production
+      PORT: "6566"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres-app:
+        condition: service_healthy
+    # Feast's own server: the baked registry, a Redis client and Uvicorn.
+    mem_limit: 384m
+    restart: on-failure:10
+    # /health, not /healthz. Feast's own path.
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6566/health', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/web:${IMAGE_TAG:-main}
+    environment:
+      # NODE_ENV=production comes from the image, and is load-bearing: it is
+      # the production half of the fixture lockout. Deploy from the committed
+      # Dockerfile, never a buildpack.
+      PORT: "3001"
+      HOSTNAME: 0.0.0.0
+      # Encrypts the session JWE holding the API tokens *and* keys the BFF CSRF
+      # double-submit hash. Unset it and reads keep working while mutations
+      # 500 -- a misconfiguration that ships and is found by a user.
+      AUTH_SECRET: ${AUTH_SECRET:?generate one with secrets.token_urlsafe(48)}
+      # web/auth.ts hardcodes trustHost: true, so pinning this is the only
+      # defence against a forwarded Host influencing callback URLs, and it is
+      # what selects the __Secure- cookie names.
+      AUTH_URL: https://${PUBLIC_APP_HOST:-app.localtest.me}
+      AUTH_TRUST_HOST: "true"
+      # The expected Origin on every BFF mutation. Behind an edge the fallback
+      # is the *internal* origin, so setting it is required, not optional.
+      APP_ORIGIN: https://${PUBLIC_APP_HOST:-app.localtest.me}
+      RECOMMENDATION_API_URL: http://api:8000
+      KEYCLOAK_PUBLIC_ISSUER: https://${PUBLIC_AUTH_HOST:-auth.localtest.me}/realms/${SERVING_REALM:-demo}
+      KEYCLOAK_INTERNAL_ISSUER: http://keycloak:8080/realms/${SERVING_REALM:-demo}
+      KEYCLOAK_CLIENT_ID: movielens-web
+      # Node adds this to the default trust store rather than replacing it, so
+      # the image optimizer can still reach image.tmdb.org over the public CAs
+      # while anything that does reach the edge by its public name verifies.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/edge-ca/root.crt
+      # MOVIELENS_UI_FIXTURE_MODE is deliberately absent.
+    volumes:
+      - edge_ca:/etc/ssl/edge-ca:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      edge:
+        condition: service_healthy
+    # Next.js standalone output serving pre-built pages and the BFF route
+    # handlers. No build happens here; the image is already built.
+    mem_limit: 256m
+    restart: on-failure:10
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:3001').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+  # --- release and verification jobs ---------------------------------------
+
+  # J1. preflight -> schema -> seed, as migrator, printing
+  # RELEASE-BOOTSTRAP-OK <revision> as its final line. Alembic runs as migrator
+  # purely by setting POSTGRES_USER; because create_tables() runs first as
+  # migrator, migrator owns every base table, which is what makes
+  # ALTER TABLE ... FORCE ROW LEVEL SECURITY and the 0010 backfill work.
+  release:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/api:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    command: ["bootstrap", "all"]
+    environment:
+      <<: [*app-db, *admin-db, *keycloak-client]
+      ENVIRONMENT: production
+      POSTGRES_HOST: postgres-app
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: movielens
+      POSTGRES_USER: migrator
+      POSTGRES_PASSWORD: ${MIGRATOR_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      REDIS_CONNECTION_STRING: redis:6379,password=${REDIS_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # Settings() refuses to construct without this outside dev, even though
+      # the release job never speaks to the sidecar.
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      SERVING_TENANT_ID: ${SERVING_REALM:-demo}
+      # The preflight fetches the *public* discovery document over https, so
+      # this job needs whatever anchor verifies the edge: Caddy's internal root
+      # on a laptop, the system CA bundle under ACME. The edge publishes one or
+      # the other to this path and the job does not have to know which.
+      SSL_CERT_FILE: /etc/ssl/edge-ca/root.crt
+    volumes:
+      - edge_ca:/etc/ssl/edge-ca:ro
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      edge:
+        condition: service_healthy
+    restart: "no"
+
+  # The model-server's pre-deploy, run as its own job because Compose has no
+  # pre-deploy hook. It fences on the release job's schema, publishes the
+  # offline snapshots into Postgres and Redis, and proves the applied registry
+  # still describes the feature views the baked one declares.
+  #
+  # The fence reads the expected head out of the image it runs in: the features
+  # image carries alembic.ini + alembic/ for exactly this, which is also what
+  # lets it recognise a database that is *ahead* of this release and let a
+  # rollback's pre-deploy through instead of timing out.
+  materialize:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/features:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/features/Dockerfile
+    command:
+      - "python"
+      - "-m"
+      - "src.release.bootstrap"
+      - "materialize"
+      - "--wait-for-schema"
+      - "300"
+    environment:
+      <<: [*feast-store, *admin-db]
+      ENVIRONMENT: production
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      MODEL_ARTIFACT_DIR: /app/models/serving
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      # Same reason as the sidecar's copy: Settings() enforces both production
+      # guards at construction, and this job connects to Postgres directly as
+      # admin_user without ever going near the pooler.
+      PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # J3. The post-deploy matrix, run from inside the deployment so no public API
+  # surface is required. V-7 writes and reverts on the Eclectic Viewer only --
+  # never Cold Start, whose zero-signal state the browser E2E set depends on.
+  verify:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/api:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    command: ["verify", "--all"]
+    environment:
+      <<: [*app-db, *keycloak-client]
+      ENVIRONMENT: production
+      API_URL: http://api:8000
+      WEB_URL: http://web:3001
+      KEYCLOAK_URL: http://keycloak:8080
+      APP_ORIGIN: https://${PUBLIC_APP_HOST:-app.localtest.me}
+      VERIFY_REALM: ${SERVING_REALM:-demo}
+      VERIFY_CLIENT_ID: movielens-verify
+      VERIFY_CLIENT_SECRET: ${VERIFY_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
+      VERIFY_USERNAME: verify
+      VERIFY_PASSWORD: ${VERIFY_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      ISOLATION_REALM: default
+      ISOLATION_USERNAME: isolation
+      ISOLATION_PASSWORD: ${ISOLATION_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # V-8 reads the live realm invariants through the admin API. The named
+      # human admin, not the bootstrap account: §2.5 deletes that one and
+      # disables it once provisioning is done.
+      KEYCLOAK_ADMIN_REALM: master
+      KEYCLOAK_ADMIN_USERNAME: ${KC_HUMAN_ADMIN_USERNAME:-recsys-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_HUMAN_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # Preferred over the human admin whenever both are set: a service-account
+      # client holding only view-realm and view-clients is the least privilege
+      # that answers the realm-invariant row. Empty until provisioning creates
+      # one, and an empty value falls through to the password grant above.
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      # The artifact-provenance row reads the sidecar's own /healthz; the
+      # setting's default is localhost, which inside this job is this job.
+      MODEL_SERVER_URL: http://model-server:6570
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      SSL_CERT_FILE: /etc/ssl/edge-ca/root.crt
+    volumes:
+      - edge_ca:/etc/ssl/edge-ca:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      edge:
+        condition: service_healthy
+    restart: "no"
+
+  # V-6, the highest-severity bug class. `verify --all` now runs this same
+  # module as its V-6 row — the harness moved to synthetic/, which the image
+  # copies, so the verify job can run it rather than report that it cannot.
+  # This service is the standalone form, kept because a canary worth having is
+  # one an operator can point at a target by hand, with every identity visible
+  # on the command line. An unreachable target is a hard failure, never a skip.
+  canary:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/api:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    # The three secrets are expanded inside the container, not by Compose, so
+    # they stay out of `docker compose config` and out of the host's process
+    # table. The tenant-A actor is the `default`-realm `isolation` account,
+    # which deliberately holds neither demo-impersonator nor the service
+    # client's azp -- the canary refuses to run if it does, because a
+    # misconfigured actor turns every expected 403 into a 200 and reports a
+    # catastrophic leak that is really a bad credential.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec python -m synthetic.tenant_isolation.remote_canary
+        --api-url http://api:8000
+        --keycloak-url http://keycloak:8080
+        --service-client-id movielens-api
+        --client-id movielens-verify
+        --client-secret "$$VERIFY_CLIENT_SECRET"
+        --realm-a default --username isolation --password "$$ISOLATION_PASSWORD"
+        --realm-b "$$SERVING_REALM" --realm-b-username verify
+        --realm-b-password "$$VERIFY_PASSWORD"
+    environment:
+      <<: [*app-db, *keycloak-client]
+      ENVIRONMENT: production
+      SERVING_REALM: ${SERVING_REALM:-demo}
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      VERIFY_CLIENT_SECRET: ${VERIFY_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
+      ISOLATION_PASSWORD: ${ISOLATION_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      VERIFY_PASSWORD: ${VERIFY_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  # V-10. The pinned CI gate is not portable -- it needs Compose
+  # --force-recreate, docker stats and a cgroup probe -- so this is the weaker
+  # instrument and says so: correctness and the warm-traffic learned assertion
+  # are enforced, p99 is recorded with no verdict.
+  loadcheck:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: infra/k6/Dockerfile
+      args:
+        K6_VERSION: ${K6_VERSION:-2.1.0}
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/k6:${IMAGE_TAG:-main}
+    environment:
+      BASE_URL: http://api:8000
+      KEYCLOAK_URL: http://keycloak:8080
+      LOAD_PROFILE: prod-canary
+      KEYCLOAK_REALM: ${SERVING_REALM:-demo}
+      KEYCLOAK_CLIENT_ID: movielens-verify
+      KEYCLOAK_CLIENT_SECRET: ${VERIFY_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
+      KEYCLOAK_USERNAME: verify
+      KEYCLOAK_PASSWORD: ${VERIFY_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # The k6 warm-up sizes itself from this, so it has to be the number of
+      # processes the API actually runs: a warm-up that primes fewer than exist
+      # leaves cold ones inside the measured window.
+      API_WORKERS: "${API_WORKERS:-2}"
+      RESULTS_DIR: /tmp/results
+    depends_on:
+      api:
+        condition: service_healthy
+      model-server:
+        condition: service_healthy
+    restart: "no"
+
+  # J4. Both databases, encrypted client-side with age, pushed off-provider.
+  # Locally the rclone remote is a directory on a volume so the restore drill
+  # is rehearsable without an object store; production points the same
+  # RCLONE_CONFIG_REMOTE_* variables at R2 or S3.
+  backup:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: infra/backup/Dockerfile
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/backup:${IMAGE_TAG:-main}
+    environment:
+      PGHOST_APP: postgres-app
+      PGUSER_APP: migrator
+      PGPASSWORD_APP: ${MIGRATOR_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      PGHOST_KC: postgres-keycloak
+      PGUSER_KC: keycloak
+      PGPASSWORD_KC: ${KC_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?an age public key; generate a keypair with age-keygen}
+      # rclone reads its whole remote definition from RCLONE_CONFIG_REMOTE_*,
+      # but Compose forwards nothing it is not told to forward: a variable set
+      # in .env.prod is available for interpolation and does not reach the
+      # container. Every key the runbook's B2 and R2 recipes name is listed
+      # here for that reason -- without them the nightly job would resolve
+      # type=b2 with no credentials and fail at 04:00 with the operator having
+      # done exactly what the runbook said. Empty is the same as unset to
+      # rclone, so the local rehearsal's `type=local` is unaffected.
+      RCLONE_CONFIG_REMOTE_TYPE: ${RCLONE_CONFIG_REMOTE_TYPE:-local}
+      RCLONE_CONFIG_REMOTE_ACCOUNT: ${RCLONE_CONFIG_REMOTE_ACCOUNT:-}
+      RCLONE_CONFIG_REMOTE_KEY: ${RCLONE_CONFIG_REMOTE_KEY:-}
+      RCLONE_CONFIG_REMOTE_PROVIDER: ${RCLONE_CONFIG_REMOTE_PROVIDER:-}
+      RCLONE_CONFIG_REMOTE_ENDPOINT: ${RCLONE_CONFIG_REMOTE_ENDPOINT:-}
+      RCLONE_CONFIG_REMOTE_REGION: ${RCLONE_CONFIG_REMOTE_REGION:-}
+      RCLONE_CONFIG_REMOTE_ACCESS_KEY_ID: ${RCLONE_CONFIG_REMOTE_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_REMOTE_SECRET_ACCESS_KEY: ${RCLONE_CONFIG_REMOTE_SECRET_ACCESS_KEY:-}
+      BACKUP_REMOTE: remote
+      BACKUP_REMOTE_PATH: ${BACKUP_REMOTE_PATH:-/backups/recsys}
+      BACKUP_RETENTION_DAILY: "7"
+      BACKUP_RETENTION_WEEKLY: "4"
+      BACKUP_RETENTION_MONTHLY: "6"
+    volumes:
+      - backup_local:/backups
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      postgres-keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  # R-12, the single most likely 02:00 failure in the design: a pre-deploy
+  # command runs on every deploy including a rollback, and an older image's
+  # `alembic upgrade head` against a newer database raises "Can't locate
+  # revision". The script stands an older image up by pruning this image's
+  # newest migration, and asserts the schema step applies nothing and exits 0.
+  rollback-rehearsal:
+    profiles: ["jobs"]
+    image: ${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/api:${IMAGE_TAG:-main}
+    build:
+      context: .
+      dockerfile: infra/api/Dockerfile
+    entrypoint: ["/bin/sh", "/opt/deploy/rollback-rehearsal.sh"]
+    environment:
+      <<: [*app-db, *keycloak-client]
+      ENVIRONMENT: production
+      POSTGRES_HOST: postgres-app
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: movielens
+      POSTGRES_USER: migrator
+      POSTGRES_PASSWORD: ${MIGRATOR_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+    volumes:
+      - ./infra/deploy:/opt/deploy:ro
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_app_data:
+  postgres_keycloak_data:
+  redis_data:
+  # Caddy's own storage: the CA signing key lives here and this volume is
+  # never shared. `edge_ca` carries only the public root, republished at 0644,
+  # and is what the containers that verify the edge's certificates mount.
+  caddy_data:
+  caddy_config:
+  edge_ca:
+  backup_local:
