@@ -1,6 +1,18 @@
 services:
   postgres:
     image: postgres:16
+    # Observability only — neither flag changes what the server does, only
+    # what it is willing to tell us afterwards. The load gate needs to be able
+    # to say whether a slow window was slow inside Postgres (WAL sync time,
+    # block write time) or somewhere else, and with the timing counters off
+    # those columns are permanently zero. The image's own entrypoint still
+    # runs; this only replaces the default `postgres` command it execs.
+    command:
+      - "postgres"
+      - "-c"
+      - "track_io_timing=on"
+      - "-c"
+      - "track_wal_io_timing=on"
     environment:
       POSTGRES_USER: recsys
       POSTGRES_PASSWORD: recsys

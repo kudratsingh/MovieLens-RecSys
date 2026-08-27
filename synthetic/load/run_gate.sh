@@ -15,6 +15,21 @@
 # this can never loop, and the second window reuses the warm stack so it is a
 # repeat of the same measurement rather than a different one.
 #
+# Alongside CPU it collects two more kinds of evidence, both informational and
+# neither feeding the rule above:
+#
+#   disk-fsync.jsonl   fdatasync latency on Postgres's own volume
+#                      (probe_disk_fsync.py). Every commit costs one fdatasync,
+#                      so a stalling device shows up in every traffic class
+#                      including the cold path — which is what the failing runs
+#                      look like. A burst before the window by default;
+#                      LOAD_FSYNC_PROBE=on adds per-second sampling *during* it,
+#                      which is diagnostic only because it perturbs the gate.
+#   server-side.json   the audit rows for the window and Postgres's WAL/IO
+#                      counters from either side of it (server_side.py). The
+#                      audit's latency_ms is timed around the handler only, so
+#                      k6 minus handler is the share spent outside it.
+#
 # Two workloads use this wrapper:
 #
 #   recommendations  the pinned p99 gate (non-negotiables #4/#11). k6's exit
@@ -44,6 +59,21 @@ set -eu
 : "${API_LOAD_WORKERS:=4}"
 : "${K6_PUSH_INTERVAL:=2m}"
 : "${K6_VERSION:=}"
+# The image the disk probe runs from. It carries src/ and synthetic/ already,
+# so the probe needs no image of its own.
+: "${LOAD_PROBE_IMAGE:=movielens-recsys/api:demo}"
+# Inside Postgres's data directory on purpose: same filesystem as the WAL, and
+# a dotfile Postgres itself never looks at. Removed by the probe on exit.
+: "${FSYNC_PROBE_PATH:=/var/lib/postgresql/data/.load-gate-fsync-probe}"
+# off (default): one baseline burst before the window opens, which costs the
+#   measurement nothing and still records what the device was doing beforehand.
+# on: sample throughout the window too, for the per-second fsync column.
+#   Opt-in because an fdatasync is a *device* cache flush, not a per-file one:
+#   measured on a Docker Desktop host, sampling every 250 ms moved this gate's
+#   p95 from 10.57 ms to 47.71 ms and its p99 from 29.64 ms to 124.74 ms — the
+#   probe measuring itself. Turn it on deliberately, on a runner whose result
+#   is being investigated rather than gated. See probe_disk_fsync.py.
+: "${LOAD_FSYNC_PROBE:=off}"
 PYTHON="${PYTHON:-python3}"
 
 export K6_VERSION LOAD_PROFILE LOAD_RESULTS_DIR API_LOAD_WORKERS LOAD_SCRIPT
@@ -69,6 +99,13 @@ esac
 mkdir -p "$LOAD_RESULTS_DIR"
 # k6 runs as an unprivileged user inside its container and has to write here.
 chmod 0777 "$LOAD_RESULTS_DIR"
+
+# Recorded before anything is recreated, so the artifact says when the gate as
+# a whole started. Each window records its own start separately and *that* is
+# what bounds the audit export — otherwise a re-measured run would export
+# window 1's rows into window 2's evidence.
+GATE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "$GATE_STARTED_AT" > "$LOAD_RESULTS_DIR/gate-started-at.txt"
 
 # Recreating these three is what gives every run the same process-cache
 # boundary; the k6 warm-up then pays that boundary off before measuring.
@@ -114,6 +151,92 @@ capture() {
 	done
 }
 
+# fdatasync latency on the filesystem Postgres commits to. Runs in a throwaway
+# container rather than on the host because the volume is Compose-managed:
+# `--volumes-from` inherits postgres's own mounts, so the probe file is
+# guaranteed to land on the same filesystem as the WAL without this script
+# having to reconstruct the project-prefixed volume name the Makefile chose.
+#
+# Two shapes, selected by LOAD_FSYNC_PROBE. `--once` runs the baseline burst
+# and exits, so it can run in the foreground before the window opens; the
+# continuous form runs detached and is stopped afterwards. Failure to start is
+# never fatal — the window runs without the evidence and summarize.py reports
+# it as absent.
+start_fsync_probe() {
+	window_dir="$1"
+	fsync_probe=""
+	# shellcheck disable=SC2086
+	postgres_container=$($DEMO_COMPOSE --profile load ps -q postgres 2>/dev/null || true)
+	if [ -z "$postgres_container" ]; then
+		echo "[fsync-probe] no postgres container; skipping disk evidence" >&2
+		return 0
+	fi
+	abs_window_dir=$(cd "$window_dir" && pwd)
+	if [ "$LOAD_FSYNC_PROBE" = "on" ]; then
+		fsync_probe=$(run_fsync_probe "$postgres_container" "$abs_window_dir" -d) \
+			|| fsync_probe=""
+		if [ -z "$fsync_probe" ]; then
+			echo "[fsync-probe] could not start; see $LOAD_RESULTS_DIR/fsync-probe.log" >&2
+		fi
+		return 0
+	fi
+	run_fsync_probe "$postgres_container" "$abs_window_dir" --once > /dev/null \
+		|| echo "[fsync-probe] baseline burst failed; see $LOAD_RESULTS_DIR/fsync-probe.log" >&2
+}
+
+# uid 999 is the postgres image's own user, which is what can write inside the
+# data directory. The trailing argument is either `-d` (detached, continuous)
+# or `--once` (foreground, burst only); both are placed where they belong
+# because docker's flags precede the image and the probe's follow it.
+run_fsync_probe() {
+	container="$1"
+	results="$2"
+	mode="$3"
+	detach=""
+	probe_mode=""
+	if [ "$mode" = "-d" ]; then
+		detach="-d"
+	else
+		probe_mode="$mode"
+	fi
+	# stdout is the container id when detached, so only stderr can be logged —
+	# and it has to go somewhere readable, because "the probe did not run" is
+	# otherwise indistinguishable from "the probe found nothing".
+	# shellcheck disable=SC2086
+	docker run --rm $detach --user 999 \
+		--volumes-from "$container" \
+		-v "$results:/results" \
+		"$LOAD_PROBE_IMAGE" \
+		python -m synthetic.load.probe_disk_fsync \
+		--path "$FSYNC_PROBE_PATH" \
+		--output /results/disk-fsync.jsonl $probe_mode 2>> "$LOAD_RESULTS_DIR/fsync-probe.log"
+}
+
+stop_fsync_probe() {
+	if [ -n "${fsync_probe:-}" ]; then
+		# SIGTERM, which the probe handles so it removes its file before exit.
+		docker stop -t 10 "$fsync_probe" > /dev/null 2>&1 || true
+		fsync_probe=""
+	fi
+}
+
+# One server-side capture: `--snapshot-only` for the before side, `--since` for
+# the export. Runs through the demo-setup service because that is the container
+# already configured with the admin DSN. A failure leaves no file behind rather
+# than a half-written one, and summarize.py reads a missing file as "n/a".
+server_side() {
+	target="$1"
+	shift
+	# shellcheck disable=SC2086
+	if $DEMO_COMPOSE --profile load run --rm -T demo-setup \
+		python -m synthetic.load.server_side "$@" \
+		> "$target" 2>> "$LOAD_RESULTS_DIR/server-side.log"; then
+		return 0
+	fi
+	echo "[server-side] capture failed; see $LOAD_RESULTS_DIR/server-side.log" >&2
+	rm -f "$target"
+}
+
 # One measured window. Everything that distinguishes window 1 from window 2 is
 # the directory it writes into; the workload is byte-identical.
 run_window() {
@@ -121,6 +244,18 @@ run_window() {
 	window_dir="$LOAD_RESULTS_DIR/$window"
 	mkdir -p "$window_dir"
 	chmod 0777 "$window_dir"
+
+	# Postgres's counters are cumulative, so only a pair of snapshots says what
+	# this window cost. Taken before the probes start so the setup container's
+	# own IO is not attributed to the window.
+	server_side "$window_dir/server-side-before.json" --snapshot-only
+
+	# Before the window on purpose: in the default `--once` shape this is a
+	# burst of syncs, and a burst belongs outside the measurement.
+	start_fsync_probe "$window_dir"
+
+	window_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	echo "$window_started_at" > "$window_dir/started-at.txt"
 
 	# On a Linux runner this reads /proc/stat directly. On Docker Desktop there
 	# is no host /proc, so it falls back to reading it from inside a container,
@@ -143,6 +278,8 @@ run_window() {
 		| tee "$window_dir/k6-stdout.txt"
 	kill "$probe_pid" 2>/dev/null || true
 	wait "$probe_pid" 2>/dev/null || true
+	stop_fsync_probe
+	server_side "$window_dir/server-side.json" --since "$window_started_at"
 	return 0
 }
 
@@ -159,7 +296,10 @@ summarize_window() {
 	fi
 	# shellcheck disable=SC2086
 	"$PYTHON" synthetic/load/summarize.py "$window_dir" \
-		--workload "$LOAD_WORKLOAD" --k6-exit "$k6_exit" $advisory "$@" \
+		--workload "$LOAD_WORKLOAD" --k6-exit "$k6_exit" $advisory \
+		--disk-fsync "$window_dir/disk-fsync.jsonl" \
+		--server-side "$window_dir/server-side.json" \
+		--server-side-before "$window_dir/server-side-before.json" "$@" \
 		| tee "$window_dir/breakdown.txt"
 }
 
