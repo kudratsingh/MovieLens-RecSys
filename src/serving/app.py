@@ -24,6 +24,12 @@ Every response carries ``X-Request-ID``. A well-formed inbound value is
 adopted so a caller's correlation id survives the hop; otherwise one is
 minted. Recommendation audits store it alongside their own row identity.
 
+Every authenticated response also carries the ``X-RateLimit-*`` view of the
+calling ``(tenant, subject)`` token bucket, and a caller that empties it gets
+a 429 with ``Retry-After`` (ADR 0014). The limiter is installed everywhere
+except a dev box, where the synthetic-load harnesses deliberately drive one
+Keycloak identity far past any sane per-subject rate.
+
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
 locks its middleware stack (Starlette forbids ``add_middleware`` after
@@ -79,6 +85,14 @@ from src.serving.feedback import (
 )
 from src.serving.models import ModelServerClient
 from src.serving.orchestration import RecommendationCoordinator
+from src.serving.ratelimit import (
+    LIMIT_HEADER,
+    REMAINING_HEADER,
+    RESET_HEADER,
+    RETRY_AFTER_HEADER,
+    RateLimitMiddleware,
+    TokenBucketLimiter,
+)
 from src.serving.recommendations import (
     RecommendationService,
     UnknownDemoPersonaError,
@@ -127,6 +141,16 @@ _model_server = ModelServerClient(
 )
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _catalog = CatalogService()
+
+# One bucket set per worker process (ADR 0014). Built unconditionally so its
+# configuration is validated at import even where the middleware is not
+# installed — a deployment should learn about a nonsensical RATE_LIMIT_BURST
+# from a boot failure, not from the first request after someone turns the
+# limiter on.
+_rate_limiter = TokenBucketLimiter(
+    requests_per_minute=_settings.rate_limit_requests_per_minute,
+    burst=_settings.rate_limit_burst,
+)
 
 # Deliberately not the serving clients: their timeouts are latency budgets for a
 # user-facing request, and a probe that reports "unavailable" because a sidecar
@@ -410,9 +434,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     run_startup_checks(settings=_settings, app_engine=_app_engine)
     logger.info(
-        "MovieLens API ready — environment=%s dev_auth_bypass=%s",
+        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s",
         _settings.environment,
         _settings.dev_auth_bypass,
+        _rate_limiter.describe() if _settings.rate_limit_active else "disabled",
     )
     yield
     await _feature_server.aclose()
@@ -421,12 +446,54 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _app_engine.dispose()
 
 
+API_DESCRIPTION = (
+    "Two-stage recommender service (candidate → ranker) per CLAUDE.md.\n\n"
+    "Every authenticated response carries `X-RateLimit-Limit` (the bucket's "
+    "capacity, i.e. the largest instantaneous burst), `X-RateLimit-Remaining` "
+    "and `X-RateLimit-Reset` (whole seconds until the bucket is full again) "
+    "for the calling `(tenant, subject)` token bucket; exhausting it answers "
+    "429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). "
+    "`/healthz` and `/readyz` are exempt and carry no such headers.\n\n"
+    "The bucket lives in the worker process that served the request, so a "
+    "service running N uvicorn workers admits up to N times the configured "
+    "rate and `X-RateLimit-Remaining` is not monotonic across a sequence of "
+    "requests from one client. Treat the headers as a per-worker view of one "
+    "caller's allowance, not as a cluster-wide quota."
+)
+
 app = FastAPI(
     title="MovieLens Recommender API",
-    description="Two-stage recommender service (candidate → ranker) per CLAUDE.md.",
+    description=API_DESCRIPTION,
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Documented on the 429 rather than on every response of every operation: they
+# are on every authenticated response (see API_DESCRIPTION), and repeating the
+# block ~150 times would bloat the committed contract and the types generated
+# from it without telling a client anything the description does not. Defined
+# once under components/headers and referenced, for the same reason.
+_RATE_LIMIT_HEADER_COMPONENTS: dict[str, Any] = {
+    RETRY_AFTER_HEADER: {
+        "description": "Whole seconds until one token is available again.",
+        "schema": {"type": "integer", "minimum": 1},
+    },
+    LIMIT_HEADER: {
+        "description": "Token-bucket capacity for this (tenant, subject), per worker.",
+        "schema": {"type": "integer", "minimum": 1},
+    },
+    REMAINING_HEADER: {
+        "description": "Whole tokens left in this worker's bucket; 0 on a 429.",
+        "schema": {"type": "integer", "minimum": 0},
+    },
+    RESET_HEADER: {
+        "description": "Whole seconds until this worker's bucket is full again.",
+        "schema": {"type": "integer", "minimum": 0},
+    },
+}
+_RATE_LIMIT_RESPONSE_HEADERS: dict[str, Any] = {
+    name: {"$ref": f"#/components/headers/{name}"} for name in _RATE_LIMIT_HEADER_COMPONENTS
+}
 
 
 def _openapi_schema() -> dict[str, Any]:
@@ -451,6 +518,7 @@ def _openapi_schema() -> dict[str, Any]:
         "required": ["detail"],
         "properties": {"detail": {"type": "string"}},
     }
+    components.setdefault("headers", {}).update(_RATE_LIMIT_HEADER_COMPONENTS)
     for path, path_item in schema.get("paths", {}).items():
         # The middleware's own list, not a copy of it: a route the contract
         # says needs a bearer token but the middleware waves through (or the
@@ -468,19 +536,22 @@ def _openapi_schema() -> dict[str, Any]:
                 ("403", "Authenticated actor is not authorized"),
                 ("404", "Requested persona or movie does not exist"),
                 ("409", "Idempotency, state revision, or transition conflict"),
+                ("429", "Rate limit exceeded for this tenant and subject"),
                 ("500", "Request transaction failed"),
             ):
-                responses.setdefault(
-                    status,
-                    {
-                        "description": description,
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/ErrorResponse"}
-                            }
-                        },
+                documented: dict[str, Any] = {
+                    "description": description,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                        }
                     },
-                )
+                }
+                # The one status a client is expected to act on rather than
+                # report, so it is the one whose headers are in the contract.
+                if status == "429":
+                    documented["headers"] = _RATE_LIMIT_RESPONSE_HEADERS
+                responses.setdefault(status, documented)
     app.openapi_schema = schema
     return schema
 
@@ -490,10 +561,19 @@ app.openapi = _openapi_schema  # type: ignore[method-assign]
 # Middleware is added at module import, before the first request. Starlette
 # evaluates the last-added middleware first: RequestIdMiddleware resolves the
 # correlation id and owns the response header, AuthMiddleware opens the RLS
-# transaction, then the audit middleware persists before that transaction
-# commits. Request-id resolution is outermost so even a 401 carries the header
-# the caller can correlate on.
+# transaction, the rate limiter charges the verified identity's bucket, then
+# the audit middleware persists before that transaction commits. Request-id
+# resolution is outermost so even a 401 carries the header the caller can
+# correlate on.
 app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
+# Between auth and the audit writer, and only where it is active. It needs the
+# resolved principal, so it cannot run outside AuthMiddleware; and a throttled
+# request must not reach the audit writer, because it produced no prediction to
+# record and a limiter that turns each rejected request into a database write
+# amplifies the burst it exists to shed. The cost it cannot avoid from here is
+# the request transaction AuthMiddleware has already opened — see ADR 0014.
+if _settings.rate_limit_active:
+    app.add_middleware(RateLimitMiddleware, limiter=_rate_limiter)
 app.add_middleware(
     AuthMiddleware,
     jwks=_jwks,

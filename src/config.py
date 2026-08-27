@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     dev_bypass_tenant: str = "default"
     dev_bypass_user: str = "dev-user"
 
+    # --- Request rate limiting (ADR 0014) -----------------------------------
+    #
+    # Per-(tenant, subject) token bucket in front of every authenticated route.
+    # `burst` is the bucket's capacity — the largest instantaneous burst one
+    # subject can spend — and `requests_per_minute` is the refill rate. The
+    # bucket lives in the worker process, so a service running N uvicorn
+    # workers admits up to N times this rate; ADR 0014 has the arithmetic.
+    rate_limit_requests_per_minute: int = Field(default=120, gt=0)
+    rate_limit_burst: int = Field(default=30, gt=0)
+    # Tri-state on purpose. Unset means "on everywhere except a dev box", which
+    # is what keeps the synthetic-load harnesses honest: they authenticate as a
+    # single Keycloak user (the demo realm has exactly one) and drive 55–600
+    # arrivals per second, so a limiter in the dev stack would be measuring
+    # itself rather than the service (ADR 0010, ADR 0014). Setting it
+    # explicitly wins in both directions — tests turn it on, a load rig turns
+    # it off — and the deployed images bake ENVIRONMENT=production, so no
+    # deployment depends on remembering the variable.
+    rate_limit_enabled: bool | None = None
+
     # --- Movie metadata (TMDB, server-side only) ----------------------------
 
     tmdb_read_access_token: SecretStr | None = None
@@ -180,6 +199,13 @@ class Settings(BaseSettings):
             f"postgresql+psycopg2://{self.app_user_db_user}:{self.app_user_db_password}"
             f"@{self.app_user_db_host}:{self.app_user_db_port}/{self.app_user_db_name}"
         )
+
+    @property
+    def rate_limit_active(self) -> bool:
+        """Whether the API should install the ADR 0014 token bucket."""
+        if self.rate_limit_enabled is not None:
+            return self.rate_limit_enabled
+        return self.environment != "dev"
 
     @property
     def admin_user_database_url(self) -> str:
