@@ -796,6 +796,60 @@
         "title": "RatingRequest",
         "type": "object"
       },
+      "ReadinessResponse": {
+        "description": "What a deploy gate reads off ``/readyz``.\n\n``database`` and ``jwks`` decide the status code because they are the\ndependencies this process cannot serve a single authenticated request\nwithout. The two sidecars are reported rather than gated \u2014 see the handler.",
+        "properties": {
+          "database": {
+            "enum": [
+              "ok",
+              "error"
+            ],
+            "title": "Database",
+            "type": "string"
+          },
+          "feature_server": {
+            "enum": [
+              "ok",
+              "unavailable"
+            ],
+            "title": "Feature Server",
+            "type": "string"
+          },
+          "jwks": {
+            "enum": [
+              "ok",
+              "error"
+            ],
+            "title": "Jwks",
+            "type": "string"
+          },
+          "model_server": {
+            "enum": [
+              "ok",
+              "unavailable"
+            ],
+            "title": "Model Server",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not-ready"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "jwks",
+          "model_server",
+          "feature_server"
+        ],
+        "title": "ReadinessResponse",
+        "type": "object"
+      },
       "RecommendationAuditItem": {
         "properties": {
           "actor_user_id": {
@@ -1328,7 +1382,7 @@
   "paths": {
     "/healthz": {
       "get": {
-        "description": "Unauthenticated liveness probe. Skipped by the auth middleware\n(see ``_UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB\nconnectivity is deliberately not checked here \u2014 pool_pre_ping\nrecycles dead connections, and a health endpoint that depends on\nPostgres would false-positive during rolling restarts.",
+        "description": "Unauthenticated liveness probe. Skipped by the auth middleware\n(see ``UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB\nconnectivity is deliberately not checked here \u2014 pool_pre_ping\nrecycles dead connections, and a health endpoint that depends on\nPostgres would false-positive during rolling restarts.",
         "operationId": "healthCheck",
         "responses": {
           "200": {
@@ -1431,6 +1485,35 @@
           }
         ],
         "summary": "Personas"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Report dependency state for the deploy gate; 503 if the API can't serve.",
+        "operationId": "readinessCheck",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "The database or the auth provider is unreachable"
+          }
+        },
+        "summary": "Readyz"
       }
     },
     "/users/{user_id}/audits": {

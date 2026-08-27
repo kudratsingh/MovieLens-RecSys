@@ -3,6 +3,8 @@ FastAPI entrypoint per ADR 0007 + 0008.
 
 The authenticated surface currently includes:
   * ``GET /healthz`` — unauthenticated, always 200.
+  * ``GET /readyz`` — unauthenticated deploy probe; reports the
+    database, JWKS, and both sidecars, and gates only on the first two.
   * ``GET /whoami`` — authenticated, returns the resolved
     ``(tenant_id, user_id)`` plus tenant metadata.
   * ``GET /users/{user_id}/recommendations`` — tenant-scoped item-item
@@ -34,6 +36,7 @@ and the process exits non-zero.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -42,13 +45,14 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, create_engine, text
+from sqlalchemy import Connection, Engine, create_engine, text
 from starlette.concurrency import run_in_threadpool
 
 from src.auth import AuthMiddleware, JwksCache
+from src.auth.middleware import UNAUTHENTICATED_PATHS
 from src.config import Settings
 from src.serving.audit import (
     RecommendationAuditContext,
@@ -102,24 +106,16 @@ _app_engine = create_engine(
     future=True,
 )
 
-# Admin engine for cross-tenant metadata reads (public.tenants).
-# BYPASSRLS. Only the tenant router uses it — handlers don't need
-# admin access, and gating it here (not via a helper anyone can import)
-# keeps the "who can bypass RLS" surface small.
-_admin_engine = create_engine(
-    _settings.admin_user_database_url,
-    pool_pre_ping=True,
-    pool_size=2,
-    max_overflow=2,
-    future=True,
-)
-
 _jwks = JwksCache(
     keycloak_base_url=_settings.keycloak_base_url,
     ttl_seconds=_settings.jwks_cache_ttl_seconds,
 )
 
-_tenant_router = TenantRouter(_admin_engine)
+# The tenant registry is cross-tenant by design and carries no RLS policy, and
+# app_user holds SELECT on it (migration 0002). Reading it on the app engine is
+# what lets this process hold no BYPASSRLS credential at all: an SSRF or RCE in
+# the request-serving path now reaches only a role RLS applies to.
+_tenant_router = TenantRouter(_app_engine)
 _recommendations = RecommendationService()
 _feedback = FeedbackService()
 _audits = RecommendationAuditService()
@@ -131,6 +127,13 @@ _model_server = ModelServerClient(
 )
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _catalog = CatalogService()
+
+# Deliberately not the serving clients: their timeouts are latency budgets for a
+# user-facing request, and a probe that reports "unavailable" because a sidecar
+# took 0.5 s to answer would be reporting on the budget rather than on the
+# sidecar. Nothing here waits long enough to hold a deploy open either.
+_READINESS_PROBE_TIMEOUT_SECONDS = 2.0
+_readiness_probe = httpx.AsyncClient(timeout=_READINESS_PROBE_TIMEOUT_SECONDS)
 
 
 class RecommendationItem(BaseModel):
@@ -148,6 +151,21 @@ class RecommendationItem(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class ReadinessResponse(BaseModel):
+    """What a deploy gate reads off ``/readyz``.
+
+    ``database`` and ``jwks`` decide the status code because they are the
+    dependencies this process cannot serve a single authenticated request
+    without. The two sidecars are reported rather than gated — see the handler.
+    """
+
+    status: Literal["ready", "not-ready"]
+    database: Literal["ok", "error"]
+    jwks: Literal["ok", "error"]
+    model_server: Literal["ok", "unavailable"]
+    feature_server: Literal["ok", "unavailable"]
 
 
 class ServingPolicyResponse(BaseModel):
@@ -390,11 +408,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     (dev: docker-compose; CI: GitHub Actions; prod: later) surfaces
     the failure before any traffic reaches the app.
     """
-    run_startup_checks(
-        settings=_settings,
-        app_engine=_app_engine,
-        admin_engine=_admin_engine,
-    )
+    run_startup_checks(settings=_settings, app_engine=_app_engine)
     logger.info(
         "MovieLens API ready — environment=%s dev_auth_bypass=%s",
         _settings.environment,
@@ -403,8 +417,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await _feature_server.aclose()
     await _model_server.aclose()
+    await _readiness_probe.aclose()
     _app_engine.dispose()
-    _admin_engine.dispose()
 
 
 app = FastAPI(
@@ -438,7 +452,10 @@ def _openapi_schema() -> dict[str, Any]:
         "properties": {"detail": {"type": "string"}},
     }
     for path, path_item in schema.get("paths", {}).items():
-        if path == "/healthz":
+        # The middleware's own list, not a copy of it: a route the contract
+        # says needs a bearer token but the middleware waves through (or the
+        # reverse) is a lie clients build against.
+        if path in UNAUTHENTICATED_PATHS:
             continue
         for method, operation in path_item.items():
             if method not in {"get", "put", "post", "patch", "delete"}:
@@ -505,12 +522,56 @@ def _require_demo_persona_access(request: Request) -> None:
 @app.get("/healthz", operation_id="healthCheck")
 async def healthz() -> dict[str, str]:
     """Unauthenticated liveness probe. Skipped by the auth middleware
-    (see ``_UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
+    (see ``UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
     connectivity is deliberately not checked here — pool_pre_ping
     recycles dead connections, and a health endpoint that depends on
     Postgres would false-positive during rolling restarts.
     """
     return {"status": "ok"}
+
+
+@app.get(
+    "/readyz",
+    response_model=ReadinessResponse,
+    operation_id="readinessCheck",
+    responses={
+        503: {
+            "model": ReadinessResponse,
+            "description": "The database or the auth provider is unreachable",
+        }
+    },
+)
+async def readyz(response: Response) -> ReadinessResponse:
+    """Report dependency state for the deploy gate; 503 if the API can't serve."""
+    # Reaching this handler already proves the startup assertions passed — the
+    # connected role has neither BYPASSRLS nor SUPERUSER, pgBouncer is in
+    # transaction pool mode — because a failed assertion exits the process
+    # before it serves anything. What is left to check per probe is that the
+    # two dependencies this process owns still answer. Either one down means no
+    # authenticated request can succeed, so either one down is the 503.
+    #
+    # The sidecars are reported and deliberately not gated on. On a first
+    # deploy the model server materializes features against the schema the
+    # release job creates, so gating readiness on it closes a dependency loop
+    # — and a popularity-serving API beats no API. Whether the learned path is
+    # genuinely learned is the post-deploy verification's question; this
+    # endpoint only makes a degraded sidecar visible without reading logs.
+    database, jwks_state, model_server, feature_server = await asyncio.gather(
+        run_in_threadpool(_probe_database, _app_engine),
+        run_in_threadpool(_probe_jwks, _jwks, _settings.model_tenant_id),
+        _probe_sidecar("model-server", _settings.model_server_url, "/healthz"),
+        _probe_sidecar("feature-server", _settings.feast_feature_server_url, "/health"),
+    )
+    ready = database == "ok" and jwks_state == "ok"
+    if not ready:
+        response.status_code = 503
+    return ReadinessResponse(
+        status="ready" if ready else "not-ready",
+        database=database,
+        jwks=jwks_state,
+        model_server=model_server,
+        feature_server=feature_server,
+    )
 
 
 @app.get(
@@ -1224,6 +1285,56 @@ async def _feedback_mutation(
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _mutation_response(result)
+
+
+# Every probe below catches broadly on purpose. A readiness endpoint reports;
+# it never raises. Whatever stopped a dependency from answering — a dead pool, a
+# revoked grant, a truncated JSON body — is the same answer to the only question
+# being asked, and a probe that 500s tells the deploy gate strictly less than
+# one that says "error".
+def _probe_database(engine: Engine) -> Literal["ok", "error"]:
+    """Round-trip one query through pgBouncer on the RLS-applied role.
+
+    The query names ``public.tenants`` rather than a bare literal because that
+    read is what the tenant router depends on now that this process holds no
+    BYPASSRLS engine: a missing GRANT or an unmigrated database would otherwise
+    stay invisible until a request hit ``/whoami``.
+    """
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1 FROM public.tenants LIMIT 1"))
+    except Exception:
+        logger.warning("Readiness probe: database is not usable", exc_info=True)
+        return "error"
+    return "ok"
+
+
+def _probe_jwks(jwks: JwksCache, realm: str) -> Literal["ok", "error"]:
+    """Fetch the signing keys for the realm this deployment serves.
+
+    Realm-per-tenant (ADR 0007) means the serving tenant names the realm, so
+    the tenant the sidecar is pinned to is the realm whose tokens this
+    deployment actually validates. Deliberately not a forced refresh: the
+    middleware answers a request from this same cache, so a probe that ignored
+    it would report a failure on traffic that would still succeed.
+    """
+    try:
+        jwks.get_jwks(realm)
+    except Exception:
+        logger.warning("Readiness probe: JWKS for realm=%s is not fetchable", realm, exc_info=True)
+        return "error"
+    return "ok"
+
+
+async def _probe_sidecar(name: str, base_url: str, path: str) -> Literal["ok", "unavailable"]:
+    """Ask one private sidecar whether it is answering. Never gates readiness."""
+    try:
+        response = await _readiness_probe.get(f"{base_url.rstrip('/')}{path}")
+        response.raise_for_status()
+    except Exception as exc:
+        logger.info("Readiness probe: %s is unavailable (%s)", name, exc)
+        return "unavailable"
+    return "ok"
 
 
 def _movie_state_response(state: MovieState) -> MovieStateResponse:

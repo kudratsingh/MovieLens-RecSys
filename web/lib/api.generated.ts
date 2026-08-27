@@ -14,7 +14,7 @@ export interface paths {
         /**
          * Healthz
          * @description Unauthenticated liveness probe. Skipped by the auth middleware
-         *     (see ``_UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
+         *     (see ``UNAUTHENTICATED_PATHS`` in ``src.auth.middleware``). DB
          *     connectivity is deliberately not checked here — pool_pre_ping
          *     recycles dead connections, and a health endpoint that depends on
          *     Postgres would false-positive during rolling restarts.
@@ -40,6 +40,26 @@ export interface paths {
          * @description Return stable synthetic identities for the current tenant's demo.
          */
         get: operations["listDemoPersonas"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readyz
+         * @description Report dependency state for the deploy gate; 503 if the API can't serve.
+         */
+        get: operations["readinessCheck"];
         put?: never;
         post?: never;
         delete?: never;
@@ -625,6 +645,41 @@ export interface components {
             /** Rating */
             rating: number;
         };
+        /**
+         * ReadinessResponse
+         * @description What a deploy gate reads off ``/readyz``.
+         *
+         *     ``database`` and ``jwks`` decide the status code because they are the
+         *     dependencies this process cannot serve a single authenticated request
+         *     without. The two sidecars are reported rather than gated — see the handler.
+         */
+        ReadinessResponse: {
+            /**
+             * Database
+             * @enum {string}
+             */
+            database: "ok" | "error";
+            /**
+             * Feature Server
+             * @enum {string}
+             */
+            feature_server: "ok" | "unavailable";
+            /**
+             * Jwks
+             * @enum {string}
+             */
+            jwks: "ok" | "error";
+            /**
+             * Model Server
+             * @enum {string}
+             */
+            model_server: "ok" | "unavailable";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "not-ready";
+        };
         /** RecommendationAuditItem */
         RecommendationAuditItem: {
             /** Actor User Id */
@@ -920,6 +975,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    readinessCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description The database or the auth provider is unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessResponse"];
                 };
             };
         };

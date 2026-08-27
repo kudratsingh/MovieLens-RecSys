@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import secrets
 import time
 from collections import OrderedDict
@@ -15,7 +16,7 @@ from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import AliasChoices, BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -30,6 +31,31 @@ logger = logging.getLogger(__name__)
 # Feast names its event-timestamp columns by appending this suffix when
 # ``to_dict(include_event_timestamps=True)`` is used.
 _FEAST_TIMESTAMP_SUFFIX = "__ts"
+
+# Shape of the one representative rank every worker serves before it is
+# reachable. The candidate limit is the widest a request may ask for
+# (``RankRequest.candidate_limit`` is capped at 500) rather than the 100 a
+# default page asks for, because the expensive part of a cold worker is the
+# batched online read and a warm-up that reads a handful of rows leaves the
+# wide read cold.
+WARMUP_SEED_LIMIT = 8
+WARMUP_LIMIT = 10
+WARMUP_CANDIDATE_LIMIT = 500
+# A user id no tenant issues. Deliberate — see
+# ``_assert_online_features_are_materialized`` for why an anonymous warm user is
+# what makes the non-degeneracy check mean something.
+WARMUP_USER_ID = 0
+
+# ADR 0010 treats these four as a serving invariant, not a test convenience:
+# unpinned, the measured p99 was 903.64 ms at 0% host CPU steal; with only these
+# changed, 48.99 ms. ``/healthz`` reports them so a deploy check can read back
+# what the running container actually got.
+_NATIVE_THREAD_VARIABLES = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
 
 
 class _OnlineResponse(Protocol):
@@ -51,6 +77,28 @@ class ColdStartError(ValueError):
 
 class TenantArtifactMismatchError(ValueError):
     """The request tenant does not match the artifact isolation boundary."""
+
+
+class DegenerateWarmupError(RuntimeError):
+    """The warm rank completed, but against an online store with nothing in it.
+
+    A ``RuntimeError`` because it is raised inside ``lifespan``: the worker
+    never joins the accept loop, the container never reports healthy, and the
+    deployment stalls loudly instead of serving every candidate a ranking score
+    computed from zeros.
+    """
+
+
+@dataclass(frozen=True)
+class WarmupReport:
+    """What one worker's warm rank actually did, for the log line and /healthz."""
+
+    warmup_ms: float
+    seed_movie_ids: tuple[int, ...]
+    candidate_count: int
+    ranked_count: int
+    seed_count: int
+    feature_event_time: float | None
 
 
 @dataclass(frozen=True)
@@ -104,14 +152,89 @@ class ModelRankingService:
     def manifest(self) -> ServingManifest:
         return self._bundle.manifest
 
-    def warmup(self) -> None:
-        """Pay LightGBM's lazy native initialization before readiness."""
-        self._bundle.ranker.predict(
-            pd.DataFrame(
-                [{column: 0.0 for column in FEATURE_COLUMNS}],
-                columns=FEATURE_COLUMNS,
+    def warmup(self) -> WarmupReport:
+        """Serve one representative rank so this worker is warm before it serves.
+
+        The previous warm-up predicted a single all-zero feature row. That paid
+        LightGBM's lazy native initialization and nothing else: the first real
+        request per worker still constructed the Feast client, opened Redis and
+        read a full candidate batch, measured at 10.597 s (about 6.567 s of it
+        Feast) against the API's 0.5 s client timeout — which the coordinator
+        turned into an honest HTTP 200 carrying ``learned=false`` and
+        ``fallback_reason="model-server-unavailable"``. Warming *through*
+        ``rank`` is the whole point: same retrieval, same batched online read,
+        same booster call, so whatever is lazy is paid here rather than by the
+        first viewer.
+
+        The input is derived from the loaded bundle rather than from a fixture,
+        because a fixture is one more file that can drift away from the
+        artifacts it is supposed to prime. No database lookup is involved, so
+        this cannot deadlock against release ordering.
+
+        The read is performed before the rank purely so the assertion below can
+        inspect the whole candidate matrix; the rank that follows re-uses the
+        per-process feature cache rather than opening a second Redis round trip.
+        """
+        started = time.perf_counter()
+        manifest = self._bundle.manifest
+        seeds = self._warmup_seed_movie_ids()
+        if not seeds:
+            raise DegenerateWarmupError(
+                "the candidate index carries no items to warm from; the serving bundle at "
+                "this manifest cannot rank anything"
             )
+        # Mirrors what ``rank`` asks the index for, so the feature read below is
+        # keyed on the exact candidate set the warm rank will look up.
+        retrieval = self._bundle.candidates.retrieve(
+            seeds,
+            limit=max(WARMUP_LIMIT, WARMUP_CANDIDATE_LIMIT),
+            excluded_movie_ids=(),
+            dismissed_movie_ids=(),
         )
+        candidate_ids = retrieval.movie_ids
+        if not candidate_ids:
+            raise DegenerateWarmupError(
+                "the candidate index returned nothing for its own lowest item ids; the "
+                "serving bundle is not usable for learned retrieval"
+            )
+        features, feature_event_time = self._online_features(
+            tenant_id=manifest.tenant_id,
+            user_id=WARMUP_USER_ID,
+            candidate_ids=candidate_ids,
+        )
+        _assert_online_features_are_materialized(features, feature_event_time)
+        result = self.rank(
+            tenant_id=manifest.tenant_id,
+            user_id=WARMUP_USER_ID,
+            positive_history_movie_ids=list(seeds),
+            excluded_movie_ids=[],
+            dismissed_movie_ids=[],
+            limit=WARMUP_LIMIT,
+            candidate_limit=WARMUP_CANDIDATE_LIMIT,
+        )
+        return WarmupReport(
+            warmup_ms=(time.perf_counter() - started) * 1000,
+            seed_movie_ids=tuple(seeds),
+            candidate_count=len(candidate_ids),
+            ranked_count=len(result.items),
+            seed_count=result.seed_count,
+            feature_event_time=feature_event_time,
+        )
+
+    def _warmup_seed_movie_ids(self) -> list[int]:
+        """The lowest item ids this index can retrieve from, in sorted order.
+
+        Sorted ids rather than, say, the most popular ones: the warm input has
+        to be a pure function of the bundle so every worker in a deployment —
+        and every deployment of the same image — warms on identical data.
+        Neighbour keys come first because a seed the index has no neighbours for
+        exercises only the popularity fill, and the fill is not the path a warm
+        user takes.
+        """
+        index = self._bundle.candidates
+        if index.neighbors:
+            return sorted(index.neighbors)[:WARMUP_SEED_LIMIT]
+        return sorted(index.popularity)[:WARMUP_SEED_LIMIT]
 
     def rank(
         self,
@@ -328,14 +451,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         create_feature_store(_settings),
         feature_cache_max_entries=_settings.model_feature_cache_max_entries,
     )
-    service.warmup()
+    # Warm inside lifespan, before this worker joins uvicorn's accept loop, so
+    # every worker is warm by construction rather than by probability. A failure
+    # here fails startup: the process exits and the container never reports
+    # healthy, which is the outcome we want over a worker that looks ready and
+    # whose first real request times out into the popularity fallback.
+    report = service.warmup()
     app.state.ranking_service = service
+    app.state.warmup = report
     logger.info(
-        "Model server loaded tenant=%s candidate=%s ranker=%s features=%s",
+        "Model server warm tenant=%s candidate=%s ranker=%s features=%s "
+        "warmup_ms=%.1f seeds=%s candidates=%s ranked=%s seed_count=%s "
+        "feature_event_time=%s workers=%s",
         bundle.manifest.tenant_id,
         bundle.manifest.candidate.version,
         bundle.manifest.ranker.version,
         bundle.manifest.feature_version,
+        report.warmup_ms,
+        len(report.seed_movie_ids),
+        report.candidate_count,
+        report.ranked_count,
+        report.seed_count,
+        report.feature_event_time,
+        _declared_workers(),
     )
     yield
 
@@ -351,15 +489,35 @@ app = FastAPI(
 
 
 @app.get("/healthz")
-async def healthz(request: Request) -> dict[str, str]:
-    service: ModelRankingService = request.app.state.ranking_service
-    return {
-        "status": "ok",
-        "tenant_id": service.manifest.tenant_id,
-        "candidate_version": service.manifest.candidate.version,
-        "ranker_version": service.manifest.ranker.version,
-        "feature_version": service.manifest.feature_version,
+async def healthz(request: Request, response: Response) -> dict[str, Any]:
+    """Report this worker's own readiness: 503 until it has served a warm rank.
+
+    Per-worker on purpose — the warm-up, the loaded bundle and the feature cache
+    are all per-process, so a shared "the service is up" answer would be a claim
+    no single process is in a position to make.
+
+    Under uvicorn a worker only accepts connections once ``lifespan`` has
+    returned, so in practice a probe either queues or reaches a warm worker; the
+    503 is what makes that guarantee explicit rather than incidental, and it is
+    what any other runner of this app object gets.
+    """
+    report: WarmupReport | None = getattr(request.app.state, "warmup", None)
+    service: ModelRankingService | None = getattr(request.app.state, "ranking_service", None)
+    payload: dict[str, Any] = {
+        "status": "ok" if report is not None else "warming",
+        "warm": report is not None,
+        "warmup_ms": round(report.warmup_ms, 3) if report is not None else None,
+        "workers": _declared_workers(),
+        "native_threads": _native_thread_pins(),
     }
+    if service is not None:
+        payload["tenant_id"] = service.manifest.tenant_id
+        payload["candidate_version"] = service.manifest.candidate.version
+        payload["ranker_version"] = service.manifest.ranker.version
+        payload["feature_version"] = service.manifest.feature_version
+    if report is None:
+        response.status_code = 503
+    return payload
 
 
 @app.post("/rank", response_model=RankResponse)
@@ -413,6 +571,81 @@ async def rank(
             for item in result.items
         ],
     )
+
+
+def _assert_online_features_are_materialized(
+    features: pd.DataFrame, feature_event_time: float | None
+) -> None:
+    """Refuse to report warm when the warm read proves the online store is empty.
+
+    Redis is not a cache here, it is the only online feature store: the feature
+    views carry 3650-day TTLs and ``_finite_float`` turns a missing value into
+    ``0.0`` rather than an error, so an emptied or evicted store degrades every
+    ranking score to a constant with nothing failing anywhere. That silence is
+    what this check converts into a boot failure.
+
+    What "non-degenerate" means here follows from the warm user id. The warm
+    rank runs as ``WARMUP_USER_ID``, which no tenant issues, so both
+    user-scoped views miss by construction: ``user_features`` and
+    ``user_item_features`` come back as ``None`` and land in the frame as
+    ``0.0``. That is deliberate rather than unfortunate — it leaves
+    ``item_features`` as the only view that can put a non-zero number anywhere
+    in the matrix, so "at least one non-zero value" is a direct statement about
+    whether item rows exist in Redis for the candidates this index retrieves.
+
+    The two halves fail and pass together for the same reason:
+
+    * **Empty or evicted store.** Every column answers ``None`` → every value
+      is ``0.0``, and Feast reports second 0 on each ``__ts`` column, which
+      ``_oldest_event_time`` discards → no event time. Both halves fail.
+    * **Materialized store.** Every candidate this index can produce came from a
+      rated title, and the item snapshot is built from the same ratings table,
+      so ``item_popularity_all_time >= 1`` and ``item_age_days > 0``, carried by
+      a real write timestamp. Both halves pass.
+
+    Keeping the event time in the check is not redundant: it is the only signal
+    that the numbers came from rows Feast actually wrote, and a store whose rows
+    carry no timestamp would report ``feature_event_time: null`` on every
+    prediction audit, which is a freshness claim we would rather not make at
+    all. And the check is deliberately not "every value is non-zero" — a zero
+    genre affinity for a user that does not exist is the correct answer, not a
+    fault.
+    """
+    if feature_event_time is None:
+        raise DegenerateWarmupError(
+            "the warm feature read carried no Feast event timestamp, so the online store holds "
+            "no rows for this tenant's candidates. Materialize before serving: "
+            "python -m src.features.materialize"
+        )
+    if not bool(np.any(features.to_numpy(dtype=np.float64) != 0.0)):
+        raise DegenerateWarmupError(
+            f"the warm feature read returned only zeros across {len(features)} candidates, so "
+            "every ranking score would be computed from missing features. Materialize before "
+            "serving: python -m src.features.materialize"
+        )
+
+
+def _declared_workers() -> int | None:
+    """How many workers the platform says this service runs, or unknown.
+
+    A worker cannot count its siblings, and the warm-up runs once per process,
+    so this exists to let whoever reads one worker's ``/healthz`` check the
+    declared fan-out against the number of processes they expect to have warmed.
+    Unset is reported as unknown rather than guessed: the compose stack passes
+    ``--workers`` on the command line, where this process cannot see it.
+    """
+    raw = os.environ.get("MODEL_SERVER_WORKERS")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _native_thread_pins() -> dict[str, str | None]:
+    """Report the ADR 0010 thread pins this process was actually given."""
+    return {name: os.environ.get(name) for name in _NATIVE_THREAD_VARIABLES}
 
 
 def _finite_float(value: Any) -> float:

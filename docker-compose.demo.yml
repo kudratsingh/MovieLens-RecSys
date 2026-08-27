@@ -6,6 +6,10 @@ services:
     image: movielens-recsys/api:demo
     command: ["python", "-m", "src.data.demo_setup"]
     environment:
+      # The image defaults to ENVIRONMENT=production so a deployment that
+      # forgets the variable fails closed; every demo service that builds
+      # Settings therefore has to opt back in to the development defaults.
+      ENVIRONMENT: dev
       POSTGRES_HOST: postgres
       ADMIN_USER_DB_HOST: postgres
     depends_on:
@@ -164,6 +168,7 @@ services:
     image: movielens-recsys/features:demo
     command: ["python", "-m", "src.training.demo_artifacts"]
     environment:
+      ENVIRONMENT: dev
       ADMIN_USER_DB_HOST: postgres
       REDIS_CONNECTION_STRING: redis:6379
       MODEL_ARTIFACT_DIR: /app/models/serving
@@ -182,6 +187,10 @@ services:
     image: movielens-recsys/features:demo
     cpu_shares: 2048
     environment:
+      # Feast's own server builds no Settings, but the whole demo stack
+      # reading `dev` keeps the answer to "which environment is this?" the
+      # same for every container in it.
+      ENVIRONMENT: dev
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_POSTGRES_HOST: postgres
       FEAST_POSTGRES_PORT: 5432
@@ -215,6 +224,10 @@ services:
         "--no-access-log",
       ]
     environment:
+      # src/serving/model_server.py builds Settings at module import with the
+      # dev token below, which the image's ENVIRONMENT=production default
+      # refuses. Dev says so explicitly.
+      ENVIRONMENT: dev
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_POSTGRES_HOST: postgres
       FEAST_POSTGRES_PORT: 5432

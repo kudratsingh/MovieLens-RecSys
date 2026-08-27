@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from src.config import Settings
 
@@ -9,6 +10,13 @@ from src.config import Settings
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear any POSTGRES_* env vars so tests see the in-code defaults regardless of host env."""
     for var in (
+        # The serving images now default to ENVIRONMENT=production, so a run
+        # inside one of them would otherwise trip the dev-credential guards
+        # before a test could say what it meant to say.
+        "ENVIRONMENT",
+        "MODEL_SERVER_AUTH_TOKEN",
+        "PGBOUNCER_ADMIN_USER",
+        "PGBOUNCER_ADMIN_PASSWORD",
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
         "POSTGRES_HOST",
@@ -117,6 +125,72 @@ def test_non_dev_accepts_explicit_model_server_token(clean_env: None) -> None:
         _env_file=None,
         environment="production",
         model_server_auth_token="production-secret",
+        pgbouncer_admin_password="production-pooler-secret",
     )
 
     assert settings.model_server_auth_token.get_secret_value() == "production-secret"
+
+
+@pytest.mark.parametrize("value", ["prod", "Production", "PRODUCTION", "prd", "staging-2"])
+def test_environment_rejects_anything_but_the_three_known_names(
+    clean_env: None, value: str
+) -> None:
+    # Every dev-credential guard is written as `environment != "dev"`, so a
+    # near-miss spelling used to pass all of them while the process kept
+    # running with development defaults. The Literal is what makes the guards
+    # mean what they say.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, environment=value)
+
+
+def test_environment_accepts_the_three_known_names(clean_env: None) -> None:
+    for value in ("dev", "staging", "production"):
+        settings = Settings(
+            _env_file=None,
+            environment=value,
+            model_server_auth_token="explicit-secret",
+            pgbouncer_admin_password="explicit-pooler-secret",
+        )
+        assert settings.environment == value
+
+
+def test_pgbouncer_admin_defaults_match_the_dev_userlist(clean_env: None) -> None:
+    # infra/pgbouncer/userlist.txt + pgbouncer.ini's admin_users. If these
+    # drift, the transaction-pool-mode startup check fails to authenticate and
+    # the API refuses to boot against a working dev stack.
+    s = _defaults(clean_env)
+    assert s.pgbouncer_admin_user == "pgbouncer_admin"
+    assert s.pgbouncer_admin_password.get_secret_value() == "pgbouncer_admin"
+
+
+def test_pgbouncer_admin_password_is_secret(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PGBOUNCER_ADMIN_PASSWORD", "pooler-secret")
+    settings = Settings(_env_file=None)
+
+    assert settings.pgbouncer_admin_password.get_secret_value() == "pooler-secret"
+    assert "pooler-secret" not in repr(settings)
+
+
+def test_non_dev_rejects_default_pgbouncer_admin_password(clean_env: None) -> None:
+    with pytest.raises(RuntimeError, match="PGBOUNCER_ADMIN_PASSWORD"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            model_server_auth_token="production-secret",
+        )
+
+
+def test_non_dev_keeps_the_pgbouncer_admin_role_name(clean_env: None) -> None:
+    # Only the password is refused outside dev: production keeps the
+    # `pgbouncer_admin` role name, and guarding the user name would reject a
+    # correct deployment.
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        model_server_auth_token="production-secret",
+        pgbouncer_admin_password="production-pooler-secret",
+    )
+
+    assert settings.pgbouncer_admin_user == "pgbouncer_admin"
