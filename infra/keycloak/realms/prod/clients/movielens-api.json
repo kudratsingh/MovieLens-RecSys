@@ -1,7 +1,7 @@
 {
   "clientId": "movielens-api",
   "name": "MovieLens API (backend)",
-  "description": "Confidential client the FastAPI service validates access tokens against. In production it issues no tokens of its own: the password grant and the service account are both off, so this client exists only as the audience every other client's tokens are minted for.",
+  "description": "Confidential client the FastAPI service validates access tokens against. It issues no tokens of its own: password grant and service account are both off, so it exists only as the audience every other client's tokens are minted for.",
   "enabled": true,
   "protocol": "openid-connect",
   "publicClient": false,

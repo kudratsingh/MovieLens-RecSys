@@ -204,10 +204,32 @@ def test_every_settings_building_service_carries_the_guarded_credentials(service
 
 
 def test_the_api_serves_on_the_measured_worker_shape() -> None:
-    command = SERVICES["api"]["command"]
-    assert command[:2] == ["uvicorn", "src.serving.app:app"]
-    assert "--no-access-log" in command
-    assert command[command.index("--workers") + 1] == "4"
+    """Four workers and --no-access-log, reached the way the deployment reaches them.
+
+    The rehearsal stack used to spell the uvicorn line out here. That renders
+    the identical command, but it lands in the entrypoint's `exec "$@"`
+    fall-through rather than its `serve` branch -- so the one stack whose job is
+    to be the deployment's shape was exercising a start path nothing deploys,
+    and skipping the settings preflight `serve` performs. PORT and API_WORKERS
+    are what drive the worker shape now, and they are asserted here because the
+    command line no longer states it.
+    """
+    assert SERVICES["api"]["command"] == ["serve", "--no-access-log"]
+    environment = _environment("api")
+    assert environment["API_WORKERS"] == "4"
+    assert environment["PORT"] == "8000"
+
+
+def test_the_api_starts_the_same_way_the_platform_starts_it() -> None:
+    """Compose and infra/railway/api.json must not drift apart on this.
+
+    Two start commands for one service is two chances to measure something the
+    deployment does not run.
+    """
+    railway = json.loads((REPO_ROOT / "infra/railway/api.json").read_text())
+    start = railway["deploy"]["startCommand"].split()
+    assert start[0].endswith("entrypoint.sh")
+    assert start[1:] == SERVICES["api"]["command"]
 
 
 def test_the_api_keeps_the_model_server_timeout_it_was_measured_with() -> None:

@@ -238,6 +238,24 @@ function assertWarmUpResponse(response, userId, round, enforcePolicy) {
   const expected = expectedPolicy(userId);
   const learnedExpected = expected !== POPULARITY_POLICY;
   const policy = response.status === 200 ? response.json("serving_policy") : null;
+  if (response.status === 429) {
+    // Every request this script makes -- warm-up and measured window alike --
+    // authenticates as one Keycloak subject, so under ADR 0014 it charges one
+    // token bucket. The warm-up is the burstiest thing here by design: it fires
+    // WARMUP_PER_PERSONA x personas per round, in parallel, as fast as the
+    // stack answers, and against the documented default of 120 requests/minute
+    // with a burst of 30 it drains that bucket before the measured window opens.
+    // Say that, rather than sending whoever reads it to re-seed a database that
+    // is fine.
+    throw new Error(
+      `${stage} failed for user ${userId}: HTTP 429. Body: ${response.body}. ` +
+        "This is the rate limiter (ADR 0014), not the serving stack: the whole " +
+        "harness runs as one subject and the warm-up is its burstiest phase. " +
+        "Raise RATE_LIMIT_REQUESTS_PER_MINUTE / RATE_LIMIT_BURST on the API " +
+        "under measurement, or run the profile against a target with the " +
+        "limiter off. Do not exempt the client.",
+    );
+  }
   if (!policy || typeof policy.name !== "string") {
     throw new Error(
       `${stage} failed for user ${userId}: HTTP ${response.status} with no serving_policy. ` +

@@ -224,12 +224,17 @@ services:
       PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
       PGBOUNCER_AUTH_USER: pgbouncer_auth
       PGBOUNCER_AUTH_PASSWORD: ${PGBOUNCER_AUTH_PASSWORD:?generate one with secrets.token_urlsafe(48)}
-      # R-7 runs the stack in both modes. auth_query is the target; userlist is
-      # the fallback that is known to work in both directions if pgBouncer
-      # cannot complete server-side SCRAM through a forced-user alias. Switching
-      # is a variable change with no rebuild, which is what makes the rehearsal
-      # cheap. userlist mode additionally needs the two passwords below.
-      PGBOUNCER_AUTH_MODE: ${PGBOUNCER_AUTH_MODE:-auth_query}
+      # R-7 ran the stack in both modes and userlist is the one that works.
+      # auth_query's lookup hands pgBouncer a SCRAM verifier, which verifies a
+      # client but cannot be replayed as a password, and both aliases below pin
+      # a forced user -- so the client leg succeeded, the server leg failed with
+      # `server login failed: FATAL password authentication failed for user
+      # "app_user"`, and nothing could reach Postgres through the pooler at all.
+      # userlist renders the two passwords into a 0600 file at container start
+      # and authenticates in both directions. Switching back is a variable
+      # change with no rebuild; the lookup role and its function stay
+      # provisioned so it stays that cheap.
+      PGBOUNCER_AUTH_MODE: ${PGBOUNCER_AUTH_MODE:-userlist}
       APP_USER_DB_PASSWORD: ${APP_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
       ADMIN_USER_DB_PASSWORD: ${ADMIN_USER_DB_PASSWORD:?generate one with secrets.token_urlsafe(48)}
     depends_on:
@@ -391,20 +396,17 @@ services:
       context: .
       dockerfile: infra/api/Dockerfile
     image: movielens-recsys/api:prod
-    # api-load's command shape -- 4 workers, --no-access-log -- because that is
-    # the shape the p99 baseline was measured against. The service is private
-    # and terminates no TLS, so it needs neither --proxy-headers nor
+    # The same start command infra/railway/api.json carries, so the rehearsal
+    # exercises the entrypoint branch the deployment actually runs. Spelling
+    # the uvicorn line out here instead would land in the entrypoint's
+    # `exec "$@"` fall-through and skip the settings preflight the `serve`
+    # branch performs -- the rehearsal would then be proving a start path
+    # nothing deploys. PORT and API_WORKERS below drive it, and it renders
+    # byte-for-byte the api-load command shape the p99 baseline was measured
+    # against: 4 workers, --no-access-log. The service is private and
+    # terminates no TLS, so it needs neither --proxy-headers nor
     # --forwarded-allow-ips.
-    command:
-      - "uvicorn"
-      - "src.serving.app:app"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8000"
-      - "--workers"
-      - "4"
-      - "--no-access-log"
+    command: ["serve", "--no-access-log"]
     environment:
       <<: [*app-db, *keycloak-client]
       ENVIRONMENT: production
@@ -469,6 +471,13 @@ services:
       # in both places on purpose.
       MODEL_SERVER_WORKERS: "4"
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      # src/serving/model_server.py builds Settings() at import time, and both
+      # of the production guards in src/config.py fire at construction whether
+      # or not the process ever uses the value. This sidecar reaches Postgres
+      # directly as admin_user and never opens the pooler's admin console, but
+      # without this it refuses to start -- the same trap the release job's
+      # MODEL_SERVER_AUTH_TOKEN above documents, from the other side.
+      PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
       # The baked bundle. No volume on either sidecar: the artifact is a build
       # input, which is what makes "one volume per service, not shareable" a
       # non-issue rather than a workaround, and makes a model rollback an image
@@ -662,6 +671,10 @@ services:
       MODEL_TENANT_ID: ${SERVING_REALM:-demo}
       MODEL_ARTIFACT_DIR: /app/models/serving
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
+      # Same reason as the sidecar's copy: Settings() enforces both production
+      # guards at construction, and this job connects to Postgres directly as
+      # admin_user without ever going near the pooler.
+      PGBOUNCER_ADMIN_PASSWORD: ${PGBOUNCER_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
     depends_on:
       postgres-app:
         condition: service_healthy

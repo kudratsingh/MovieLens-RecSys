@@ -22,6 +22,18 @@ mode="${1:-serve}"
 case "$mode" in
 serve)
     shift
+    # Construct Settings once, here, before uvicorn forks. Every guard in
+    # src/config.py raises at construction time, and inside a worker that is
+    # the wrong place for it to happen: uvicorn's supervisor outlives its
+    # children, so a bad variable produces workers that die and are respawned
+    # forever while the container stays "running" and never exits. The restart
+    # policy -- `restart: on-failure:10` in Compose, restartPolicyType
+    # ON_FAILURE on the platform -- is then inert against the entire class of
+    # misconfiguration it exists for, and the only signal is a healthcheck that
+    # never turns green. Failing here instead costs one interpreter start and
+    # turns a silent respawn loop back into an exit code.
+    python -c 'from src.config import Settings; Settings()'
+
     # No --no-access-log here. The deployed API sets it through its own start
     # command (it serves behind an edge and logs a request twice otherwise);
     # the dev stack wants the request log, and a default that removed it would

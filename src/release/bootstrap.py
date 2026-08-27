@@ -539,11 +539,31 @@ def database_revisions(engine: Engine) -> tuple[str, ...]:
         # one caller that runs as a different role.
         if getattr(exc.orig, "pgcode", None) != "42501":
             raise
+        # Which of the two causes it is depends on who is asking, and getting
+        # that wrong sends an operator to add a GRANT that is already there.
+        # admin_user is the sidecar's pre-deploy fence and wants the default
+        # privilege; migrator owns the table on a healthy deployment, so its
+        # being refused means ownership moved -- which is what a `pg_restore`
+        # run as the superuser does to every table in the dump.
+        role = ""
+        try:
+            with engine.connect() as connection:
+                role = str(connection.execute(text("SELECT current_user")).scalar_one())
+        except Exception:  # pragma: no cover - diagnosis must not mask the original error
+            pass
+        remedy = (
+            "`migrator` owns public.alembic_version on a deployment that migrated normally, "
+            "so being refused here means ownership moved. A `pg_restore --no-owner` run as "
+            "the superuser does exactly that: restore as `migrator` instead, or "
+            "`REASSIGN OWNED BY <restoring role> TO migrator;` in the restored database."
+            if role == "migrator"
+            else "Add `ALTER DEFAULT PRIVILEGES FOR ROLE migrator IN SCHEMA public GRANT "
+            "SELECT ON TABLES TO admin_user;` to the one-time provisioning SQL, before the "
+            "first migration runs."
+        )
         raise ReleaseError(
-            "this role may not read public.alembic_version, so the migration state cannot "
-            "be established. Add `ALTER DEFAULT PRIVILEGES FOR ROLE migrator IN SCHEMA "
-            "public GRANT SELECT ON TABLES TO admin_user;` to the one-time provisioning "
-            "SQL, before the first migration runs."
+            f"role {role or 'this role'} may not read public.alembic_version, so the "
+            f"migration state cannot be established. {remedy}"
         ) from exc
 
 

@@ -280,6 +280,7 @@ so an address-keyed limiter would throttle the whole deployment as one caller.
 | `ENVIRONMENT` / `PORT` / `MODEL_SERVER_WORKERS` | `production` / `6570` / `4` |
 | `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS` | all `"1"` — also baked into the image. ADR 0010 calls these a serving invariant, not a local test convenience: without them p99 was 903.64 ms at 0% steal; with only these four changed, 48.99 ms |
 | `MODEL_SERVER_AUTH_TOKEN` | `${{shared.MODEL_SERVER_AUTH_TOKEN}}` **S** |
+| `PGBOUNCER_ADMIN_PASSWORD` | `${{shared.PGBOUNCER_ADMIN_PASSWORD}}` **S** — and it is not a mistake that a sidecar which never opens the pooler needs it. `src/serving/model_server.py` builds `Settings()` at import time and both production guards in `src/config.py` fire at construction, whether or not the value is ever read. Omit it and the sidecar exits before it serves anything, with `the default pgBouncer admin password is only permitted in development`. **The same variable is required on the pre-deploy command**, which runs the same image |
 | `MODEL_ARTIFACT_DIR` / `MODEL_MANIFEST_NAME` | `/app/models/serving` (the baked path) / `manifest.json` |
 | `MODEL_FEATURE_CACHE_MAX_ENTRIES` / `MODEL_TENANT_ID` | `256` / `demo` |
 | `FEAST_POSTGRES_HOST` / `_PORT` / `_DB` / `_USER` / `_PASSWORD` | `${{postgres-app.RAILWAY_PRIVATE_DOMAIN}}` / `5432` / `movielens` / `admin_user` / `${{shared.ADMIN_USER_DB_PASSWORD}}` **S** — direct to Postgres, bypassing the pooler by design |
@@ -309,8 +310,9 @@ so an address-keyed limiter would throttle the whole deployment as one caller.
 - **`pgbouncer`** — `PGB_UPSTREAM_HOST=${{postgres-app.RAILWAY_PRIVATE_DOMAIN}}` ·
   `PGB_UPSTREAM_PORT=5432` · `PGBOUNCER_LISTEN_PORT=6432` · `PGBOUNCER_ADMIN_USER=pgbouncer_admin` ·
   `PGBOUNCER_ADMIN_PASSWORD` **S** · `PGBOUNCER_AUTH_USER=pgbouncer_auth` · `PGBOUNCER_AUTH_PASSWORD`
-  **S** · `PGBOUNCER_AUTH_MODE=auth_query`. In `userlist` mode, additionally `APP_USER_DB_PASSWORD`
-  and `ADMIN_USER_DB_PASSWORD` **S** so the entrypoint can render the file.
+  **S** · `PGBOUNCER_AUTH_MODE=userlist`, which additionally needs `APP_USER_DB_PASSWORD` and
+  `ADMIN_USER_DB_PASSWORD` **S** so the entrypoint can render the file. `auth_query` does not work
+  against the forced-user aliases — §4 has the measurement.
 - **`release`** (J1) — `ENVIRONMENT=production` ·
   `POSTGRES_HOST=${{postgres-app.RAILWAY_PRIVATE_DOMAIN}}` · `POSTGRES_PORT=5432` ·
   `POSTGRES_DB=movielens` · **`POSTGRES_USER=migrator`** · `POSTGRES_PASSWORD` **S** ·
@@ -440,13 +442,37 @@ rather than performed for the first time against production.
 On `postgres-keycloak`, create the `keycloak` database and role with the generated `KC_DB_PASSWORD`.
 Nothing else is needed there — Keycloak manages its own schema.
 
-If the pooler cannot complete server-side SCRAM against the forced-user aliases in `auth_query` mode,
-switch `PGBOUNCER_AUTH_MODE=userlist` and redeploy the same image; the entrypoint then renders
-`/etc/pgbouncer/userlist.txt` from `APP_USER_DB_PASSWORD`, `ADMIN_USER_DB_PASSWORD` and
-`PGBOUNCER_ADMIN_PASSWORD`. It is a variable change with no rebuild. `pgbouncer_admin` is rendered
-into the userlist in **both** modes on purpose — it has no Postgres role behind it, so an
-`auth_query` lookup would find nothing and the API's boot check, and therefore every deploy, would
-fail.
+**`PGBOUNCER_AUTH_MODE=userlist`, and this is measured rather than preferred.** `auth_query` was the
+mode this deployment wanted — only the lookup role's own password reaches disk, and rotating an
+application password is an `ALTER ROLE` plus a variable change — and the rehearsal (R-7, 2026-08-27,
+pgbouncer 1.24 against Postgres 16) established that it cannot be used here. The lookup returns a
+stored SCRAM **verifier**. That is enough to check a connecting client's proof, and it is not a
+password; both `[databases]` entries pin a forced user (`user=app_user`, `user=admin_user`), so
+pgBouncer opens the server connection under its own identity rather than passing the client's
+exchange through, and in `auth_query` mode it has nothing to present. What that looks like in the
+pooler's log is worth recognising, because the client leg succeeds and only the second leg fails:
+
+```
+LOG  C-…: movielens_app/app_user@… login attempt: db=movielens_app user=app_user
+LOG  S-…: movielens_app/app_user@…:5432 new connection to server
+WARNING server login failed: FATAL password authentication failed for user "app_user"
+WARNING C-…: pooler error: password authentication failed for user "app_user"
+```
+
+Every connection through both aliases is refused, so the release job dies on its first query and the
+API never boots. `userlist` renders `/etc/pgbouncer/userlist.txt` at 0600 at container start from
+`APP_USER_DB_PASSWORD`, `ADMIN_USER_DB_PASSWORD` and `PGBOUNCER_ADMIN_PASSWORD` — never into an image
+layer, never into the repository — and authenticates in both directions. `pgbouncer_auth` and its
+lookup function stay provisioned regardless: switching back is a variable change with no rebuild, and
+`auth_query` becomes correct again the moment the forced users go.
+
+Note that `pgbouncer`'s healthcheck (`pg_isready`) does **not** authenticate, so a pooler in a mode
+that refuses every login still reports healthy. The failure surfaces one layer later, at the first
+service that actually connects, and it is loud when it does.
+
+`pgbouncer_admin` is rendered into the userlist in **both** modes on purpose — it has no Postgres
+role behind it, so an `auth_query` lookup would find nothing and the API's boot check, and therefore
+every deploy, would fail.
 
 ## 5. Keycloak and provisioning
 
@@ -668,8 +694,19 @@ object, bytes, TOC entries, alembic head, per-stage and total seconds, outcome) 
 `--report PATH` — **including on failure**, which is the run worth having evidence of. `--dry-run`
 rehearses it safely.
 
-Four things the drill will tell you the hard way if you skip them:
+Five things the drill will tell you the hard way if you skip them:
 
+- **Restore as `migrator`, not as the superuser.** The dump is `--no-owner`, so every restored
+  object is owned by whatever role ran `pg_restore`. On a normal deployment `migrator` owns every
+  base table — `create_tables()` runs as `migrator` before Alembic does, which is what makes
+  `ALTER TABLE … FORCE ROW LEVEL SECURITY` and the `0010` backfill work — and a restore performed as
+  the superuser silently moves all of it. The restored database serves fine: the `app_user` and
+  `admin_user` grants travel in the dump, so `prod-verify` is green and nothing looks wrong. The
+  *next deploy* is what breaks, because the release job's `alembic upgrade head` runs as `migrator`
+  and `migrator` can no longer read `public.alembic_version`. `migrator` holds BYPASSRLS, so it also
+  satisfies the row-count requirement below. Restoring as the superuser and repairing afterwards
+  with `REASSIGN OWNED BY <restoring role> TO migrator;` works too; doing neither leaves a database
+  that passes every check you would think to run.
 - The restore target needs the §4 provisioning roles **before** `pg_restore`, because the dump
   carries their grants.
 - The drill refuses a non-empty target outright, with no override flag.

@@ -41,6 +41,19 @@ API_LOAD_WORKERS ?= 4
 LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
 	DEMO_COMPOSE="$(DEMO_COMPOSE)" sh synthetic/load/run_gate.sh
 
+# How long `prod-verify` pauses between its two stages. Both authenticate as
+# the same `verify` account, so under ADR 0014 they charge one token bucket:
+# `verify --all` spends ~30 of it, the reliability suite then spends ~40 more
+# within seconds, and against 120/minute with a burst of 30 the tail of the
+# second stage comes back 429 -- which surfaced as `cursor_rejection` reporting
+# a catalog page that "offered no continuation cursor", because a throttled
+# read has no `page` key. The deployment does not have this problem: `verify`
+# is a nightly cron and the reliability suite is invoked separately, minutes
+# apart. It is this target that chains them, so it is this target that pauses.
+# The observed refill is 15s (`X-RateLimit-Reset`); 20 leaves margin. Raising
+# the API's limit to make a chained target fit would be the wrong repair.
+PROD_VERIFY_COOLDOWN_SECONDS ?= 20
+
 # --- Deterministic serving-artifact build -----------------------------------
 # The committed bundle in infra/model-bundle/ is rebuilt and hash-compared by
 # CI on linux/amd64, while most work on this project happens on arm64 macOS.
@@ -373,9 +386,20 @@ prod-seed: prod-env-guard prod-keycloak-provision
 # The reliability harness rides in the verify service rather than one of its
 # own: it is in the same image, it wants the same identity, and the API
 # image's entrypoint execs an unrecognised mode as given.
+# The `canary` service is deliberately NOT run here. `verify --all` runs the
+# same module as its V-6 row, and running it twice sweeps the isolation
+# subject's 20 persona routes twice inside a second -- 40 requests against a
+# 30-token burst, so the tail of the second sweep comes back 429 and the
+# canary reports "expected 403 from the persona guard" on a request the rate
+# limiter answered before the guard ever saw it. That was harmless redundancy
+# until ADR 0014's limiter went on in production mode, and this is where it
+# first showed. The standalone service stays in the compose file: it is the
+# form an operator points at a target by hand, with every identity on the
+# command line.
 prod-verify: prod-env-guard
 	$(PROD_COMPOSE) run --rm -T verify
-	$(PROD_COMPOSE) run --rm -T canary
+	@echo "waiting $(PROD_VERIFY_COOLDOWN_SECONDS)s for the verify subject's rate-limit bucket to refill"
+	@sleep $(PROD_VERIFY_COOLDOWN_SECONDS)
 	$(PROD_COMPOSE) run --rm -T verify sh -c \
 		'exec python -m synthetic.load.reliability \
 			--api-url "$$API_URL" --keycloak-url "$$KEYCLOAK_URL" \

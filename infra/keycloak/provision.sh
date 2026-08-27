@@ -117,6 +117,27 @@ render_template() {
   if grep -q '\${' "$destination"; then
     fail "unresolved placeholder left in $source"
   fi
+  assert_descriptions_fit "$source" "$destination"
+}
+
+# Keycloak stores a client's description in a varchar(255) and the admin API
+# does not check the length: the write reaches Postgres, fails there, and kcadm
+# reports `[unknown_error]` while the only readable cause -- "value too long for
+# type character varying(255)" -- is in the server's own log, which on a managed
+# platform is a different pane. Provisioning then aborts partway through, having
+# created the realm and its roles but no clients, so the first symptom is every
+# browser token being rejected for want of an audience mapper. Check it here,
+# where the message can name the file and the number.
+assert_descriptions_fit() {
+  local source="$1" rendered="$2" value
+  while IFS= read -r value; do
+    [ -n "$value" ] || continue
+    if [ "${#value}" -gt 255 ]; then
+      fail "$source: \"description\" is ${#value} characters; Keycloak's column holds 255 and the overflow surfaces only as [unknown_error]"
+    fi
+  done <<EOF
+$(sed -n 's/^[[:space:]]*"description"[[:space:]]*:[[:space:]]*"\(.*\)",\{0,1\}[[:space:]]*$/\1/p' "$rendered")
+EOF
 }
 
 # Every lookup collects kcadm's output before matching on it. Piping straight
@@ -132,6 +153,14 @@ client_uuid() {
 user_uuid() {
   local found
   found="$(kc get users -r "$1" -q "username=$2" -q exact=true --fields id --format csv --noquotes 2>/dev/null || true)"
+  printf '%s' "$found" | head -n 1 | tr -d '\r"'
+}
+
+# user_field <realm> <username> <attribute>. Empty when the attribute is unset,
+# which is what makes the email reconciliation below a no-op on a second run.
+user_field() {
+  local found
+  found="$(kc get users -r "$1" -q "username=$2" -q exact=true --fields "$3" --format csv --noquotes 2>/dev/null || true)"
   printf '%s' "$found" | head -n 1 | tr -d '\r"'
 }
 
@@ -198,15 +227,46 @@ ensure_client() {
   fi
 }
 
-# ensure_user <realm> <username> <first> <last> <password> [role...]
+# ensure_user <realm> <username> <first> <last> <email> <password> [role...]
+#
+# The email is not decoration. Keycloak 25 always runs the declarative user
+# profile, whose default marks email, firstName and lastName
+# `required: {roles: ["user"]}` -- required in the *user* context, which
+# includes authenticating. An account the admin API created without one is
+# accepted at creation, reports an empty `requiredActions`, looks completely
+# healthy in the console, and then fails every direct grant with
+#
+#   {"error":"invalid_grant","error_description":"Account is not fully set up"}
+#
+# firstName and lastName were always set here; email was not, so every token
+# this deployment's automation asks for -- the verify job, the cross-tenant
+# canary, the load canary -- and the browser sign-in for `walkthrough` failed
+# identically until R-7's rehearsal ran the first real password grant.
+# Addresses use the RFC 2606 `.invalid` TLD: syntactically valid, reserved, and
+# guaranteed never to resolve, because nothing here should be able to send mail.
 ensure_user() {
-  local realm="$1" username="$2" first="$3" last="$4" password="$5"
-  shift 5
+  local realm="$1" username="$2" first="$3" last="$4" email="$5" password="$6"
+  shift 6
   local roles=("$@")
   local uuid created=0 role
+
+  # Six positional arguments, and the password sits directly after the address.
+  # Drop one and every later argument shifts left, which puts the password into
+  # the email attribute -- Keycloak answers `error-invalid-email` and the value
+  # it rejected is a live credential. Check the shape, and deliberately do not
+  # echo the value that failed.
+  if [ -n "$email" ] && [[ "$email" != ?*@?*.?* ]]; then
+    fail "ensure_user ${realm}/${username}: argument 5 is not an email address. Check the argument order -- the value is withheld here because a shifted argument in this position is a password"
+  fi
+
   local create_args=(-s "username=${username}" -s "enabled=true")
   if [ -n "$first" ]; then create_args+=(-s "firstName=${first}"); fi
   if [ -n "$last" ]; then create_args+=(-s "lastName=${last}"); fi
+  # emailVerified rides with the address: VERIFY_EMAIL is an enabled action
+  # provider in both realms and there is no mail server to complete it with.
+  if [ -n "$email" ]; then
+    create_args+=(-s "email=${email}" -s "emailVerified=true")
+  fi
 
   uuid="$(user_uuid "$realm" "$username")"
   if [ -z "$uuid" ]; then
@@ -215,6 +275,12 @@ ensure_user() {
     [ -n "$uuid" ] || fail "realm ${realm}: user ${username} was not created"
     created=1
     log "realm ${realm}: user ${username} created"
+  elif [ -n "$email" ] && [ "$(user_field "$realm" "$username" email)" != "$email" ]; then
+    # Repairs an account provisioned before the address was set, so a
+    # deployment already carrying the broken shape heals on the next run
+    # instead of needing a console visit. A correct account skips this.
+    kc update "users/${uuid}" -r "$realm" -s "email=${email}" -s "emailVerified=true" >/dev/null
+    log "realm ${realm}: user ${username} email set"
   fi
 
   for role in "${roles[@]}"; do
@@ -235,11 +301,15 @@ ensure_user() {
 
 assert_realm_flag() {
   local realm="$1" field="$2" expected="$3" observed
-  # Whitespace is squeezed out rather than trusted: -c asks kcadm not to pretty
-  # print, and the assertion should not depend on it having obliged.
-  observed="$(kc get "realms/${realm}" --fields "$field" -c | tr -d ' \n\t')"
-  if ! grep -Fq "\"${field}\":${expected}" <<<"$observed"; then
-    fail "realm ${realm}: ${field} reads ${observed}, expected ${expected}"
+  # `--fields` and `-c` are mutually exclusive: kcadm applies both field
+  # filtering and CSV rendering to the parsed response, and -c makes it hand
+  # back the raw compressed body instead, so the pair fails with "Cannot create
+  # CSV nor filter returned fields because the response is compressed" and takes
+  # the whole run down after every realm, client and account has already been
+  # written. The csv form is what the other four lookups in this file use.
+  observed="$(kc get "realms/${realm}" --fields "$field" --format csv --noquotes | tr -d ' \n\t\r')"
+  if [ "$observed" != "$expected" ]; then
+    fail "realm ${realm}: ${field} reads '${observed}', expected '${expected}'"
   fi
 }
 
@@ -315,16 +385,17 @@ done
 # Railway and GitHub Actions, and `isolation` deliberately lacks
 # demo-impersonator so the cross-tenant canary has a subject that must be
 # refused across the whole product surface.
-ensure_user demo walkthrough "Portfolio" "Walkthrough" "$WALKTHROUGH_PASSWORD" \
-  "$ROLE_USER" "$ROLE_IMPERSONATOR"
-ensure_user demo verify "Release" "Verification" "$VERIFY_PASSWORD" \
-  "$ROLE_USER" "$ROLE_IMPERSONATOR"
-ensure_user default isolation "Isolation" "Canary" "$ISOLATION_PASSWORD" \
-  "$ROLE_USER"
+ensure_user demo walkthrough "Portfolio" "Walkthrough" walkthrough@movielens.invalid \
+  "$WALKTHROUGH_PASSWORD" "$ROLE_USER" "$ROLE_IMPERSONATOR"
+ensure_user demo verify "Release" "Verification" verify@movielens.invalid \
+  "$VERIFY_PASSWORD" "$ROLE_USER" "$ROLE_IMPERSONATOR"
+ensure_user default isolation "Isolation" "Canary" isolation@movielens.invalid \
+  "$ISOLATION_PASSWORD" "$ROLE_USER"
 
 # A named admin that survives the runbook's next step: deleting the bootstrap
 # variables and disabling the account they created.
-ensure_user master "$KC_HUMAN_ADMIN_USERNAME" "" "" "$KC_HUMAN_ADMIN_PASSWORD" admin
+ensure_user master "$KC_HUMAN_ADMIN_USERNAME" "" "" \
+  "${KC_HUMAN_ADMIN_USERNAME}@movielens.invalid" "$KC_HUMAN_ADMIN_PASSWORD" admin
 
 for realm in demo default; do
   assert_realm_flag "$realm" registrationAllowed false

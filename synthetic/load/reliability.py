@@ -495,18 +495,25 @@ def _check_degraded_metadata(client: httpx.Client, target: Target, token: str) -
     the normal path rather than an edge case: if a missing poster could fail a
     page, most of Browse would be broken.
     """
-    catalog = _json(
-        client.get(
-            f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit={CATALOG_MAX_LIMIT}&sort=title",
-            headers=_auth(token),
-        )
+    catalog_response = client.get(
+        f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit={CATALOG_MAX_LIMIT}&sort=title",
+        headers=_auth(token),
     )
+    catalog = _json(catalog_response)
     items = catalog.get("items")
     if not isinstance(items, list) or not items:
+        # Same reason as _no_cursor_summary: an empty item list after a 429 is a
+        # limit, not a fixture, and the two get fixed in different places.
+        reason = (
+            f"HTTP {catalog_response.status_code}"
+            if catalog_response.status_code != 200
+            else "an empty item list"
+        )
         return Check(
             name="degraded_metadata",
             passed=False,
-            summary="catalog returned no items, so degraded metadata could not be exercised",
+            summary=(f"catalog answered {reason}, so degraded metadata could not be exercised"),
+            evidence={"catalog_status": catalog_response.status_code},
         )
     posterless = [item for item in items if not item.get("poster_url")]
     if not posterless:
@@ -597,21 +604,45 @@ def _check_bounded_pages(client: httpx.Client, target: Target, token: str) -> Ch
     )
 
 
+def _no_cursor_summary(response: httpx.Response) -> str:
+    """Say why the first page carried no cursor, and name throttling as throttling.
+
+    This whole suite runs as one subject inside a few seconds, so it competes
+    with itself for that subject's token bucket (ADR 0014). A throttled catalog
+    read returns a body with no ``page`` key, and reporting that as "the fixture
+    has only one page" sends whoever reads it to look at the seed data instead
+    of at the limit. Say which one it was.
+    """
+    if response.status_code == 429:
+        retry_after = response.headers.get("retry-after", "?")
+        return (
+            f"the first catalog page was rate limited (HTTP 429, Retry-After={retry_after}s), "
+            "so no continuation cursor could be read. This suite and `verify --all` share one "
+            "subject's bucket -- see ADR 0014"
+        )
+    if response.status_code != 200:
+        return (
+            f"the first catalog page answered HTTP {response.status_code}, "
+            "so no continuation cursor could be read"
+        )
+    return "the first catalog page offered no continuation cursor to test"
+
+
 def _check_cursor_rejection(client: httpx.Client, target: Target, token: str) -> Check:
     """A cursor that no longer matches its query is refused, not silently re-run."""
-    first = _json(
-        client.get(
-            f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit=24&sort=title",
-            headers=_auth(token),
-        )
+    first_response = client.get(
+        f"{target.api_url}/users/{WARM_PERSONA}/catalog?limit=24&sort=title",
+        headers=_auth(token),
     )
+    first = _json(first_response)
     page = first.get("page") or {}
     cursor = page.get("next_cursor")
     if not isinstance(cursor, str):
         return Check(
             name="cursor_rejection",
             passed=False,
-            summary="the first catalog page offered no continuation cursor to test",
+            summary=_no_cursor_summary(first_response),
+            evidence={"first_page_status": first_response.status_code},
         )
     # The cursor goes into the URL rather than into `params`: httpx replaces a
     # URL's query string when both are given, which would quietly drop the

@@ -94,6 +94,11 @@ CHECK_IDS = ("V-0", "V-1", "V-3", "V-5", "V-6", "V-7", "V-8", "V-9", "V-12")
 
 _DEFAULT_TIMEOUT_SECONDS = 20.0
 _DEFAULT_AUDIT_WINDOW_HOURS = 24
+# The catalog endpoint's own ceiling (`limit` is ge=1, le=48 in
+# src/serving/app.py and in docs/api/openapi.json). Asking for more is a 422,
+# not a clamp, and synthetic/load/reliability.py carries the same number under
+# the name CATALOG_MAX_LIMIT.
+_CATALOG_MAX_LIMIT = 48
 
 
 class VerifyError(RuntimeError):
@@ -534,7 +539,10 @@ def check_write_path(run: VerifyRun) -> CheckResult:
 
 def _pick_watchlistable_movie(run: VerifyRun, user_id: int) -> tuple[int, int]:
     """A catalog movie this persona has not watchlisted, and its revision."""
-    page = run.get_json(f"/users/{user_id}/catalog?limit=50")
+    # 48, not 50: the endpoint declares `limit` as ge=1, le=48 and the committed
+    # contract in docs/api/openapi.json says so, so 50 is a 422 before the check
+    # begins. That is what it did on this row's first live run.
+    page = run.get_json(f"/users/{user_id}/catalog?limit={_CATALOG_MAX_LIMIT}")
     items = page.get("items")
     if not isinstance(items, list):
         raise CheckFailedError("the catalog response carries no items list")

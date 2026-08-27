@@ -15,17 +15,22 @@
 #               and verifies the client against the SCRAM secret Postgres
 #               already stores. Only the lookup role's own password reaches
 #               disk, and rotating an application password is ALTER ROLE plus a
-#               variable update. This is the target mode.
+#               variable update. It was the target mode and it does not work
+#               against a forced-user alias — see below.
 #   userlist    pgBouncer reads the passwords from a userlist.txt rendered here
-#               at 0600. The mode exists because a stored SCRAM secret is
-#               enough to *verify* a client but not to *log in* to Postgres:
-#               whether auth_query alone can also authenticate the forced-user
-#               server connections (movielens_app -> app_user) depends on
-#               pgBouncer's SCRAM pass-through, which this project has not yet
-#               measured against a forced-user alias. The deployment
-#               rehearsal's R-7 settles it; until it does, userlist is the mode
-#               known to work in both directions, and switching between them is
-#               a variable change with no rebuild.
+#               at 0600. THIS IS THE MODE THAT WORKS, and the deployment's
+#               default. A stored SCRAM secret is enough to *verify* a client
+#               but not to *log in* to Postgres, and both [databases] aliases
+#               pin a forced user, so pgBouncer opens the server connection
+#               itself instead of passing the client's exchange through -- and
+#               in auth_query mode it has nothing to present. R-7 measured
+#               exactly that on 2026-08-27: the client leg succeeded and the
+#               server leg failed with `server login failed: FATAL password
+#               authentication failed for user "app_user"`, refusing every
+#               connection through both aliases. auth_query is kept because it
+#               is one variable away and would become correct the moment the
+#               forced users go, and switching is a variable change with no
+#               rebuild.
 #
 # In either mode the admin user is rendered into the userlist: pgbouncer_admin
 # is a pgBouncer-internal identity with no Postgres role behind it — it is what
@@ -51,7 +56,7 @@ TEMPLATE_FILE=/opt/pgbouncer/pgbouncer.prod.ini.tmpl
 : "${PGBOUNCER_ADMIN_USER:=pgbouncer_admin}"
 : "${PGBOUNCER_ADMIN_PASSWORD:?PGBOUNCER_ADMIN_PASSWORD must be set; the API authenticates to the admin console with it}"
 
-: "${PGBOUNCER_AUTH_MODE:=auth_query}"
+: "${PGBOUNCER_AUTH_MODE:=userlist}"
 
 # Pool sizing and TLS carry the dev stack's values as defaults so a deployment
 # that sets neither behaves the way the load gate measured.
@@ -140,7 +145,7 @@ userlist)
 ; container start, mode 0600 and never written to an image layer. The passwords
 ; are plain text in that file, which is what lets pgBouncer both verify a
 ; SCRAM client and complete SCRAM against Postgres as a forced user — the
-; property the auth_query mode still has to prove.
+; property auth_query mode turned out not to have (R-7, 2026-08-27).
 auth_type = scram-sha-256
 auth_file = ${USERLIST_FILE}
 INI
