@@ -2,8 +2,8 @@
 
 The key is taken from the *verified* token: the tenant the issuer resolved to
 and the ``sub`` claim the middleware put on ``request.state.principal``. It is
-never a client address. Behind Railway's edge, Compose's bridge network, or the
-Caddy rehearsal edge every request arrives from a proxy, so an address-keyed
+never a client address. Behind the Caddy edge and Compose's bridge network
+every request arrives from a proxy, so an address-keyed
 limiter would either throttle the whole deployment as one caller or force
 ``--forwarded-allow-ips`` into a security decision. A verified token cannot be
 spoofed by a header, which is what makes it the only honest key here.

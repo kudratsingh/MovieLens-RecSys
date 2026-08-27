@@ -42,15 +42,25 @@ import httpx
 # immediately afterwards can legitimately miss it. Bounded polling, not a sleep.
 AUDIT_POLL_ATTEMPTS = 20
 AUDIT_POLL_INTERVAL_S = 0.25
-# The documented defaults are a burst of 30 refilled at 120/minute (ADR 0014,
-# docs/deployment-runbook.md §3), so `burst + limit` is the window in which a
-# drained bucket has to show itself. It is deliberately not `burst + 1`,
-# because the bucket lives in the worker process: this client's keep-alive
-# connection usually pins one worker and one bucket, but an edge proxy or a
-# reconnect can spread the probe across all N, and then draining any single
-# bucket takes roughly N x burst requests. 150 covers the four workers every
-# deployed API service runs; a wider fan-out needs --rate-limit-probe-requests.
-RATE_LIMIT_PROBE_REQUESTS = 150
+# The documented defaults are a burst of 120 refilled at 600/minute (ADR 0014,
+# src/config.py), so `burst + limit` is the window in which a drained bucket
+# has to show itself. It is deliberately not `burst + 1`, because the bucket
+# lives in the worker process: this client's keep-alive connection usually pins
+# one worker and one bucket, and then 120 back-to-back requests outrun a
+# 10-per-second refill within a couple of seconds. An edge proxy or a reconnect
+# can spread the probe across all N workers instead, and then the bucket that
+# drains first needs roughly `N x burst` requests plus whatever refilled while
+# they were in flight. 720 covers the two workers a CX22 API runs with room to
+# spare; a wider fan-out fails loudly and is fixed with
+# --rate-limit-probe-requests rather than by editing this.
+#
+# The probe also has to outrun the refill to drain anything at all: at ten
+# tokens a second, a client that manages fewer than ten requests a second never
+# reaches the floor however many it sends. That is a property of a token bucket
+# rather than a tuning problem, which is why the check reports "advertises a
+# bucket but admitted all N" in words instead of inferring a verdict from a
+# window it could not close.
+RATE_LIMIT_PROBE_REQUESTS = 720
 RATE_LIMIT_HEADER_PREFIXES = ("x-ratelimit", "ratelimit", "retry-after")
 RATE_LIMIT_LIMIT_HEADER = "x-ratelimit-limit"
 RATE_LIMIT_REMAINING_HEADER = "x-ratelimit-remaining"

@@ -500,7 +500,7 @@ def test_issuer_equality_refuses_an_internal_issuer() -> None:
         bootstrap.check_issuer_equality(
             public_base_url="https://auth.example.com",
             realm="demo",
-            fetch=lambda url: {"issuer": "http://keycloak.railway.internal:8080/realms/demo"},
+            fetch=lambda url: {"issuer": "http://keycloak:8080/realms/demo"},
         )
 
 

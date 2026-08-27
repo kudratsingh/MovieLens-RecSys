@@ -338,10 +338,19 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_documented_defaults_match_the_runbook(clean_env: None) -> None:
+def test_documented_defaults_are_the_measured_per_worker_numbers(clean_env: None) -> None:
+    """The pair the deployment runs on, and the only place they are declared.
+
+    Nothing in the Compose files or the env example sets `RATE_LIMIT_*`: the
+    images bake `ENVIRONMENT=production`, so these defaults *are* the deployed
+    policy. They describe one worker's allowance for one client, because
+    keep-alive pins a client to one worker — ADR 0014 has the rehearsal
+    measurement that made the first pair (120/30) refuse 37.9% of a 5 req/s
+    canary.
+    """
     settings = Settings(_env_file=None)
-    assert settings.rate_limit_requests_per_minute == 120
-    assert settings.rate_limit_burst == 30
+    assert settings.rate_limit_requests_per_minute == 600
+    assert settings.rate_limit_burst == 120
 
 
 def test_the_limiter_is_off_on_a_dev_box_and_on_everywhere_else(clean_env: None) -> None:

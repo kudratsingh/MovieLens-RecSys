@@ -133,10 +133,18 @@ class Settings(BaseSettings):
     # Per-(tenant, subject) token bucket in front of every authenticated route.
     # `burst` is the bucket's capacity — the largest instantaneous burst one
     # subject can spend — and `requests_per_minute` is the refill rate. The
-    # bucket lives in the worker process, so a service running N uvicorn
-    # workers admits up to N times this rate; ADR 0014 has the arithmetic.
-    rate_limit_requests_per_minute: int = Field(default=120, gt=0)
-    rate_limit_burst: int = Field(default=30, gt=0)
+    # bucket lives in the worker process, so these are per-worker numbers.
+    #
+    # They are not per-worker numbers divided by the worker count either, which
+    # is what the first pair (120/30) assumed: keep-alive pins a connection to
+    # one worker, so a single client draws on one bucket while the others sit
+    # idle. The production-mode rehearsal measured that plainly — one subject
+    # at 5 req/s against 4 workers × 120/min had 37.9% of 301 requests refused,
+    # against a nominal aggregate ceiling of 480/min. The defaults now describe
+    # what one worker will actually admit from one client; ADR 0014 has the
+    # arithmetic and names the Redis-backed shared bucket as the real fix.
+    rate_limit_requests_per_minute: int = Field(default=600, gt=0)
+    rate_limit_burst: int = Field(default=120, gt=0)
     # Tri-state on purpose. Unset means "on everywhere except a dev box", which
     # is what keeps the synthetic-load harnesses honest: they authenticate as a
     # single Keycloak user (the demo realm has exactly one) and drive 55–600
