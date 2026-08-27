@@ -25,10 +25,16 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY synthetic ./synthetic
 
+# The mode dispatcher. This image is the service, the release job and the
+# verify cron; the entrypoint is what lets one build cover all three without
+# any of them needing to know the module paths. COPY preserves the exec bit.
+COPY infra/api/entrypoint.sh /usr/local/bin/entrypoint.sh
+
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.serving.app:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["serve"]
