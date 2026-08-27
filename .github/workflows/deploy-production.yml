@@ -1,45 +1,50 @@
 name: Deploy production
 
-# The only path by which anything reaches the production Railway environment.
-# Auto-deploy is off on every service (infra/railway/README.md) because the
-# cross-service ordering below is the whole reason a release works: the API
-# cannot become ready until Keycloak's serving realm exists and the migrations
-# have run, and the model sidecar refuses to boot until Redis holds materialised
-# features.
+# The only path by which anything reaches the production host.
 #
-# Every step drives Railway's public GraphQL API rather than the CLI, and that is
-# a capability finding rather than a preference. Checked against the Railway
-# documentation on 2026-08-26: `railway redeploy` redeploys a service's *latest*
-# deployment and accepts no deployment id, `railway down` deletes the latest
-# deployment rather than reverting to a previous one, and neither can deploy a
-# named commit or read a service's attached domains. The API operations used
-# here, with their documented signatures, are:
+# The trigger is CI's *completion* rather than the push that started it. The
+# images a deploy pulls are built by CI's `publish-images` job, so a workflow
+# that fired on the push itself would race the thing it depends on and reach the
+# box before the tag existed. `workflow_run` fires once CI has concluded and
+# carries the commit CI ran on in `workflow_run.head_sha`.
 #
-#   serviceInstanceDeployV2(serviceId, environmentId, commitSha)  -- deploy a commit
-#   deployments(input: DeploymentListInput!, first: Int)          -- list deployments
-#   deploymentLogs(deploymentId: String!, limit: Int)             -- read a job's output
-#   deploymentRollback(id: String!)                               -- revert to a deployment
-#   domains(projectId, environmentId, serviceId)                  -- attached domains
-#   tcpProxies(serviceId, environmentId)                          -- TCP proxies
+# That conclusion is checked rather than trusted. `conclusion == 'success'` is a
+# statement about a run, and a run stays green when a job is skipped or deleted;
+# the gate below turns it into a statement about each required job by name, on
+# that exact SHA.
 #
-# Token types. An account or workspace token authenticates with
-# `Authorization: Bearer`; a project token uses its own `Project-Access-Token`
-# header and is scoped to a single environment. RAILWAY_API_TOKEN (account or
-# workspace) is preferred for every step here, because the documentation does not
-# state that a project token reaches `project`, `domains` or `deploymentRollback`
-# — and a release is the wrong place to find that out. RAILWAY_TOKEN is the
-# fallback and is the token the CLI would have used.
+# Nothing is built here and nothing is copied here. The host holds the
+# repository at /opt/movielens and its secrets at /opt/movielens/.env.prod, so
+# this workflow checks out no code and its entire payload is one SSH command
+# naming a commit. Everything the release actually does — pull, run the release
+# job, start the stack, verify, roll back on a failed verification — lives in
+# infra/deploy/deploy.sh, on the box, where an operator can run exactly the same
+# thing by hand during an incident.
 
 on:
-  workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to deploy (40-character SHA). Defaults to the tip of main."
+        required: false
+        type: string
+      rollback:
+        description: "Return the host to its recorded previous release instead of deploying."
+        required: false
+        type: boolean
+        default: false
 
-# One lane to Railway. A canary that redeploys `verify` while a release is
-# halfway through its ordered sequence would read the wrong deployment's log, so
-# the canary shares this group; queued runs wait rather than cancel the release.
+# One lane to the box, shared with production-canary.yml: a canary that runs
+# `make prod-verify` while a release is halfway through reports on a system that
+# is mid-change. Queued runs wait rather than cancel — cancelling a release
+# between `docker compose pull` and `up -d` leaves the host in neither the old
+# state nor the new one.
 concurrency:
-  group: production-railway
+  group: production-hetzner
   cancel-in-progress: false
 
 permissions:
@@ -47,14 +52,18 @@ permissions:
   contents: read
 
 env:
-  RAILWAY_GRAPHQL_URL: https://backboard.railway.com/graphql/v2
-
-  # Every job in .github/workflows/ci.yml that runs unconditionally. Requiring
-  # the whole job set rather than a hand-picked subset is deliberate: a job that
-  # is deleted, renamed or skipped still leaves its run green, and "the run is
-  # green" is then a statement about nothing.
+  # Every job in .github/workflows/ci.yml that runs unconditionally, plus
+  # `publish-images`. Requiring the whole set rather than a hand-picked subset
+  # is deliberate: a job that is deleted, renamed or skipped still leaves its
+  # run green, and "the run is green" is then a statement about nothing.
   # tests/unit/test_deploy_workflows.py holds both lists against ci.yml so they
   # cannot drift apart silently.
+  #
+  # `publish-images` is required rather than conditional even though it carries
+  # an `if`. Its condition is an event guard (push to main), not a path filter,
+  # and a skipped `publish-images` means this commit has no images in GHCR at
+  # all — `docker compose pull` on the box would fail on a tag that was never
+  # pushed. Refusing here says so in a place with a log.
   #
   # `api-contract-check` and `web-api-types-check` are named as gates in the
   # deployment plan but are *steps*, not jobs: `python -m scripts.generate_openapi
@@ -68,83 +77,121 @@ env:
     feature-parity
     frontend
     lint
+    publish-images
     synthetic-load-smoke
     tenant-isolation
     test
   # Jobs ci.yml gates on a path filter. On a push to `main` that filter has no
   # base commit to diff against and deliberately turns every gate on, so these
   # are `success` on exactly the runs this workflow normally reads. `skipped` is
-  # accepted — and reported as a warning — because a workflow_dispatch aimed at a
-  # branch reads that branch's pull_request run, where the filter can legitimately
-  # have decided a gate was not needed by the change.
+  # accepted — and reported as a warning — because a workflow_dispatch aimed at
+  # an older commit reads that commit's pull_request run, where the filter can
+  # legitimately have decided a gate was not needed by the change.
   CONDITIONAL_CHECKS: >-
     realm-drift
     serving-artifacts
   CI_WORKFLOW_FILE: ci.yml
-  # A push to main starts CI and this workflow at the same moment, so the gate
-  # waits for the run rather than failing the race. It still refuses anything
-  # that is not a completed, successful run for this exact commit.
-  CI_WAIT_SECONDS: "3600"
 
 jobs:
   gate:
-    name: Require a green CI run for this commit
+    name: Resolve the commit and require a green CI run
+    # On the workflow_run path this is the guard that matters: `types:
+    # [completed]` fires for a failed run too, and a deploy triggered by a red
+    # CI run is precisely the thing this workflow exists to prevent. The branch
+    # is asserted as well as filtered, because `on.workflow_run.branches` and
+    # the run's own head_branch are two different facts.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 15
+    # Deliberately without `environment:`. The production environment carries a
+    # required reviewer, and a reviewer should be asked to approve a release
+    # whose CI is already proven green — not asked first and told afterwards
+    # that the commit never passed.
     outputs:
-      run_id: ${{ steps.ci.outputs.run_id }}
-      run_url: ${{ steps.ci.outputs.run_url }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      rollback: ${{ steps.resolve.outputs.rollback }}
     steps:
-      # This job deliberately does not declare `environment: production`. The
-      # environment carries a required reviewer, and a reviewer should be asked
-      # to approve a release whose CI is already proven green — not asked first
-      # and told afterwards that the commit never passed.
-      - name: Resolve and check the CI run for this commit
-        id: ci
+      - name: Resolve the commit this run acts on
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMIT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_ROLLBACK: ${{ inputs.rollback }}
         run: |
           set -euo pipefail
 
-          deadline=$(( $(date +%s) + CI_WAIT_SECONDS ))
-          run_json=""
+          rollback=false
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_ROLLBACK}" = "true" ]; then
+            rollback=true
+          fi
 
-          while :; do
-            runs=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?head_sha=${COMMIT_SHA}&per_page=100")
-            # The API returns runs newest first; a re-run keeps the same id and
-            # bumps run_attempt, so the newest entry of a kind is the one that
-            # counts. A push run is preferred over a pull_request run for the
-            # same commit: ci.yml's path filter has no base commit to diff on a
-            # push and therefore runs every gate, which is the strongest evidence
-            # available for this sha.
-            run_json=$(jq -c '
-              [.workflow_runs[]] as $all
-              | (($all | map(select(.event == "push")) | first) // ($all | first)) // empty' <<<"$runs")
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            sha="${RUN_HEAD_SHA}"
+          elif [ -n "${INPUT_SHA}" ]; then
+            sha="${INPUT_SHA}"
+          else
+            sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')
+          fi
 
-            if [ -z "$run_json" ]; then
-              echo "No ${CI_WORKFLOW_FILE} run found yet for ${COMMIT_SHA}."
-            else
-              status=$(jq -r '.status' <<<"$run_json")
-              if [ "$status" = "completed" ]; then
-                break
-              fi
-              echo "CI run $(jq -r '.id' <<<"$run_json") is ${status}; waiting."
-            fi
+          # This value is interpolated into a remote command line further down.
+          # A 40-character hex string is the only shape that reaches the box.
+          if ! printf '%s' "${sha}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::'${sha}' is not a 40-character commit SHA. Refusing to deploy."
+            exit 1
+          fi
 
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::No completed ${CI_WORKFLOW_FILE} run for ${COMMIT_SHA} within ${CI_WAIT_SECONDS}s. Refusing to deploy."
-              exit 1
-            fi
-            sleep 20
-          done
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "rollback=${rollback}" >> "$GITHUB_OUTPUT"
+          echo "Target commit ${sha} (rollback=${rollback})."
+
+      # A rollback ships nothing new: it returns the box to the release recorded
+      # in /opt/movielens/.release/previous, which passed this same gate when it
+      # was deployed. There is no new commit here to assert anything about, and
+      # blocking a rollback on a CI query is how an incident gets longer.
+      - name: Require every CI check to be green on this commit
+        if: steps.resolve.outputs.rollback != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # No wait loop: on the workflow_run path CI has already concluded by
+          # definition, and a workflow_dispatch aimed at a commit whose CI is
+          # still running should be told so rather than silently held open for
+          # an hour.
+          runs=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?head_sha=${COMMIT_SHA}&per_page=100")
+
+          # The API returns runs newest first; a re-run keeps the same id and
+          # bumps run_attempt, so the newest entry of a kind is the one that
+          # counts. A push run is preferred over a pull_request run for the same
+          # commit: only a push run carries `publish-images`, and ci.yml's path
+          # filter has no base commit to diff on a push and therefore runs every
+          # gate.
+          run_json=$(jq -c '
+            [.workflow_runs[]] as $all
+            | (($all | map(select(.event == "push")) | first) // ($all | first)) // empty' <<<"$runs")
+
+          if [ -z "$run_json" ]; then
+            echo "::error::No ${CI_WORKFLOW_FILE} run exists for ${COMMIT_SHA}. Refusing to deploy."
+            exit 1
+          fi
 
           run_id=$(jq -r '.id' <<<"$run_json")
           run_url=$(jq -r '.html_url' <<<"$run_json")
+          status=$(jq -r '.status' <<<"$run_json")
           conclusion=$(jq -r '.conclusion' <<<"$run_json")
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
-          echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" != "completed" ]; then
+            echo "::error::CI run ${run_id} for ${COMMIT_SHA} is '${status}', not completed. Refusing to deploy. ${run_url}"
+            exit 1
+          fi
 
           if [ "$conclusion" != "success" ]; then
             echo "::error::CI run ${run_id} for ${COMMIT_SHA} concluded '${conclusion}'. Refusing to deploy. ${run_url}"
@@ -200,655 +247,169 @@ jobs:
           echo "Every required CI check is green on ${COMMIT_SHA}."
 
   deploy:
-    name: Deploy to Railway production
+    name: Release to the production host
     needs: gate
     runs-on: ubuntu-latest
-    # The `production` GitHub environment holds RAILWAY_TOKEN / RAILWAY_API_TOKEN
-    # and carries the required reviewer. Because environment secrets are only
-    # readable from a job that declares the environment, the rollback lives in
-    # this job as a `failure()` step rather than in a job of its own — a separate
-    # job would re-enter the approval gate, and a rollback that waits for a
-    # reviewer at 02:00 is not a rollback.
+    # The `production` GitHub environment holds DEPLOY_SSH_KEY and
+    # DEPLOY_KNOWN_HOSTS and carries the required reviewer. The rollback lives
+    # inside infra/deploy/deploy.sh rather than in a second job here for the
+    # same reason: a separate job would re-enter the approval gate, and a
+    # rollback that waits for a reviewer at 02:00 is not a rollback.
     environment: production
-    timeout-minutes: 120
+    timeout-minutes: 60
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      # Ids, not secrets: Railway environment variables on the `production`
-      # GitHub environment. Left unset, they are resolved from a project token.
-      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-      RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-      COMMIT_SHA: ${{ github.sha }}
-      CI_RUN_URL: ${{ needs.gate.outputs.run_url }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
+      DEPLOY_ROLLBACK: ${{ needs.gate.outputs.rollback }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare Railway API access
+      # The key is held by an agent for the life of the job and never written to
+      # disk. The host key is pinned from DEPLOY_KNOWN_HOSTS: an SSH session
+      # that accepts whatever key answers on port 22 authenticates the deploy
+      # user to an unknown server, which for a step that runs shell commands as
+      # a Docker-capable account is the whole game. Disabling host-key checking
+      # appears nowhere in this repository's workflows, and a unit test greps
+      # for the flag that would do it. Pinning a new box means running
+      # `ssh-keyscan` once into the DEPLOY_KNOWN_HOSTS secret.
+      - name: Open an SSH agent holding the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
-          if [ -z "${RAILWAY_API_TOKEN:-}" ] && [ -z "${RAILWAY_TOKEN:-}" ]; then
-            echo "::error::Neither RAILWAY_API_TOKEN nor RAILWAY_TOKEN is set on the production environment."
+          if [ -z "${DEPLOY_HOST}" ] || [ -z "${DEPLOY_USER}" ]; then
+            echo "::error::The production environment must set the DEPLOY_HOST and DEPLOY_USER variables."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_SSH_KEY}" ] || [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::error::The production environment must set the DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS secrets."
             exit 1
           fi
 
-          # The token goes in a curl config file rather than on the command line
-          # so it never appears in an argument list. Actions masks secrets in the
-          # log; this covers the process table as well.
           umask 077
-          if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
-            printf 'header = "Authorization: Bearer %s"\n' "$RAILWAY_API_TOKEN" > "$RUNNER_TEMP/railway-curl.conf"
-            echo "Authenticating to the Railway API with the account/workspace token."
-          else
-            printf 'header = "Project-Access-Token: %s"\n' "$RAILWAY_TOKEN" > "$RUNNER_TEMP/railway-curl.conf"
-            echo "Authenticating to the Railway API with the project token."
+          mkdir -p "${RUNNER_TEMP}/ssh"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${RUNNER_TEMP}/ssh/known_hosts"
+
+          eval "$(ssh-agent -s)" > /dev/null
+          if ! printf '%s\n' "${DEPLOY_SSH_KEY}" | ssh-add - 2> /dev/null; then
+            echo "::error::ssh-add refused DEPLOY_SSH_KEY. It has to be a complete PEM private key, newlines included."
+            exit 1
           fi
-
-          cat > "$RUNNER_TEMP/railway.sh" <<'HELPER'
-          # Railway public API helpers. Sourced by every step below; each step is
-          # a fresh shell, so state that has to survive between them lives in
-          # files under $RUNNER_TEMP rather than in shell variables.
-
-          RAILWAY_CURL_CONFIG="$RUNNER_TEMP/railway-curl.conf"
-          RAILWAY_SERVICES_FILE="$RUNNER_TEMP/railway-services.json"
-          RAILWAY_DEPLOYED_FILE="$RUNNER_TEMP/railway-deployed.txt"
-          RAILWAY_ROLLBACK_FILE="$RUNNER_TEMP/rollback-target.json"
-
-          DEPLOYMENTS_QUERY='query deployments($input: DeploymentListInput!, $first: Int) { deployments(input: $input, first: $first) { edges { node { id status createdAt } } } }'
-          DEPLOYMENT_LOGS_QUERY='query deploymentLogs($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message } }'
-          BUILD_LOGS_QUERY='query buildLogs($deploymentId: String!, $limit: Int) { buildLogs(deploymentId: $deploymentId, limit: $limit) { message } }'
-          PROJECT_QUERY='query project($id: String!) { project(id: $id) { services { edges { node { id name } } } environments { edges { node { id name } } } } }'
-          DOMAINS_QUERY='query domains($projectId: String!, $environmentId: String!, $serviceId: String!) { domains(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) { serviceDomains { domain } customDomains { domain } } }'
-          TCP_PROXIES_QUERY='query tcpProxies($serviceId: String!, $environmentId: String!) { tcpProxies(serviceId: $serviceId, environmentId: $environmentId) { domain proxyPort applicationPort } }'
-          ROLLBACK_MUTATION='mutation deploymentRollback($id: String!) { deploymentRollback(id: $id) { id status } }'
-          # The published schema does not say whether serviceInstanceDeployV2
-          # returns a scalar or an object, and GraphQL rejects the wrong shape
-          # outright — a scalar carrying a selection, or an object without one.
-          # Both forms are sent in turn so a schema this workflow cannot read
-          # cannot strand a release.
-          DEPLOY_MUTATION_SCALAR='mutation deploy($serviceId: String!, $environmentId: String!, $commitSha: String) { serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId, commitSha: $commitSha) }'
-          DEPLOY_MUTATION_OBJECT='mutation deploy($serviceId: String!, $environmentId: String!, $commitSha: String) { serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId, commitSha: $commitSha) { id } }'
-
-          # POST one GraphQL document and print `.data`. A transport failure and a
-          # 200 carrying `.errors` are both failures here; GraphQL reports the
-          # second with HTTP 200, which is exactly the shape a naive caller
-          # mistakes for success.
-          gql() {
-            local query="$1" variables="${2-}" body response
-            [ -n "$variables" ] || variables='{}'
-            body=$(jq -nc --arg q "$query" --argjson v "$variables" '{query: $q, variables: $v}')
-            if ! response=$(curl --silent --show-error --fail-with-body --max-time 60 \
-                --config "$RAILWAY_CURL_CONFIG" \
-                --header 'Content-Type: application/json' \
-                --request POST "$RAILWAY_GRAPHQL_URL" --data "$body"); then
-              echo "Railway API request failed:" >&2
-              printf '%s\n' "$response" >&2
-              return 1
-            fi
-            if jq -e 'has("errors")' >/dev/null 2>&1 <<<"$response"; then
-              echo "Railway API returned errors:" >&2
-              jq -c '.errors' <<<"$response" >&2
-              return 1
-            fi
-            jq -c '.data' <<<"$response"
-          }
-
-          # Resolve the project and environment ids once. A project token can
-          # report its own scope; an account token cannot guess it, so the ids
-          # have to be configured alongside it.
-          railway_resolve_scope() {
-            if [ -z "${RAILWAY_PROJECT_ID:-}" ] || [ -z "${RAILWAY_ENVIRONMENT_ID:-}" ]; then
-              if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
-                echo "::error::RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID must be set when authenticating with an account or workspace token." >&2
-                return 1
-              fi
-              local scope
-              scope=$(gql 'query { projectToken { projectId environmentId } }') || return 1
-              RAILWAY_PROJECT_ID=$(jq -r '.projectToken.projectId' <<<"$scope")
-              RAILWAY_ENVIRONMENT_ID=$(jq -r '.projectToken.environmentId' <<<"$scope")
-            fi
-            [ -n "$RAILWAY_PROJECT_ID" ] && [ "$RAILWAY_PROJECT_ID" != "null" ] || return 1
-            [ -n "$RAILWAY_ENVIRONMENT_ID" ] && [ "$RAILWAY_ENVIRONMENT_ID" != "null" ] || return 1
-            export RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID
-          }
-
-          railway_load_services() {
-            local data
-            data=$(gql "$PROJECT_QUERY" "$(jq -nc --arg id "$RAILWAY_PROJECT_ID" '{id: $id}')") || return 1
-            jq -c '[.project.services.edges[].node | {name, id}]' <<<"$data" > "$RAILWAY_SERVICES_FILE"
-          }
-
-          service_id() {
-            local name="$1" id
-            id=$(jq -r --arg n "$name" 'map(select(.name == $n)) | first | .id // empty' "$RAILWAY_SERVICES_FILE")
-            if [ -z "$id" ]; then
-              echo "::error::No Railway service named '${name}' in project ${RAILWAY_PROJECT_ID}." >&2
-              return 1
-            fi
-            printf '%s' "$id"
-          }
-
-          # Deployments for one service, newest first. `first` is generous enough
-          # that a service redeployed several times today still has a successful
-          # deployment in the window to roll back to.
-          deployment_nodes() {
-            local sid="$1" data
-            data=$(gql "$DEPLOYMENTS_QUERY" "$(jq -nc \
-              --arg p "$RAILWAY_PROJECT_ID" --arg s "$sid" --arg e "$RAILWAY_ENVIRONMENT_ID" \
-              '{input: {projectId: $p, serviceId: $s, environmentId: $e}, first: 25}')") || return 1
-            jq -c '[.deployments.edges[].node] | sort_by(.createdAt) | reverse' <<<"$data"
-          }
-
-          newest_deployment() {
-            local nodes
-            nodes=$(deployment_nodes "$1") || return 1
-            jq -c 'first // {}' <<<"$nodes"
-          }
-
-          newest_successful_deployment() {
-            local nodes
-            nodes=$(deployment_nodes "$1") || return 1
-            jq -c 'map(select(.status == "SUCCESS")) | first // {}' <<<"$nodes"
-          }
-
-          # Deliberately tolerant: a transient API failure while polling reports
-          # UNKNOWN and the caller keeps waiting, rather than aborting a release
-          # that is otherwise going fine.
-          deployment_status() {
-            local sid="$1" id="$2" nodes
-            nodes=$(deployment_nodes "$sid" 2>/dev/null) || nodes=''
-            if [ -z "$nodes" ]; then
-              printf 'UNKNOWN'
-              return 0
-            fi
-            jq -r --arg id "$id" 'map(select(.id == $id)) | first | .status // "UNKNOWN"' <<<"$nodes"
-          }
-
-          deployment_logs() {
-            local id="$1" limit="${2:-1000}"
-            gql "$DEPLOYMENT_LOGS_QUERY" "$(jq -nc --arg d "$id" --argjson l "$limit" \
-              '{deploymentId: $d, limit: $l}')" 2>/dev/null | jq -r '.deploymentLogs[]?.message'
-          }
-
-          build_logs() {
-            local id="$1" limit="${2:-200}"
-            gql "$BUILD_LOGS_QUERY" "$(jq -nc --arg d "$id" --argjson l "$limit" \
-              '{deploymentId: $d, limit: $l}')" 2>/dev/null | jq -r '.buildLogs[]?.message'
-          }
-
-          # A deployment that reaches one of these has stopped moving; anything
-          # else is still building, queued or rolling out.
-          is_terminal_status() {
-            case "$1" in
-              SUCCESS|FAILED|CRASHED|REMOVED|SKIPPED) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          # Deploy this workflow's commit. Nothing here redeploys "whatever the
-          # service last had": the commit whose CI was proven green is the commit
-          # that ships, on every service.
-          deploy_commit() {
-            local sid="$1" sha="$2" vars scalar_error
-            vars=$(jq -nc --arg s "$sid" --arg e "$RAILWAY_ENVIRONMENT_ID" --arg c "$sha" \
-              '{serviceId: $s, environmentId: $e, commitSha: $c}')
-            if scalar_error=$(gql "$DEPLOY_MUTATION_SCALAR" "$vars" 2>&1); then
-              return 0
-            fi
-            if gql "$DEPLOY_MUTATION_OBJECT" "$vars" >/dev/null; then
-              return 0
-            fi
-            printf '%s\n' "$scalar_error" >&2
-            return 1
-          }
-
-          # Trigger a deploy and print the id of the deployment it created. The
-          # id is discovered by watching for a new entry rather than read off the
-          # mutation's response, so the return shape of the mutation is not load
-          # bearing.
-          start_deployment() {
-            local name="$1" sid="$2" sha="$3" previous deadline node id
-            node=$(newest_deployment "$sid") || return 1
-            previous=$(jq -r '.id // empty' <<<"$node")
-            deploy_commit "$sid" "$sha" || return 1
-            deadline=$(( $(date +%s) + 180 ))
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              node=$(newest_deployment "$sid" 2>/dev/null) || node='{}'
-              id=$(jq -r '.id // empty' <<<"$node")
-              if [ -n "$id" ] && [ "$id" != "$previous" ]; then
-                printf '%s' "$id"
-                return 0
-              fi
-              sleep 5
-            done
-            echo "::error::${name}: Railway created no new deployment within 180s of the deploy mutation." >&2
-            return 1
-          }
-
-          record_deployed() {
-            printf '%s\n' "$1" >> "$RAILWAY_DEPLOYED_FILE"
-          }
-
-          dump_failure_logs() {
-            local name="$1" id="$2"
-            echo "----- ${name} build log (tail) -----" >&2
-            build_logs "$id" 100 | tail -n 60 >&2 || true
-            echo "----- ${name} deployment log (tail) -----" >&2
-            deployment_logs "$id" 300 | tail -n 80 >&2 || true
-          }
-
-          # A long-lived service is ready when Railway's deploy-time health check
-          # has passed and the deployment has been swapped in — which is exactly
-          # what SUCCESS means. For `model-server` that health check is
-          # `/healthz`, which answers 503 until the worker is warm, so SUCCESS
-          # there is a real statement about the first request.
-          wait_for_active() {
-            local name="$1" sid="$2" id="$3" timeout="$4"
-            local deadline=$(( $(date +%s) + timeout )) status
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              status=$(deployment_status "$sid" "$id")
-              case "$status" in
-                SUCCESS)
-                  echo "${name}: deployment ${id} is active."
-                  return 0
-                  ;;
-                FAILED|CRASHED|REMOVED|SKIPPED)
-                  echo "::error::${name}: deployment ${id} ended as ${status}." >&2
-                  dump_failure_logs "$name" "$id"
-                  return 1
-                  ;;
-              esac
-              echo "${name}: deployment ${id} is ${status}."
-              sleep 10
-            done
-            echo "::error::${name}: deployment ${id} did not become active within ${timeout}s." >&2
-            dump_failure_logs "$name" "$id"
-            return 1
-          }
-
-          # A job service exits when its work is done, and Railway can present a
-          # clean exit as a stopped or crashed deployment. The sentinel line the
-          # job prints is therefore the pass condition; the deployment state is
-          # only used to stop waiting early.
-          wait_for_sentinel() {
-            local name="$1" sid="$2" id="$3" sentinel="$4" timeout="$5"
-            local deadline=$(( $(date +%s) + timeout )) status logs
-            while :; do
-              logs=$(deployment_logs "$id" 1000 || true)
-              if grep -Eq "(^|[[:space:]])${sentinel}([[:space:]]|$)" <<<"$logs"; then
-                echo "${name}: ${sentinel} found in deployment ${id}."
-                return 0
-              fi
-              status=$(deployment_status "$sid" "$id")
-              if [ "$status" = "FAILED" ] || [ "$status" = "SKIPPED" ]; then
-                echo "::error::${name}: deployment ${id} ended as ${status} without printing ${sentinel}." >&2
-                dump_failure_logs "$name" "$id"
-                return 1
-              fi
-              if [ "$(date +%s)" -ge "$deadline" ]; then
-                if is_terminal_status "$status"; then
-                  echo "::error::${name}: deployment ${id} finished as ${status} and never printed ${sentinel}." >&2
-                else
-                  echo "::error::${name}: no ${sentinel} within ${timeout}s (deployment ${id} is ${status})." >&2
-                fi
-                dump_failure_logs "$name" "$id"
-                return 1
-              fi
-              echo "${name}: waiting for ${sentinel} (deployment ${id} is ${status})."
-              sleep 15
-            done
-          }
-
-          rollback_to() {
-            gql "$ROLLBACK_MUTATION" "$(jq -nc --arg i "$1" '{id: $i}')" >/dev/null
-          }
-
-          # Whether Railway reactivates the recorded deployment or creates a new
-          # one from it is not something the documentation settles, so both are
-          # accepted: the recorded id reporting SUCCESS, or the service's newest
-          # deployment reporting SUCCESS. Neither can be satisfied by the failed
-          # deployment this run just made, which is the case that matters. The
-          # authority on whether the rollback actually works is the verify run
-          # that follows it, not this poll.
-          wait_for_rollback() {
-            local name="$1" sid="$2" id="$3" timeout="$4"
-            local deadline=$(( $(date +%s) + timeout )) status newest
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              status=$(deployment_status "$sid" "$id")
-              if [ "$status" = "SUCCESS" ]; then
-                echo "${name}: deployment ${id} is active again."
-                return 0
-              fi
-              newest=$(newest_deployment "$sid" 2>/dev/null) || newest='{}'
-              if [ "$(jq -r '.status // empty' <<<"$newest")" = "SUCCESS" ]; then
-                echo "${name}: rollback produced deployment $(jq -r '.id' <<<"$newest")."
-                return 0
-              fi
-              echo "${name}: waiting for the rollback to become active (${id} is ${status})."
-              sleep 10
-            done
-            echo "::warning::${name}: the rollback to ${id} did not report active within ${timeout}s." >&2
-            return 1
-          }
-          HELPER
-
-          # Resolve the ids once and hand them to every later step. Doing it here
-          # means a bad token or a missing id fails before anything is deployed.
-          source "$RUNNER_TEMP/railway.sh"
-          railway_resolve_scope
-          railway_load_services
           {
-            echo "RAILWAY_PROJECT_ID=${RAILWAY_PROJECT_ID}"
-            echo "RAILWAY_ENVIRONMENT_ID=${RAILWAY_ENVIRONMENT_ID}"
+            echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+            echo "SSH_AGENT_PID=${SSH_AGENT_PID}"
           } >> "$GITHUB_ENV"
 
-          echo "Railway project ${RAILWAY_PROJECT_ID}, environment ${RAILWAY_ENVIRONMENT_ID}."
-          jq -r '.[] | "  \(.name)  \(.id)"' "$RAILWAY_SERVICES_FILE" | sort
+          echo "Deploy target ${DEPLOY_USER}@${DEPLOY_HOST}, host key pinned from DEPLOY_KNOWN_HOSTS."
 
-      - name: Assert the topology this workflow expects still exists
+      # `git fetch --tags origin && git checkout --detach <sha>` is what makes
+      # the box's checkout match the images: deploy.sh reads compose files,
+      # Makefile targets and the release job from the working tree, so a tree at
+      # a different commit than IMAGE_TAG is a stack described by one release
+      # and running another. Detached on purpose — no branch on the box can
+      # drift, and a rollback is another detached checkout rather than a reset.
+      #
+      # The whole release runs inside deploy.sh: record current→previous, pull
+      # at this SHA, run the release job, `up -d`, `make prod-verify`, and on a
+      # failed verification roll back to the recorded previous release and
+      # verify that. It prints DEPLOY-OK <sha> or ROLLBACK-OK <sha> as its last
+      # word, and this job believes the sentinel rather than the exit code — a
+      # remote command that dies with the connection can exit 0 through some
+      # shells, and "the SSH call returned" is not "the release landed".
+      - name: Run the release on the host
+        id: release
         run: |
           set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
 
-          # Every service this workflow deploys is built from a Dockerfile in
-          # this repository and reads a config file from infra/railway/. A
-          # service that lost its file deploys with dashboard defaults and says
-          # nothing, so the pairing is checked here rather than assumed.
-          for name in keycloak release model-server feature-server api web verify; do
-            service_id "$name" > /dev/null
-            test -f "infra/railway/${name}.json" || {
-              echo "::error::infra/railway/${name}.json is missing; ${name} would deploy with dashboard defaults."
-              exit 1
-            }
-          done
+          if [ "${DEPLOY_ROLLBACK}" = "true" ]; then
+            remote="cd /opt/movielens && infra/deploy/deploy.sh --rollback"
+            sentinel="ROLLBACK-OK"
+          else
+            remote="cd /opt/movielens && git fetch --tags origin && git checkout --detach ${DEPLOY_SHA} && infra/deploy/deploy.sh ${DEPLOY_SHA}"
+            sentinel="DEPLOY-OK"
+          fi
+          echo "sentinel=${sentinel}" >> "$GITHUB_OUTPUT"
 
-          # The private services are named here too: the no_public_sidecar
-          # assertion below is only meaningful if each of them actually exists
-          # under the name it is asserted against.
-          for name in pgbouncer redis postgres-app postgres-keycloak; do
-            service_id "$name" > /dev/null
-          done
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" "${remote}" 2>&1 \
+            | tee "${RUNNER_TEMP}/release.log"
+          ssh_status=${PIPESTATUS[0]}
+          set -e
 
-      # Captured before anything changes, published as an artifact and printed
-      # into the job summary. This is the rollback target: reconstructing it
-      # during an incident is exactly the work an incident has no time for.
-      - name: Record the current deployments as the rollback target
+          fail() {
+            echo "::error::$1"
+            {
+              echo "### Release failed"
+              echo ""
+              echo "$1"
+              echo ""
+              echo '```'
+              tail -n 60 "${RUNNER_TEMP}/release.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          # Checked before the sentinel is looked for, because it is the one
+          # failure with a specific thing to say. ROLLBACK-OK during a deploy
+          # means deploy.sh could not verify the new release and put the
+          # previous one back: the box is serving and the run still has to be
+          # red, or somebody reads a green tick and believes the commit shipped.
+          if [ "${sentinel}" = "DEPLOY-OK" ] \
+            && grep -Eq "(^|[[:space:]])ROLLBACK-OK([[:space:]]|$)" "${RUNNER_TEMP}/release.log"; then
+            fail "${DEPLOY_SHA} failed verification and the host rolled back to its previous release. The site is up on the previous release; this commit did not ship."
+          fi
+
+          if ! grep -Eq "(^|[[:space:]])${sentinel}([[:space:]]|$)" "${RUNNER_TEMP}/release.log"; then
+            fail "The host never printed ${sentinel}; the release did not complete (ssh exit ${ssh_status})."
+          fi
+          if [ "${ssh_status}" -ne 0 ]; then
+            fail "The host printed ${sentinel} but the release command exited ${ssh_status}."
+          fi
+
+          echo "${sentinel} for ${DEPLOY_SHA}."
+
+      # Read back even when the release failed — that is the run whose rollback
+      # target somebody actually needs. deploy.sh records current→previous
+      # before it pulls anything, so `previous` names the release that was
+      # serving when this run started whether or not the new one landed.
+      - name: Upload the recorded rollback target
+        if: always()
+        env:
+          RELEASE_SENTINEL: ${{ steps.release.outputs.sentinel }}
         run: |
           set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
+          mkdir -p artifacts/rollback-target
 
-          record='[]'
-          for name in keycloak release model-server feature-server api web verify; do
-            sid=$(service_id "$name")
-            current=$(newest_deployment "$sid")
-            target=$(newest_successful_deployment "$sid")
-            record=$(jq -c \
-              --arg name "$name" --arg sid "$sid" \
-              --argjson current "$current" --argjson target "$target" \
-              '. + [{
-                 service: $name,
-                 service_id: $sid,
-                 current_deployment_id: ($current.id // null),
-                 current_status: ($current.status // null),
-                 rollback_deployment_id: ($target.id // null),
-                 rollback_created_at: ($target.createdAt // null)
-               }]' <<<"$record")
-          done
-
-          jq -n \
-            --arg commit "$COMMIT_SHA" \
-            --arg project "$RAILWAY_PROJECT_ID" \
-            --arg environment "$RAILWAY_ENVIRONMENT_ID" \
-            --arg recorded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson services "$record" \
-            '{commit: $commit, project_id: $project, environment_id: $environment, recorded_at: $recorded_at, services: $services}' \
-            > "$RAILWAY_ROLLBACK_FILE"
+          recorded=$(ssh -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+            -o BatchMode=yes -o ConnectTimeout=20 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'cd /opt/movielens/.release 2>/dev/null && { printf "current=%s\n" "$(cat current 2>/dev/null)"; printf "previous=%s\n" "$(cat previous 2>/dev/null)"; }' \
+            || echo "unreadable=true")
 
           {
-            echo "### Rollback target recorded before deploying \`${COMMIT_SHA}\`"
-            echo
-            echo "| Service | Current deployment | Status | Rollback target |"
-            echo "| --- | --- | --- | --- |"
-            jq -r '.services[] | "| `\(.service)` | `\(.current_deployment_id // "none")` | \(.current_status // "-") | `\(.rollback_deployment_id // "none")` |"' \
-              "$RAILWAY_ROLLBACK_FILE"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "attempted=${DEPLOY_SHA}"
+            echo "rollback_requested=${DEPLOY_ROLLBACK}"
+            echo "sentinel=${RELEASE_SENTINEL}"
+            printf '%s\n' "${recorded}"
+          } | tee artifacts/rollback-target/release-state.txt >> "$GITHUB_STEP_SUMMARY"
 
-          # A service with no successful deployment in the window has no rollback
-          # target. That is normal on a first deploy and worth saying out loud
-          # rather than discovering while rolling back.
-          jq -r '.services[] | select(.rollback_deployment_id == null) | .service' \
-            "$RAILWAY_ROLLBACK_FILE" \
-            | while read -r name; do
-                echo "::warning::${name} has no successful deployment to roll back to."
-              done
-
-      - name: Upload the rollback target
+      - name: Publish the rollback target
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rollback-target
-          path: ${{ runner.temp }}/rollback-target.json
+          path: artifacts/rollback-target/
           if-no-files-found: warn
 
-      # V-2. `feature-server` has no authentication of any kind and the model
-      # sidecar's /healthz is unauthenticated, so "we won't attach a domain" is
-      # checked on every release rather than remembered.
-      - name: Assert no sidecar or data store is publicly reachable
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-
-          violations=0
-          for name in api model-server feature-server pgbouncer redis postgres-app postgres-keycloak; do
-            sid=$(service_id "$name")
-
-            domains=$(gql "$DOMAINS_QUERY" "$(jq -nc \
-              --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_ENVIRONMENT_ID" --arg s "$sid" \
-              '{projectId: $p, environmentId: $e, serviceId: $s}')")
-            attached=$(jq -r '[.domains.serviceDomains[]?.domain, .domains.customDomains[]?.domain] | join(", ")' <<<"$domains")
-
-            proxies=$(gql "$TCP_PROXIES_QUERY" "$(jq -nc \
-              --arg s "$sid" --arg e "$RAILWAY_ENVIRONMENT_ID" \
-              '{serviceId: $s, environmentId: $e}')")
-            proxied=$(jq -r '[.tcpProxies[]? | "\(.domain):\(.proxyPort)"] | join(", ")' <<<"$proxies")
-
-            if [ -n "$attached" ]; then
-              echo "::error::${name} has an attached domain: ${attached}"
-              violations=$((violations + 1))
-            fi
-            if [ -n "$proxied" ]; then
-              echo "::error::${name} has a TCP proxy enabled: ${proxied}"
-              violations=$((violations + 1))
-            fi
-            if [ -z "$attached" ] && [ -z "$proxied" ]; then
-              echo "${name}: no domain, no TCP proxy."
-            fi
-          done
-
-          if [ "$violations" -ne 0 ]; then
-            echo "::error::no_public_sidecar failed; refusing to deploy."
-            exit 1
-          fi
-
-      # From here on the release is mutating, and a failure rolls back whatever
-      # this run has already promoted.
-      - name: Deploy keycloak
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id keycloak)
-          id=$(start_deployment keycloak "$sid" "$COMMIT_SHA")
-          record_deployed "keycloak $sid $id"
-          wait_for_active keycloak "$sid" "$id" 1200
-
-      # Migrations, the persona seed and every preflight assertion. The job
-      # prints RELEASE-BOOTSTRAP-OK <revision> as its final line and Railway may
-      # show its clean exit as stopped, so the log is what is read.
-      - name: Run the release job
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id release)
-          id=$(start_deployment release "$sid" "$COMMIT_SHA")
-          record_deployed "release $sid $id"
-          wait_for_sentinel release "$sid" "$id" RELEASE-BOOTSTRAP-OK 2400
-
-      # The pre-deploy command materialises features and asserts the applied
-      # registry against the baked one; the health check then waits for a warm
-      # worker. A model-server that will not go healthy with "no Feast event
-      # timestamp" in its log needs a materialize, not a rollback.
-      - name: Deploy model-server
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id model-server)
-          id=$(start_deployment model-server "$sid" "$COMMIT_SHA")
-          record_deployed "model-server $sid $id"
-          wait_for_active model-server "$sid" "$id" 2400
-
-      - name: Deploy feature-server
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id feature-server)
-          id=$(start_deployment feature-server "$sid" "$COMMIT_SHA")
-          record_deployed "feature-server $sid $id"
-          wait_for_active feature-server "$sid" "$id" 1800
-
-      - name: Deploy api
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id api)
-          id=$(start_deployment api "$sid" "$COMMIT_SHA")
-          record_deployed "api $sid $id"
-          wait_for_active api "$sid" "$id" 1200
-
-      - name: Deploy web
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id web)
-          id=$(start_deployment web "$sid" "$COMMIT_SHA")
-          record_deployed "web $sid $id"
-          wait_for_active web "$sid" "$id" 1800
-
-      # The post-deploy verification matrix. `--all` prints VERIFY-OK; a partial
-      # run prints VERIFY-SUBSET-OK, which the sentinel match deliberately does
-      # not accept.
-      - name: Verify the deployment
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-          sid=$(service_id verify)
-          id=$(start_deployment verify "$sid" "$COMMIT_SHA")
-          record_deployed "verify $sid $id"
-          wait_for_sentinel verify "$sid" "$id" VERIFY-OK 1800
-
-      # Reverse order over the services this run actually promoted, to the ids
-      # recorded before it started. `keycloak` and `release` are deliberately
-      # excluded: rolling back the identity provider is an identity migration,
-      # and re-running an older bootstrap against a newer database is how one
-      # incident becomes two.
-      - name: Roll back to the recorded deployments
-        if: failure()
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
-
-          if [ ! -s "$RAILWAY_DEPLOYED_FILE" ]; then
-            echo "Nothing was deployed in this run; there is nothing to roll back."
-            echo "### Rollback: not needed — the run failed before deploying anything" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          {
-            echo "### Rollback"
-            echo ""
-            echo "| Service | Rolled back to | Outcome |"
-            echo "| --- | --- | --- |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          failures=0
-          for name in web api feature-server model-server; do
-            grep -q "^${name} " "$RAILWAY_DEPLOYED_FILE" || continue
-
-            target=$(jq -r --arg n "$name" \
-              '.services[] | select(.service == $n) | .rollback_deployment_id // empty' \
-              "$RAILWAY_ROLLBACK_FILE")
-            if [ -z "$target" ]; then
-              echo "::error::${name}: no recorded deployment to roll back to."
-              echo "| \`${name}\` | none recorded | **not rolled back** |" >> "$GITHUB_STEP_SUMMARY"
-              failures=$((failures + 1))
-              continue
-            fi
-
-            sid=$(service_id "$name")
-            echo "Rolling ${name} back to ${target}."
-            # Railway only rolls back to a deployment with canRollback: true, so
-            # a refusal here is reported per service rather than aborting the
-            # rest of the sequence — the remaining services still need reverting.
-            if rollback_to "$target"; then
-              if wait_for_rollback "$name" "$sid" "$target" 900; then
-                echo "| \`${name}\` | \`${target}\` | rolled back |" >> "$GITHUB_STEP_SUMMARY"
-              else
-                echo "| \`${name}\` | \`${target}\` | **rollback did not become active** |" >> "$GITHUB_STEP_SUMMARY"
-                failures=$((failures + 1))
-              fi
-            else
-              echo "::error::${name}: deploymentRollback to ${target} was refused."
-              echo "| \`${name}\` | \`${target}\` | **refused** |" >> "$GITHUB_STEP_SUMMARY"
-              failures=$((failures + 1))
-            fi
-          done
-
-          # Re-verify after reverting. Its result is reported and does not change
-          # this job's conclusion: the run has already failed, and the reason to
-          # run verify here is to say whether the rollback restored a working
-          # deployment or left one that still needs a human.
-          #
-          # This deploys `verify` at the *new* commit against services that are
-          # back on the old one, rather than rolling `verify` back too. Rolling it
-          # back would reactivate a deployment whose log already contains a
-          # VERIFY-OK from when it last ran, and a sentinel grep cannot tell that
-          # apart from a fresh pass — a false green in exactly the situation where
-          # a false green is most expensive. The cost of this choice is a possible
-          # false *alarm* if the new matrix asserts something the old code does not
-          # provide, and an alarm is the safe direction to be wrong in.
-          sid=$(service_id verify)
-          if id=$(start_deployment verify "$sid" "$COMMIT_SHA") \
-             && wait_for_sentinel verify "$sid" "$id" VERIFY-OK 1800; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Post-rollback verify: **VERIFY-OK**." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Post-rollback verify: **failed** — the deployment needs a human." >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Post-rollback verify did not print VERIFY-OK."
-            failures=$((failures + 1))
-          fi
-
-          if [ "$failures" -ne 0 ]; then
-            echo "::error::Rollback did not complete cleanly; see the summary."
-          fi
-          # This step never masks the original failure: the job is already in a
-          # failed state and stays there whatever the rollback reports.
-
-      - name: Summarise the release
+      - name: Close the SSH agent
         if: always()
-        run: |
-          set -euo pipefail
-          {
-            echo "### Release ${COMMIT_SHA}"
-            echo ""
-            echo "- CI run: ${CI_RUN_URL}"
-            echo "- Result: ${{ job.status }}"
-            if [ -s "$RAILWAY_DEPLOYED_FILE" ]; then
-              echo "- Deployed in this run:"
-              while read -r name _service_id id; do
-                echo "  - \`${name}\` → deployment \`${id}\` (service \`${_service_id}\`)"
-              done < "$RAILWAY_DEPLOYED_FILE"
-            else
-              echo "- Deployed in this run: nothing"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: ssh-agent -k > /dev/null 2>&1 || true

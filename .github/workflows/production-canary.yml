@@ -1,25 +1,29 @@
 name: Production canary
 
-# The only continuous health signal this deployment has. Railway's health checks
-# are deploy-time only: it polls the path until it answers 200, swaps the new
-# deployment in, and then stops checking. Nothing after that moment notices a
-# model sidecar that lost its Redis, an expired client secret, or a warm persona
-# that has quietly started being served the popularity fallback at HTTP 200.
+# The only continuous health signal this deployment has. A single-node stack has
+# no deploy-time health check that keeps watching: once `docker compose up -d
+# --wait` has seen every container healthy, nothing notices a model sidecar that
+# lost its Redis, an expired client secret, or a warm persona that has quietly
+# started being served the popularity fallback at HTTP 200.
 #
-# Two probes, half an hour apart:
+# So every thirty minutes this runs `make prod-verify` on the box over SSH —
+# `python -m src.release.verify --all` in the private `verify` service followed
+# by the non-latency reliability harness. That is the whole post-deploy matrix,
+# including tenant isolation, the learned-path assertion and the audit SLI
+# rollup, and it is what decides the run.
 #
-#   verify     `python -m src.release.verify --all` from the private `verify`
-#              service — the whole post-deploy matrix, including tenant
-#              isolation, the learned-path assertion and the audit SLI rollup.
-#              This is what decides the run.
-#   loadcheck  V-10: 5 arrivals/second for 60 seconds of GET-only traffic across
-#              warm and cold personas. Advisory here — reported, never a verdict.
-#              The SLO's only authority stays the pinned k6 gate in CI, per
-#              ADR 0010 and synthetic/load/canary_thresholds.js.
+# It ships nothing. There is no checkout here, no `git fetch`, no image pull and
+# no tag to pull one at: a canary must measure what is running, never change it.
 #
-# Both are triggered with `serviceInstanceRedeploy`, which redeploys a service's
-# latest deployment using its existing commit. That is exactly the canary
-# semantic: a canary must measure what is running, never ship anything.
+# `make prod-load` is *not* on the schedule. The production-mode rehearsal
+# measured what happens when it is: at ADR 0014's shipped defaults a single
+# keep-alive subject at 5 requests/second had 37.9% of its requests refused,
+# because keep-alive pins a connection to one worker and the effective
+# single-client limit is one worker's bucket rather than workers × limit. A
+# canary that reports a red loadcheck every half hour for a limiter behaving
+# exactly as configured teaches everyone to ignore the canary. It stays
+# available on demand, and stays advisory when it runs: the SLO's only authority
+# is the pinned k6 gate in CI (ADR 0010).
 
 on:
   schedule:
@@ -28,280 +32,102 @@ on:
   workflow_dispatch:
     inputs:
       run_loadcheck:
-        description: "Also run the advisory V-10 loadcheck"
+        description: "Also run the advisory `make prod-load` (rate-limit refusals expected — see ADR 0014)."
         type: boolean
-        default: true
+        default: false
 
-# Shared with deploy-production.yml on purpose: a canary that redeploys `verify`
-# while a release is halfway through its ordered sequence would read the wrong
-# deployment's log and report on a system that is mid-change.
+# Shared with deploy-production.yml on purpose: a canary that runs the verify
+# matrix while a release is halfway through would report on a system that is
+# mid-change, and its `verify` container would be talking to a half-restarted
+# stack. Queued runs wait rather than cancel.
 concurrency:
-  group: production-railway
+  group: production-hetzner
   cancel-in-progress: false
 
 permissions:
   contents: read
 
-env:
-  RAILWAY_GRAPHQL_URL: https://backboard.railway.com/graphql/v2
-
 jobs:
   canary:
     name: Verify the running deployment
     runs-on: ubuntu-latest
-    # A second GitHub environment holding the same Railway token values as
+    # A second GitHub environment holding the same DEPLOY_* values as
     # `production` but with no protection rules. `production` carries a required
     # reviewer, and a reviewer prompt on a job that fires every thirty minutes
     # means no canary at all — the runs would queue for approval and be
-    # superseded before anyone read them. The tokens are the same; what differs
-    # is that this environment gates nothing, which is only acceptable because
-    # every operation below redeploys an existing deployment and changes no code.
+    # superseded before anyone read them. What differs is only that this
+    # environment gates nothing, which is acceptable because every command below
+    # reads the running stack and changes nothing.
     environment: production-canary
     timeout-minutes: 45
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-      RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
     steps:
-      - name: Prepare Railway API access
+      - name: Open an SSH agent holding the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
-          if [ -z "${RAILWAY_API_TOKEN:-}" ] && [ -z "${RAILWAY_TOKEN:-}" ]; then
-            echo "::error::Neither RAILWAY_API_TOKEN nor RAILWAY_TOKEN is set on the production-canary environment."
+          if [ -z "${DEPLOY_HOST}" ] || [ -z "${DEPLOY_USER}" ]; then
+            echo "::error::The production-canary environment must set the DEPLOY_HOST and DEPLOY_USER variables."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_SSH_KEY}" ] || [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::error::The production-canary environment must set the DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS secrets."
             exit 1
           fi
 
-          # An account or workspace token authenticates with `Authorization:
-          # Bearer`; a project token uses `Project-Access-Token` and is scoped to
-          # one environment. The token lives in a curl config file rather than on
-          # a command line so it never reaches an argument list.
           umask 077
-          if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
-            printf 'header = "Authorization: Bearer %s"\n' "$RAILWAY_API_TOKEN" > "$RUNNER_TEMP/railway-curl.conf"
-          else
-            printf 'header = "Project-Access-Token: %s"\n' "$RAILWAY_TOKEN" > "$RUNNER_TEMP/railway-curl.conf"
+          mkdir -p "${RUNNER_TEMP}/ssh"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${RUNNER_TEMP}/ssh/known_hosts"
+
+          eval "$(ssh-agent -s)" > /dev/null
+          if ! printf '%s\n' "${DEPLOY_SSH_KEY}" | ssh-add - 2> /dev/null; then
+            echo "::error::ssh-add refused DEPLOY_SSH_KEY. It has to be a complete PEM private key, newlines included."
+            exit 1
           fi
-
-          cat > "$RUNNER_TEMP/railway.sh" <<'HELPER'
-          # Railway public API helpers for the canary. A trimmed copy of the set
-          # in deploy-production.yml: this workflow never deploys a commit and
-          # never rolls anything back, so it carries neither.
-
-          RAILWAY_CURL_CONFIG="$RUNNER_TEMP/railway-curl.conf"
-          RAILWAY_SERVICES_FILE="$RUNNER_TEMP/railway-services.json"
-
-          DEPLOYMENTS_QUERY='query deployments($input: DeploymentListInput!, $first: Int) { deployments(input: $input, first: $first) { edges { node { id status createdAt } } } }'
-          DEPLOYMENT_LOGS_QUERY='query deploymentLogs($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message } }'
-          PROJECT_QUERY='query project($id: String!) { project(id: $id) { services { edges { node { id name } } } } }'
-          # The published schema does not say whether serviceInstanceRedeploy
-          # returns a scalar or an object, and GraphQL rejects the wrong shape
-          # outright. Both forms are sent in turn.
-          REDEPLOY_MUTATION_SCALAR='mutation redeploy($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }'
-          REDEPLOY_MUTATION_OBJECT='mutation redeploy($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) { id } }'
-
-          gql() {
-            local query="$1" variables="${2-}" body response
-            [ -n "$variables" ] || variables='{}'
-            body=$(jq -nc --arg q "$query" --argjson v "$variables" '{query: $q, variables: $v}')
-            if ! response=$(curl --silent --show-error --fail-with-body --max-time 60 \
-                --config "$RAILWAY_CURL_CONFIG" \
-                --header 'Content-Type: application/json' \
-                --request POST "$RAILWAY_GRAPHQL_URL" --data "$body"); then
-              echo "Railway API request failed:" >&2
-              printf '%s\n' "$response" >&2
-              return 1
-            fi
-            if jq -e 'has("errors")' >/dev/null 2>&1 <<<"$response"; then
-              echo "Railway API returned errors:" >&2
-              jq -c '.errors' <<<"$response" >&2
-              return 1
-            fi
-            jq -c '.data' <<<"$response"
-          }
-
-          railway_resolve_scope() {
-            if [ -z "${RAILWAY_PROJECT_ID:-}" ] || [ -z "${RAILWAY_ENVIRONMENT_ID:-}" ]; then
-              if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
-                echo "::error::RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID must be set when authenticating with an account or workspace token." >&2
-                return 1
-              fi
-              local scope
-              scope=$(gql 'query { projectToken { projectId environmentId } }') || return 1
-              RAILWAY_PROJECT_ID=$(jq -r '.projectToken.projectId' <<<"$scope")
-              RAILWAY_ENVIRONMENT_ID=$(jq -r '.projectToken.environmentId' <<<"$scope")
-            fi
-            [ -n "$RAILWAY_PROJECT_ID" ] && [ "$RAILWAY_PROJECT_ID" != "null" ] || return 1
-            [ -n "$RAILWAY_ENVIRONMENT_ID" ] && [ "$RAILWAY_ENVIRONMENT_ID" != "null" ] || return 1
-            export RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID
-          }
-
-          railway_load_services() {
-            local data
-            data=$(gql "$PROJECT_QUERY" "$(jq -nc --arg id "$RAILWAY_PROJECT_ID" '{id: $id}')") || return 1
-            jq -c '[.project.services.edges[].node | {name, id}]' <<<"$data" > "$RAILWAY_SERVICES_FILE"
-          }
-
-          service_id() {
-            local name="$1" id
-            id=$(jq -r --arg n "$name" 'map(select(.name == $n)) | first | .id // empty' "$RAILWAY_SERVICES_FILE")
-            if [ -z "$id" ]; then
-              echo "::error::No Railway service named '${name}' in project ${RAILWAY_PROJECT_ID}." >&2
-              return 1
-            fi
-            printf '%s' "$id"
-          }
-
-          deployment_nodes() {
-            local sid="$1" data
-            data=$(gql "$DEPLOYMENTS_QUERY" "$(jq -nc \
-              --arg p "$RAILWAY_PROJECT_ID" --arg s "$sid" --arg e "$RAILWAY_ENVIRONMENT_ID" \
-              '{input: {projectId: $p, serviceId: $s, environmentId: $e}, first: 25}')") || return 1
-            jq -c '[.deployments.edges[].node] | sort_by(.createdAt) | reverse' <<<"$data"
-          }
-
-          newest_deployment() {
-            local nodes
-            nodes=$(deployment_nodes "$1") || return 1
-            jq -c 'first // {}' <<<"$nodes"
-          }
-
-          deployment_status() {
-            local sid="$1" id="$2" nodes
-            nodes=$(deployment_nodes "$sid" 2>/dev/null) || nodes=''
-            if [ -z "$nodes" ]; then
-              printf 'UNKNOWN'
-              return 0
-            fi
-            jq -r --arg id "$id" 'map(select(.id == $id)) | first | .status // "UNKNOWN"' <<<"$nodes"
-          }
-
-          deployment_logs() {
-            local id="$1" limit="${2:-1000}"
-            gql "$DEPLOYMENT_LOGS_QUERY" "$(jq -nc --arg d "$id" --argjson l "$limit" \
-              '{deploymentId: $d, limit: $l}')" 2>/dev/null | jq -r '.deploymentLogs[]?.message'
-          }
-
-          is_terminal_status() {
-            case "$1" in
-              SUCCESS|FAILED|CRASHED|REMOVED|SKIPPED) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          redeploy_latest() {
-            local sid="$1" vars scalar_error
-            vars=$(jq -nc --arg s "$sid" --arg e "$RAILWAY_ENVIRONMENT_ID" \
-              '{serviceId: $s, environmentId: $e}')
-            if scalar_error=$(gql "$REDEPLOY_MUTATION_SCALAR" "$vars" 2>&1); then
-              return 0
-            fi
-            if gql "$REDEPLOY_MUTATION_OBJECT" "$vars" >/dev/null; then
-              return 0
-            fi
-            printf '%s\n' "$scalar_error" >&2
-            return 1
-          }
-
-          # Trigger a redeploy and print the id of the deployment it created. The
-          # id is discovered by watching for a new entry rather than read off the
-          # mutation's response, so the mutation's return shape is not load
-          # bearing.
-          start_redeploy() {
-            local name="$1" sid="$2" previous deadline node id
-            node=$(newest_deployment "$sid") || return 1
-            previous=$(jq -r '.id // empty' <<<"$node")
-            redeploy_latest "$sid" || return 1
-            deadline=$(( $(date +%s) + 180 ))
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              node=$(newest_deployment "$sid" 2>/dev/null) || node='{}'
-              id=$(jq -r '.id // empty' <<<"$node")
-              if [ -n "$id" ] && [ "$id" != "$previous" ]; then
-                printf '%s' "$id"
-                return 0
-              fi
-              sleep 5
-            done
-            echo "::error::${name}: Railway created no new deployment within 180s of the redeploy mutation." >&2
-            return 1
-          }
-
-          # A job exits when its work is done and Railway can present a clean
-          # exit as stopped or crashed, so the sentinel line the job prints is the
-          # pass condition and the deployment state only stops the wait early.
-          wait_for_sentinel() {
-            local name="$1" sid="$2" id="$3" sentinel="$4" timeout="$5"
-            local deadline=$(( $(date +%s) + timeout )) status logs
-            while :; do
-              logs=$(deployment_logs "$id" 1000 || true)
-              if grep -Eq "(^|[[:space:]])${sentinel}([[:space:]]|$)" <<<"$logs"; then
-                echo "${name}: ${sentinel} found in deployment ${id}."
-                return 0
-              fi
-              status=$(deployment_status "$sid" "$id")
-              if [ "$status" = "FAILED" ] || [ "$status" = "SKIPPED" ]; then
-                echo "::error::${name}: deployment ${id} ended as ${status} without printing ${sentinel}." >&2
-                printf '%s\n' "$logs" | tail -n 80 >&2
-                return 1
-              fi
-              if [ "$(date +%s)" -ge "$deadline" ]; then
-                echo "::error::${name}: no ${sentinel} within ${timeout}s (deployment ${id} is ${status})." >&2
-                printf '%s\n' "$logs" | tail -n 80 >&2
-                return 1
-              fi
-              sleep 15
-            done
-          }
-
-          wait_for_exit() {
-            local name="$1" sid="$2" id="$3" timeout="$4"
-            local deadline=$(( $(date +%s) + timeout )) status
-            while [ "$(date +%s)" -lt "$deadline" ]; do
-              status=$(deployment_status "$sid" "$id")
-              if is_terminal_status "$status"; then
-                printf '%s' "$status"
-                return 0
-              fi
-              sleep 10
-            done
-            printf 'TIMEOUT'
-            return 0
-          }
-          HELPER
-
-          source "$RUNNER_TEMP/railway.sh"
-          railway_resolve_scope
-          railway_load_services
           {
-            echo "RAILWAY_PROJECT_ID=${RAILWAY_PROJECT_ID}"
-            echo "RAILWAY_ENVIRONMENT_ID=${RAILWAY_ENVIRONMENT_ID}"
+            echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+            echo "SSH_AGENT_PID=${SSH_AGENT_PID}"
           } >> "$GITHUB_ENV"
 
       # `--all` prints VERIFY-OK; a partial run prints VERIFY-SUBSET-OK, which
       # this match deliberately does not accept — a canary that silently ran half
-      # the matrix is worse than one that failed.
+      # the matrix is worse than one that failed. The grep is the check rather
+      # than the exit status alone, because the verify container's own exit code
+      # travels back through SSH and a broken pipe is indistinguishable from a
+      # clean zero.
       - name: Run the verification matrix
         id: verify
         run: |
           set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
 
-          sid=$(service_id verify)
-          id=$(start_redeploy verify "$sid")
-          echo "deployment_id=${id}" >> "$GITHUB_OUTPUT"
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'cd /opt/movielens && make prod-verify' 2>&1 \
+            | tee "${RUNNER_TEMP}/verify.log"
+          ssh_status=${PIPESTATUS[0]}
+          set -e
 
-          if wait_for_sentinel verify "$sid" "$id" VERIFY-OK 1500; then
+          if [ "${ssh_status}" -eq 0 ] \
+            && grep -Eq "(^|[[:space:]])VERIFY-OK([[:space:]]|$)" "${RUNNER_TEMP}/verify.log"; then
             {
               echo "### Canary verify: VERIFY-OK"
               echo ""
-              echo "Deployment \`${id}\`."
-              echo ""
               # The audit SLI line (V-9) is one JSON object per run and is the
-              # only place the last 24 hours of production latency, learned-vs-
-              # fallback ratio and fallback reasons are visible at all.
+              # only place the last 24 hours of production latency,
+              # learned-vs-fallback ratio and fallback reasons are visible at all.
               echo '```'
-              deployment_logs "$id" 1000 | grep -F 'recommendation_audit_sli' | tail -n 1 \
+              grep -F 'recommendation_audit_sli' "${RUNNER_TEMP}/verify.log" | tail -n 1 \
                 || echo "(no audit SLI line in this run)"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
@@ -309,79 +135,80 @@ jobs:
             {
               echo "### Canary verify: FAILED"
               echo ""
-              echo "Deployment \`${id}\` did not print VERIFY-OK."
+              echo "\`make prod-verify\` exited ${ssh_status} without a clean VERIFY-OK."
               echo ""
               echo '```'
-              deployment_logs "$id" 1000 | tail -n 60
+              tail -n 60 "${RUNNER_TEMP}/verify.log"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      # V-10, advisory. k6's own thresholds (checks rate==1, http_req_failed
-      # rate==0, and the warm-traffic learned assertion) still decide whether the
-      # loadcheck deployment exits clean, and a failure is surfaced as a warning
-      # here rather than as a verdict — the deployment plan scopes this row as
-      # recorded-with-no-verdict, and `verify` covers the same correctness ground
-      # as the run that decides. Promoting it to a gate is one `exit 1` below,
-      # and should be a deliberate decision rather than a drift.
+      # Advisory, and only ever on demand. `make prod-load` runs the `loadcheck`
+      # service: k6's own thresholds (checks rate == 1, http_req_failed rate == 0
+      # and the warm-traffic learned assertion) decide whether that container
+      # exits clean, and a failure surfaces here as a warning rather than a
+      # verdict. Promoting it to a gate is one `exit 1` below and should be a
+      # deliberate decision — but not before the shared rate-limit bucket ADR
+      # 0014 names as the follow-up exists, because until then this profile's
+      # refusals measure the limiter and not the service.
       - name: Run the advisory loadcheck
-        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.run_loadcheck) }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_loadcheck }}
         run: |
           set -euo pipefail
-          source "$RUNNER_TEMP/railway.sh"
 
-          sid=$(service_id loadcheck)
-          id=$(start_redeploy loadcheck "$sid")
-          status=$(wait_for_exit loadcheck "$sid" "$id" 900)
-          logs=$(deployment_logs "$id" 1000 || true)
+          set +e
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${RUNNER_TEMP}/ssh/known_hosts" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'cd /opt/movielens && make prod-load' 2>&1 \
+            | tee "${RUNNER_TEMP}/loadcheck.log"
+          load_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "### Canary loadcheck (advisory)"
+            echo ""
+            echo "\`make prod-load\` exited ${load_status}."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           # handleSummary prints one pretty-printed JSON object as the final
           # thing k6 writes, so the last balanced `{` … `}` block in the log is
           # the summary. Anything that fails to parse is reported as such rather
           # than guessed at.
-          summary=$(printf '%s\n' "$logs" | awk '
+          summary=$(awk '
             /^\{$/ { buf = $0 "\n"; inblock = 1; next }
             inblock { buf = buf $0 "\n" }
             /^\}$/ { if (inblock) { last = buf; inblock = 0 } }
-            END { printf "%s", last }')
+            END { printf "%s", last }' "${RUNNER_TEMP}/loadcheck.log")
 
-          {
-            echo "### Canary loadcheck (advisory)"
-            echo ""
-            echo "Deployment \`${id}\` ended as \`${status}\`."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -n "$summary" ] && jq -e . >/dev/null 2>&1 <<<"$summary"; then
+          if [ -n "${summary}" ] && jq -e . > /dev/null 2>&1 <<<"${summary}"; then
             {
               echo "| profile | p50 ms | p95 ms | p99 ms | rps | checks | errors |"
               echo "| --- | --- | --- | --- | --- | --- | --- |"
-              jq -r '"| \(.profile) | \(.latency_ms.p50) | \(.latency_ms.p95) | \(.latency_ms.p99) | \(.throughput_rps) | \(.check_rate) | \(.error_rate) |"' <<<"$summary"
+              jq -r '"| \(.profile) | \(.latency_ms.p50) | \(.latency_ms.p95) | \(.latency_ms.p99) | \(.throughput_rps) | \(.check_rate) | \(.error_rate) |"' <<<"${summary}"
               echo ""
               echo "Latency is recorded with no verdict. The SLO's only authority is the pinned k6 gate in CI (ADR 0010)."
             } >> "$GITHUB_STEP_SUMMARY"
 
-            checks=$(jq -r '.check_rate // 0' <<<"$summary")
-            errors=$(jq -r '.error_rate // 1' <<<"$summary")
-            silent=$(jq -r '.silent_learned_fallbacks // 0' <<<"$summary")
-            if [ "$checks" != "1" ] || [ "$errors" != "0" ]; then
-              echo "::warning::Loadcheck correctness is degraded: check rate ${checks}, error rate ${errors}."
-            fi
-            if [ "$silent" != "0" ]; then
+            silent=$(jq -r '.silent_learned_fallbacks // 0' <<<"${summary}")
+            if [ "${silent}" != "0" ]; then
               echo "::warning::${silent} warm responses degraded to a non-learned policy at HTTP 200."
             fi
           else
-            echo "No parseable k6 summary in the loadcheck log." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::The loadcheck deployment ${id} produced no parseable k6 summary (status ${status})."
-            {
-              echo ""
-              echo '```'
-              printf '%s\n' "$logs" | tail -n 60
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "No parseable k6 summary in the loadcheck output." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::The loadcheck produced no parseable k6 summary (exit ${load_status})."
           fi
 
-          if [ "$status" != "SUCCESS" ]; then
-            echo "::warning::The loadcheck deployment ended as ${status}; k6 exits non-zero when its thresholds fail."
+          if [ "${load_status}" -ne 0 ]; then
+            echo "::warning::make prod-load exited ${load_status}. The profile offers 5 req/s from one subject against ADR 0014's 10-per-second refill, so refusals here mean the limiter is configured below its documented defaults -- check that before reading this as a service fault."
           fi
+
+      - name: Close the SSH agent
+        if: always()
+        run: ssh-agent -k > /dev/null 2>&1 || true

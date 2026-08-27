@@ -412,11 +412,19 @@ def test_canary_thresholds_assert_correctness_and_claim_no_slo() -> None:
     assert _threshold_entries(canary) == {
         "checks{endpoint:recommendations}": ["rate==1"],
         "http_req_failed{endpoint:recommendations}": ["rate==0"],
+        # Not a gate. k6 materialises a tagged sub-metric only if a threshold
+        # names it, and handleSummary reads p50/p95/p99 off precisely this one,
+        # so without this line the canary's summary reports null latency -- the
+        # opposite of its remit, which is to record p99 and not judge it.
+        # A duration is never negative, so this can never fail.
+        "http_req_duration{endpoint:recommendations}": ["p(99)>=0"],
     }
-    # The omissions are the point: a second place that appears to define the
-    # p99 SLO is how a pinned threshold quietly drifts.
+    # The omission is the point: a second place that appears to define the p99
+    # SLO is how a pinned threshold quietly drifts. So what is asserted here is
+    # the property rather than the spelling -- no latency bound that could
+    # *fail*, and no achieved-throughput floor.
     exported = canary.read_text().split("export const", 1)[1]
-    assert "p(99)" not in exported
+    assert "p(99)<" not in exported
     assert "http_reqs" not in exported
 
 

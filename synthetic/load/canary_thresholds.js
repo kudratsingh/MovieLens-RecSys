@@ -42,10 +42,24 @@
 //               and a post-deploy check has no business generating the 55 rps
 //               the CI gate does.
 //
-// Latency is still reported — `handleSummary` prints p50/p95/p99 either way —
-// so a deploy that got 10x slower is visible in the job log. It just is not
-// this run's pass/fail contract.
+// Latency is still reported, so a deploy that got 10x slower is visible in the
+// job log. It just is not this run's pass/fail contract.
+//
+// That reporting needs a line here to work at all, which is the one piece of
+// k6 mechanics this file cannot leave implicit: a *tagged* sub-metric exists
+// only if some threshold names it. `handleSummary` reads p50/p95/p99 off
+// `http_req_duration{endpoint:recommendations}` specifically, so omitting it
+// does not merely skip a gate — it makes the metric absent, and the canary's
+// summary table renders `null` for all three percentiles. It did exactly that
+// until 2026-08-27, which is how the omission was found: a rehearsal run
+// produced `"latency_ms": {}` while this comment claimed the numbers were
+// printed either way.
+//
+// `p(99)>=0` is the materialising line. A duration cannot be negative, so it
+// cannot fail, and it is deliberately not a number anyone could misread as a
+// second definition of the SLO.
 export const canaryThresholds = {
   "checks{endpoint:recommendations}": ["rate==1"],
   "http_req_failed{endpoint:recommendations}": ["rate==0"],
+  "http_req_duration{endpoint:recommendations}": ["p(99)>=0"],
 };

@@ -112,7 +112,7 @@ jobs:
         run: docker compose -p movielens-browser-e2e -f docker-compose.yml -f docker-compose.demo.yml up -d --build --wait --wait-timeout 180 api web
       - name: Wait for imported demo realm
         run: |
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --fail --silent http://localhost:8080/realms/demo/.well-known/openid-configuration > /dev/null; then
               exit 0
             fi
@@ -227,7 +227,7 @@ jobs:
       # sub-second.
       - name: Wait for Keycloak
         run: |
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -sSf http://localhost:8080/realms/default > /dev/null; then
               echo "Keycloak ready"; exit 0
             fi
@@ -504,3 +504,113 @@ jobs:
       - name: Stop Keycloak
         if: always()
         run: docker compose -p movielens-realm-drift -f docker-compose.yml down --volumes --remove-orphans
+
+  # --- Release images --------------------------------------------------------
+  # The production host never builds anything. It pulls, which makes this job
+  # the only place the images it runs come from, and `needs` naming every other
+  # job in this file is what makes "published" mean "passed everything". A red
+  # gate anywhere above leaves the tags where they were and gives the deploy
+  # workflow nothing new to pull.
+  #
+  # Two tags per image. The 40-character commit SHA is what a deploy pins and
+  # what a rollback returns to; `main` is the moving convenience tag
+  # docker-compose.prod.yml defaults IMAGE_TAG to, for an operator on the box
+  # who wants whatever is current. Nothing here ever deletes a tag: a rollback
+  # is only possible while the previous release's SHA tag still exists, which is
+  # also why infra/host's prune timer removes images by age and never volumes.
+  publish-images:
+    needs:
+      - browser-auth-e2e
+      - changed-paths
+      - demo-compose
+      - feature-parity
+      - frontend
+      - lint
+      - realm-drift
+      - serving-artifacts
+      - synthetic-load-smoke
+      - tenant-isolation
+      - test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # GHCR namespaces are lowercase and this repository is `MovieLens-RecSys`,
+      # so `github.repository` cannot be used verbatim. The literal is the same
+      # string infra/deploy/production.env.example defaults IMAGE_REPOSITORY to,
+      # and tests/unit/test_deploy_workflows.py holds the two together — a
+      # publish job and a host that disagree about the namespace is a deploy
+      # that pulls a tag nobody pushed.
+      IMAGE_REPOSITORY: ghcr.io/kudratsingh/movielens-recsys
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+
+      # The default `docker` driver cannot push straight to a registry, so this
+      # job builds on a docker-container builder instead.
+      - name: Enable a buildx builder that can push
+        run: docker buildx create --name release --driver docker-container --use
+
+      # linux/amd64 only, and stated rather than inherited: the target is a
+      # Hetzner CX22 (x86-64) while the machine this repository is usually
+      # developed on is arm64, and an image built on the wrong architecture
+      # fails on the box rather than here.
+      #
+      # `--provenance=false` keeps each published reference a plain
+      # single-platform image rather than an index carrying an attestation
+      # manifest. Nothing on the host consumes an attestation, and a plain image
+      # is what `docker compose pull` and `docker image prune` reason about
+      # most predictably.
+      #
+      # The k6 image takes its version from the ARG default in
+      # infra/k6/Dockerfile rather than a --build-arg here, because a Dockerfile
+      # cannot read infra/ci/k6-version to build its own FROM line. The
+      # duplicate pin is asserted in tests/unit/test_deploy_workflows.py, not
+      # trusted: a canary running a different k6 than the gate quietly undoes
+      # ADR 0010.
+      - name: Build and push every image the production stack runs
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "### Published images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # name, build context, Dockerfile. Every service in
+          # docker-compose.prod.yml that carries a `build:` block is here and
+          # nothing else — a service missing from this table is a service the
+          # box would have to build for itself.
+          while read -r name context dockerfile; do
+            [ -n "${name}" ] || continue
+            echo "::group::${name}"
+            docker buildx build \
+              --platform linux/amd64 \
+              --provenance=false \
+              --file "${dockerfile}" \
+              --tag "${IMAGE_REPOSITORY}/${name}:${IMAGE_TAG}" \
+              --tag "${IMAGE_REPOSITORY}/${name}:main" \
+              --push \
+              "${context}"
+            echo "::endgroup::"
+            echo "- \`${IMAGE_REPOSITORY}/${name}\` at \`${IMAGE_TAG}\` and \`main\`" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done <<'IMAGES'
+          api . infra/api/Dockerfile
+          features . infra/features/Dockerfile
+          web ./web ./web/Dockerfile
+          pgbouncer . infra/pgbouncer/Dockerfile
+          keycloak . infra/keycloak/Dockerfile
+          backup . infra/backup/Dockerfile
+          k6 . infra/k6/Dockerfile
+          IMAGES
