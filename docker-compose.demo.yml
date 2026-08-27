@@ -215,6 +215,14 @@ services:
         "--no-access-log",
       ]
     environment:
+      # Four Uvicorn processes already provide CPU parallelism. Without native
+      # limits every LightGBM prediction starts an OpenMP team sized to the
+      # whole host; concurrent rank calls then oversubscribe the runner and
+      # create the periodic latency backlog the p99 gate is designed to catch.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
       REDIS_CONNECTION_STRING: redis:6379
       FEAST_POSTGRES_HOST: postgres
       FEAST_POSTGRES_PORT: 5432

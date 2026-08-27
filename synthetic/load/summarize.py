@@ -19,6 +19,19 @@ without preemption is the service's and fails immediately. Nothing here can make
 a gate pass — it only decides whether a breached window is allowed one honest
 repeat, and turns k6's own result into the wrapper's exit code.
 
+Two further joins are *informational* and feed nothing the rule reads. Steal
+answers "was the CPU taken away"; it cannot answer "was the disk". So the
+per-second table also carries `fsync` — that second's `fdatasync` cost on
+Postgres's own volume (`probe_disk_fsync.py`, opt-in because the sampler that
+fills this column perturbs the commits it measures; the pre-window burst that
+runs by default costs nothing) — and `srv_p99`, the p99 of the audit rows the
+server wrote in the same second (`server_side.py`). Since the
+audit's `latency_ms` is timed around the handler alone, k6 minus handler is the
+share spent outside it: auth, the transaction, the audit insert, and the COMMIT
+every traffic class pays, including the cold path that never reaches a model.
+All three are optional — an older evidence directory summarizes exactly as it
+did before, with `n/a` where a file is missing.
+
 Two workloads share this tool:
 
 `recommendations`
@@ -57,9 +70,17 @@ MEASURED_ENDPOINT = "recommendations"
 LATENCY_METRIC = "http_req_duration"
 RAW_METRICS_NAMES = ("raw-metrics.json.gz", "raw-metrics.json")
 HOST_CPU_NAME = "host-cpu.jsonl"
+DISK_FSYNC_NAME = "disk-fsync.jsonl"
+SERVER_SIDE_NAME = "server-side.json"
+SERVER_SIDE_BEFORE_NAME = "server-side-before.json"
 SUMMARY_NAME = "summary.json"
 SLOWEST_SECONDS = 10
 SLO_MS = 100.0
+# What counts as a slow second on the storage side, for the informational
+# count in decision.json. A commit costs one fdatasync; ten milliseconds of it
+# is already a tenth of the whole request budget, so a second spent above that
+# is worth being able to point at. It gates nothing.
+FSYNC_SLOW_MS = 10.0
 WORKLOAD_RECOMMENDATIONS = "recommendations"
 WORKLOAD_PAGES = "pages"
 # k6 returns this when a declared threshold was breached. Any other non-zero
@@ -120,6 +141,9 @@ class SecondBucket:
     traffic: dict[str, int]
     steal_pct: float | None
     run_queue: float | None
+    # Both optional: they exist only when the newer probes ran.
+    server_p99: float | None = None
+    fsync_p99: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +156,8 @@ class SecondBucket:
             f"over_{int(SLO_MS)}ms": self.over_slo,
             "steal_pct": self.steal_pct,
             "run_queue": self.run_queue,
+            "server_p99_ms": _rounded(self.server_p99),
+            "fsync_p99_ms": _rounded(self.fsync_p99),
             "traffic": self.traffic,
         }
 
@@ -156,6 +182,73 @@ class StepStats:
             "p99_ms": round(self.p99, 2),
             "max_ms": round(self.maximum, 2),
         }
+
+
+@dataclass(frozen=True)
+class ServerRow:
+    """One `recommendation_audits` row, reduced to what a window needs."""
+
+    epoch: float
+    latency_ms: float
+    candidate_ms: float
+    feature_ms: float
+    ranker_ms: float
+    model_ms: float
+    policy: str
+
+
+@dataclass(frozen=True)
+class ServerSide:
+    """One `server_side.py` export. `note` says why it is empty when it is."""
+
+    rows: list[ServerRow]
+    stats: dict[str, Any]
+    note: str
+
+
+@dataclass(frozen=True)
+class DiskFsync:
+    """Per-second `fdatasync` durations plus the pre-window baseline burst."""
+
+    per_second: dict[int, list[float]]
+    all_samples: list[float]
+    baseline: dict[str, Any]
+    note: str
+
+    @property
+    def available(self) -> bool:
+        return bool(self.all_samples)
+
+
+@dataclass(frozen=True)
+class Percentiles:
+    label: str
+    count: int | None
+    p50: float
+    p95: float
+    p99: float
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "count": self.count,
+            "p50_ms": round(self.p50, 2),
+            "p95_ms": round(self.p95, 2),
+            "p99_ms": round(self.p99, 2),
+        }
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """What the client measured, what the server measured, and the gap."""
+
+    client: Percentiles
+    handler: Percentiles | None
+    outside: Percentiles | None
+    by_class: list[Percentiles]
+    by_policy: list[Percentiles]
+    stages: dict[str, dict[str, float]]
+    note: str
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -183,23 +276,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="This window is the verdict; never ask for another measurement.",
     )
+    # All three default to the window directory's own names, so an evidence
+    # tree captured before these probes existed summarizes unchanged.
+    parser.add_argument("--disk-fsync", type=Path, default=None)
+    parser.add_argument("--server-side", type=Path, default=None)
+    parser.add_argument("--server-side-before", type=Path, default=None)
     args = parser.parse_args(argv)
     window: Path = args.window
     workload: str = args.workload
+
+    fsync = _read_disk_fsync(args.disk_fsync or window / DISK_FSYNC_NAME)
+    server = _read_server_side(args.server_side or window / SERVER_SIDE_NAME)
+    server_before = _read_server_side(args.server_side_before or window / SERVER_SIDE_BEFORE_NAME)
 
     raw = _find_raw_metrics(window)
     if raw is None:
         print(f"[load-summary] no k6 sample stream under {window}; skipping the breakdown")
         decision = _unavailable_decision("no k6 sample stream")
+        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None)
         _write_decision(window, decision)
         return _emit(decision, _gate(window, workload, args))
 
     steal = _read_host_cpu(window / HOST_CPU_NAME)
     samples = _read_samples(raw, workload)
-    buckets = _bucket_by_second(samples, steal)
+    buckets = _bucket_by_second(samples, steal, fsync=fsync, server=server)
     if not buckets:
         print(f"[load-summary] {raw.name} holds no {workload}-tagged latency samples")
         decision = _unavailable_decision("no measured latency samples")
+        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None)
         _write_decision(window, decision)
         return _emit(decision, _gate(window, workload, args))
 
@@ -215,9 +319,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     slowest = sorted(buckets, key=lambda bucket: bucket.p99, reverse=True)[:SLOWEST_SECONDS]
+    comparison = _compare(samples, server, buckets)
     decision = _decide(window, workload, buckets, slowest, args)
+    _attach_evidence(decision, fsync=fsync, slowest=slowest, comparison=comparison)
     _write_decision(window, decision)
-    _report(window, buckets, slowest, steps, decision)
+    _report(window, buckets, slowest, steps, decision, comparison, fsync, server_before, server)
     return _emit(decision, _gate(window, workload, args))
 
 
@@ -235,6 +341,10 @@ def _report(
     slowest: list[SecondBucket],
     steps: list[StepStats],
     decision: dict[str, Any],
+    comparison: Comparison | None,
+    fsync: DiskFsync,
+    server_before: ServerSide,
+    server_after: ServerSide,
 ) -> None:
     total = sum(bucket.count for bucket in buckets)
     over_slo = sum(bucket.over_slo for bucket in buckets)
@@ -250,7 +360,13 @@ def _report(
     print(_render_table(sorted(slowest, key=lambda bucket: bucket.second)))
     print("[load-summary] opening second of the measured window:")
     print(_render_table(buckets[:1]))
-    print(f"[load-summary] {decision['label']}")
+    print("\n[load-summary] server-side vs k6:")
+    print(_render_comparison(comparison))
+    print("\n[load-summary] fdatasync on Postgres's volume:")
+    print(_render_fsync(fsync))
+    print("\n[load-summary] Postgres counters across the window:")
+    print(_render_stat_deltas(server_before, server_after))
+    print(f"\n[load-summary] {decision['label']}")
 
 
 # --- verdicts ---------------------------------------------------------------
@@ -517,6 +633,181 @@ def _read_host_cpu(path: Path) -> dict[int, dict[str, float]]:
     return samples
 
 
+def _read_disk_fsync(path: Path) -> DiskFsync:
+    """Read `probe_disk_fsync.py`'s stream: one baseline line, then samples."""
+    if not path.is_file():
+        return DiskFsync({}, [], {}, f"no {path.name}")
+    per_second: defaultdict[int, list[float]] = defaultdict(list)
+    all_samples: list[float] = []
+    baseline: dict[str, Any] = {}
+    note = ""
+    for line in path.read_text().splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            record = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") == "baseline":
+            baseline = record
+            continue
+        if record.get("available") is False:
+            note = str(record.get("reason", "probe unavailable"))
+            continue
+        at = record.get("ts")
+        duration = record.get("fdatasync_ms")
+        if not isinstance(at, int | float) or not isinstance(duration, int | float):
+            continue
+        per_second[int(at)].append(float(duration))
+        all_samples.append(float(duration))
+    if not all_samples and not note:
+        # The common case, not a fault: LOAD_FSYNC_PROBE defaults to off, so a
+        # normal artifact carries the burst and nothing else.
+        note = "baseline only; continuous sampling off" if baseline else "no samples in probe file"
+    return DiskFsync(dict(per_second), all_samples, baseline, note)
+
+
+def _read_server_side(path: Path) -> ServerSide:
+    """Read one `server_side.py` export, tolerating every way it can be absent."""
+    if not path.is_file():
+        return ServerSide([], {}, f"no {path.name}")
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        return ServerSide([], {}, f"{path.name} unreadable: {error}")
+    if not isinstance(loaded, dict):
+        return ServerSide([], {}, f"{path.name} is not an object")
+    stats = loaded.get("stats")
+    rows = [
+        row for row in (_server_row(entry) for entry in loaded.get("rows") or []) if row is not None
+    ]
+    note = str(loaded.get("rows_unavailable", "")) if not rows else ""
+    return ServerSide(rows, stats if isinstance(stats, dict) else {}, note)
+
+
+def _server_row(entry: Any) -> ServerRow | None:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        epoch = _parse_time(str(entry["created_at"]))
+        latency = float(entry["latency_ms"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return ServerRow(
+        epoch=epoch,
+        latency_ms=latency,
+        candidate_ms=_float_or_zero(entry.get("candidate_latency_ms")),
+        feature_ms=_float_or_zero(entry.get("feature_latency_ms")),
+        ranker_ms=_float_or_zero(entry.get("ranker_latency_ms")),
+        model_ms=_float_or_zero(entry.get("model_latency_ms")),
+        policy=str(entry.get("policy") or "unknown"),
+    )
+
+
+def _server_by_second(server: ServerSide) -> dict[int, list[float]]:
+    grouped: defaultdict[int, list[float]] = defaultdict(list)
+    for row in server.rows:
+        grouped[int(row.epoch)].append(row.latency_ms)
+    return dict(grouped)
+
+
+# --- server-side vs client-side ---------------------------------------------
+
+
+def _compare(
+    samples: list[Sample], server: ServerSide, buckets: list[SecondBucket]
+) -> Comparison | None:
+    """Line the two measurements up over the same seconds.
+
+    The audit export is bounded by the *window's* start, which includes k6's
+    warm-up; the client samples are only the measured requests. Clipping the
+    rows to the measured seconds is what makes the two columns comparable
+    rather than merely adjacent.
+    """
+    if not samples or not buckets:
+        return None
+    client = _percentiles("k6 client", [sample.value for sample in samples])
+    first, last = buckets[0].epoch, buckets[-1].epoch + 1
+    rows = [row for row in server.rows if first <= row.epoch < last]
+
+    by_class: list[Percentiles] = []
+    grouped: defaultdict[str, list[float]] = defaultdict(list)
+    for sample in samples:
+        grouped[sample.class_name].append(sample.value)
+    for name in sorted(grouped):
+        by_class.append(_percentiles(name, grouped[name]))
+
+    if not rows:
+        note = server.note or (
+            "no audit rows inside the measured seconds" if server.rows else "no server-side export"
+        )
+        return Comparison(client, None, None, by_class, [], {}, note)
+
+    handler = _percentiles("server handler", [row.latency_ms for row in rows])
+    outside = Percentiles(
+        label="implied outside the handler",
+        count=None,
+        p50=client.p50 - handler.p50,
+        p95=client.p95 - handler.p95,
+        p99=client.p99 - handler.p99,
+    )
+    by_policy: list[Percentiles] = []
+    stages: dict[str, dict[str, float]] = {}
+    policies: defaultdict[str, list[ServerRow]] = defaultdict(list)
+    for row in rows:
+        policies[row.policy].append(row)
+    for policy in sorted(policies):
+        grouped_rows = policies[policy]
+        by_policy.append(_percentiles(policy, [row.latency_ms for row in grouped_rows]))
+        stages[policy] = {
+            "candidate": _percentile(sorted(row.candidate_ms for row in grouped_rows), 0.99),
+            "feature": _percentile(sorted(row.feature_ms for row in grouped_rows), 0.99),
+            "ranker": _percentile(sorted(row.ranker_ms for row in grouped_rows), 0.99),
+            "model": _percentile(sorted(row.model_ms for row in grouped_rows), 0.99),
+        }
+    return Comparison(client, handler, outside, by_class, by_policy, stages, "")
+
+
+def _percentiles(label: str, values: list[float]) -> Percentiles:
+    ordered = sorted(values)
+    return Percentiles(
+        label=label,
+        count=len(ordered),
+        p50=_percentile(ordered, 0.50),
+        p95=_percentile(ordered, 0.95),
+        p99=_percentile(ordered, 0.99),
+    )
+
+
+def _attach_evidence(
+    decision: dict[str, Any],
+    *,
+    fsync: DiskFsync,
+    slowest: list[SecondBucket],
+    comparison: Comparison | None,
+) -> None:
+    """Add the informational fields — and only those.
+
+    `remeasure` and `label` are produced by `_decide` and are never touched
+    here: this evidence exists to explain a verdict, not to change one.
+    """
+    ordered = sorted(fsync.all_samples)
+    decision["fsync_probe_p50_ms"] = _rounded(_percentile(ordered, 0.50)) if ordered else None
+    decision["fsync_probe_p99_ms"] = _rounded(_percentile(ordered, 0.99)) if ordered else None
+    decision["fsync_probe_max_ms"] = _rounded(ordered[-1]) if ordered else None
+    decision["fsync_probe_baseline"] = fsync.baseline or None
+    decision["slowest_seconds_with_fsync_p99_over_10ms"] = sum(
+        1 for bucket in slowest if bucket.fsync_p99 is not None and bucket.fsync_p99 > FSYNC_SLOW_MS
+    )
+    handler = comparison.handler if comparison is not None else None
+    outside = comparison.outside if comparison is not None else None
+    decision["handler_p99_ms"] = _rounded(handler.p99) if handler is not None else None
+    decision["outside_handler_p99_ms"] = _rounded(outside.p99) if outside is not None else None
+
+
 # --- reading k6's sample stream ---------------------------------------------
 
 
@@ -572,10 +863,16 @@ def _read_sample(line: str, workload: str) -> Sample | None:
 
 
 def _bucket_by_second(
-    samples: list[Sample], steal: dict[int, dict[str, float]]
+    samples: list[Sample],
+    steal: dict[int, dict[str, float]],
+    *,
+    fsync: DiskFsync | None = None,
+    server: ServerSide | None = None,
 ) -> list[SecondBucket]:
     if not samples:
         return []
+    fsync_seconds = fsync.per_second if fsync is not None else {}
+    server_seconds = _server_by_second(server) if server is not None else {}
 
     start = min(sample.timestamp for sample in samples)
     values: defaultdict[int, list[float]] = defaultdict(list)
@@ -603,9 +900,15 @@ def _bucket_by_second(
                 traffic=dict(sorted(traffic[second].items())),
                 steal_pct=_optional_float(host.get("steal_pct")),
                 run_queue=_optional_float(host.get("procs_running")),
+                server_p99=_p99_of(server_seconds.get(epoch)),
+                fsync_p99=_p99_of(fsync_seconds.get(epoch)),
             )
         )
     return buckets
+
+
+def _p99_of(values: list[float] | None) -> float | None:
+    return _percentile(sorted(values), 0.99) if values else None
 
 
 def _step_stats(samples: list[Sample]) -> list[StepStats]:
@@ -632,6 +935,14 @@ def _step_stats(samples: list[Sample]) -> list[StepStats]:
 
 def _optional_float(value: Any) -> float | None:
     return float(value) if isinstance(value, int | float) else None
+
+
+def _float_or_zero(value: Any) -> float:
+    return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _rounded(value: float | None, digits: int = 2) -> float | None:
+    return None if value is None else round(value, digits)
 
 
 def _parse_time(raw: str) -> float:
@@ -663,18 +974,149 @@ def _percentile(ordered: list[float], fraction: float) -> float:
 def _render_table(buckets: list[SecondBucket]) -> str:
     header = (
         f"{'sec':>4} {'reqs':>5} {'p50':>8} {'p95':>8} {'p99':>8} {'max':>9} "
-        f"{'>slo':>5} {'steal%':>7} {'runq':>5}  traffic"
+        f"{'>slo':>5} {'steal%':>7} {'runq':>5} {'srv_p99':>8} {'fsync':>8}  traffic"
     )
     lines = [header, "-" * len(header)]
     for bucket in buckets:
         traffic = " ".join(f"{name}={count}" for name, count in bucket.traffic.items())
         steal = "n/a" if bucket.steal_pct is None else f"{bucket.steal_pct:.1f}"
         run_queue = "n/a" if bucket.run_queue is None else f"{bucket.run_queue:.0f}"
+        server = "n/a" if bucket.server_p99 is None else f"{bucket.server_p99:.2f}"
+        fsync = "n/a" if bucket.fsync_p99 is None else f"{bucket.fsync_p99:.2f}"
         lines.append(
             f"{bucket.second:>4} {bucket.count:>5} {bucket.p50:>8.2f} {bucket.p95:>8.2f} "
             f"{bucket.p99:>8.2f} {bucket.maximum:>9.2f} {bucket.over_slo:>5} "
-            f"{steal:>7} {run_queue:>5}  {traffic}"
+            f"{steal:>7} {run_queue:>5} {server:>8} {fsync:>8}  {traffic}"
         )
+    return "\n".join(lines)
+
+
+def _render_comparison(comparison: Comparison | None) -> str:
+    """k6's view, the handler's view, and what the difference implies.
+
+    `implied outside the handler` is a subtraction of percentiles, not a
+    measured quantity: the p99 request on the client is not necessarily the p99
+    request in the handler. It is still the right first cut, because a large
+    gap can only come from work the handler's timer does not cover — auth,
+    opening the transaction, the audit insert, and the COMMIT.
+    """
+    if comparison is None:
+        return "  n/a (no measured samples)"
+    header = f"  {'where':<40} {'n':>6} {'p50':>9} {'p95':>9} {'p99':>9}"
+    lines = [header, "  " + "-" * (len(header) - 2)]
+    lines.append(_comparison_row(comparison.client))
+    if comparison.handler is not None and comparison.outside is not None:
+        lines.append(_comparison_row(comparison.handler))
+        lines.append(_comparison_row(comparison.outside))
+    else:
+        lines.append(f"  server handler: n/a ({comparison.note or 'unavailable'})")
+
+    lines.append("")
+    lines.append(f"  {'k6 traffic class':<40} {'n':>6} {'p50':>9} {'p95':>9} {'p99':>9}")
+    lines.append("  " + "-" * (len(header) - 2))
+    lines.extend(_comparison_row(entry) for entry in comparison.by_class)
+
+    if comparison.by_policy:
+        stage_header = (
+            f"  {'server policy':<40} {'n':>6} {'p50':>9} {'p95':>9} {'p99':>9}"
+            f" {'cand p99':>9} {'feat p99':>9} {'rank p99':>9} {'model p99':>10}"
+        )
+        lines.append("")
+        lines.append(stage_header)
+        lines.append("  " + "-" * (len(stage_header) - 2))
+        for entry in comparison.by_policy:
+            stages = comparison.stages.get(entry.label, {})
+            lines.append(
+                f"{_comparison_row(entry)}"
+                f" {stages.get('candidate', 0.0):>9.2f} {stages.get('feature', 0.0):>9.2f}"
+                f" {stages.get('ranker', 0.0):>9.2f} {stages.get('model', 0.0):>10.2f}"
+            )
+    return "\n".join(lines)
+
+
+def _comparison_row(entry: Percentiles) -> str:
+    count = "-" if entry.count is None else str(entry.count)
+    return f"  {entry.label:<40} {count:>6} {entry.p50:>9.2f} {entry.p95:>9.2f} {entry.p99:>9.2f}"
+
+
+def _render_fsync(fsync: DiskFsync) -> str:
+    """The pre-window burst and, when it was collected, the in-window sampling.
+
+    The two halves are independent because the in-window half is opt-in: a
+    continuous sampler on the same volume perturbs the very commits the gate is
+    timing (see `probe_disk_fsync.py`), so the default artifact carries the
+    burst alone.
+    """
+    lines = []
+    if fsync.baseline:
+        baseline = fsync.baseline
+        lines.append(
+            f"  pre-window baseline ({baseline.get('ops', 0)} back-to-back ops): "
+            f"p50 {_render_ms(baseline.get('p50_ms'))}, "
+            f"p95 {_render_ms(baseline.get('p95_ms'))}, "
+            f"p99 {_render_ms(baseline.get('p99_ms'))}, max {_render_ms(baseline.get('max_ms'))}"
+        )
+    else:
+        lines.append("  pre-window baseline: n/a")
+    if fsync.available:
+        ordered = sorted(fsync.all_samples)
+        lines.append(
+            f"  during the window ({len(ordered)} samples): "
+            f"p50 {_percentile(ordered, 0.50):.2f} ms, p95 {_percentile(ordered, 0.95):.2f} ms, "
+            f"p99 {_percentile(ordered, 0.99):.2f} ms, max {ordered[-1]:.2f} ms"
+        )
+    else:
+        lines.append(f"  during the window: n/a ({fsync.note or 'no probe output'})")
+    return "\n".join(lines)
+
+
+def _render_ms(value: Any) -> str:
+    return f"{float(value):.2f} ms" if isinstance(value, int | float) else "n/a"
+
+
+# The counters worth reading for a latency tail, in the order they explain one:
+# how much WAL the window produced, how many syncs that cost and how long they
+# took, whether a checkpoint landed inside the window, and how much time the
+# backends themselves spent in IO.
+STAT_DELTA_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("wal", "wal_records", "WAL records"),
+    ("wal", "wal_bytes", "WAL bytes"),
+    ("wal", "wal_write", "WAL writes"),
+    ("wal", "wal_sync", "WAL syncs"),
+    ("wal", "wal_write_time", "WAL write time (ms)"),
+    ("wal", "wal_sync_time", "WAL sync time (ms)"),
+    ("bgwriter", "checkpoints_timed", "checkpoints (timed)"),
+    ("bgwriter", "checkpoints_req", "checkpoints (requested)"),
+    ("bgwriter", "checkpoint_write_time", "checkpoint write time (ms)"),
+    ("bgwriter", "checkpoint_sync_time", "checkpoint sync time (ms)"),
+    ("bgwriter", "buffers_checkpoint", "buffers written at checkpoint"),
+    ("bgwriter", "buffers_backend", "buffers written by backends"),
+    ("database", "xact_commit", "transactions committed"),
+    ("database", "blks_read", "blocks read"),
+    ("database", "blk_read_time", "block read time (ms)"),
+    ("database", "blk_write_time", "block write time (ms)"),
+)
+
+
+def _render_stat_deltas(before: ServerSide, after: ServerSide) -> str:
+    """Differences between the two snapshots.
+
+    Postgres's counters are cumulative since the last stats reset, so a single
+    reading says nothing about one minute of traffic. Only the pair does.
+    """
+    if not before.stats or not after.stats:
+        missing = before.note or after.note or "snapshot missing"
+        return f"  n/a ({missing})"
+    lines = []
+    for section, field, label in STAT_DELTA_FIELDS:
+        start = _optional_float((before.stats.get(section) or {}).get(field))
+        end = _optional_float((after.stats.get(section) or {}).get(field))
+        if start is None or end is None:
+            lines.append(f"  {label:<30} n/a")
+            continue
+        delta = end - start
+        rendered = f"{delta:,.2f}" if field.endswith("time") else f"{delta:,.0f}"
+        lines.append(f"  {label:<30} {rendered:>16}")
     return "\n".join(lines)
 
 
