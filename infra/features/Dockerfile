@@ -28,6 +28,36 @@ RUN apt-get update \
 COPY infra/features/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --requirement requirements.txt
 COPY src ./src
+
+# feature_store.yaml interpolates these unconditionally, so `feast apply` fails
+# on interpolation long before it would fail on connectivity. They are ARG and
+# not ENV deliberately: an ENV default would still be set at runtime, so a
+# deployment that forgot to pass the real online/offline store would quietly
+# resolve to a host called `build` instead of refusing to start. Nothing here
+# reaches either store — verified by running the same apply with
+# `docker run --network none`, which exits 0 and writes the registry.
+ARG FEAST_POSTGRES_HOST=build
+ARG FEAST_POSTGRES_PORT=5432
+ARG FEAST_POSTGRES_DB=build
+ARG FEAST_POSTGRES_USER=build
+ARG FEAST_POSTGRES_PASSWORD=build
+ARG REDIS_CONNECTION_STRING=build:6379
+
+# Bake the Feast registry. The feature views declare explicit schemas
+# (src/features/feast_repo/features.py), so `apply` never has to infer one from
+# the offline store, which is what makes it a build step rather than runtime
+# state on a volume Railway would not let two services share. The check that
+# follows is semantic and never a checksum: apply writes a protobuf carrying
+# `last_updated`, so byte equality would fail every build.
+RUN feast -c src/features/feast_repo apply \
+    && python -m src.features.registry_check
+
+# The serving bundle is a build input, not runtime state: it is a pure function
+# of the committed persona fixture, whose epoch and catalog snapshot are frozen.
+# Baking it makes a model rollback an image rollback, and the manifest's
+# SHA-256s are re-verified by ServingArtifactBundle.load on every boot.
+COPY infra/model-bundle/ ./models/serving/
+
 RUN useradd --create-home --uid 10001 feastuser \
     && mkdir -p /app/models/serving \
     && chown -R feastuser:feastuser /app
