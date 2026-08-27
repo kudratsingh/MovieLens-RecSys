@@ -176,6 +176,31 @@ def test_the_sidecars_watch_the_baked_serving_bundle() -> None:
         patterns = _load(service)["build"]["watchPatterns"]
         # The bundle is baked into the image, so a new bundle is a new image.
         assert "infra/model-bundle/**" in patterns, service
+        # So is the migration graph the model-server's pre-deploy fence compares
+        # against: a stale copy makes the fence's "the database is ahead of this
+        # image" branch mean something other than what it says.
+        assert "alembic/**" in patterns, service
+        assert "alembic.ini" in patterns, service
+
+
+def test_the_api_worker_count_is_a_variable_and_not_two_literals() -> None:
+    """One place, or the measured shape is whichever copy happens to be live.
+
+    The start command used to spell out `--workers 4` while the deployment also
+    set API_WORKERS=4 for the image's own `serve` mode; only one of the two was
+    ever in effect, depending on which start command the service ended up with,
+    and the p99 baseline is a four-worker number. Deferring to `serve` leaves
+    exactly one answer, in the variable panel where it can be changed without a
+    redeploy of a config file.
+    """
+    start_command = _load("api")["deploy"]["startCommand"]
+    assert "--workers" not in start_command
+    assert start_command.startswith("/usr/local/bin/entrypoint.sh serve")
+    # The dispatcher passes anything after the mode word to uvicorn. The API
+    # serves behind an edge that logs every request already.
+    assert "--no-access-log" in start_command
+    entrypoint = (REPO_ROOT / "infra" / "api" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert '"${API_WORKERS:-4}"' in entrypoint
 
 
 def test_loadcheck_runs_a_script_the_image_actually_carries() -> None:

@@ -320,11 +320,71 @@ def test_the_release_job_migrates_as_migrator_and_not_as_the_superuser() -> None
     assert SERVICES["release"]["command"] == ["bootstrap", "all"]
 
 
-def test_the_materialize_job_is_told_which_revision_to_fence_on() -> None:
-    """The features image ships no Alembic, so it cannot answer this itself."""
-    environment = _environment("materialize")
-    assert environment["RELEASE_EXPECTED_REVISION"].startswith("${RELEASE_EXPECTED_REVISION")
+def test_the_materialize_fence_reads_its_own_head_rather_than_being_told() -> None:
+    """The features image carries alembic.ini + alembic/ for exactly this.
+
+    It used to be told, through a hand-maintained ``RELEASE_EXPECTED_REVISION``
+    literal, because the image shipped no Alembic. A literal in a variable panel
+    is only ever as correct as the last person to remember it, and its failure
+    mode is the expensive one: the model-server's pre-deploy waits out its whole
+    300 s and fails the deploy. Reading the image's own migration set is also
+    what lets the fence recognise a database that is *ahead* — the rollback
+    path, where the release job correctly applied nothing.
+    """
     assert "--wait-for-schema" in SERVICES["materialize"]["command"]
+    for name in SERVICES:
+        assert "RELEASE_EXPECTED_REVISION" not in _environment(name), name
+    dockerfile = (REPO_ROOT / "infra" / "features" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY alembic.ini ./" in dockerfile
+    assert "COPY alembic ./alembic" in dockerfile
+    requirements = (REPO_ROOT / "infra" / "features" / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r"^alembic==", requirements, re.MULTILINE
+    ), "the features image needs the alembic package as well as the scripts"
+
+
+def test_the_verify_job_can_reach_every_row_it_declares() -> None:
+    """Three variables, each of which turns a row into a failure when absent.
+
+    None of them fails loudly at boot: the job runs, the row reports that it
+    could not be performed, and the deploy gate refuses the release. That is the
+    right direction, and it is still cheaper to have them here.
+    """
+    environment = _environment("verify")
+    # V-12 reads the sidecar's own /healthz; the setting's default is localhost,
+    # which inside this job is this job.
+    assert environment["MODEL_SERVER_URL"] == "http://model-server:6570"
+    # V-8 cannot know which redirect URIs are the expected ones without it.
+    assert environment["APP_ORIGIN"].startswith("${PUBLIC_APP_ORIGIN")
+    # V-8's admin-read identity: the human admin today, a service-account client
+    # whenever one exists, and the job prefers the client when both are set.
+    assert environment["KEYCLOAK_ADMIN_USERNAME"].startswith("${KC_HUMAN_ADMIN_USERNAME")
+    assert environment["KEYCLOAK_ADMIN_PASSWORD"].startswith("${KC_HUMAN_ADMIN_PASSWORD")
+    assert environment["KEYCLOAK_ADMIN_CLIENT_ID"] == "${KEYCLOAK_ADMIN_CLIENT_ID:-}"
+    assert environment["KEYCLOAK_ADMIN_CLIENT_SECRET"] == "${KEYCLOAK_ADMIN_CLIENT_SECRET:-}"
+    # V-6's tenant-A actor, which the provisioning creates deliberately without
+    # demo-impersonator.
+    assert environment["ISOLATION_REALM"] == "default"
+    assert environment["ISOLATION_USERNAME"] == "isolation"
+    assert environment["ISOLATION_PASSWORD"].startswith("${ISOLATION_PASSWORD")
+
+
+def test_the_isolation_canary_travels_inside_the_image() -> None:
+    """It lives under synthetic/, which infra/api/Dockerfile copies.
+
+    While it lived under tests/, which the image does not copy, the verify job
+    could only report that it was unable to run the one check standing behind
+    the project's highest-severity bug class, and this rehearsal stack had to
+    bind-mount the repository to run it at all.
+    """
+    command = " ".join(str(part) for part in SERVICES["canary"]["command"])
+    assert "synthetic.tenant_isolation.remote_canary" in command
+    assert (REPO_ROOT / "synthetic" / "tenant_isolation" / "remote_canary.py").is_file()
+    assert "volumes" not in SERVICES["canary"]
+    api_dockerfile = (REPO_ROOT / "infra" / "api" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY synthetic ./synthetic" in api_dockerfile
 
 
 def test_every_interpolated_variable_is_defaulted_or_present_in_the_example() -> None:

@@ -31,7 +31,10 @@ to live in ``make`` recipes coupled to Compose:
     snapshots into Postgres and Redis, then proves two things about what it
     published: that the registry the apply produced still describes the feature
     views this image's code declares *and* the one baked into the image, and
-    that a real persona reads back a non-default feature frame.
+    that a real persona reads back a non-default feature frame. **Like
+    ``schema``, a database whose revision this image has never heard of is read
+    as ahead rather than as missing**, so a rollback's pre-deploy is satisfied
+    immediately instead of waiting out its whole deadline.
 
 ``all``
     ``preflight`` then ``schema`` then ``seed``. Not ``materialize`` — that one
@@ -40,10 +43,11 @@ to live in ``make`` recipes coupled to Compose:
 
 **Imports are deliberately lazy.** The same ``src/`` tree is baked into two
 images with different dependency sets: the slim API image ships no Feast,
-pandas or LightGBM, and the features image ships no Alembic and no httpx
-(verified against both built images). A module-level import of either side's
-dependencies would make this module unimportable in the other image, so each
-subcommand imports what only it needs.
+pandas or LightGBM, and the features image ships no httpx. A module-level
+import of either side's dependencies would make this module unimportable in the
+other image, so each subcommand imports what only it needs. Alembic is the one
+dependency both images carry — the API image to *run* migrations, the features
+image only to read the revision graph its fence compares against.
 """
 
 from __future__ import annotations
@@ -51,7 +55,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import socket
 import ssl
 import sys
@@ -80,10 +83,6 @@ logger = logging.getLogger("release.bootstrap")
 # pre-deploy command and a job.
 TREE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ALEMBIC_INI = TREE_ROOT / "alembic.ini"
-
-# Set by the deployment when the image cannot enumerate its own migrations —
-# see ``resolve_expected_revision``.
-EXPECTED_REVISION_ENV = "RELEASE_EXPECTED_REVISION"
 
 FEATURE_STORE_SCHEMA = "feature_store"
 FEATURE_STORE_TABLES = ("user_features", "item_features", "user_item_features")
@@ -475,11 +474,11 @@ def _alembic_config(config_path: Path) -> Config:
 def _script_directory(config_path: Path) -> Any:
     """This image's Alembic script directory, or a named reason it has none.
 
-    Every failure mode collapses to one exception on purpose. The features
-    image ships neither ``alembic`` nor ``alembic/`` — it is sized for Feast and
-    the ranker, not for migrations — and its callers have a documented fallback,
-    so an unhandled ``ModuleNotFoundError`` would replace an actionable message
-    with a stack trace.
+    Every failure mode collapses to one exception on purpose. Both deployed
+    images carry ``alembic`` and ``alembic/`` today, so reaching this failure
+    means an image was built without them — which the callers turn into a
+    message naming the two COPY lines, rather than into a ``ModuleNotFoundError``
+    traceback from inside a pre-deploy command.
     """
     try:
         from alembic.script import ScriptDirectory
@@ -635,10 +634,29 @@ class SchemaState:
     revision_ok: bool
     missing_feature_tables: tuple[str, ...]
     tenant_has_ratings: bool
+    # Revisions the database reports that this image's script directory has
+    # never heard of. Non-empty means the database is ahead of this release.
+    unknown_revisions: tuple[str, ...] = ()
 
     @property
     def satisfied(self) -> bool:
         return self.revision_ok and not self.missing_feature_tables and self.tenant_has_ratings
+
+    def satisfaction(self, *, expected_revision: str) -> str:
+        """Why the fence is satisfied — at head, or ahead of this release.
+
+        The two are worth telling apart in a deploy log. "Ahead" is the
+        rollback path, and it is the one an operator staring at a deploy needs
+        to recognise on sight: nothing is broken, this image is simply older
+        than the database it is being deployed against.
+        """
+        if self.unknown_revisions:
+            return (
+                f"database revision {', '.join(self.unknown_revisions)} is unknown to this "
+                "image; it is ahead of this release, so the fence is satisfied without "
+                "waiting (rollback path)"
+            )
+        return f"database is at this release's expected revision {expected_revision}"
 
     def unmet(self, *, expected_revision: str, tenant_id: str) -> list[str]:
         reasons: list[str] = []
@@ -661,29 +679,28 @@ def resolve_expected_revision(
     explicit: str | None = None,
     *,
     config_path: Path = DEFAULT_ALEMBIC_INI,
-    environ: dict[str, str] | None = None,
 ) -> str:
     """The head revision this deploy expects the database to be at.
 
-    Three sources, in order, because the image that runs the fence is not
-    always the image that owns the migrations: the features image ships neither
-    ``alembic`` nor ``alembic/``, so it cannot answer the question itself.
+    The image's own script directory is the answer, not a variable somebody
+    maintains alongside it. There was a ``RELEASE_EXPECTED_REVISION`` here while
+    the features image shipped no Alembic; it is gone because a hand-written
+    literal in a variable panel is only ever as correct as the last person to
+    remember it, and its failure mode — a pre-deploy fence that waits out its
+    deadline and fails the deploy — is the expensive one. ``--expected-revision``
+    remains for the rehearsal case where a run wants to pin the comparison.
     """
     if explicit:
         return explicit
-    from_environment = (environ if environ is not None else dict(os.environ)).get(
-        EXPECTED_REVISION_ENV, ""
-    )
-    if from_environment.strip():
-        return from_environment.strip()
     try:
         return head_revision(config_path)
     except SchemaToolingUnavailableError as exc:
         raise ReleaseError(
             "the schema fence needs the revision this release expects, and this image "
-            "carries no Alembic script directory. Pass --expected-revision, or set "
-            f"{EXPECTED_REVISION_ENV}, or add `COPY alembic.ini ./` + `COPY alembic "
-            "./alembic` and the alembic dependency to infra/features/Dockerfile."
+            "carries no Alembic script directory. Both deployed images are built with "
+            "one: add `COPY alembic.ini ./` + `COPY alembic ./alembic` and the alembic "
+            "dependency (infra/features/Dockerfile, infra/features/requirements.txt), or "
+            "pass --expected-revision for this run."
         ) from exc
 
 
@@ -702,14 +719,17 @@ def inspect_schema_state(
     that demanded exact equality would then hold the rollback open until it
     timed out. Without it the fence is stricter — it fails loudly rather than
     passing wrongly, but it fails a rollback, which is why the message says so.
+    Both deployed images ship a script directory, so ``known`` is ``None`` only
+    for a caller that deliberately withheld it.
     """
     revisions = database_revisions(engine)
+    unknown = tuple(rev for rev in revisions if known is not None and rev not in known)
     if not revisions:
         revision_ok = False
     elif expected_revision in revisions:
         revision_ok = True
     else:
-        revision_ok = known is not None and any(rev not in known for rev in revisions)
+        revision_ok = bool(unknown)
 
     inspector = inspect(engine)
     missing = tuple(
@@ -732,6 +752,7 @@ def inspect_schema_state(
         revision_ok=revision_ok,
         missing_feature_tables=missing,
         tenant_has_ratings=has_ratings,
+        unknown_revisions=unknown,
     )
 
 
@@ -772,10 +793,17 @@ def wait_for_schema(
             reasons = [f"the database is not answering yet: {exc.orig}"]
         else:
             if state.satisfied:
+                satisfaction = state.satisfaction(expected_revision=expected_revision)
+                # Logged, not just returned: on the rollback path this line is
+                # the difference between "the pre-deploy did nothing because the
+                # database is newer" and a silent pass an operator has to infer.
+                logger.info("Release schema fence satisfied: %s", satisfaction)
                 return {
                     "expected_revision": expected_revision,
                     "database_revisions": list(state.revisions),
+                    "ahead_revisions": list(state.unknown_revisions),
                     "tenant_id": tenant_id,
+                    "reason": satisfaction,
                 }
             reasons = state.unmet(expected_revision=expected_revision, tenant_id=tenant_id)
         if monotonic() >= deadline:
@@ -784,8 +812,8 @@ def wait_for_schema(
                 if known is not None
                 else (
                     " This image cannot enumerate its own migrations, so a database that is "
-                    "legitimately ahead (a rollback) also lands here; give the image "
-                    "alembic/ or pass --expected-revision for the deployed revision."
+                    "legitimately ahead (a rollback) also lands here; build the image with "
+                    "alembic.ini + alembic/, or pass --expected-revision for this run."
                 )
             )
             raise SchemaFenceTimeoutError(
@@ -834,7 +862,16 @@ def run_materialize(
     revision = resolve_expected_revision(expected_revision)
     try:
         known: frozenset[str] | None = known_revisions()
-    except SchemaToolingUnavailableError:
+    except SchemaToolingUnavailableError as exc:
+        # Both deployed images carry the script directory, so this is a build
+        # regression rather than an expected mode. The fence still runs, and is
+        # stricter without it: it cannot recognise a database that is ahead, so
+        # a rollback would wait out its deadline instead of passing.
+        logger.warning(
+            "This image cannot enumerate its own migrations (%s); the fence cannot "
+            "recognise a database that is ahead of this release.",
+            exc,
+        )
         known = None
 
     engine = create_engine(settings.admin_user_database_url, future=True)
@@ -973,8 +1010,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-revision",
         default=None,
         help=(
-            "materialize: the Alembic head this release expects. Defaults to "
-            f"${EXPECTED_REVISION_ENV}, then to this image's own script directory."
+            "materialize: the Alembic head this release expects. Defaults to this "
+            "image's own script directory, which is the answer in every deployed image."
         ),
     )
     parser.add_argument(

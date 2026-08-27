@@ -12,7 +12,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log",
+    "startCommand": "/usr/local/bin/entrypoint.sh serve --no-access-log",
     "healthcheckPath": "/readyz",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

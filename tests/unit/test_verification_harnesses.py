@@ -29,7 +29,7 @@ import pytest
 from fastapi.routing import APIRoute
 
 from synthetic.smoke.demo import DEFAULT_AUTH, AuthConfig, DemoSmokeError, service_access_token
-from tests.tenant_isolation.remote_canary import (
+from synthetic.tenant_isolation.remote_canary import (
     PERSONA_ROUTES,
     REQUIRE_STACK_ENV,
     TENANT_A_USER_ID,

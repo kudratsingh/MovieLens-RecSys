@@ -20,7 +20,7 @@ dashboard.
 
 | File | Source | Root Directory | Start command | Healthcheck | Restart | Cron |
 |---|---|---|---|---|---|---|
-| `api.json` | `infra/api/Dockerfile` | *(unset)* | uvicorn, 4 workers, `--no-access-log` | `/readyz` | ON_FAILURE ×10 | – |
+| `api.json` | `infra/api/Dockerfile` | *(unset)* | `entrypoint.sh serve --no-access-log` (`API_WORKERS` workers) | `/readyz` | ON_FAILURE ×10 | – |
 | `model-server.json` | `infra/features/Dockerfile` | *(unset)* | uvicorn, 4 workers, `--no-access-log` | `/healthz` | ON_FAILURE ×10 | – |
 | `feature-server.json` | `infra/features/Dockerfile` | *(unset)* | *(image `CMD`)* | `/health` | ON_FAILURE ×10 | – |
 | `web.json` | `web/Dockerfile` | **`web`** | *(image `CMD`)* | `/` | ON_FAILURE ×10 | – |
@@ -95,6 +95,14 @@ when something behaves differently from what these files say.
    → `api` → `web` → `verify`) is the whole reason the sequence works. The
    `watchPatterns` below are declared anyway so that re-enabling it later is a
    deliberate act rather than an accident.
+
+   Two consequences of auto-deploy being off, both of which shape how a deploy and a rollback are
+   actually performed. A *redeploy* reuses whatever commit a service already carries, which is not
+   the commit CI just proved green — so `.github/workflows/deploy-production.yml` ships an explicit
+   commit through `serviceInstanceDeployV2` rather than redeploying. And rollback is the GraphQL
+   mutation `deploymentRollback(id)` against a deployment id recorded before the release started:
+   the pinned CLI's `railway redeploy` takes no id and `railway down` deletes the latest deployment
+   rather than reverting to a previous one. The runbook has the operator form of both.
 9. **App sleeping.** Must stay off on `keycloak`, `api` and `model-server`. Keycloak's
    JVM cold start trips the web app's OIDC discovery, and a slept model-server pays
    its Feast warm-up again on the first request after every idle period — the exact
@@ -115,7 +123,7 @@ either file alone.
 
 | Service | Image `ENTRYPOINT` | Image `CMD` | This file's `startCommand` |
 |---|---|---|---|
-| `api` | *(none today; the image gains a `serve\|bootstrap\|verify` dispatcher)* | uvicorn, 1 worker | uvicorn, 4 workers |
+| `api` | `/usr/local/bin/entrypoint.sh` (a `serve\|bootstrap\|verify` dispatcher) | `serve` | uvicorn |
 | `model-server` | *(none)* | `feast … serve` | uvicorn on 6570 |
 | `feature-server` | *(none)* | `feast -c src/features/feast_repo serve --host 0.0.0.0 --port 6566` | *(none — the CMD is already right)* |
 | `web` | *(none)* | `node server.js` | *(none)* |
@@ -129,8 +137,8 @@ either file alone.
 start command *replace* the container's whole command, or does it replace only `CMD`
 and leave `ENTRYPOINT` in front of it? Every start command in this directory is
 written for the replace-the-whole-command reading, which is what the deployment plan
-assumes. Two services would break under the other reading, and both have a one-line
-fix:
+assumes. **One service would break under the other reading**, and it has a one-line fix; the three
+that run the API image are safe either way, for a reason worth not undoing:
 
 - **`keycloak-provision`** — `/opt/keycloak/provision.sh` would become
   `kc.sh /opt/keycloak/provision.sh` and die on the first line. Fix: give
@@ -138,11 +146,15 @@ fix:
   `ENTRYPOINT` instead of `kc.sh`, and set the start command to `provision`. Verify
   this during the Keycloak provisioning rehearsal, before the first real run against
   a server that matters — not during it.
-- **`release` and `verify`** — `/usr/local/bin/entrypoint.sh bootstrap all` would
-  become `entrypoint.sh /usr/local/bin/entrypoint.sh bootstrap all`, and the
-  dispatcher would be handed a mode it does not recognise. Fix: drop the path and
-  set the start commands to `bootstrap all` and `verify --all`. Note that in that
-  reading `api`'s start command breaks too, and its fix is `serve`.
+- **`api`, `release` and `verify` are already safe under both readings, and it is worth knowing
+  why rather than rediscovering it.** All three name the dispatcher by absolute path
+  (`/usr/local/bin/entrypoint.sh serve --no-access-log`, `… bootstrap all`, `… verify --all`), and
+  `infra/api/entrypoint.sh`'s default branch execs an unrecognised first argument as given. So under
+  the appending reading the command becomes `entrypoint.sh /usr/local/bin/entrypoint.sh bootstrap
+  all`, the outer invocation does not recognise a path as a mode, falls through, and execs the inner
+  one — which does recognise `bootstrap`. Do not "simplify" these three to bare `serve` /
+  `bootstrap all` / `verify --all`: that form is correct only under the replace-everything reading
+  and is exactly what breaks if the platform appends.
 
 The two images this repository can settle on its own already are: `infra/backup/`
 clears its base image's entrypoint, and `infra/k6/Dockerfile` clears
@@ -152,21 +164,26 @@ reading. Both are correct either way.
 
 Four more cross-checks worth carrying forward:
 
-- **`api`'s worker count is written twice.** `api.json` hardcodes `--workers 4`, and
-  the service also carries `API_WORKERS=4`, which is what the image's `serve`
-  dispatcher mode reads. Only one of the two is live at a time depending on which
-  start command the service ends up with, and they must not be allowed to disagree —
-  the measured p99 baseline is a four-worker number, and
-  `synthetic/load/recommendations.js` sizes its warm-up from `API_WORKERS`. If the
-  start command ever becomes `serve`, delete the literal.
-- **`model-server`'s pre-deploy runs from the features image**, which contains
-  `src/` but neither `alembic/`, `alembic.ini`, nor the `alembic` package (see
-  `infra/features/requirements.txt`). `bootstrap materialize --wait-for-schema` is
-  specified to wait for the database to reach *the image's head revision*, so it has
-  to establish that head some other way than by reading a script directory it does
-  not have. Resolving it belongs to the bootstrap command rather than to this file;
-  it is recorded here because it is a property of the pairing of a config file with
-  an image, and nothing else looks at both.
+- **`api`'s worker count lives in `API_WORKERS` and nowhere else.** It used to be written twice —
+  a `--workers 4` literal in `api.json` alongside the `API_WORKERS` variable the image's `serve`
+  dispatcher reads — with only one of the two live depending on which start command the service
+  ended up with. The literal is gone and the start command is `entrypoint.sh serve
+  --no-access-log`, so there is one value to get right. It matters: the measured p99 baseline is a
+  four-worker number, and `synthetic/load/recommendations.js` sizes its warm-up from `API_WORKERS`,
+  so a warm-up sized for four workers against a service running one leaves workers cold. Do not
+  reintroduce the literal. `model-server` is the opposite case and deliberately so — it runs uvicorn
+  directly with `--workers 4`, and `MODEL_SERVER_WORKERS` exists only because the process cannot read
+  its own flag back to report it on `/healthz`.
+- **`model-server`'s pre-deploy runs from the features image, and that image now carries the
+  migration graph for reading.** `bootstrap materialize --wait-for-schema` waits for the database to
+  reach *the image's head revision*, and it has to be able to tell "the database is behind" from
+  "the database is ahead of this image, because a rollback is in progress" — the second is a no-op,
+  the first is a wait. Both are questions about which revisions this image knows, which is why
+  `infra/features/Dockerfile` copies `alembic.ini` and `alembic/` and
+  `infra/features/requirements.txt` pins `alembic` even though this image runs no migrations. The
+  only override is the `--expected-revision` flag on `bootstrap materialize`, for a container that
+  cannot read the graph; there is no environment literal to remember to bump. Recorded here because
+  it is a property of the pairing of a config file with an image, and nothing else looks at both.
 - **Pre-deploy commands mount no volumes and persist no filesystem changes**, and a
   non-zero exit aborts the deploy without retrying. `materialize` writes to Postgres
   and Redis, so it is a legitimate pre-deploy; publishing an artifact to a volume
@@ -218,8 +235,9 @@ Declared on every Dockerfile-built service and currently inert, since auto-deplo
 off. They describe what actually goes into each image, so they are worth keeping
 honest: `api`/`release`/`verify` share one image and therefore one pattern set
 (`src/`, `alembic/`, `alembic.ini`, `synthetic/`, `infra/api/`), `model-server` and
-`feature-server` share another (`src/`, `infra/features/`, `infra/model-bundle/` —
-the baked serving bundle is a build input, so a new bundle is a new image), and
+`feature-server` share another (`src/`, `alembic/`, `alembic.ini`, `infra/features/`,
+`infra/model-bundle/` — the baked serving bundle is a build input, so a new bundle is a
+new image, and the migration graph is copied in for the pre-deploy fence to read), and
 `loadcheck` watches `synthetic/load/` because that is what its image copies.
 
 Whether Railway resolves watch patterns relative to the repository root or to a

@@ -22,7 +22,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from src.config import Settings
-from tests.tenant_isolation.remote_canary import REQUIRE_STACK_ENV, live_stack_required
+from synthetic.tenant_isolation.remote_canary import REQUIRE_STACK_ENV, live_stack_required
 
 _KEYCLOAK_URL = "http://localhost:8080"
 _API_CLIENT_ID = "movielens-api"
@@ -47,7 +47,7 @@ if not _stack_reachable():
             f"answer at {_KEYCLOAK_URL}/realms/default and the cross-tenant leakage "
             "canaries were never executed. Skipping here would report a pass for a "
             "gate that never ran — bring the stack up, or point the deployed-stack "
-            "canary (`python -m tests.tenant_isolation.remote_canary`) at the target.",
+            "canary (`python -m synthetic.tenant_isolation.remote_canary`) at the target.",
             pytrace=False,
         )
     pytest.skip(

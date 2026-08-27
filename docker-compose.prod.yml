@@ -20,9 +20,8 @@
 #     are baked into the features image, and the realm templates ride inside
 #     the Keycloak image -- a PaaS has no repository to mount from. What still
 #     mounts is the edge's Caddyfile (the edge has no counterpart in the
-#     deployment at all) and three rehearsal-only jobs: the one-time
-#     provisioning SQL, the isolation canary's module (which
-#     infra/api/Dockerfile does not COPY), and the rollback rehearsal's script;
+#     deployment at all) and two rehearsal-only jobs: the one-time provisioning
+#     SQL and the rollback rehearsal's script;
 #   * a Caddy edge terminating TLS on real hostnames, because an https issuer
 #     on a real hostname behind a proxy is the single thing the demo stack has
 #     never once exercised. app.localtest.me and auth.localtest.me both resolve
@@ -640,9 +639,10 @@ services:
   # offline snapshots into Postgres and Redis, and proves the applied registry
   # still describes the feature views the baked one declares.
   #
-  # It runs in the features image, which ships no Alembic, so it cannot
-  # enumerate its own migrations: RELEASE_EXPECTED_REVISION is how the fence
-  # learns which head this release expects.
+  # The fence reads the expected head out of the image it runs in: the features
+  # image carries alembic.ini + alembic/ for exactly this, which is also what
+  # lets it recognise a database that is *ahead* of this release and let a
+  # rollback's pre-deploy through instead of timing out.
   materialize:
     profiles: ["jobs"]
     image: movielens-recsys/features:prod
@@ -662,7 +662,6 @@ services:
       MODEL_TENANT_ID: ${SERVING_REALM:-demo}
       MODEL_ARTIFACT_DIR: /app/models/serving
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
-      RELEASE_EXPECTED_REVISION: ${RELEASE_EXPECTED_REVISION:?set it to this release's Alembic head, e.g. the output of `alembic heads`}
     depends_on:
       postgres-app:
         condition: service_healthy
@@ -701,7 +700,16 @@ services:
       KEYCLOAK_ADMIN_REALM: master
       KEYCLOAK_ADMIN_USERNAME: ${KC_HUMAN_ADMIN_USERNAME:-recsys-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KC_HUMAN_ADMIN_PASSWORD:?generate one with secrets.token_urlsafe(48)}
+      # Preferred over the human admin whenever both are set: a service-account
+      # client holding only view-realm and view-clients is the least privilege
+      # that answers the realm-invariant row. Empty until provisioning creates
+      # one, and an empty value falls through to the password grant above.
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
       MODEL_TENANT_ID: ${SERVING_REALM:-demo}
+      # The artifact-provenance row reads the sidecar's own /healthz; the
+      # setting's default is localhost, which inside this job is this job.
+      MODEL_SERVER_URL: http://model-server:6570
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
       SSL_CERT_FILE: /etc/ssl/edge-ca/root.crt
     volumes:
@@ -717,11 +725,12 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # V-6, the highest-severity bug class. It is a separate service from `verify`
-  # only because infra/api/Dockerfile does not COPY tests/, so the canary
-  # module is not in the image; the bind mount is the rehearsal's stand-in for
-  # the COPY the deployed image needs. An unreachable target is a hard failure
-  # here, never a skip.
+  # V-6, the highest-severity bug class. `verify --all` now runs this same
+  # module as its V-6 row — the harness moved to synthetic/, which the image
+  # copies, so the verify job can run it rather than report that it cannot.
+  # This service is the standalone form, kept because a canary worth having is
+  # one an operator can point at a target by hand, with every identity visible
+  # on the command line. An unreachable target is a hard failure, never a skip.
   canary:
     profiles: ["jobs"]
     image: movielens-recsys/api:prod
@@ -738,7 +747,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        exec python -m tests.tenant_isolation.remote_canary
+        exec python -m synthetic.tenant_isolation.remote_canary
         --api-url http://api:8000
         --keycloak-url http://keycloak:8080
         --service-client-id movielens-api
@@ -756,8 +765,6 @@ services:
       VERIFY_CLIENT_SECRET: ${VERIFY_CLIENT_SECRET:?generate one with secrets.token_urlsafe(48)}
       ISOLATION_PASSWORD: ${ISOLATION_PASSWORD:?generate one with secrets.token_urlsafe(48)}
       VERIFY_PASSWORD: ${VERIFY_PASSWORD:?generate one with secrets.token_urlsafe(48)}
-    volumes:
-      - ./tests:/app/tests:ro
     depends_on:
       api:
         condition: service_healthy

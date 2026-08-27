@@ -73,6 +73,11 @@ ARTIFACT_TENANT ?= demo
 # string-keyed iteration stable for the same reason. The model-server token is
 # set only because the image declares ENVIRONMENT=production and Settings
 # refuses its dev default there; this container never speaks to the sidecar.
+# The pgBouncer admin password is here for exactly the same reason and with
+# exactly as little meaning: this build talks to Postgres directly as
+# admin_user and never opens the pooler's admin console. Both are non-default
+# literals rather than ENVIRONMENT=dev, because disarming every production
+# guard inside the one build whose point is reproducibility is the worse trade.
 ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	--network $(ARTIFACT_NETWORK) \
 	-e ADMIN_USER_DB_HOST=$(ARTIFACT_DB_HOST) \
@@ -82,6 +87,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	-e ADMIN_USER_DB_PASSWORD=$(ARTIFACT_DB_PASSWORD) \
 	-e MODEL_TENANT_ID=$(ARTIFACT_TENANT) \
 	-e MODEL_SERVER_AUTH_TOKEN=serving-artifact-build \
+	-e PGBOUNCER_ADMIN_PASSWORD=serving-artifact-build \
 	-e PYTHONHASHSEED=0 \
 	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
 	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
@@ -292,7 +298,8 @@ demo-load-pages-nightly:
 # Non-latency serving promises that a percentile cannot express: the request id
 # survives to the audit row, /healthz is reachable without a token while nothing
 # else is, dependency provenance is visible somewhere real, degraded metadata
-# renders instead of failing, and rate limiting is reported honestly as absent.
+# renders instead of failing, and rate limiting answers 429 with a Retry-After
+# where ADR 0014 turns it on.
 # Runs against the same warm stack the load gate just measured.
 demo-reliability-check:
 	@mkdir -p $(PAGE_RESULTS_DIR)

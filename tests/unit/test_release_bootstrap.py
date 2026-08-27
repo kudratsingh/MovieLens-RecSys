@@ -47,7 +47,6 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "PGBOUNCER_ADMIN_USER",
         "PGBOUNCER_ADMIN_PASSWORD",
         "REDIS_CONNECTION_STRING",
-        bootstrap.EXPECTED_REVISION_ENV,
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -201,20 +200,25 @@ def test_head_revision_does_not_depend_on_the_working_directory(
     assert bootstrap.head_revision() == bootstrap.head_revision(REPOSITORY_ROOT / "alembic.ini")
 
 
-def test_expected_revision_prefers_the_flag_then_the_environment(clean_env: None) -> None:
+def test_expected_revision_is_this_image_s_own_head_unless_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No environment variable feeds this any more.
+
+    ``RELEASE_EXPECTED_REVISION`` existed while the features image shipped no
+    Alembic. It ships one now, so the image answers for itself and the only
+    override left is the flag — a hand-maintained literal in a variable panel
+    could only ever be right until the next migration."""
+    monkeypatch.setenv("RELEASE_EXPECTED_REVISION", "0001_a_stale_hand_written_literal")
     assert bootstrap.resolve_expected_revision("0007") == "0007"
-    assert (
-        bootstrap.resolve_expected_revision(None, environ={bootstrap.EXPECTED_REVISION_ENV: "0008"})
-        == "0008"
-    )
-    assert bootstrap.resolve_expected_revision(None, environ={}) == bootstrap.head_revision()
+    assert bootstrap.resolve_expected_revision(None) == bootstrap.head_revision()
 
 
 def test_an_image_without_a_script_directory_says_so_rather_than_tracing(
     tmp_path: Path,
 ) -> None:
-    """The features image ships neither alembic nor alembic/; its fence has a
-    documented fallback and needs the message, not a stack trace."""
+    """An image built without alembic/ is a build regression, and its fence
+    needs the message rather than a ModuleNotFoundError from a pre-deploy."""
     with pytest.raises(bootstrap.SchemaToolingUnavailableError, match="Alembic config"):
         bootstrap.head_revision(tmp_path / "alembic.ini")
 
@@ -227,11 +231,11 @@ def test_expected_revision_names_every_remedy_when_the_image_has_no_alembic(
 
     monkeypatch.setattr(bootstrap, "head_revision", unavailable)
     with pytest.raises(bootstrap.ReleaseError) as error:
-        bootstrap.resolve_expected_revision(None, environ={})
+        bootstrap.resolve_expected_revision(None)
     message = str(error.value)
     assert "--expected-revision" in message
-    assert bootstrap.EXPECTED_REVISION_ENV in message
     assert "infra/features/Dockerfile" in message
+    assert "infra/features/requirements.txt" in message
 
 
 # --------------------------------------------------------------------------
@@ -327,9 +331,64 @@ def test_the_fence_returns_once_the_release_job_has_landed() -> None:
         expected_revision=head,
         tenant_id="demo",
         timeout_seconds=0.0,
+        known=bootstrap.known_revisions(),
         sleep=lambda _seconds: None,
     )
     assert summary["database_revisions"] == [head]
+    assert summary["ahead_revisions"] == []
+    assert head in summary["reason"]
+
+
+def test_the_fence_passes_a_rollback_immediately_and_says_why(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The other half of the same fence: a database ahead of this image.
+
+    This is the deploy that would otherwise wait out its whole 300 s and fail —
+    the release job correctly applied nothing, so the revision it left behind is
+    newer than anything this image knows. It has to pass, and it has to say so
+    in the log, because a silent pass and a hung pre-deploy look identical from
+    the outside until the timeout."""
+    engine = _fenced_engine(UNKNOWN_REVISION)
+    with caplog.at_level("INFO", logger="release.bootstrap"):
+        summary = bootstrap.wait_for_schema(
+            engine,
+            expected_revision=bootstrap.head_revision(),
+            tenant_id="demo",
+            timeout_seconds=0.0,
+            known=bootstrap.known_revisions(),
+            sleep=lambda _seconds: None,
+        )
+    assert summary["ahead_revisions"] == [UNKNOWN_REVISION]
+    assert "ahead of this release" in summary["reason"]
+    assert "ahead of this release" in caplog.text
+
+
+def test_the_features_image_can_answer_both_halves_of_the_fence() -> None:
+    """The fence's two branches both need this image's own revision set.
+
+    ``known_revisions()`` reading the tree is what makes "unknown to this image"
+    mean "newer than this release" rather than "this image cannot tell". The
+    features image is built with alembic.ini + alembic/ for exactly this call;
+    a build that dropped them would fail here rather than in a pre-deploy."""
+    known = bootstrap.known_revisions()
+    assert bootstrap.head_revision() in known
+    assert UNKNOWN_REVISION not in known
+
+    at_head = bootstrap.inspect_schema_state(
+        _fenced_engine(bootstrap.head_revision()),
+        expected_revision=bootstrap.head_revision(),
+        tenant_id="demo",
+        known=known,
+    )
+    ahead = bootstrap.inspect_schema_state(
+        _fenced_engine(UNKNOWN_REVISION),
+        expected_revision=bootstrap.head_revision(),
+        tenant_id="demo",
+        known=known,
+    )
+    assert (at_head.satisfied, at_head.unknown_revisions) == (True, ())
+    assert (ahead.satisfied, ahead.unknown_revisions) == (True, (UNKNOWN_REVISION,))
 
 
 # --------------------------------------------------------------------------

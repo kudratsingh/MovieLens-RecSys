@@ -40,9 +40,16 @@ radius is a whole user -- names a user id that is nobody's persona. In both
 cases an intact guard answers 403 first, and a broken one answers 404 without
 touching a row, which this module still reports as a failure.
 
+It lives beside the other deployment harnesses rather than under ``tests/``
+because the serving image copies ``synthetic/`` and not ``tests/``: from
+``tests/`` the verify job could only report that it was unable to run the one
+check standing behind the project's highest-severity bug class.
+``tests/tenant_isolation/`` still owns the in-process CI test and imports this
+module for the one switch they share.
+
 Run it as::
 
-    python -m tests.tenant_isolation.remote_canary \\
+    python -m synthetic.tenant_isolation.remote_canary \\
         --api-url http://api.internal:8000 --keycloak-url http://keycloak.internal:8080 \\
         --client-id movielens-verify --client-secret ... \\
         --realm-a default --username isolation --password ... \\

@@ -52,6 +52,17 @@ ARG REDIS_CONNECTION_STRING=build:6379
 RUN feast -c src/features/feast_repo apply \
     && python -m src.features.registry_check
 
+# The migration graph, for reading only. This image runs no migrations — the
+# release job in the API image does — but it does run the model-server's
+# pre-deploy fence (`src.release.bootstrap materialize --wait-for-schema`), and
+# that fence has to answer two questions about the database it is waiting for:
+# is it at this release's head, and if it is not, is it *ahead* of this image
+# because a rollback is in progress. Both are questions about which revisions
+# this image knows, so the image has to carry them. Copied after `feast apply`
+# so a migration never invalidates the registry layer.
+COPY alembic.ini ./
+COPY alembic ./alembic
+
 # The serving bundle is a build input, not runtime state: it is a pure function
 # of the committed persona fixture, whose epoch and catalog snapshot are frozen.
 # Baking it makes a model rollback an image rollback, and the manifest's

@@ -1,22 +1,31 @@
 # MVP release and deployment handoff
 
-_Last updated: 2026-08-26 (America/Los_Angeles)_
+_Last updated: 2026-08-27 (America/Los_Angeles)_
 
 ## Start here
 
-The active objective is to get the MovieLens MVP working end to end, close the
-remaining release blockers with evidence, and deploy it to a production
-environment selected by the owner.
+The objective is unchanged: get the MovieLens MVP working end to end, close the
+remaining release blockers with evidence, and deploy it. Three of the four things
+this note originally handed off are now settled.
 
-The repository was clean and synchronized with `origin/main` at
-`001bbb4` (`test(e2e): leave Cold Start with zero signals after every journey
-(#67)`) before this documentation branch was created. Frontend Bundles 0-7 are
-merged. The product routes are live in source; the old dashboard is intentionally
-kept only at `/legacy` as the documented rollback.
+- **PR #68 (the documentation handoff) and PR #69 (the serving fix) are merged.**
+  `main` and `origin/main` are at `c2db933`.
+- **The deployment target is chosen: Railway.** ADR 0013 records the decision, the
+  topology, the six alternatives it was weighed against, and the sub-decisions
+  that came with it. `docs/deployment-runbook.md` is the operator's half.
+- **The cold-worker blocker is closed in code, pending a rehearsal that proves
+  it.** See below.
+- **Still open:** the runner-storage question the load gate was instrumented to
+  settle (`docs/release-serving-fix-handoff.md`), the local production-mode
+  rehearsal, and the twelve owner decisions in `docs/deployment-runbook.md` §0.
 
-Do not deploy the current development Compose files unchanged. They contain
-development credentials, public host ports, Keycloak `start-dev`, localhost
-issuers, and no production TLS, secret, backup, or rollback configuration.
+The deployment work lives on `feat/production-deployment`. Nothing has been
+deployed anywhere, and no Railway project exists.
+
+Do not deploy the development Compose files unchanged. They contain development
+credentials, published host ports, Keycloak `start-dev`, localhost issuers, and no
+production TLS, secret, backup or rollback configuration. `docker-compose.prod.yml`
+is the production-shaped rehearsal stack that exists for exactly this reason.
 
 ## What the product is supposed to show
 
@@ -37,177 +46,125 @@ is in `docs/frontend/frontend-system.md`; the final review is in
 `docs/frontend/finish-gate-review.md`. Representative screenshots are under
 `docs/frontend/evidence/bundle-4`, `bundle-5b`, `bundle-6`, and `bundle-7d`.
 
-## Why localhost appeared unchanged
+## Closed: cold model workers
 
-On 2026-08-26, `http://localhost:3001` was still served by a container created
-from `/private/tmp/movielens-bundle1-auth`, not this checkout. Docker labels on
-`movielens-demo-web-1` proved that its Compose working directory and config files
-came from the old Bundle 1 worktree. Bundle 1 predates the redesign, so localhost
-correctly looked like the original dashboard even though current `main` contained
-Bundles 4-7.
+The clean-start defect was real. Immediately after `make demo-seed`,
+`make demo-smoke` reported `Action Fan did not use learned two-stage serving:
+popularity`, and the tenant-scoped audit proved the fallback honest rather than a
+label bug (`fallback_reason: model-server-unavailable`, `ReadTimeout`,
+`positive_signal_count: 8`). A direct cold internal rank returned 200 only after
+10.597 s, about 6.567 s of it Feast; after every worker had seen the input,
+repeated calls were 14–19 ms. `/healthz` proved artifacts had loaded, not that a
+representative rank was inside the 0.5-second client timeout.
 
-The stale API and web containers were replaced with images built from the real
-checkout. Alembic setup was applied, the four deterministic personas were reset,
-the 120-title catalog and 480 background interactions were restored, Feast was
-materialized, and current item-item/LightGBM artifacts were published. Container
-labels then reported this repository as the Compose working directory. The web
-entry document contained the new `MovieLens recommendation lab` sign-in door and
-both API and web health checks passed.
+The fix, on `feat/production-deployment`: `src/serving/model_server.py` now warms
+each worker **inside `lifespan`** — it performs the same online feature read
+`rank()` performs and then a real `rank()`, and asserts the feature matrix is
+non-degenerate — and `/healthz` returns **503 until warm**, reporting `warm`,
+`warmup_ms`, `workers` and `native_threads`. Two consequences worth knowing
+before reading a failure: a worker that cannot find materialized item features in
+Redis refuses to boot rather than serving zeros, so a crash-looping sidecar whose
+log says `no Feast event timestamp` means run `materialize`, not roll back; and
+the startup cost moved into boot, which is why the platform healthcheck timeout is
+300 s.
 
-Local demo login:
+**The required regression evidence has not been produced yet.** It is a rehearsal
+step, not a code question: recreate the sidecars with cold in-process caches, run
+the documented materialize/start sequence, run the smoke **once** with no manual
+priming, prove Action Fan on `item-item-cosine+lightgbm` and Cold Start on
+`popularity`, then run the browser journeys and the load gate. Do not close this
+item on the unit tests alone.
 
-- application account: `demo` / `demo`, Keycloak realm `demo`;
-- development Keycloak admin: `admin` / `admin` at
-  `http://localhost:8080/admin`.
+## Closed: the load gate
 
-These credentials are local-only and must never be reused for deployment.
+PR #69 pinned the model-server's native parallelism
+(`OMP/OPENBLAS/MKL/VECLIB_MAXIMUM_THREADS=1`), which took the local gate from
+p99 903.64 ms to 48.99 ms with no threshold, timeout or durability change, and
+instrumented the gate's shared path so a slow runner can be told from a slow
+service. The invariant travels into production: it is baked into
+`infra/features/Dockerfile` and set again on the Railway `model-server` service.
 
-## Open release blocker: cold model workers
+`docs/release-serving-fix-handoff.md` carries the part that is still open — two
+low-steal CI breaches whose tail was in the shared auth → pooler → audit →
+`fdatasync` path rather than in the ranker, and ADR 0010's rule that the verdict
+comes from the first instrumented runner failure rather than from a laptop.
 
-The refreshed stack exposed a real clean-start defect. Immediately after
-`make demo-seed`, `make demo-smoke` reported:
+## What remains before a deploy
 
-```text
-DemoSmokeError: Action Fan did not use learned two-stage serving: popularity
-```
+**Fourteen rehearsal steps against `docker-compose.prod.yml`**, none of which this
+codebase has ever done. In the order the runbook and CLAUDE.md's current-step
+paragraph put them: the first boot with `ENVIRONMENT != dev` and no
+`DEV_AUTH_BYPASS` variable at all; `KEYCLOAK_AUTHORIZED_PARTIES` in CSV form
+crash-looping before the JSON form works; `feast apply` at image-build time with
+only dummy connection `ARG`s; the whole release sequence from empty volumes; a
+full https OIDC round trip through the Caddy edge on a real hostname; Keycloak
+provisioning run twice with the second run changing nothing; pgBouncer doing
+server-side SCRAM through the forced-user aliases in **both** `auth_query` and
+`userlist` modes; Alembic and the seeder as `migrator` rather than the superuser;
+four deliberate breaks each refusing to boot; a clean-start smoke passing on the
+**first** request; killing the sidecar and separately emptying Redis, with
+`verify` failing in both cases; a rollback across a migration proving the
+database-ahead no-op; a restore drill with the seed step deliberately skipped;
+and the pinned k6 gate plus the browser journeys at the production worker
+topology. **Nothing is created on Railway until `make prod-reset && make
+prod-seed && make prod-verify` runs clean twice from a cold start.**
 
-The tenant-scoped prediction audit proved the fallback was honest rather than a
-policy-label bug:
+**Twelve owner decisions**, in `docs/deployment-runbook.md` §0 as a table with a
+`Recorded` column. D6 (how a rollback is actually performed) is answered from the
+Railway API documentation; the other eleven — the domain, the plan tier, the
+exposure of Keycloak's admin console, persona-impersonation blast radius, Postgres
+TLS, feature-store retention, whether browser journeys run against production,
+one serving tenant, the web boot-time env schema, and secret custody — are open,
+and deploying with a row still open is how a decision gets made by accident.
 
-```text
-fallback_reason: model-server-unavailable
-reason: model-server-unavailable: ReadTimeout
-positive_signal_count: 8
-```
+Then the Railway work itself: create the project with the service names the deploy
+workflow asserts, attach the two domains, create the four volumes, enable the
+Backups tab, create the `production` and `production-canary` GitHub environments,
+set the variables, run `infra/deploy/provision-roles.sql` once, deploy `keycloak`
+and run `keycloak-provision`, and run the release workflow.
 
-The relevant mechanics are:
+## Current local state
 
-- `ModelServerClient` has a 0.5-second timeout (`src/serving/models.py` and
-  `src/config.py`).
-- the model server runs four Uvicorn workers in `docker-compose.demo.yml`;
-- each worker owns a separate in-process Feast feature cache;
-- model-server startup warms LightGBM native initialization, but not a real
-  Feast candidate lookup;
-- `/healthz` proves artifacts loaded, not that a representative rank request is
-  within the client timeout.
+- The demo Compose stack (project `movielens-demo`) is up and healthy, seeded from
+  this checkout with the four deterministic personas, the 120-title catalog, and
+  materialized features.
+- Local demo login is `demo` / `demo` in Keycloak realm `demo`; the development
+  Keycloak admin is `admin` / `admin` at `http://localhost:8080/admin`. These are
+  local-only fixtures and must never be reused for a deployment.
+- Earlier confusion about localhost looking unchanged was container provenance,
+  not code: `http://localhost:3001` was being served by a container created from
+  an old Bundle 1 worktree. Rebuilt from this checkout, it serves the redesigned
+  product.
 
-A direct cold internal rank call returned HTTP 200 only after 10.597 seconds;
-the response attributed about 6.567 seconds to Feast feature lookup and about
-7.068 seconds to model work. After the exact most-recent-first Action Fan input
-had reached every worker, repeated direct calls were approximately 14-19 ms.
-After that warmup, `make demo-smoke` passed with:
+### The local dev Keycloak has drifted from the committed seeds
 
-```json
-{
-  "action_history_count": 8,
-  "action_recommendation_count": 8,
-  "cold_history_count": 0,
-  "cold_recommendation_count": 8,
-  "persona_count": 4
-}
-```
+Worth knowing before anything is concluded from a local realm. `--import-realm`
+**never overwrites a realm that already exists**, so a long-lived development
+Keycloak database keeps whatever it was first created with. This host's does, and
+it is looser than the repository:
 
-This pass proves the currently running warm demo, not clean-start readiness. A
-release fix must make `make demo-seed && make demo-smoke` pass on the first try
-without an undocumented manual request. Do not solve this by silently relaxing
-the production p99 SLO or globally inflating the 0.5-second client timeout.
+| | Committed seed | This host's running Keycloak |
+|---|---|---|
+| `default` realm roles | `user`, `demo-impersonator` | `user` only — no `demo-impersonator` |
+| `movielens-api` redirect URIs (both realms) | `http://localhost:3001/api/auth/callback/keycloak` | `http://localhost:3001/*` |
 
-The most promising scoped direction is an explicit, testable demo warmup/readiness
-step after the feature/model sidecars start. It must exercise the same ordered
-positive/exclusion inputs as the API and cover every configured model worker.
-The load gate already has worker-aware priming; reuse that contract where
-possible instead of creating a second incompatible warmup definition. Preserve
-the existing rule that warm users must report learned serving and fail if they
-quietly fall back to popularity.
+The wildcard is the pre-PR #47 value and the missing role is the pre-PR #45 seed;
+both realms have been running looser than `infra/keycloak/realms/*.json` claims
+since those merged. A fresh import matches the seeds exactly, which is what CI
+does and what `make demo-reset` would do — so this is a stale-database artifact,
+not a repository defect. The `realm-drift` CI job exists to keep it that way.
 
-Required regression evidence:
+**`make keycloak-export-realms` is broken and cannot be used to reconcile this.**
+Two independent reasons: it exports into `/opt/keycloak/data/import`, which
+`docker-compose.yml` mounts read-only, so it cannot write; and `kc.sh export`
+inside a running container starts a second Keycloak runtime whose management
+interface collides with the server's port 9000, so it exits non-zero even when the
+export succeeds. Both are one-line fixes — a different `--dir`, and
+`--http-management-port 9001` — and neither has been made.
 
-1. Start from sidecars recreated with cold in-process caches.
-2. Run the documented materialize/start sequence.
-3. Run `make demo-smoke` once, with no manual priming.
-4. Prove Action Fan uses `item-item-cosine+lightgbm` and Cold Start uses
-   `popularity`.
-5. Run the service-backed browser journeys and load gate after the fix.
+## Definition of done
 
-### PR #68 CI release-gate evidence
-
-The documentation handoff PR reran the release gates against current `main`.
-Every required job except `synthetic-load-smoke` passed, including the demo
-Compose, browser-auth E2E, frontend, lint, unit, tenant-isolation, and
-feature-parity jobs. The load job warmed all four workers successfully, then
-failed the unchanged p99 < 100 ms contract with:
-
-- 3,281 measured requests at 53.891 requests/second;
-- p50 8.417 ms, p95 233.113 ms, and p99 429.518 ms;
-- zero request errors, 100% checks, and zero silent learned fallbacks;
-- 20 dropped iterations and 545 requests over 100 ms (16.61%); and
-- 0.0% host CPU steal during the ten slowest seconds.
-
-ADR 0010 therefore does not permit an environmental remeasurement. Do not
-override the red check to merge PR #68. Diagnose this warm-traffic service tail
-regression on a code branch, retain the cold-worker readiness work above, and
-rerun the unchanged gate. The documentation-only PR did not introduce the
-serving regression, but it correctly remains blocked by the repository's
-required release policy.
-
-## Deployment decision awaiting owner
-
-Three options were presented; the owner has not selected one yet.
-
-1. **Railway (recommended):** public Next.js and Keycloak; private FastAPI,
-   model server, and Feast; separate application and Keycloak Postgres services;
-   Redis; persistent model/feature storage; GitHub deployment; managed domain and
-   TLS. This is the fastest path with the least server administration.
-2. **DigitalOcean plus Coolify:** one 8 GB / 4 vCPU Droplet initially (16 GB if
-   measured pressure requires it), Docker Compose, automatic TLS, off-host
-   encrypted backups, and GitHub deployment. Lower fixed cost, but the owner is
-   responsible for host patching, backup restoration, and the single-node
-   failure domain.
-3. **AWS:** ECS/Fargate, RDS, ElastiCache, S3, ALB, Route 53/ACM, Secrets
-   Manager, and CloudWatch. Scale-ready but excessive for the first MVP release.
-
-Do not split only the frontend onto Vercel for the first release: Keycloak,
-FastAPI, Feast, and model serving would still need another provider, complicating
-issuer URLs, private BFF networking, egress, and rollback. Do not introduce
-Kubernetes for the MVP.
-
-## Exact next sequence
-
-1. Confirm the deployment selection (`Railway`, `DigitalOcean + Coolify`, or
-   `AWS`). Default to Railway when the owner chooses the recommended path.
-2. Implement and test cold-worker startup warmup/readiness on its own feature
-   branch and substantial PR.
-3. From a clean demo lifecycle, run migrations, seed/materialize, the first-try
-   `make demo-smoke`, and the authenticated Playwright journey (`make web-e2e`).
-4. Run backend/unit, auth/RLS/ownership, migration, contract-drift, frontend
-   lint/typecheck/unit/build, page-timing, and synthetic-load gates. Keep host
-   Python/FAISS tests serialized and use one thread for OMP/BLAS/MKL/VECLIB on
-   macOS.
-5. Add the selected platform's production manifest and environment contract:
-   production Keycloak issuer/hostname, generated secrets, private service
-   addresses, migration/release jobs, persistent artifacts, database backups
-   with a restore test, health/readiness probes, TLS/domain configuration,
-   monitoring, and a previous-image rollback.
-6. Deploy, then run production health, OIDC login, tenant-isolation canaries,
-   Discover/Browse/detail/Library/Quick Picks journeys, learned/cold serving
-   assertions, and a production-safe smoke/load check.
-
-## Current local state at handoff
-
-- Git source was clean before this documentation-only branch.
-- `main` and `origin/main` were synchronized at `001bbb4`.
-- Current API, web, Feast, model server, Keycloak, Postgres, pgBouncer, and Redis
-  containers were healthy.
-- The four demo personas were reset to deterministic seed state.
-- The current warm stack passed `make demo-smoke`.
-- PR #68 reran the service-backed browser-auth journey successfully. Its
-  synthetic load gate failed at p99 429.518 ms with no valid host-preemption
-  remeasurement, as recorded above; every other required PR job passed.
-- The in-app browser had no connected browser instance, so runtime verification
-  used container provenance, HTTP health/entry checks, durable audits, direct
-  internal model measurements, and the repository's committed screenshot
-  evidence.
-
-Do not report the MVP deployed or the goal complete until the deployment target
-is chosen, the cold-start readiness regression is fixed, all release gates pass,
-and the public deployment itself passes production smoke and browser journeys.
+Do not report the MVP deployed or the goal complete until the rehearsal passes,
+all release gates are green, the deployment exists, and it passes production
+health, OIDC login, tenant-isolation canaries, the learned/cold serving
+assertions, the browser journeys, and a production-safe smoke and canary.

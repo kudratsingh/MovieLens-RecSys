@@ -49,6 +49,12 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "types-redis",
+    # The deployment tests parse docker-compose.prod.yml and the GitHub
+    # workflows. PyYAML has always been installed here transitively (mlflow,
+    # prefect, dvc and feast all pull it), which is exactly why it is named:
+    # a test suite whose imports depend on somebody else's dependency tree
+    # fails the day that tree changes, and fails as a collection error.
+    "PyYAML",
 ]
 
 [tool.ruff]

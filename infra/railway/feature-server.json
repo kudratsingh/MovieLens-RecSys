@@ -5,6 +5,8 @@
     "dockerfilePath": "infra/features/Dockerfile",
     "watchPatterns": [
       "src/**",
+      "alembic/**",
+      "alembic.ini",
       "infra/features/**",
       "infra/model-bundle/**"
     ]

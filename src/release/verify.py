@@ -16,6 +16,10 @@ V-3   Cold-start handling and learned serving, through the shared demo smoke:
 V-5   The learned path is genuinely learned. ``serving_policy.learned`` must be
       true for a warm persona — a popularity fallback at HTTP 200 is the
       failure this row exists to refuse.
+V-6   Cross-tenant isolation, through the deployment-side canary: an actor from
+      another realm is refused on every persona-guarded route, and the actor
+      that is entitled to them never receives a row stamped with another
+      tenant. (Non-negotiable #9.)
 V-7   The write path commits: one idempotent ``PUT`` with ``expected_revision``,
       a replay of the same idempotency key, an immediate authenticated read of
       the committed revision, then a revert. **Eclectic Viewer only** — the
@@ -33,15 +37,16 @@ V-12  Artifact provenance: the sidecar reports the versions it loaded, and they
 
 Not here, on purpose. **V-2** (no public sidecar) is a Railway-API question the
 deploy workflow asks. **V-4** and **V-10** are separate harnesses invoked whole
-(``synthetic.load.reliability`` and the k6 canary). **V-6**, the cross-tenant
-canary, lives in ``tests/tenant_isolation/remote_canary.py``, which is not
-copied into this image. **V-11** is a Playwright spec.
+(``synthetic.load.reliability`` and the k6 canary). **V-11** is a Playwright
+spec.
 
 Exit codes mirror the isolation canary: 0 every selected check passed, 1 a
 check failed, 2 the run could not be performed at all. A run that could not
 authenticate is never reported as a pass — a verification job that goes green
 because it could not reach the thing it verifies converts an outage into a
-green check.
+green check. The same rule holds one level down: **a selected row that could
+not be run is reported as a failed row**, never omitted, so ``VERIFY-OK`` means
+every row ran and held rather than every row that happened to run.
 """
 
 from __future__ import annotations
@@ -64,6 +69,8 @@ from src.release import VERIFY_SENTINEL, VERIFY_SUBSET_SENTINEL
 from src.release.bootstrap import PreflightError, check_issuer_equality
 from src.serving.orchestration import REASON_LEARNED
 from synthetic.smoke.demo import AuthConfig, DemoSmokeError, run_behavior_smoke
+from synthetic.tenant_isolation.remote_canary import Actor, CanaryError
+from synthetic.tenant_isolation.remote_canary import run as run_isolation_canary
 
 logger = logging.getLogger("release.verify")
 
@@ -83,7 +90,7 @@ AUDIENCE_MAPPER_CONFIG_KEY = "included.client.audience"
 BROWSER_FACING_CLIENTS = ("movielens-api", "movielens-web")
 CALLBACK_PATH = "/api/auth/callback/keycloak"
 
-CHECK_IDS = ("V-0", "V-1", "V-3", "V-5", "V-7", "V-8", "V-9", "V-12")
+CHECK_IDS = ("V-0", "V-1", "V-3", "V-5", "V-6", "V-7", "V-8", "V-9", "V-12")
 
 _DEFAULT_TIMEOUT_SECONDS = 20.0
 _DEFAULT_AUDIT_WINDOW_HOURS = 24
@@ -140,6 +147,10 @@ class VerifyConfig:
     admin_client_secret: str
     admin_username: str
     admin_password: str
+    isolation_realm: str
+    isolation_username: str
+    isolation_password: str
+    service_client_id: str
     warm_user_id: int
     write_user_id: int
     audit_window_hours: int
@@ -184,6 +195,14 @@ def config_from_environment(settings: Settings, args: argparse.Namespace) -> Ver
         admin_client_secret=_env("KEYCLOAK_ADMIN_CLIENT_SECRET"),
         admin_username=_env("KEYCLOAK_ADMIN_USERNAME", "KEYCLOAK_ADMIN"),
         admin_password=_env("KEYCLOAK_ADMIN_PASSWORD"),
+        isolation_realm=args.isolation_realm or _env("ISOLATION_REALM", default="default"),
+        isolation_username=args.isolation_username
+        or _env("ISOLATION_USERNAME", default="isolation"),
+        isolation_password=args.isolation_password or _env("ISOLATION_PASSWORD"),
+        # Whichever client the API trusts by azp alone. The canary refuses to
+        # run if the tenant-A actor authenticated through it, so this is read
+        # from the deployment's own setting rather than assumed.
+        service_client_id=settings.keycloak_service_client_id,
         warm_user_id=args.warm_user_id,
         write_user_id=args.write_user_id,
         audit_window_hours=args.audit_window_hours,
@@ -377,6 +396,76 @@ def check_learned_serving(run: VerifyRun) -> CheckResult:
             f"{LEARNED_POLICY!r}"
         )
     return CheckResult("V-5", "learned serving", True, f"served by {LEARNED_POLICY}", evidence)
+
+
+def check_tenant_isolation(run: VerifyRun) -> CheckResult:
+    """V-6 — no actor reaches another tenant's rows, asked from outside.
+
+    The harness is ``synthetic.tenant_isolation.remote_canary``, called rather
+    than reimplemented: its route table is asserted in CI against the set of
+    routes the application actually guards, so an endpoint added later joins
+    this row instead of quietly escaping it.
+
+    It needs a second identity — an actor in another realm holding neither
+    ``demo-impersonator`` nor the client the API trusts by ``azp`` — and the
+    absence of that identity is a failure rather than a skip. Non-negotiable #9
+    is the one bug class where "the check did not run" and "the check passed"
+    must never look the same in a job summary.
+    """
+    config = run.config
+    if not config.isolation_password:
+        raise CheckFailedError(
+            "V-6 needs a second tenant's actor and this job holds none, so cross-tenant "
+            f"isolation was not proven. Set ISOLATION_PASSWORD for account "
+            f"{config.isolation_username!r} in realm {config.isolation_realm!r} — the "
+            "account provisioning creates deliberately without demo-impersonator."
+        )
+    common = {"client_id": config.client_id, "client_secret": config.client_secret}
+    try:
+        report = run_isolation_canary(
+            run.client,
+            api_url=config.api_url,
+            keycloak_url=config.keycloak_url,
+            actor_a=Actor(
+                realm=config.isolation_realm,
+                username=config.isolation_username,
+                password=config.isolation_password,
+                **common,
+            ),
+            actor_b=Actor(
+                realm=config.realm,
+                username=config.username,
+                password=config.password,
+                **common,
+            ),
+            service_client_id=config.service_client_id,
+        )
+    except CanaryError as exc:
+        raise CheckFailedError(
+            f"the cross-tenant canary could not be run, which is a failure and not a "
+            f"skip: {exc}"
+        ) from exc
+    if not report["passed"]:
+        raise CheckFailedError(
+            "cross-tenant leakage canary failed: "
+            + "; ".join(
+                f"{failure['route']} -> HTTP {failure['status']}: {failure['detail']}"
+                for failure in report["failures"]
+            )
+        )
+    return CheckResult(
+        "V-6",
+        "tenant isolation",
+        True,
+        f"{report['routes_probed']} persona routes refused for realm "
+        f"{report['tenant_a']!r}, and no foreign tenant's rows in realm "
+        f"{report['tenant_b']!r}'s payloads",
+        {
+            "tenant_a": report["tenant_a"],
+            "tenant_b": report["tenant_b"],
+            "routes_probed": report["routes_probed"],
+        },
+    )
 
 
 def check_write_path(run: VerifyRun) -> CheckResult:
@@ -753,6 +842,7 @@ CHECKS: dict[str, tuple[str, Callable[[VerifyRun], CheckResult]]] = {
     "V-1": ("issuer equality", check_issuer),
     "V-3": ("cold-start and learned serving", check_smoke),
     "V-5": ("learned serving", check_learned_serving),
+    "V-6": ("tenant isolation", check_tenant_isolation),
     "V-7": ("durable write path", check_write_path),
     "V-8": ("realm invariants", check_realm_invariants),
     "V-9": ("audit SLI", check_audit_sli),
@@ -762,7 +852,7 @@ CHECKS: dict[str, tuple[str, Callable[[VerifyRun], CheckResult]]] = {
 # V-9 counts the audit rows this run's own reads produced, and V-12 compares
 # the sidecar against the version the API served, so both have to follow the
 # checks that generate that traffic. The order is fixed rather than derived.
-CHECK_ORDER = ("V-0", "V-1", "V-8", "V-3", "V-5", "V-7", "V-12", "V-9")
+CHECK_ORDER = ("V-0", "V-1", "V-8", "V-3", "V-5", "V-7", "V-6", "V-12", "V-9")
 
 
 def run_checks(run: VerifyRun, selected: Sequence[str]) -> list[CheckResult]:
@@ -777,6 +867,25 @@ def run_checks(run: VerifyRun, selected: Sequence[str]) -> list[CheckResult]:
             result = CheckResult(check_id, name, False, str(exc))
         logger.info("%s %s: %s", check_id, "PASS" if result.passed else "FAIL", result.detail)
         results.append(result)
+
+    # A selected row that no dispatch table entry could reach is a failed row,
+    # not an absent one. Otherwise a check registered in CHECKS but missing from
+    # CHECK_ORDER (or a row named on the command line that this build does not
+    # implement) would leave VERIFY-OK standing for a matrix that never ran it —
+    # the same "green because nothing executed" failure the exit codes exist to
+    # refuse, one level down.
+    executed = {result.id for result in results}
+    for check_id in selected:
+        if check_id in executed:
+            continue
+        name = CHECKS[check_id][0] if check_id in CHECKS else "unknown row"
+        detail = (
+            f"{check_id} was selected but this build ran nothing for it "
+            "(it is absent from CHECK_ORDER, or is not a row this build implements). "
+            "Reported as a failure: a row that did not run has proven nothing."
+        )
+        logger.error("%s FAIL: %s", check_id, detail)
+        results.append(CheckResult(check_id, name, False, detail))
     return results
 
 
@@ -788,8 +897,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "checks",
         nargs="*",
-        choices=list(CHECK_IDS),
-        help="Matrix rows to run. Omit with --all to run every row.",
+        metavar="CHECK",
+        # Deliberately not `choices=`. argparse validates a `nargs="*"`
+        # argument's *default* against choices, so `--all` — which passes no
+        # rows at all, and is the command every deployment runs — exited 2 with
+        # "invalid choice: []" before this module did anything. The check is
+        # made by hand in main() instead, where it can say what this build
+        # implements.
+        help=f"Matrix rows to run, from {', '.join(CHECK_IDS)}. Omit with --all for every row.",
     )
     parser.add_argument("--all", action="store_true", help="Run every row of the matrix.")
     parser.add_argument("--api-url", default=None)
@@ -802,6 +917,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--username", default=None)
     parser.add_argument("--password", default=None)
     parser.add_argument("--app-origin", default=None)
+    parser.add_argument("--isolation-realm", default=None)
+    parser.add_argument("--isolation-username", default=None)
+    parser.add_argument("--isolation-password", default=None)
     parser.add_argument("--warm-user-id", type=int, default=WARM_PERSONA_USER_ID)
     parser.add_argument(
         "--write-user-id",
@@ -823,7 +941,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stderr,
     )
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    unknown = [check for check in args.checks if check not in CHECK_IDS]
+    if unknown:
+        parser.error(
+            f"unknown matrix row(s): {', '.join(unknown)}. This build implements "
+            f"{', '.join(CHECK_IDS)}."
+        )
     selected = list(CHECK_IDS) if args.all or not args.checks else list(args.checks)
 
     try:

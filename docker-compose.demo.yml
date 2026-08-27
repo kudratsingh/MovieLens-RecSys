@@ -24,6 +24,13 @@ services:
     image: movielens-recsys/api:demo
     environment:
       ENVIRONMENT: dev
+      # One worker, deliberately. This service is the browser demo and the
+      # service-backed Playwright journeys, which want a single process to
+      # read logs from and to attach a debugger to; the multi-worker shape the
+      # latency gate measures is `api-load` below. The image's CMD is `serve`,
+      # which takes its worker count from API_WORKERS, so this is where that
+      # decision is stated rather than in a command override.
+      API_WORKERS: "1"
       POSTGRES_HOST: postgres
       APP_USER_DB_HOST: pgbouncer
       APP_USER_DB_PORT: 5432

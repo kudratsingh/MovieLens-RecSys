@@ -55,7 +55,7 @@ made by accident.
 | D3 | Hobby or Pro | **Hobby.** Both cost about the same at this topology (~$28–34/mo usage). The 5 GB volume cap is the binding limit and the fixture is 120 titles | ☐ |
 | D4 | Keycloak's admin console is internet-reachable at `https://auth.<domain>/admin`, with no path-level ACL on a Railway domain | Accept, with: a 48-character bootstrap password used once, a named human admin, brute-force protection, and the bootstrap variables deleted afterwards. Otherwise front both hostnames with a CDN path rule from day one | ☐ |
 | D5 | Persona impersonation: any signed-in `demo`-realm account can read **and mutate** all four personas across every product route | `registrationAllowed: false` (already seeded) plus exactly three deliberately-created accounts, and a line on the sign-in door saying the published account drives shared named personas | ☐ |
-| D6 | Does the pinned Railway CLI redeploy a *specific previous* deployment, or does rollback need the GraphQL `deploymentRollback` mutation with `RAILWAY_API_TOKEN`? | Prove it during the rollback rehearsal; hold both tokens until one is proven. This is the one command that must work when nothing else does | ☐ |
+| D6 | Does the pinned Railway CLI redeploy a *specific previous* deployment, or does rollback need the GraphQL `deploymentRollback` mutation with `RAILWAY_API_TOKEN`? | **Answered: the CLI cannot.** `railway redeploy` takes no deployment id and redeploys the *latest*; `railway down` **deletes** the latest deployment rather than reverting — never reach for it during an incident. Rollback is the GraphQL mutation `deploymentRollback(id:)` with `RAILWAY_API_TOKEN`, against the ids the deploy workflow publishes as its `rollback-target` artifact. Hold both tokens: `RAILWAY_API_TOKEN` (account/workspace, `Authorization: Bearer`) is what every step here prefers, `RAILWAY_TOKEN` (project, `Project-Access-Token`) is the fallback | ☑ 2026-08-27 — from the Railway API documentation, not yet from a run |
 | D7 | Postgres TLS | Keep all Postgres traffic on Railway's private mesh; `server_tls_sslmode = prefer` in pgBouncer gives the `app_user` leg TLS for free. Recorded in ADR 0013 — requiring TLS everywhere is a DSN-construction change plus a Feast config change | ☐ |
 | D8 | Retention for `feature_store.*`, which gains one generation per release and is never pruned | Delete-then-insert per `as_of`, keeping the last three generations — bounded by construction rather than by attention | ☐ |
 | D9 | Do the browser journeys run against production? | No. One **read-only** canary spec (sign in, load `/` and `/discover`, assert the learned policy label, sign out). The mutating set writes real rows and stays on the seeded Compose stack in CI | ☐ |
@@ -101,8 +101,10 @@ generated replacement:
 Custody (D12): the password manager is the authority. Railway shared variables hold anything two
 services need; Railway service variables hold single-service secrets; the GitHub `production`
 environment (required reviewer) holds `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, `VERIFY_CLIENT_SECRET`
-and `VERIFY_PASSWORD`. Nothing else in GitHub. CI holds zero secrets today, so this is new plumbing
-either way — do not extend an existing workflow's permissions to reach it.
+and `VERIFY_PASSWORD`, and a second environment `production-canary` holds the same Railway token
+values with no protection rules (§2 step 8 says why). Nothing else in GitHub. CI holds zero secrets
+today, so this is new plumbing either way — do not extend an existing workflow's permissions to reach
+it.
 
 ## 2. Create the project
 
@@ -125,13 +127,30 @@ either way — do not extend an existing workflow's permissions to reach it.
    makes every other setting in `infra/railway/` take effect. `infra/railway/README.md` lists what
    stays dashboard-only.
 
+   **The service names are load-bearing — type them exactly.** The deploy workflow resolves services
+   by name before it deploys anything, and asserts each of these exists:
+
+   ```
+   keycloak  release  model-server  feature-server  api  web  verify
+   pgbouncer  redis  postgres-app  postgres-keycloak
+   ```
+
+   The last four are named so that the `no_public_sidecar` assertion is actually asserting about
+   something: a Postgres service called `Postgres` instead of `postgres-app` makes the check pass
+   over a service it never found. The three remaining jobs — `keycloak-provision`, `backup` and
+   `loadcheck` — are not resolved by the workflow, but name them after their config files too. A
+   wrong name fails the workflow loudly on its first run rather than silently, which is the good
+   version of this mistake, but it is cheaper to avoid.
+
    **One thing must be answered on the first deploy:** does Railway's start command replace the
    container's whole command, or only its `CMD`, leaving the image's `ENTRYPOINT` in front? Every
-   start command in `infra/railway/` is written for the replace-everything reading. If the other
-   reading turns out to be true, `keycloak-provision` becomes `kc.sh /opt/keycloak/provision.sh` and
-   dies on its first line, and `release`/`verify` are handed a mode their dispatcher does not
-   recognise. Both fixes are one line and are written down in `infra/railway/README.md`. Answer it
-   during the Keycloak rehearsal, not during a real provisioning run.
+   start command in `infra/railway/` is written for the replace-everything reading. Exactly one
+   service breaks under the other reading: `keycloak-provision` becomes
+   `kc.sh /opt/keycloak/provision.sh` and dies on its first line. The fix is one line and is written
+   down in `infra/railway/README.md`. Answer it during the Keycloak rehearsal, not during a real
+   provisioning run. (`api`, `release` and `verify` name their dispatcher by absolute path, and its
+   default branch execs an unrecognised first argument as given, so they survive either reading —
+   which is why those three start commands keep the path rather than the bare mode word.)
 4. **Domains.** Attach `app.<domain>` to `web` and `auth.<domain>` to `keycloak`. Attach nothing
    else, ever.
 5. **Volumes.** `postgres-app` 5 GB, `postgres-keycloak` 1 GB, `redis` 1 GB mounted at `/data`. No
@@ -147,6 +166,20 @@ either way — do not extend an existing workflow's permissions to reach it.
 7. **Do not enable app sleeping** on `keycloak`, `api` or `model-server`. Keycloak's 8–15 s JVM cold
    start trips the web app's OIDC discovery, and a slept model-server reintroduces the cold-worker
    defect on the first request after every idle period.
+8. **Create two GitHub environments, not one.** Both hold the same values; they differ only in their
+   protection rules.
+
+   | Environment | Protection | Secrets | Variables |
+   |---|---|---|---|
+   | `production` | required reviewer | `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, `VERIFY_CLIENT_SECRET`, `VERIFY_PASSWORD` | `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID` |
+   | `production-canary` | **none — deliberately no protection rules** | the same Railway token values | the same two ids |
+
+   The second one is not redundant. `.github/workflows/production-canary.yml` runs on a schedule, and a required
+   reviewer on a job that fires every thirty minutes means every canary queues for approval — that
+   is, no canary at all. The project and environment ids are GitHub **variables** rather than
+   secrets, because ids are configuration; with an account or workspace token they must be set, and
+   the workflow refuses with a named error if they are missing. (A project token resolves them
+   itself, but its reach across the API operations these workflows use is unproven — see D6.)
 
 ## 3. Set the variables
 
@@ -186,9 +219,11 @@ and half reads another, and nothing errors — it is a silent split-brain.
 Three more that are easy to miss:
 
 - `MODEL_SERVER_WORKERS` must be set explicitly on `model-server` even though the worker count is
-  also on the start command. The process cannot read its own `--workers` flag, so without the
-  variable `/healthz` reports `"workers": null` and you lose the one place that tells you how many
-  workers actually warmed.
+  also on that service's start command (`infra/railway/model-server.json` runs uvicorn directly).
+  The process cannot read its own `--workers` flag, so without the variable `/healthz` reports
+  `"workers": null` and you lose the one place that tells you how many workers actually warmed. Keep
+  the two in step. The API does not have this problem — its worker count lives in `API_WORKERS`
+  alone.
 - `MODEL_TENANT_ID=demo` must be set explicitly on `api` as well. `/readyz` fetches the JWKS for that
   realm, so the readiness probe and the serving tenant are coupled — make it deliberate rather than a
   default.
@@ -214,7 +249,7 @@ comma-separated `k=v` form, **not** a `redis://` URL.
 
 | Variable | Value |
 |---|---|
-| `ENVIRONMENT` / `PORT` / `API_WORKERS` | `production` / `8000` / `4` |
+| `ENVIRONMENT` / `PORT` / `API_WORKERS` | `production` / `8000` / `4` — `API_WORKERS` is the **only** home for the API's worker count. `infra/railway/api.json` carries no `--workers` literal, the image's `serve` mode reads this variable, and `synthetic/load/recommendations.js` sizes its warm-up from it. The measured p99 baseline is a four-worker number |
 | `APP_USER_DB_HOST` / `_PORT` | `${{pgbouncer.RAILWAY_PRIVATE_DOMAIN}}` / `6432` — **the pooler, not Postgres**; the boot check opens the pooler's admin console at exactly this host and port |
 | `APP_USER_DB_NAME` | `movielens_app` — **a pgBouncer alias, not a database name** |
 | `APP_USER_DB_USER` / `_PASSWORD` | `app_user` / `${{shared.APP_USER_DB_PASSWORD}}` **S** — this role must have neither BYPASSRLS nor SUPERUSER or the boot fails |
@@ -228,8 +263,15 @@ comma-separated `k=v` form, **not** a `redis://` URL.
 | `MODEL_SERVER_URL` / `_TIMEOUT_SECONDS` / `_AUTH_TOKEN` | `http://${{model-server.RAILWAY_PRIVATE_DOMAIN}}:6570` / `0.5` — **do not raise it to paper over cold workers** / `${{shared.MODEL_SERVER_AUTH_TOKEN}}` **S** |
 | `FEAST_FEATURE_SERVER_URL` | `http://${{feature-server.RAILWAY_PRIVATE_DOMAIN}}:6566` |
 | `MODEL_TENANT_ID` | `demo` — `/readyz` fetches this realm's JWKS |
-| `RATE_LIMIT_REQUESTS_PER_MINUTE` / `_BURST` | `120` / `30` |
+| `RATE_LIMIT_REQUESTS_PER_MINUTE` / `_BURST` | `120` / `30` — the ADR 0014 token bucket's refill rate and its capacity. **Leave `RATE_LIMIT_ENABLED` unset**: it is tri-state, and unset means on everywhere except `environment == "dev"`. The image bakes `ENVIRONMENT=production`, so the limiter is on without anyone remembering a variable |
 | `ADMIN_USER_DB_*`, `POSTGRES_*`, `TMDB_READ_ACCESS_TOKEN` | **absent.** The API holds no BYPASSRLS credential, no migrator DSN, and needs no outbound internet except JWKS |
+
+Two things about the limiter that will not be obvious from the two numbers. **The bucket lives in
+the worker process**, so a four-worker API admits up to `4 × 120` per minute for one subject — the
+configured value is per worker, not per service, and ADR 0014 records the Redis-backed shared bucket
+as the named upgrade path rather than pretending otherwise. And **the key is the verified
+`(tenant, sub)`, never a client address**: behind Railway's edge every request arrives from a proxy,
+so an address-keyed limiter would throttle the whole deployment as one caller.
 
 ### `model-server`
 
@@ -289,6 +331,21 @@ comma-separated `k=v` form, **not** a `redis://` URL.
   `ISOLATION_PASSWORD` **S** · `APP_USER_DB_*` and `PGBOUNCER_ADMIN_*` (the audit rollup runs as
   `app_user` through the pooler, inside a tenant-scoped transaction) · `MODEL_SERVER_AUTH_TOKEN`
   **S**. **No `POSTGRES_*`.**
+
+  Three more that `src/release/verify.py` reads and that a `verify` job is easy to create without,
+  because each is a *row* that fails rather than a boot that fails:
+
+  | Variable | Value | Which row needs it |
+  |---|---|---|
+  | `MODEL_SERVER_URL` | `http://${{model-server.RAILWAY_PRIVATE_DOMAIN}}:6570` | The artifact-provenance row reads the sidecar's `/healthz` through `settings.model_server_url`, whose default is `localhost` |
+  | `APP_ORIGIN` (or `PUBLIC_APP_ORIGIN`) | `${{shared.PUBLIC_APP_ORIGIN}}` | The realm-invariants row cannot know which redirect URIs are the expected ones without the public app origin |
+  | `KEYCLOAK_ADMIN_CLIENT_ID` + `KEYCLOAK_ADMIN_CLIENT_SECRET` **S**, or `KEYCLOAK_ADMIN_USERNAME` + `KEYCLOAK_ADMIN_PASSWORD` **S** with `KEYCLOAK_ADMIN_REALM` (default `master`) | a service-account client holding only `view-realm` and `view-clients`, or the named human admin from D4 | The realm-invariants row again — it reads the Keycloak admin API |
+
+  The last one is the awkward one and it is awkward on purpose: `movielens-verify` is
+  `serviceAccountsEnabled: false` and holds no realm-management role, so a leaked verify credential
+  is not an admin credential. That is exactly why the realm-invariants row is the one row that
+  structurally cannot use the verify identity, and why the least-privilege answer is a small
+  service-account client rather than reusing the human admin.
 - **`backup`** (J4) — `PGHOST_APP` / `PGUSER_APP=migrator` / `PGPASSWORD_APP` **S** · `PGHOST_KC` /
   `PGUSER_KC=keycloak` / `PGPASSWORD_KC` **S** · `BACKUP_AGE_RECIPIENT` (an `age` public key) ·
   `RCLONE_CONFIG_REMOTE_*` **S** · `BACKUP_RETENTION_DAILY=7` · `BACKUP_RETENTION_WEEKLY=4` ·
@@ -302,31 +359,83 @@ comma-separated `k=v` form, **not** a `redis://` URL.
 
 ## 4. One-time provisioning SQL
 
-Run once, as Railway's `postgres` superuser, from the dashboard query interface or `railway connect`.
-Railway's `postgres` role **is** a real superuser, which is what makes the BYPASSRLS grants possible
-and is the specific bar DigitalOcean Managed Postgres does not clear.
+**There is exactly one copy of this SQL: `infra/deploy/provision-roles.sql`.** Do not retype it into
+a dashboard query box from memory or from an older version of this document — a second copy is how
+the `ALTER DEFAULT PRIVILEGES` line below goes missing, and its absence fails *every* deploy rather
+than the first one. Run the file once, as Railway's `postgres` superuser, connected to the
+application database, **before the release job's first migration**. Railway's `postgres` role **is** a
+real superuser, which is what makes the BYPASSRLS grants possible and is the specific bar
+DigitalOcean Managed Postgres does not clear.
 
 ```sql
 CREATE DATABASE movielens;   -- migration 0001 hardcodes GRANT CONNECT ON DATABASE movielens
-\c movielens
--- Pre-create the roles with the generated passwords. Migration 0001's
--- DO $$ ... IF NOT EXISTS guards then leave them alone, so the tree-literal
--- passwords 'app_user' / 'admin_user' / 'migrator' never take effect. This is
--- the intended escape hatch; getting it wrong means the production app_user
--- password is the one published in a public repository.
-CREATE ROLE app_user        LOGIN PASSWORD :'app_pw';
-CREATE ROLE admin_user      LOGIN PASSWORD :'admin_pw' BYPASSRLS;
-CREATE ROLE migrator        LOGIN PASSWORD :'migrator_pw' BYPASSRLS;
-CREATE ROLE pgbouncer_auth  LOGIN PASSWORD :'pgb_auth_pw';
-ALTER DATABASE movielens OWNER TO migrator;
-GRANT ALL ON DATABASE movielens TO migrator;
-\i infra/postgres/pgbouncer-auth.sql
 ```
 
-Order matters: `infra/postgres/pgbouncer-auth.sql` installs a `SECURITY DEFINER` lookup function
-executable only by `pgbouncer_auth` and **raises a named exception rather than half-installing** if
-that role does not exist yet. It grants CONNECT on `current_database()` rather than a hardcoded name,
-so the same file works unchanged against the restore-drill database.
+```bash
+# Connected to the application database, as the superuser. The file reads the
+# database name from psql's own :"DBNAME", which is why it must be run from
+# inside the target rather than from `postgres` — and why the same file works
+# unchanged against the restore-drill database.
+psql "$SUPERUSER_DSN_TO_MOVIELENS" -v ON_ERROR_STOP=1 \
+  -v app_password="$APP_USER_DB_PASSWORD" \
+  -v admin_password="$ADMIN_USER_DB_PASSWORD" \
+  -v migrator_password="$MIGRATOR_DB_PASSWORD" \
+  -v pgbouncer_auth_password="$PGBOUNCER_AUTH_PASSWORD" \
+  -f infra/deploy/provision-roles.sql
+
+psql "$SUPERUSER_DSN_TO_MOVIELENS" -v ON_ERROR_STOP=1 \
+  -f infra/postgres/pgbouncer-auth.sql
+```
+
+The file creates `app_user` (plain LOGIN, deliberately **not** BYPASSRLS), `admin_user` and
+`migrator` (both BYPASSRLS), and `pgbouncer_auth`, each with the generated password passed in as a
+psql variable so no secret is ever written into a file or into the server log. Migration `0001`'s
+`IF NOT EXISTS` guards then leave those three alone, which is why pre-creating them here is what keeps
+the tree-literal passwords `app_user` / `admin_user` / `migrator` — published in a public repository —
+from ever taking effect. It is idempotent (`ALTER` where the role already exists), so re-running it
+after a password rotation or a restore is how a rotation is applied.
+
+**Never wrap these statements in a `DO $$ … $$` block.** psql does not interpolate `:'var'` inside a
+dollar-quoted string: the roles would be created with the literal text `:'app_password'` as their
+password, the script would report success, and nobody would be able to log in. The file builds every
+role statement with `format(… %L …)` and runs it through `\gexec` for exactly that reason.
+
+The consequence of `format(… %L …)` is that the password *is* in the SQL text the server executes.
+Postgres defaults to `log_statement = none`, but set `PGOPTIONS="-c log_statement=none"` on the
+session anyway — the rehearsal job does — so a server someone configured otherwise does not end up
+with four generated credentials in its log.
+
+The one statement worth reading before you run it:
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ROLE migrator IN SCHEMA public
+    GRANT SELECT ON TABLES TO admin_user;
+```
+
+The model-server's pre-deploy fence reads `public.alembic_version` to learn whether the release job's
+schema has arrived, and it runs as `admin_user` — that is the identity the features image carries.
+`alembic_version` is created by whoever ran the migration and carries no `GRANT` of its own, so
+without this line the fence fails with `insufficient_privilege` on every deploy, and
+`src/release/bootstrap.py` raises a `ReleaseError` naming this exact statement. Default privileges
+apply only to objects created *after* they are set, so it has to be in place before the first
+migration. It grants nothing meaningful — `admin_user` is already BYPASSRLS.
+
+What the file deliberately does **not** do, in case an older copy of it does: it does not transfer
+ownership of the database or of schema `public` to `migrator`, and it does not create
+`pgbouncer_admin`. `migrator` gets `CONNECT … WITH GRANT OPTION`, `CREATE` on the database, and
+`USAGE, CREATE … WITH GRANT OPTION` on `public` — exactly the privileges migration `0001`'s onward
+grants and migration `0007`'s `CREATE SCHEMA feature_store` exercise, and nothing more. Ownership
+stays with the superuser.
+
+Order matters: `infra/postgres/pgbouncer-auth.sql` runs second because it installs a
+`SECURITY DEFINER` lookup function executable only by `pgbouncer_auth` and **raises a named exception
+rather than half-installing** if that role does not exist yet. It grants CONNECT on
+`current_database()` rather than a hardcoded name, so it too works unchanged against the
+restore-drill database.
+
+The same two files are what the rehearsal stack runs: `docker-compose.prod.yml`'s `postgres-provision`
+job mounts them read-only and applies them before anything else starts. So this step is rehearsed
+rather than performed for the first time against production.
 
 On `postgres-keycloak`, create the `keycloak` database and role with the generated `KC_DB_PASSWORD`.
 Nothing else is needed there — Keycloak manages its own schema.
@@ -340,6 +449,15 @@ into the userlist in **both** modes on purpose — it has no Postgres role behin
 fail.
 
 ## 5. Keycloak and provisioning
+
+**The first deploy has one order and it is not a preference: `keycloak` → `keycloak-provision` →
+`release` → `api`.** `/readyz` — the path Railway's deploy probe polls on the API — checks two
+things, `SELECT 1 FROM public.tenants` through the pooler and the cached JWKS for the realm named by
+`MODEL_TENANT_ID`. So the API cannot answer 200 until the serving realm exists *and* the migrations
+have run, and a deploy that starts the API before either is a deploy that never promotes and times
+out at its healthcheck with nothing in its own logs to explain why. The sidecars slot in between
+`release` and `api` (§6 has the full per-release order); on a first deploy the four steps above are
+the ones that fail closed against each other.
 
 Deploy `keycloak` first. Its healthcheck path is
 `/realms/master/.well-known/openid-configuration`, deliberately not the `demo` realm: on a first
@@ -379,12 +497,21 @@ their grant flags, redirect URIs, mapper presence and its audience) rather than 
 
 ## 6. Release
 
-Deploys run from the `deploy-production.yml` workflow (`workflow_dispatch`, or a `v*` tag), gated on
-the `production` GitHub environment with a required reviewer. In order:
+Deploys run from the `.github/workflows/deploy-production.yml` workflow — `workflow_dispatch`, or a
+push to `main`. There is no tag trigger. The gate job runs without an environment; the job that
+actually touches Railway declares `environment: production`, so the required reviewer is asked to
+approve a commit that has already passed CI rather than one that has not been checked yet. In order:
 
-1. Refuse to proceed unless every required gate is green on this exact commit — `lint`, `test`,
-   `feature-parity`, `tenant-isolation`, `demo-compose`, `frontend`, `serving-artifacts`,
-   `api-contract-check`, `web-api-types-check` and `synthetic-load-smoke`. There is no override.
+1. Refuse to proceed unless **every job `ci.yml` declares** is `success` on this exact commit:
+   `browser-auth-e2e`, `changed-paths`, `demo-compose`, `feature-parity`, `frontend`, `lint`,
+   `synthetic-load-smoke`, `tenant-isolation` and `test`. `serving-artifacts` and `realm-drift` are
+   the two conditional jobs — `ci.yml` gates them on a path filter, so `success` **or** `skipped`
+   passes and a skip is reported as a warning. (A push to `main` has no base commit to diff against
+   and deliberately turns every gate on, so on the runs this workflow normally reads they are
+   `success` anyway.) `api-contract-check` and `web-api-types-check` are **steps, not jobs** —
+   `python -m scripts.generate_openapi --check` inside `lint` and `npm run api:types:check` inside
+   `frontend` — so requiring those two jobs is what requiring those two checks means. There is no
+   override.
 2. **Record the current deployment id of every service** and publish it as a workflow artifact and in
    the job summary. This is the rollback target, captured before anything changes rather than
    reconstructed during an incident.
@@ -393,6 +520,12 @@ the `production` GitHub environment with a required reviewer. In order:
 4. `release` → grep the deployment log for `RELEASE-BOOTSTRAP-OK <revision>`.
 5. `model-server` → its pre-deploy runs `python -m src.release.bootstrap materialize
    --wait-for-schema 300`, then every worker warms inside `lifespan` before `/healthz` returns 200.
+   That fence reads the expected head out of the image: `infra/features/Dockerfile` copies
+   `alembic.ini` and `alembic/`, and `infra/features/requirements.txt` pins `alembic`, so the
+   features image knows its own revision set and can tell "the database is behind" from "the
+   database is *ahead* of this image, because a rollback is in progress". The only override is the
+   `--expected-revision` flag on `bootstrap materialize`, for a container that cannot read the
+   graph; there is no environment literal anybody has to remember to bump.
 6. `feature-server`, then `api`, then `web`, waiting for each.
 7. `verify` → the full post-deploy matrix → grep for `VERIFY-OK`.
 
@@ -421,9 +554,12 @@ door rather than only here.
 - `serving_policy.learned === true` for a warm persona — the check that catches a silent popularity
   fallback returning HTTP 200.
 - The auth boundary: 401 unauthenticated across nine routes, plus request-id echo and persistence,
-  dependency visibility, degraded metadata, bounded pages, cursor rejection and rate limiting
+  dependency visibility, degraded metadata, bounded pages and cursor rejection
   (`python -m synthetic.load.reliability`, invoked whole — it has no `--checks` argument and every
-  check is read-only).
+  check is read-only), plus rate limiting: the `X-RateLimit-*` headers on an admitted request and a
+  429 carrying `Retry-After` once the bucket is drained, with no third behaviour. Because the bucket
+  is per worker, the probe has to spend roughly `workers × burst` requests to drain one, which is
+  why it sends more than the burst suggests.
 - Tenant isolation: the `default`-realm `isolation` account must be 403 on every persona-guarded
   route, and a `demo` token must be refused against a `default` user id. **An unreachable target is a
   hard failure, never a skip.**
@@ -445,9 +581,23 @@ recorded with no verdict.** `synthetic/load/thresholds.js` in CI remains the SLO
 it is four lines, it has never moved, and it is never edited. A canary regression opens an
 investigation and a CI re-run; it never re-baselines anything.
 
+**The canary and the rate limiter share one subject, so watch that interaction on the first run.**
+`loadcheck` authenticates as the single `verify` account and the ADR 0014 bucket is keyed on
+`(tenant, sub)`, so the whole 60-second run spends one subject's allowance: 5 arrivals/s is 300
+requests a minute against an effective `4 × 120 = 480`. That fits with 1.6× headroom, and it is the
+thinnest margin in ADR 0014's table — the `setup()` warm-up is burstier than the steady phase. If the
+canary ever reports 429s, **raise `RATE_LIMIT_REQUESTS_PER_MINUTE` on `api`. Do not weaken the canary
+and do not exempt its client**; the headroom was simply not real. The CI gate is unaffected either
+way, because `api-load` runs with `ENVIRONMENT: dev`, where the limiter is off by default so it
+cannot measure itself.
+
 One maintenance note that will surprise whoever adds the next endpoint: a new persona-guarded route
-must be added to `PERSONA_ROUTES` in `tests/tenant_isolation/remote_canary.py`, or a unit test fails
-by design. A guarded route absent from the canary is a route no deployment proves is isolated.
+must be added to `PERSONA_ROUTES` in `synthetic/tenant_isolation/remote_canary.py`, or a unit test
+fails by design. A guarded route absent from the canary is a route no deployment proves is isolated.
+The canary lives under `synthetic/` rather than `tests/` because it has to ship inside the deployed
+image: `infra/api/Dockerfile` copies `src/`, `alembic/` and `synthetic/`, and never `tests/`, so a
+harness the `verify` job runs cannot live in the test tree. The CI leakage suite that runs against
+the Compose stack stays in `tests/tenant_isolation/`.
 
 ## 8. Incident quick reference
 
@@ -462,12 +612,32 @@ by design. A guarded route absent from the canary is a route no deployment prove
 | The API refuses to boot on a pgBouncer check | Either the pooler is down (the API cannot boot without it, by design), or `pool_mode` is not `transaction`, or `PGBOUNCER_ADMIN_PASSWORD` disagrees between the API and the pooler |
 | A deploy never promotes and the healthcheck times out | `/readyz` is returning non-200. It fails on database or JWKS only, never on a sidecar — so this means the pooler path or Keycloak, not the model server |
 | `verify` fails but the site looks fine | Read the failing row before anything else. A silent popularity fallback, a broken isolation guard and a stale audit table all look fine from a browser |
+| Requests start coming back `429` with `Retry-After` | The ADR 0014 token bucket, working. It is keyed on `(tenant, sub)` from the verified token, so it is one *account* that is over, not the deployment. If the workload is legitimate, raise `RATE_LIMIT_REQUESTS_PER_MINUTE` on `api`; never reach for `RATE_LIMIT_ENABLED=false` on a public service, and never exempt a client |
 
-**Rollback.** `make prod-rollback SERVICE=<name> [TO=<id>]`, using the deployment ids the workflow
-recorded in step 2 above. Roll back in reverse dependency order — `web` → `api` → `feature-server` →
-`model-server` — then re-run `verify`. The workflow does this automatically on any failure at or
-after its release step. Rolling back the model *is* rolling back the sidecar image: the bundle is
-baked, so there is no separate artifact to revert.
+**Rollback.** The deploy workflow rolls back automatically on any failure at or after its release
+step, in reverse dependency order — `web` → `api` → `feature-server` → `model-server` — and then
+re-runs `verify`. `keycloak` and `release` are deliberately excluded: reverting the IdP is an
+identity migration, and re-running an older bootstrap against a newer database is how one incident
+becomes two.
+
+To roll back by hand, **there is no CLI command for it and no `make` target** (D6). The pinned
+Railway CLI cannot reach a specific previous deployment: `railway redeploy` accepts no deployment id
+and redeploys the latest, and `railway down` *deletes* the latest deployment rather than reverting to
+a previous one — do not reach for it during an incident. Rollback is one GraphQL mutation per
+service, and the ids it needs are in the `rollback-target` artifact the deploy workflow published
+before it changed anything (also printed into the job summary):
+
+```bash
+curl -sS https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation deploymentRollback($id: String!) { deploymentRollback(id: $id) { id status } }",
+       "variables":{"id":"<deployment-id-from-the-rollback-target-artifact>"}}'
+```
+
+The mutation is documented as working only on a deployment whose `canRollback` is true. Roll the four
+services back in the order above, then re-run `verify`. Rolling back the *model* is rolling back the
+sidecar image: the bundle is baked, so there is no separate artifact to revert.
 
 ## 9. Backups and the restore drill
 
