@@ -1,0 +1,7 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "redis-server --requirepass \"$REDIS_PASSWORD\" --maxmemory-policy noeviction --appendonly yes --appendfsync everysec --dir /data",
+    "restartPolicyType": "ALWAYS"
+  }
+}

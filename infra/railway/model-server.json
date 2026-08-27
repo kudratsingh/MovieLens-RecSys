@@ -1,0 +1,20 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "infra/features/Dockerfile",
+    "watchPatterns": [
+      "src/**",
+      "infra/features/**",
+      "infra/model-bundle/**"
+    ]
+  },
+  "deploy": {
+    "startCommand": "uvicorn src.serving.model_server:app --host 0.0.0.0 --port 6570 --workers 4 --no-access-log",
+    "preDeployCommand": "python -m src.release.bootstrap materialize --wait-for-schema 300",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
