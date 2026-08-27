@@ -205,6 +205,81 @@ workers gave 25.29 ms and 36.28 ms. The spread within each setting is as wide as
 the gap between them, so the default stays at 4 — but it is now one variable to
 change if runner data says otherwise.
 
+### 2026-08-26 — bound native ranker parallelism per process
+
+PR #68's otherwise-green handoff run failed the gate at p99 429.52 ms with 20
+dropped iterations, while all requests were correct, no warm response quietly
+fell back, and the host recorded 0% CPU steal. The low-steal rule made the
+result final. Reproducing it locally found a real defect — but, as the note
+that follows this one records, not the one the runner was failing on.
+
+A local clean-process reproduction made the failure larger and easier to read:
+p50 81.57 ms, p95 551.37 ms, p99 903.64 ms, 52 dropped iterations, and seven
+warm `ReadTimeout` fallbacks. Its worker warm-up took 2.34 seconds, observed 15
+first-round learned-path fallbacks, and still ended with a 376 ms slowest
+request. Durable audits showed cached Feast reads below 1 ms while ranker and
+whole-request stalls arrived in periodic clusters. The run queue reached 24
+with 0% steal and no cgroup throttling.
+
+The four Uvicorn processes were not the defect by themselves. Each process also
+allowed LightGBM/OpenMP and the linked BLAS runtime to size a native thread team
+to the whole host. Concurrent rank calls therefore multiplied process
+parallelism by host-sized native parallelism. The model-server runtime now pins
+`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
+`VECLIB_MAXIMUM_THREADS` to `1`. Uvicorn's four processes remain the explicit
+serving parallelism; the 0.5-second sidecar timeout, workload, traffic mix, and
+all thresholds remain unchanged.
+
+With only those runtime limits changed, the same clean-process local gate
+passed at p50 7.24 ms, p95 12.50 ms, p99 48.99 ms, and 54.18 requests/second
+across 3,300 requests, with zero errors, dropped iterations, or silent learned
+fallbacks. Warm-up fell to 666 ms, returned the correct policy on every request,
+and ended at 42.2 ms slowest. A separate `demo-up -> demo-seed -> demo-smoke`
+run then recreated the sidecars and passed on its first smoke request without
+manual priming. These variables are a serving invariant, not a local test
+convenience; the production deployment must carry the same values unless a
+measured worker/thread topology replaces them.
+
+### 2026-08-26 — the runner's tail is in the shared path, and the gate now says where
+
+The pins did not make the runner's gate pass. With them on the branch the gate
+failed twice more, at p99 198.97 ms and 164.14 ms, with 6 and 8 dropped
+iterations, 0% steal, and a run queue of 1–2 on the four-vCPU runner — and the
+evidence artifacts across five runs separate two things the local reproduction
+had merged. On the failing runners the tail is not the ranker's: cold traffic,
+which the popularity fallback serves without ever reaching the model server or
+the feature server, breaches as hard as warm traffic (cold p99 174.61 ms against
+warm 146.37 ms; 429.60 against 417.62 on the PR #68 run), the median stays at
+8.4–9.2 ms, and `http_req_waiting` carries all of the time. The passing runs
+across the same commits have the opposite shape — a slower median of 10.6–11.3
+ms and a p99 of 15–19 ms with no second over 100 ms — so the same code measures
+both ways depending on which runner it lands on. What every request shares is
+the auth middleware, the pgBouncer-pooled request transaction, the audit insert,
+and a synchronous commit that costs one `fdatasync`; what differs between runner
+VMs is the device under that WAL. The rule stands: a low-steal breach is not
+re-measured, because CPU steal is the only preemption the runner reports, and
+this one was invisible to it.
+
+The gate therefore records two more kinds of evidence, neither of which feeds
+the decision. `server-side.json` exports the window's `recommendation_audits`
+rows — whose `latency_ms` is timed around the handler alone — together with
+Postgres's WAL and IO counters from either side of the window
+(`track_io_timing` and `track_wal_io_timing` are now on in the base compose
+file), so the summary prints k6's percentiles beside the handler's and the share
+spent outside it, per traffic class and per serving policy, with a per-second
+`srv_p99` column next to `steal%`. `disk-fsync.jsonl` records an `fdatasync`
+burst on Postgres's own volume before the window opens; sampling during the
+window exists behind `LOAD_FSYNC_PROBE=on` but is diagnostic only, because an
+`fdatasync` flushes the device rather than the file, and four probes a second
+measurably slowed the service they were observing (locally p99 29.64 → 124.74
+ms). With the host quiet, the local shape is handler p99 42.45 ms under k6 p99
+68.05 ms, and 1.43 s of WAL sync time across 3,303 syncs. A runner whose tail
+lives outside the handler while its handler percentiles match the passing runs
+is measuring its storage, not the service; whether that earns a storage-stall
+validity rule beside the steal rule, or means taking the runner's disk out of
+the measurement, is decided from the first instrumented runner failure rather
+than from a laptop.
+
 ### 2026-08-21 — page-shaped workloads and browser timing
 
 The recommendation gate measures one endpoint. It is the SLO and it does not
