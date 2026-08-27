@@ -16,9 +16,10 @@
 #      key, so this container cannot decrypt what it produced: a compromised
 #      backup job leaks nothing, and the storage provider is never trusted with
 #      plaintext identity data.
-#   3. The copy leaves the provider. Backups sitting next to the data are one
-#      account away from being lost with it, which is why this runs alongside
-#      Railway's own volume backups rather than instead of them.
+#   3. The copy leaves the box. On a single host the dumps and the database
+#      share one failure domain and one provider account, so a backup that
+#      stays on the volume is lost by whatever loses the machine. Off-box
+#      storage is the whole recovery story here, not a second copy of one.
 #
 # Ownership is dropped from the dump (--no-owner) because the owning role is
 # deployment-specific, but privileges are kept: the app_user / admin_user grants
@@ -55,9 +56,10 @@
 #   --dry-run   resolve everything, print every command that would run with the
 #               credentials redacted, touch nothing, exit 0
 #
-# Prints BACKUP-OK as its final line. Railway shows a cleanly exited job as
-# stopped, so the deploy workflow greps for the sentinel rather than trusting
-# the deployment state.
+# Prints BACKUP-OK as its final line. `docker compose run` does propagate the
+# exit code, so the sentinel is not the only signal here -- it is the one that
+# proves the script reached its own end, which an exit code cannot distinguish
+# from a job the box killed part-way through.
 
 set -euo pipefail
 umask 077

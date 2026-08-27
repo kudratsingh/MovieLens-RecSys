@@ -139,6 +139,10 @@ userlist)
     # the superuser connect direct, so their passwords have no business here.
     append_userlist_entry app_user APP_USER_DB_PASSWORD "${APP_USER_DB_PASSWORD}"
     append_userlist_entry admin_user ADMIN_USER_DB_PASSWORD "${ADMIN_USER_DB_PASSWORD}"
+    # Read by the template, not by this script: pgbouncer.prod.ini.tmpl carries
+    # a ${PGB_AUTH_SECTION} placeholder that the `eval "cat <<EOF"` at the end
+    # expands. shellcheck cannot see through that indirection.
+    # shellcheck disable=SC2034
     PGB_AUTH_SECTION=$(
         cat <<INI
 ; Client authentication against a userlist rendered from the environment at

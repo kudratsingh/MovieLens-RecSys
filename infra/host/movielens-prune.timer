@@ -1,0 +1,18 @@
+# Sundays at 05:00 UTC.
+#
+# Weekly rather than nightly because the thing being reclaimed accumulates per
+# release, not per day, and an hour after the nightly backup so the two never
+# contend for the same disk. As with the backup timer, the zone is stated
+# rather than inherited.
+
+[Unit]
+Description=Weekly MovieLens Docker image prune
+Documentation=file:///opt/movielens/docs/deployment-runbook.md
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

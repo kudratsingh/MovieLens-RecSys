@@ -337,9 +337,10 @@ async def test_healthz_reports_an_unset_worker_count_as_unknown(
 def test_healthz_serves_503_then_200_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
     """Through FastAPI itself, because the status code is the contract.
 
-    Railway's probe and the compose healthcheck both read the status line and
-    nothing else, so an endpoint that returns a ``warm: false`` body with a 200
-    would advertise a cold worker as ready.
+    The compose healthcheck reads the status line and nothing else, and every
+    ``depends_on: service_healthy`` in the production stack waits on it, so an
+    endpoint that returns a ``warm: false`` body with a 200 would advertise a
+    cold worker as ready.
     """
     monkeypatch.setenv("MODEL_SERVER_WORKERS", "4")
     probe = FastAPI()

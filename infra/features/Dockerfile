@@ -46,7 +46,8 @@ ARG REDIS_CONNECTION_STRING=build:6379
 # Bake the Feast registry. The feature views declare explicit schemas
 # (src/features/feast_repo/features.py), so `apply` never has to infer one from
 # the offline store, which is what makes it a build step rather than runtime
-# state on a volume Railway would not let two services share. The check that
+# state on a shared volume — baking it is also what makes rolling the image
+# back roll the registry back with it (ADR 0013). The check that
 # follows is semantic and never a checksum: apply writes a protobuf carrying
 # `last_updated`, so byte equality would fail every build.
 RUN feast -c src/features/feast_repo apply \

@@ -53,9 +53,10 @@
 # push them rather than reading them back, so the loop closes without a human
 # copying a value out of the admin console.
 #
-# Prints PROVISION-OK as its final line. Railway shows a cleanly exited job as
-# stopped, so the deploy workflow greps for that sentinel rather than trusting
-# the deployment state.
+# Prints PROVISION-OK as its final line. `docker compose run` does propagate
+# the exit code, so the sentinel is not the only signal here -- it is the one
+# that proves the script reached its own end, which an exit code cannot
+# distinguish from a job the box killed part-way through.
 
 set -euo pipefail
 umask 077
@@ -113,7 +114,13 @@ render_template() {
   local source="$1" destination="$2" content
   [ -f "$source" ] || fail "template not found: $source"
   content="$(cat "$source")"
+  # Both single-quoted strings below are meant to stay literal: the first is
+  # the placeholder text being searched for, the second the leftover marker
+  # being searched for. Expanding either would defeat the substitution and the
+  # check that follows it.
+  # shellcheck disable=SC2016
   printf '%s' "${content//'${APP_ORIGIN}'/$APP_ORIGIN}" >"$destination"
+  # shellcheck disable=SC2016
   if grep -q '\${' "$destination"; then
     fail "unresolved placeholder left in $source"
   fi
@@ -381,8 +388,8 @@ for realm in demo default; do
 done
 
 # Exactly three accounts, and the difference between them is the point:
-# `walkthrough` is the published portfolio login, `verify` is known only to
-# Railway and GitHub Actions, and `isolation` deliberately lacks
+# `walkthrough` is the published portfolio login, `verify` is known only to the
+# box's own .env.prod and GitHub Actions, and `isolation` deliberately lacks
 # demo-impersonator so the cross-tenant canary has a subject that must be
 # refused across the whole product surface.
 ensure_user demo walkthrough "Portfolio" "Walkthrough" walkthrough@movielens.invalid \

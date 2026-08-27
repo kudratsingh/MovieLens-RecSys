@@ -35,10 +35,12 @@ V-12  Artifact provenance: the sidecar reports the versions it loaded, and they
       are the versions the API just served with.
 ===== ==========================================================================
 
-Not here, on purpose. **V-2** (no public sidecar) is a Railway-API question the
-deploy workflow asks. **V-4** and **V-10** are separate harnesses invoked whole
-(``synthetic.load.reliability`` and the k6 canary). **V-11** is a Playwright
-spec.
+Not here, on purpose. **V-2** (no public sidecar) is settled before anything
+runs rather than probed afterwards: on one host the only published ports are
+the edge's, which ``tests/unit/test_prod_compose.py`` asserts against the
+Compose file and ``ufw`` enforces on the box. **V-4** and **V-10** are separate
+harnesses invoked whole (``synthetic.load.reliability`` and the k6 canary).
+**V-11** is a Playwright spec.
 
 Exit codes mirror the isolation canary: 0 every selected check passed, 1 a
 check failed, 2 the run could not be performed at all. A run that could not
@@ -194,7 +196,7 @@ def config_from_environment(settings: Settings, args: argparse.Namespace) -> Ver
         username=args.username or _env("VERIFY_USERNAME", default="verify"),
         password=args.password or _env("VERIFY_PASSWORD"),
         audience=settings.keycloak_audience,
-        app_origin=(args.app_origin or _env("APP_ORIGIN", "PUBLIC_APP_ORIGIN")).rstrip("/"),
+        app_origin=(args.app_origin or _env("APP_ORIGIN")).rstrip("/"),
         admin_realm=_env("KEYCLOAK_ADMIN_REALM", default="master"),
         admin_client_id=_env("KEYCLOAK_ADMIN_CLIENT_ID"),
         admin_client_secret=_env("KEYCLOAK_ADMIN_CLIENT_SECRET"),
@@ -578,7 +580,7 @@ def check_realm_invariants(run: VerifyRun) -> CheckResult:
     if not config.app_origin:
         raise CheckFailedError(
             "V-8 needs the public application origin to know which redirect URIs are the "
-            "expected ones. Set APP_ORIGIN (or PUBLIC_APP_ORIGIN) on this job."
+            "expected ones. Set APP_ORIGIN on this job."
         )
     token = _admin_token(run)
     admin = f"{config.keycloak_url}/admin/realms/{config.realm}"

@@ -1,10 +1,10 @@
 # Backup and restore-drill image.
 #
 # postgres:16 is the base because pg_dump refuses a server newer than itself and
-# the Railway Postgres template is 16 — the client major has to track it, and the
-# API image (python:3.11-slim) carries no Postgres client tools at all. Pinning
-# the base here means a template upgrade breaks loudly at pg_dump's own version
-# check rather than quietly producing dumps nobody can restore.
+# docker-compose.prod.yml runs postgres:16 — the client major has to track it,
+# and the API image (python:3.11-slim) carries no Postgres client tools at all.
+# Pinning the base here means a server upgrade breaks loudly at pg_dump's own
+# version check rather than quietly producing dumps nobody can restore.
 #
 # age does the client-side encryption and rclone the off-provider copy; both come
 # from Debian bookworm's archive, so the image downloads nothing of its own.

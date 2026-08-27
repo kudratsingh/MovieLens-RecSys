@@ -1,10 +1,11 @@
-"""Structural gates on the production-mode rehearsal stack.
+"""Structural gates on the production stack.
 
 ``docker compose config`` proves the file parses and that every variable it
-interpolates has a value. It cannot prove the things this stack exists to be:
-that no dev-only switch survived into it, that nothing but the TLS edge is
-reachable from the host, that the services which construct ``Settings()`` all
-say ``production``, and that the variable contract and its example file are
+interpolates has a value. It cannot prove the things this stack has to be: that
+no dev-only switch survived into it, that nothing but the TLS edge is reachable
+from the host, that the services which construct ``Settings()`` all say
+``production``, that every image is the one CI published rather than one the
+box built for itself, and that the variable contract and its example file are
 still the same contract. Those are the claims the deployment rests on, so they
 are asserted here rather than remembered.
 
@@ -27,8 +28,7 @@ ENV_EXAMPLE_PATH = REPO_ROOT / "infra" / "deploy" / "production.env.example"
 CADDYFILE_PATH = REPO_ROOT / "infra" / "edge" / "Caddyfile"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 
-# Section 1 of the deployment plan, minus the two Postgres services the
-# platform provides from a template and plus the edge, which exists only here.
+# Everything that runs between deploys. The jobs below run and exit.
 LONG_LIVED_SERVICES = frozenset(
     {
         "postgres-app",
@@ -140,11 +140,11 @@ def test_the_stack_declares_every_service_in_the_deployment_topology() -> None:
 
 
 def test_only_the_edge_is_reachable_from_the_host() -> None:
-    """The data stores and the API publish nothing, exactly as on the platform.
+    """On a single box, a published port is a port on the public internet.
 
-    A published Postgres or API port would make the rehearsal prove less than
-    the deployment does, and it is also what would let the demo stack and this
-    one collide on a host port.
+    ufw is the second line of defence and this is the first: nothing but the
+    edge is reachable from outside the Compose network. It is also what keeps
+    the demo stack and this one from colliding on a host port.
     """
     published = {name: body["ports"] for name, body in SERVICES.items() if body.get("ports")}
     assert set(published) == {"edge"}
@@ -158,8 +158,8 @@ def test_the_edge_answers_to_the_public_hostnames_inside_the_network() -> None:
     fail against its own loopback rather than against Keycloak.
     """
     aliases = SERVICES["edge"]["networks"]["default"]["aliases"]
-    assert "${EDGE_APP_HOST:-app.localtest.me}" in aliases
-    assert "${EDGE_AUTH_HOST:-auth.localtest.me}" in aliases
+    assert "${PUBLIC_APP_HOST:-app.localtest.me}" in aliases
+    assert "${PUBLIC_AUTH_HOST:-auth.localtest.me}" in aliases
 
 
 def test_no_job_starts_on_up() -> None:
@@ -203,33 +203,38 @@ def test_every_settings_building_service_carries_the_guarded_credentials(service
         assert "${PGBOUNCER_ADMIN_PASSWORD" in environment["PGBOUNCER_ADMIN_PASSWORD"]
 
 
-def test_the_api_serves_on_the_measured_worker_shape() -> None:
-    """Four workers and --no-access-log, reached the way the deployment reaches them.
+def test_the_api_serves_through_the_entrypoint_mode_and_not_a_uvicorn_line() -> None:
+    """`serve`, and the worker count as a variable rather than a literal.
 
-    The rehearsal stack used to spell the uvicorn line out here. That renders
-    the identical command, but it lands in the entrypoint's `exec "$@"`
-    fall-through rather than its `serve` branch -- so the one stack whose job is
-    to be the deployment's shape was exercising a start path nothing deploys,
-    and skipping the settings preflight `serve` performs. PORT and API_WORKERS
-    are what drive the worker shape now, and they are asserted here because the
-    command line no longer states it.
+    Spelling the uvicorn line out here renders the identical command, but it
+    lands in the entrypoint's `exec "$@"` fall-through rather than its `serve`
+    branch -- skipping the settings preflight that turns a bad variable into an
+    exit code instead of workers respawning forever inside a container that
+    stays "running". PORT and API_WORKERS are what drive the shape, so they are
+    asserted here: the command line no longer states it.
     """
     assert SERVICES["api"]["command"] == ["serve", "--no-access-log"]
     environment = _environment("api")
-    assert environment["API_WORKERS"] == "4"
+    assert environment["API_WORKERS"] == "${API_WORKERS:-2}"
     assert environment["PORT"] == "8000"
+    entrypoint = (REPO_ROOT / "infra" / "api" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert "${API_WORKERS:-4}" in entrypoint, "the entrypoint no longer reads API_WORKERS"
 
 
-def test_the_api_starts_the_same_way_the_platform_starts_it() -> None:
-    """Compose and infra/railway/api.json must not drift apart on this.
+def test_the_worker_counts_are_sized_for_the_box_and_stated_once() -> None:
+    """Two vCPUs, so two workers -- and the load job has to agree with the API.
 
-    Two start commands for one service is two chances to measure something the
-    deployment does not run.
+    The k6 warm-up sizes itself from API_WORKERS: a warm-up that primes fewer
+    processes than exist leaves cold ones inside the measured window, which is
+    the failure ADR 0010's hardening note was written about. One variable, read
+    by both services, is what stops the two drifting.
     """
-    railway = json.loads((REPO_ROOT / "infra/railway/api.json").read_text())
-    start = railway["deploy"]["startCommand"].split()
-    assert start[0].endswith("entrypoint.sh")
-    assert start[1:] == SERVICES["api"]["command"]
+    assert _environment("api")["API_WORKERS"] == _environment("loadcheck")["API_WORKERS"]
+    for service in ("api", "loadcheck"):
+        assert _environment(service)["API_WORKERS"].endswith(":-2}"), service
+    assert _environment("model-server")["MODEL_SERVER_WORKERS"].endswith(":-2}")
+    for name in ("API_WORKERS", "MODEL_SERVER_WORKERS"):
+        assert name in ENV_EXAMPLE, f"{name} is the box's sizing; it belongs in the example"
 
 
 def test_the_api_keeps_the_model_server_timeout_it_was_measured_with() -> None:
@@ -298,19 +303,22 @@ def test_the_model_server_repeats_the_thread_pins_the_image_bakes() -> None:
 def test_neither_sidecar_takes_a_volume() -> None:
     """The bundle and the registry are baked, which is the whole point.
 
-    It is what makes the platform's "one volume per service, not shareable"
-    constraint a non-issue rather than a workaround, and what makes a model
-    rollback an image rollback.
+    A serving artifact in a volume outlives the image that was tested with it,
+    so a rollback would move the code back and leave the model where it was.
+    Baked, a model rollback is an image rollback.
     """
     assert "volumes" not in SERVICES["model-server"]
     assert "volumes" not in SERVICES["feature-server"]
 
 
 def test_no_long_lived_service_but_the_edge_mounts_the_repository() -> None:
-    """A PaaS has no repository to bind-mount from.
+    """The box has a checkout, and the services still must not read from it.
 
-    The edge is exempt because the edge is the one service in this file that
-    does not exist in the deployment at all -- the platform terminates TLS.
+    An image is pinned by tag and a bind mount is not, so a service that read
+    its configuration, registry or model bundle off the disk would not roll
+    back with everything else -- `deploy.sh --rollback` moves images, not the
+    working tree. The edge is the exception because its Caddyfile is the one
+    piece of configuration that has no image of its own.
     """
     for name in sorted(LONG_LIVED_SERVICES - {"edge"}):
         mounts = [str(mount) for mount in SERVICES[name].get("volumes", [])]
@@ -379,7 +387,7 @@ def test_the_verify_job_can_reach_every_row_it_declares() -> None:
     # which inside this job is this job.
     assert environment["MODEL_SERVER_URL"] == "http://model-server:6570"
     # V-8 cannot know which redirect URIs are the expected ones without it.
-    assert environment["APP_ORIGIN"].startswith("${PUBLIC_APP_ORIGIN")
+    assert environment["APP_ORIGIN"] == "https://${PUBLIC_APP_HOST:-app.localtest.me}"
     # V-8's admin-read identity: the human admin today, a service-account client
     # whenever one exists, and the job prefers the client when both are set.
     assert environment["KEYCLOAK_ADMIN_USERNAME"].startswith("${KC_HUMAN_ADMIN_USERNAME")
@@ -425,6 +433,23 @@ def test_every_interpolated_variable_is_defaulted_or_present_in_the_example() ->
     assert documented_only == []
 
 
+def test_the_backup_job_forwards_every_rclone_key_the_runbook_tells_you_to_set() -> None:
+    """The failure this prevents is silent until 04:00 and looks like a typo.
+
+    ``.env.prod`` is an interpolation source, not a container environment, so a
+    credential the operator adds because the runbook said to reaches rclone only
+    if ``backup`` forwards it by name. Forward ``TYPE`` alone and the job
+    resolves a b2 remote with no key, fails the copy, and the mistake reads as
+    bad credentials rather than a missing line in the Compose file. The runbook
+    recipes and this list are one contract; drift either way is the bug.
+    """
+    runbook = (REPO_ROOT / "docs" / "deployment-runbook.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"\bRCLONE_CONFIG_REMOTE_[A-Z0-9_]+\b", runbook))
+    assert documented, "the runbook stopped naming the rclone variables at all"
+    forwarded = {name for name in _environment("backup") if name.startswith("RCLONE_CONFIG_")}
+    assert sorted(documented - forwarded) == []
+
+
 def test_the_example_file_ships_no_credential_from_the_public_tree() -> None:
     secretish = {
         name: value
@@ -449,13 +474,40 @@ def test_the_example_states_the_password_generation_rule() -> None:
     assert "openssl rand -base64" in text
 
 
-def test_the_edge_terminates_tls_from_its_own_authority() -> None:
+def test_the_edge_takes_its_issuer_from_one_switch_and_defaults_to_the_local_ca() -> None:
+    """`acme` on the box, `internal` on a laptop, and one file for both.
+
+    The default matters as much as the switch: an unset EDGE_TLS that fell
+    through to ACME would ask Let's Encrypt for a certificate for
+    app.localtest.me every time somebody ran the rehearsal, and burn a rate
+    limit against a name nobody can validate.
+    """
     caddyfile = CADDYFILE_PATH.read_text(encoding="utf-8")
-    assert caddyfile.count("tls internal") == 2
-    assert "local_certs" in caddyfile
+    assert caddyfile.count("tls {$EDGE_TLS_ISSUER:internal}") == 2
+    # `local_certs` would pin the internal issuer globally and silently win
+    # over the per-site ACME argument -- an edge that looks configured and
+    # serves a certificate no browser trusts. (The comments say so; the
+    # directives are what this asserts.)
+    directives = [
+        line.strip()
+        for line in caddyfile.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "local_certs" not in directives
     # The admin API has no authentication of its own and nothing drives this
     # edge remotely.
     assert "admin off" in caddyfile
+    # Both hostnames come from the same two variables everything else reads.
+    assert "{$PUBLIC_APP_HOST:app.localtest.me}" in caddyfile
+    assert "{$PUBLIC_AUTH_HOST:auth.localtest.me}" in caddyfile
+    # And the resolution from EDGE_TLS to that single argument happens in one
+    # place: the edge's own entrypoint, which also publishes the matching trust
+    # anchor -- Caddy's root locally, the system bundle under ACME.
+    published = " ".join(str(part) for part in SERVICES["edge"]["command"])
+    assert "EDGE_TLS_ISSUER=internal" in published
+    assert 'EDGE_TLS_ISSUER="$$ACME_EMAIL"' in published
+    assert "/etc/ssl/certs/ca-certificates.crt /edge-ca/root.crt" in published
+    assert _environment("edge")["EDGE_TLS"] == "${EDGE_TLS:-internal}"
 
 
 def test_the_edge_publishes_its_ca_root_where_unprivileged_containers_can_read_it() -> None:
@@ -500,7 +552,75 @@ def test_the_makefile_exposes_the_rehearsal_as_named_targets() -> None:
         assert target in phony, target
 
 
-def test_the_rehearsal_stack_cannot_be_confused_with_the_demo_stack() -> None:
+def test_every_image_is_pulled_from_the_registry_ci_publishes_to() -> None:
+    """One repository, one tag variable, and no service exempt.
+
+    A deploy is `docker compose pull` at IMAGE_TAG=<sha> and nothing else, so a
+    service still carrying a locally-built tag would silently keep whatever
+    happened to be on the box across every release -- and a rollback would not
+    move it. The upstream base images are the exception on purpose: postgres,
+    redis and caddy are pinned by their own tags and are not ours to publish.
+    """
+    upstream = {"postgres:16", "redis:7", "caddy:2-alpine"}
+    ours = [str(body["image"]) for body in SERVICES.values() if body.get("image") not in upstream]
+    assert ours, "no service names an image of ours, which cannot be right"
+    for image in ours:
+        assert image.startswith("${IMAGE_REPOSITORY:-ghcr.io/kudratsingh/movielens-recsys}/"), image
+        assert image.endswith(":${IMAGE_TAG:-main}"), image
+    names = {image.split("/")[-1].split(":")[0] for image in ours}
+    assert names == {"api", "features", "web", "pgbouncer", "keycloak", "backup", "k6"}
+
+
+def test_every_image_of_ours_can_still_be_built_from_this_checkout() -> None:
+    """The box pulls; a laptop builds the same file's images from source.
+
+    Keeping `build:` next to the registry reference is what makes one compose
+    file serve both -- and it is also what would let the box quietly build an
+    image a failed pull left missing, which is why `make prod-pull` asserts
+    every image is present before anything starts.
+    """
+    upstream = {"postgres:16", "redis:7", "caddy:2-alpine"}
+    for name, body in SERVICES.items():
+        if body.get("image") in upstream:
+            continue
+        assert "build" in body, f"{name} names one of our images but cannot build it"
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "docker image inspect" in makefile, "prod-pull no longer asserts the images arrived"
+
+
+def test_the_load_job_runs_the_k6_the_rest_of_the_project_measures_with() -> None:
+    """ADR 0010 makes this version the thing that stops measurements drifting.
+
+    A Dockerfile cannot read a file to build its own FROM line, so the pin is
+    duplicated in infra/k6/Dockerfile and the duplicate is asserted rather than
+    trusted -- a canary running a different k6 than the gate would quietly undo
+    what ADR 0010 pinned the version for. The assertion moved here when the
+    deployment config that used to carry it was deleted.
+    """
+    pinned = (REPO_ROOT / "infra" / "ci" / "k6-version").read_text(encoding="utf-8").strip()
+    dockerfile = (REPO_ROOT / "infra" / "k6" / "Dockerfile").read_text(encoding="utf-8")
+    assert f"ARG K6_VERSION={pinned}" in dockerfile
+    assert SERVICES["loadcheck"]["build"]["args"]["K6_VERSION"] == f"${{K6_VERSION:-{pinned}}}"
+    assert ENV_EXAMPLE["K6_VERSION"] == pinned
+
+
+def test_every_long_lived_service_carries_a_memory_ceiling() -> None:
+    """4 GB, ten services, and one leak away from taking the box down.
+
+    The limits are ceilings rather than reservations and they deliberately sum
+    to more than the box has -- what each one buys is a blast radius: the
+    kernel kills the service that ran away, `docker inspect` says OOMKilled,
+    and the other nine keep serving. The release jobs are exempt: they run one
+    at a time, they are the memory-hungriest things here, and a job killed
+    halfway through a migration is a far worse outcome than one that swaps.
+    """
+    for name in sorted(LONG_LIVED_SERVICES):
+        assert "mem_limit" in SERVICES[name], name
+    for name in sorted(JOB_SERVICES):
+        assert "mem_limit" not in SERVICES[name], name
+
+
+def test_the_production_stack_cannot_be_confused_with_the_demo_stack() -> None:
     """Different project, different volumes, different image tags.
 
     The project name is pinned in the file rather than left to the directory

@@ -43,15 +43,19 @@ LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
 
 # How long `prod-verify` pauses between its two stages. Both authenticate as
 # the same `verify` account, so under ADR 0014 they charge one token bucket:
-# `verify --all` spends ~30 of it, the reliability suite then spends ~40 more
-# within seconds, and against 120/minute with a burst of 30 the tail of the
-# second stage comes back 429 -- which surfaced as `cursor_rejection` reporting
-# a catalog page that "offered no continuation cursor", because a throttled
-# read has no `page` key. The deployment does not have this problem: `verify`
-# is a nightly cron and the reliability suite is invoked separately, minutes
-# apart. It is this target that chains them, so it is this target that pauses.
-# The observed refill is 15s (`X-RateLimit-Reset`); 20 leaves margin. Raising
-# the API's limit to make a chained target fit would be the wrong repair.
+# `verify --all` spends ~30 of it and the reliability suite then spends ~40
+# more within seconds. At the *first* defaults (120/minute, burst 30) the tail
+# of the second stage came back 429 -- which surfaced as `cursor_rejection`
+# reporting a catalog page that "offered no continuation cursor", because a
+# throttled read has no `page` key. At the shipped defaults (600/minute, burst
+# 120) those ~70 requests fit inside one burst and the collision no longer
+# happens, so this pause is no longer what makes the target work.
+#
+# It is kept anyway, for 20 seconds of a several-minute target: the limit is a
+# tuning knob and the failure it prevents is a confusing one to re-diagnose, so
+# lowering the limit should cost a slower verify rather than a red run that
+# blames the catalog. Raising the API's limit to make a chained target fit
+# would still be the wrong repair.
 PROD_VERIFY_COOLDOWN_SECONDS ?= 20
 
 # --- Deterministic serving-artifact build -----------------------------------
@@ -105,7 +109,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
 	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-keycloak-provision prod-seed prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -332,13 +336,22 @@ demo-reset:
 demo-logs:
 	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server model-server postgres pgbouncer keycloak redis
 
-# --- Production-mode rehearsal ----------------------------------------------
-# The order below is the deployment's real order, and it is not the demo
-# stack's. Keycloak has to exist before its realms, the realms have to exist
-# before the API can become ready (/readyz probes the serving realm's JWKS),
-# and the schema has to exist before the sidecar's feature materialization can
-# fence on it. Compose expresses only the first hop of that with depends_on, so
-# the rest is these targets.
+# --- Production ------------------------------------------------------------
+# These targets run the production stack, on the box and on a laptop. The order
+# below is the release's real order, and it is not the demo stack's: Keycloak
+# has to exist before its realms, the realms have to exist before the API can
+# become ready (/readyz probes the serving realm's JWKS), and the schema has to
+# exist before the sidecar's feature materialization can fence on it. Compose
+# expresses only the first hop of that with depends_on, so the rest is these
+# targets -- which is also why infra/deploy/deploy.sh drives them rather than
+# spelling the sequence out a second time.
+#
+# The two halves of the same file:
+#
+#   on the box   deploy.sh exports IMAGE_TAG=<sha> and calls prod-pull,
+#                prod-release, prod-serve and prod-verify. Nothing builds.
+#   on a laptop  up-prod builds the images locally at the default tag and
+#                prod-seed runs the same release steps against them.
 #
 # Nothing on this stack is destructive to `movielens-demo`: different project,
 # different volumes, different image tags.
@@ -354,11 +367,44 @@ prod-env-guard:
 		echo "    python -c \"import secrets; print(secrets.token_urlsafe(48))\""; \
 		exit 1; }
 
+# The laptop entry point: build every image from this checkout, then bring the
+# stores up. The box never runs this -- it pulls what CI built and tested.
 up-prod: prod-env-guard
 	$(PROD_COMPOSE_ALL) build
+	$(MAKE) prod-stores
+
+# The data tier and identity, with the one-time role provisioning in between.
+# Separate from up-prod because a deploy needs exactly this and no build: the
+# release jobs cannot run until Postgres has the roles migration 0001 expects
+# and pgBouncer can authenticate against them.
+prod-stores: prod-env-guard
 	$(PROD_COMPOSE) up -d --wait --wait-timeout 240 postgres-app postgres-keycloak redis edge
 	$(PROD_COMPOSE) run --rm -T postgres-provision
 	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 pgbouncer keycloak
+
+# Every image the compose model names, at whatever IMAGE_TAG is in the
+# environment, followed by the assertion that matters: they are all here now.
+# Without it a failed pull would be quietly repaired by `up` building the image
+# from the checkout the box happens to have -- a release running something CI
+# never tested, with nothing in the log to say so.
+#
+# DEPLOY_SKIP_PULL=1 skips the fetch and *only* the fetch: the presence check
+# below still runs, so the rehearsal proves the same property the box does --
+# every image the release needs is on this machine at this tag. It exists
+# because the local rehearsal drives the real deploy.sh against locally built
+# images that were tagged by hand, and GHCR has nothing to serve for a SHA that
+# was never pushed. It is never set on the box; there the pull is the point.
+prod-pull: prod-env-guard
+	@if [ "$${DEPLOY_SKIP_PULL:-0}" = "1" ]; then \
+		echo "DEPLOY_SKIP_PULL=1: skipping the registry fetch; the images must already be local"; \
+	else \
+		$(PROD_COMPOSE_ALL) pull; \
+	fi
+	@for image in $$($(PROD_COMPOSE_ALL) config --images | sort -u); do \
+		docker image inspect "$$image" >/dev/null 2>&1 || { \
+			echo "missing after pull: $$image"; exit 1; }; \
+	done
+	@echo "all images present at IMAGE_TAG=$${IMAGE_TAG:-main}"
 
 # Realms, clients, the audience mapper and the three named accounts. Separate
 # from prod-seed so R-6 can run it twice and confirm the second run reports no
@@ -367,14 +413,31 @@ up-prod: prod-env-guard
 prod-keycloak-provision: prod-env-guard
 	$(PROD_COMPOSE) run --rm -T keycloak-provision
 
-# preflight -> schema -> seed as migrator, then the feature materialization the
-# sidecar's pre-deploy performs, then the serving tier. The API is started here
-# rather than in up-prod because it cannot become ready until both the realm
-# and the migrations exist, and a service that can never pass its healthcheck
-# is a worse signal than one that has not been asked to start yet.
-prod-seed: prod-env-guard prod-keycloak-provision
+# The laptop's whole release: the state half and then the serving half. It is
+# the same two steps a deploy runs, in the same order, which is what makes a
+# rehearsal worth running. The serving tier is deliberately last -- the API
+# cannot become ready until both the realm and the migrations exist, and a
+# service that can never pass its healthcheck is a worse signal than one that
+# has not been asked to start yet.
+prod-seed: prod-env-guard
+	$(MAKE) prod-release
+	$(MAKE) prod-serve
+
+# Everything a release does to state, and nothing that serves traffic: roles,
+# realms, migrations, seed, feature materialization. Run before the new
+# containers start, because the schema has to be ahead of the code that
+# queries it. Idempotent end to end -- it runs on every deploy including a
+# rollback, where the schema step correctly applies nothing.
+prod-release: prod-env-guard
+	$(MAKE) prod-stores
+	$(MAKE) prod-keycloak-provision
 	$(PROD_COMPOSE) run --rm -T release
 	$(PROD_COMPOSE) run --rm -T materialize
+
+# The serving tier. This is where a deploy's outage is: Compose recreates the
+# containers whose image changed, and --wait holds until every one of them is
+# healthy again -- which for the sidecar means warm, not merely listening.
+prod-serve: prod-env-guard
 	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 feature-server model-server api web
 
 # The post-deploy matrix, in the order the rows depend on each other: the
@@ -387,15 +450,16 @@ prod-seed: prod-env-guard prod-keycloak-provision
 # own: it is in the same image, it wants the same identity, and the API
 # image's entrypoint execs an unrecognised mode as given.
 # The `canary` service is deliberately NOT run here. `verify --all` runs the
-# same module as its V-6 row, and running it twice sweeps the isolation
-# subject's 20 persona routes twice inside a second -- 40 requests against a
-# 30-token burst, so the tail of the second sweep comes back 429 and the
-# canary reports "expected 403 from the persona guard" on a request the rate
-# limiter answered before the guard ever saw it. That was harmless redundancy
-# until ADR 0014's limiter went on in production mode, and this is where it
-# first showed. The standalone service stays in the compose file: it is the
-# form an operator points at a target by hand, with every identity on the
-# command line.
+# same module as its V-6 row, so running it twice sweeps the isolation
+# subject's 20 persona routes twice inside a second. At the first rate-limit
+# defaults that was 40 requests against a 30-token burst, and the tail of the
+# second sweep came back 429 -- with the canary reporting "expected 403 from
+# the persona guard" on a request the limiter had answered before the guard
+# ever saw it. The shipped burst of 120 absorbs 40, so today this is the
+# harmless redundancy it always was rather than a failure; it stays out
+# because a second identical sweep proves nothing either way. The standalone
+# service stays in the compose file: it is the form an operator points at a
+# target by hand, with every identity on the command line.
 prod-verify: prod-env-guard
 	$(PROD_COMPOSE) run --rm -T verify
 	@echo "waiting $(PROD_VERIFY_COOLDOWN_SECONDS)s for the verify subject's rate-limit bucket to refill"
@@ -422,6 +486,28 @@ prod-rollback-rehearsal: prod-env-guard
 
 prod-backup: prod-env-guard
 	$(PROD_COMPOSE) run --rm -T backup
+
+# --- Deploys ----------------------------------------------------------------
+# Both are one line into infra/deploy/deploy.sh, which owns the sequence, the
+# release record in .release/ and the automatic rollback.
+#
+# `env -u IMAGE_TAG MAKEFLAGS=` is not decoration. A variable set on make's
+# command line is exported to every sub-make as an override, and it beats an
+# environment variable set inside the recipe -- so `make prod-deploy
+# IMAGE_TAG=<sha>` would silently force IMAGE_TAG=<sha> on the sub-makes
+# deploy.sh runs during a *rollback*, and the rollback would redeploy the
+# release it was rolling back from. Clearing both here is what lets deploy.sh's
+# own exports decide which images each step pulls.
+prod-deploy:
+	@test -n "$(IMAGE_TAG)" || { \
+		echo "usage: make prod-deploy IMAGE_TAG=<40-character git sha>"; exit 1; }
+	env -u IMAGE_TAG MAKEFLAGS= bash infra/deploy/deploy.sh $(IMAGE_TAG)
+
+# No argument: the release to go back to is the one recorded in
+# .release/previous, and a rollback that took a SHA from whoever is typing at
+# 02:00 would be a rollback to whatever they remembered.
+prod-rollback:
+	env -u IMAGE_TAG MAKEFLAGS= bash infra/deploy/deploy.sh --rollback
 
 # The edge's own CA root, for trusting https://app.localtest.me in a browser
 # (R-5) or with curl --cacert. The containers that need it read it from the
