@@ -129,6 +129,27 @@ Required regression evidence:
    `popularity`.
 5. Run the service-backed browser journeys and load gate after the fix.
 
+### PR #68 CI release-gate evidence
+
+The documentation handoff PR reran the release gates against current `main`.
+Every required job except `synthetic-load-smoke` passed, including the demo
+Compose, browser-auth E2E, frontend, lint, unit, tenant-isolation, and
+feature-parity jobs. The load job warmed all four workers successfully, then
+failed the unchanged p99 < 100 ms contract with:
+
+- 3,281 measured requests at 53.891 requests/second;
+- p50 8.417 ms, p95 233.113 ms, and p99 429.518 ms;
+- zero request errors, 100% checks, and zero silent learned fallbacks;
+- 20 dropped iterations and 545 requests over 100 ms (16.61%); and
+- 0.0% host CPU steal during the ten slowest seconds.
+
+ADR 0010 therefore does not permit an environmental remeasurement. Do not
+override the red check to merge PR #68. Diagnose this warm-traffic service tail
+regression on a code branch, retain the cold-worker readiness work above, and
+rerun the unchanged gate. The documentation-only PR did not introduce the
+serving regression, but it correctly remains blocked by the repository's
+required release policy.
+
 ## Deployment decision awaiting owner
 
 Three options were presented; the owner has not selected one yet.
@@ -179,8 +200,9 @@ Kubernetes for the MVP.
   containers were healthy.
 - The four demo personas were reset to deterministic seed state.
 - The current warm stack passed `make demo-smoke`.
-- A full service-backed Playwright run and full load gate were not rerun during
-  this short handoff session.
+- PR #68 reran the service-backed browser-auth journey successfully. Its
+  synthetic load gate failed at p99 429.518 ms with no valid host-preemption
+  remeasurement, as recorded above; every other required PR job passed.
 - The in-app browser had no connected browser instance, so runtime verification
   used container provenance, HTTP health/entry checks, durable audits, direct
   internal model measurements, and the repository's committed screenshot
