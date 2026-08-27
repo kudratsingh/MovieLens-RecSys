@@ -27,7 +27,52 @@ API_LOAD_WORKERS ?= 4
 LOAD_GATE = API_LOAD_WORKERS=$(API_LOAD_WORKERS) K6_VERSION=$(K6_VERSION) \
 	DEMO_COMPOSE="$(DEMO_COMPOSE)" sh synthetic/load/run_gate.sh
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+# --- Deterministic serving-artifact build -----------------------------------
+# The committed bundle in infra/model-bundle/ is rebuilt and hash-compared by
+# CI on linux/amd64, while most work on this project happens on arm64 macOS.
+# LightGBM's text model is not byte-identical across architectures, so the
+# build runs inside the features image pinned to linux/amd64 rather than
+# against the host interpreter: the bundle is produced on the architecture
+# that checks it. That is also why these targets do not simply invoke
+# `python -m src.training.demo_artifacts` the way the other train-* targets do.
+#
+# ARTIFACT_AS_OF is a literal and is never computed. It becomes the manifest's
+# trained_at, which is what makes manifest.json byte-stable across rebuilds,
+# and it sits after the frozen persona fixture's last event so every seeded
+# rating is in scope (synthetic/personas/seed.py pins both).
+ARTIFACT_AS_OF := 2026-09-01T00:00:00+00:00
+ARTIFACT_PLATFORM ?= linux/amd64
+ARTIFACT_IMAGE ?= movielens-recsys/features:artifacts
+ARTIFACT_DIR ?= infra/model-bundle
+# The build reads the ratings table directly as admin_user. The defaults reach
+# the demo Compose stack's Postgres; CI overrides them to reach its own.
+ARTIFACT_NETWORK ?= movielens-demo_default
+ARTIFACT_DB_HOST ?= postgres
+ARTIFACT_DB_PORT ?= 5432
+ARTIFACT_DB_NAME ?= movielens
+ARTIFACT_DB_USER ?= admin_user
+ARTIFACT_DB_PASSWORD ?= admin_user
+ARTIFACT_TENANT ?= demo
+# The thread pins repeat what the features image already bakes: this is the
+# one invocation whose output is compared byte for byte, so it states its own
+# conditions rather than inheriting them. PYTHONHASHSEED keeps any
+# string-keyed iteration stable for the same reason. The model-server token is
+# set only because the image declares ENVIRONMENT=production and Settings
+# refuses its dev default there; this container never speaks to the sidecar.
+ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
+	--network $(ARTIFACT_NETWORK) \
+	-e ADMIN_USER_DB_HOST=$(ARTIFACT_DB_HOST) \
+	-e ADMIN_USER_DB_PORT=$(ARTIFACT_DB_PORT) \
+	-e ADMIN_USER_DB_NAME=$(ARTIFACT_DB_NAME) \
+	-e ADMIN_USER_DB_USER=$(ARTIFACT_DB_USER) \
+	-e ADMIN_USER_DB_PASSWORD=$(ARTIFACT_DB_PASSWORD) \
+	-e MODEL_TENANT_ID=$(ARTIFACT_TENANT) \
+	-e MODEL_SERVER_AUTH_TOKEN=serving-artifact-build \
+	-e PYTHONHASHSEED=0 \
+	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
+	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
+
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -81,6 +126,36 @@ train-twotower:
 
 train-ranker:
 	python -m src.training.ranker
+
+# Non-negotiable #5's entry point: a fixed seed and a fixed as-of produce the
+# same artifact hashes. It is the serving-bundle build under the name the
+# non-negotiable uses.
+train: serving-artifacts
+
+serving-artifacts-image:
+	docker build --platform $(ARTIFACT_PLATFORM) \
+		-f infra/features/Dockerfile -t $(ARTIFACT_IMAGE) .
+
+# Training logs go to stderr; stdout carries the bundle out of the container as
+# a tar stream, which sidesteps the uid mismatch a writable bind mount would
+# hit between the image's `feastuser` and whatever user CI runs as. It lands in
+# a file rather than a pipe so that a failed build fails this target instead of
+# handing an empty archive to a tar that shrugs.
+serving-artifacts: serving-artifacts-image
+	@mkdir -p $(ARTIFACT_DIR) artifacts
+	$(ARTIFACT_RUN) $(ARTIFACT_IMAGE) sh -c \
+		'python -m src.training.demo_artifacts --train-only \
+			--as-of $(ARTIFACT_AS_OF) --output-dir /tmp/bundle >&2 \
+			&& tar -c -C /tmp/bundle .' > artifacts/serving-bundle.tar
+	tar -x -C $(ARTIFACT_DIR) -f artifacts/serving-bundle.tar
+
+# Rebuilds into a scratch directory inside the container and fails if the
+# committed bundle differs. The mount is read-only: a check must never be able
+# to repair what it is checking.
+serving-artifacts-check: serving-artifacts-image
+	$(ARTIFACT_RUN) -v "$(CURDIR)/$(ARTIFACT_DIR):/app/committed:ro" $(ARTIFACT_IMAGE) \
+		python -m src.training.demo_artifacts --check \
+			--as-of $(ARTIFACT_AS_OF) --output-dir /app/committed
 
 serve:
 	uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --reload

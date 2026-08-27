@@ -1,10 +1,22 @@
-"""Train deterministic serving artifacts for the compact portfolio tenant."""
+"""Train deterministic serving artifacts for the compact portfolio tenant.
+
+Run with no arguments this materializes Feast snapshots and republishes the
+bundle into ``MODEL_ARTIFACT_DIR`` — the shape the demo stack's one-shot
+``feature-setup`` job uses. The release build instead pins ``--as-of`` and
+``--output-dir`` and passes ``--train-only``, which is what lets the committed
+bundle be rebuilt and hash-compared (non-negotiable #5): a pinned ``as_of``
+makes ``manifest.json`` byte-stable, and skipping materialization keeps a
+rebuild from appending another generation of feature rows as a side effect.
+"""
 
 from __future__ import annotations
 
+import argparse
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
@@ -110,26 +122,23 @@ def build_ranker_training_data(
     )
 
 
-def train_serving_artifacts(
-    settings: Settings,
+def publish_serving_artifacts(
+    ratings: pd.DataFrame,
     *,
+    movies: pd.DataFrame,
+    tenant_id: str,
     output_dir: Path,
     as_of: datetime,
+    manifest_name: str = "manifest.json",
 ) -> ServingManifest:
-    """Fit both stages offline and publish a checksum-pinned manifest last."""
-    engine = create_engine(settings.admin_user_database_url, future=True)
-    try:
-        ratings = load_tenant_ratings(
-            engine,
-            tenant_id=settings.model_tenant_id,
-            as_of=as_of,
-        )
-        with engine.connect() as connection:
-            movies = pd.read_sql(_MOVIES_SQL, connection)
-    finally:
-        engine.dispose()
+    """Fit both stages and publish a checksum-pinned manifest last.
+
+    ``as_of`` is the only clock this function reads: it becomes the manifest's
+    ``trained_at``, so a caller that pins it gets a byte-stable manifest for a
+    given set of ratings.
+    """
     if ratings.empty:
-        raise ValueError(f"tenant {settings.model_tenant_id!r} has no ratings to train on")
+        raise ValueError(f"tenant {tenant_id!r} has no ratings to train on")
 
     histories = {
         int(user_id): {int(item_id) for item_id in group["item_id"]}
@@ -165,7 +174,7 @@ def train_serving_artifacts(
     ranker_tmp.replace(ranker_path)
 
     manifest = ServingManifest(
-        tenant_id=settings.model_tenant_id,
+        tenant_id=tenant_id,
         candidate=ArtifactRef(
             artifact_type="item-item-cosine",
             version=CANDIDATE_VERSION,
@@ -181,34 +190,178 @@ def train_serving_artifacts(
         feature_version=FEATURE_VERSION,
         trained_at=as_of.astimezone(UTC).isoformat(),
     )
-    manifest_tmp = output_dir / f".{settings.model_manifest_name}.tmp"
+    manifest_tmp = output_dir / f".{manifest_name}.tmp"
     manifest.write(manifest_tmp)
-    manifest_tmp.replace(output_dir / settings.model_manifest_name)
+    manifest_tmp.replace(output_dir / manifest_name)
     return manifest
 
 
-def materialize_and_train(settings: Settings, *, as_of: datetime | None = None) -> ServingManifest:
+def train_serving_artifacts(
+    settings: Settings,
+    *,
+    output_dir: Path,
+    as_of: datetime,
+) -> ServingManifest:
+    """Read the tenant's ratings as of ``as_of`` and publish the bundle."""
+    engine = create_engine(settings.admin_user_database_url, future=True)
+    try:
+        ratings = load_tenant_ratings(
+            engine,
+            tenant_id=settings.model_tenant_id,
+            as_of=as_of,
+        )
+        with engine.connect() as connection:
+            movies = pd.read_sql(_MOVIES_SQL, connection)
+    finally:
+        engine.dispose()
+    return publish_serving_artifacts(
+        ratings,
+        movies=movies,
+        tenant_id=settings.model_tenant_id,
+        output_dir=output_dir,
+        as_of=as_of,
+        manifest_name=settings.model_manifest_name,
+    )
+
+
+def materialize_and_train(
+    settings: Settings,
+    *,
+    as_of: datetime | None = None,
+    output_dir: Path | None = None,
+) -> ServingManifest:
     timestamp = (as_of or datetime.now(UTC)).astimezone(UTC)
     counts = materialize(settings, as_of=timestamp)
     logger.info("Materialized Feast snapshots: %s", counts)
-    manifest = train_serving_artifacts(
+    return train_serving_artifacts(
         settings,
-        output_dir=settings.model_artifact_dir,
+        output_dir=output_dir if output_dir is not None else settings.model_artifact_dir,
         as_of=timestamp,
     )
+
+
+def manifest_differences(rebuilt: ServingManifest, committed: ServingManifest) -> list[str]:
+    """Manifest fields on which a rebuild disagrees with a committed bundle.
+
+    Comparing the whole manifest rather than only the two artifact hashes
+    means a bundle that was published for the wrong tenant, against a stale
+    feature contract, or at a different ``as_of`` is caught by the same gate.
+    """
+    left = rebuilt.to_dict()
+    right = committed.to_dict()
+    return sorted(key for key in set(left) | set(right) if left.get(key) != right.get(key))
+
+
+def check_serving_artifacts(
+    settings: Settings,
+    *,
+    committed_dir: Path,
+    as_of: datetime,
+) -> list[str]:
+    """Rebuild into a scratch directory and diff against a committed bundle.
+
+    ``ServingManifest.load`` re-hashes the committed artifact files before the
+    rebuild starts, so a bundle whose ``ranker.txt`` was edited after its
+    manifest was written fails here rather than at sidecar boot.
+    """
+    committed = ServingManifest.load(committed_dir / settings.model_manifest_name)
+    with TemporaryDirectory(prefix="serving-artifacts-check-") as scratch:
+        rebuilt = train_serving_artifacts(settings, output_dir=Path(scratch), as_of=as_of)
+    return manifest_differences(rebuilt, committed)
+
+
+def parse_as_of(value: str) -> datetime:
+    """Parse the release build's pinned timestamp, in UTC.
+
+    A naive timestamp is refused instead of being assumed to be UTC: it would
+    be resolved against whatever zone the build host happens to sit in, and two
+    hosts disagreeing on ``trained_at`` is exactly what pinning it prevents.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"--as-of must be an ISO-8601 timestamp: {value!r}") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"--as-of must carry a UTC offset: {value!r}")
+    return parsed.astimezone(UTC)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Train and publish the tenant's two-stage serving bundle."
+    )
+    parser.add_argument(
+        "--as-of",
+        help=(
+            "ISO-8601 timestamp with a UTC offset. Bounds the ratings the "
+            "bundle is trained on and becomes the manifest's trained_at. "
+            "Defaults to now, which is what the demo stack wants and what a "
+            "reproducible release build must never use."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Where to publish the bundle. Defaults to MODEL_ARTIFACT_DIR.",
+    )
+    parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help=(
+            "Skip Feast materialization. A bundle rebuild is a pure read of "
+            "the ratings table; without this it would also append another "
+            "generation of feature rows."
+        ),
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Rebuild into a scratch directory and fail if the bundle already "
+            "in --output-dir differs. Never materializes and never writes."
+        ),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.check and args.as_of is None:
+        parser.error("--check requires the --as-of the committed bundle was built with")
+
+    try:
+        as_of = parse_as_of(args.as_of) if args.as_of else datetime.now(UTC)
+    except ValueError as error:
+        parser.error(str(error))
+
+    settings = Settings()
+    output_dir = args.output_dir if args.output_dir is not None else settings.model_artifact_dir
+
+    if args.check:
+        differences = check_serving_artifacts(settings, committed_dir=output_dir, as_of=as_of)
+        if differences:
+            raise SystemExit(
+                f"the committed serving bundle in {output_dir} is stale; "
+                f"rebuild it with `make serving-artifacts`. "
+                f"Differing manifest fields: {', '.join(differences)}"
+            )
+        logger.info("Serving bundle in %s reproduces at as-of %s", output_dir, as_of.isoformat())
+        return
+
+    if args.train_only:
+        manifest = train_serving_artifacts(settings, output_dir=output_dir, as_of=as_of)
+    else:
+        manifest = materialize_and_train(settings, as_of=as_of, output_dir=output_dir)
     logger.info(
-        "Published serving artifacts tenant=%s candidate=%s ranker=%s features=%s",
+        "Published serving artifacts tenant=%s candidate=%s ranker=%s features=%s trained_at=%s",
         manifest.tenant_id,
         manifest.candidate.version,
         manifest.ranker.version,
         manifest.feature_version,
+        manifest.trained_at,
     )
-    return manifest
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    materialize_and_train(Settings())
 
 
 if __name__ == "__main__":
