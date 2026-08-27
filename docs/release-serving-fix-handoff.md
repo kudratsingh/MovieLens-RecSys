@@ -4,9 +4,8 @@ Date: 2026-08-27 (America/Los_Angeles)
 
 **Status: closed.** The work this note handed off merged as PR #69
 (`fix(serving): pin model native parallelism and instrument the load gate's
-shared path`), and `main` and `origin/main` are at `c2db933`. It is kept because
-one question it opened is still open, and because the deployment carries the
-invariant it established.
+shared path`). It is kept because one question it opened is still open, and
+because the deployment carries the invariant it established.
 
 ## What shipped
 
@@ -22,10 +21,14 @@ four values changed at p50 7.24 ms / p95 12.50 ms / p99 48.99 ms, zero errors an
 zero fallbacks. The four Uvicorn workers, the 0.5-second model-server timeout,
 the commit-before-response contract, the 55-request/second workload and the
 p99 < 100 ms threshold are all unchanged. **A production deployment carries the
-same native-thread invariant** unless a separately measured topology replaces it:
-it is baked into `infra/features/Dockerfile` and set again on the Railway
-`model-server` service, and `docs/deployment-runbook.md` §3 records it as a
-serving invariant rather than a local test convenience.
+same native-thread invariant** unless a separately measured topology replaces it,
+and it is baked into `infra/features/Dockerfile` rather than set per environment —
+so no deployment depends on anyone remembering it.
+
+The production-mode rehearsal (2026-08-27) re-ran the pinned gate against the
+production images with baked artifacts and `ENVIRONMENT=production`, and it passed
+at p50 6.85 ms, p95 9.47 ms, p99 12.93 ms with zero errors and zero dropped
+iterations. That is the number the deployment inherits.
 
 The gate also gained the instrumentation that distinguishes a slow service from a
 slow runner — `server-side.json` (audit-row handler latency beside k6's, per
@@ -52,9 +55,9 @@ gate is not re-run to fish for a green.
 
 ## Where the work went next
 
-The deployment work continues on `feat/production-deployment`, merged with
-`origin/main` at `c2db933`. Three things from this note are carried there rather
-than repeated:
+The deployment work continues on `feat/production-deployment`, which now targets
+a single Hetzner CX22 (ADR 0013, rewritten). Three things from this note are
+carried there rather than repeated:
 
 - the cold-worker readiness defect described in
   `docs/mvp-release-deployment-handoff.md` is closed by warming each model-server
@@ -64,7 +67,8 @@ than repeated:
 - ADR 0013 and `docs/deployment-runbook.md` record that
   `synthetic/load/thresholds.js` in CI remains the SLO's only authority, and that
   the production canary is a deliberately lower-authority instrument that records
-  p99 with no verdict.
+  p99 with no verdict — doubly so now that k6 runs on the same two vCPUs as the
+  service it measures.
 
 A local `make web-e2e` still needs Node 22 and `cd web && npm ci` first; the
 `browser-auth-e2e` CI job is what covers the browser journeys.
