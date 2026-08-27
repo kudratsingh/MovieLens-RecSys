@@ -1,6 +1,20 @@
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
+# --- Production-mode rehearsal stack ----------------------------------------
+# A second, deliberately separate Compose project: its own name, its own
+# volumes, its own images (:prod, not :demo) and no published port except the
+# TLS edge, so it can run alongside the demo stack without either one touching
+# the other's state. Nothing here reads docker-compose.yml -- the dev stack's
+# trust authentication and published data-store ports are exactly what this
+# stack exists not to inherit.
+PROD_ENV_FILE ?= .env.prod
+PROD_COMPOSE = docker compose -p movielens-prod -f docker-compose.prod.yml --env-file $(PROD_ENV_FILE)
+# The release, verification and backup jobs sit behind the `jobs` profile so
+# `up` never starts them. `run` enables a service's own profile on its own;
+# `build` and `down` have to be told.
+PROD_COMPOSE_ALL = $(PROD_COMPOSE) --profile jobs
+
 # Where the load gate leaves its evidence: the k6 summary, the raw sample
 # stream, the per-second latency table, and container CPU snapshots from either
 # side of the measured window. CI uploads it whether the gate passed or failed,
@@ -72,7 +86,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
 	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-keycloak-provision prod-seed prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -297,6 +311,106 @@ demo-reset:
 
 demo-logs:
 	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server model-server postgres pgbouncer keycloak redis
+
+# --- Production-mode rehearsal ----------------------------------------------
+# The order below is the deployment's real order, and it is not the demo
+# stack's. Keycloak has to exist before its realms, the realms have to exist
+# before the API can become ready (/readyz probes the serving realm's JWKS),
+# and the schema has to exist before the sidecar's feature materialization can
+# fence on it. Compose expresses only the first hop of that with depends_on, so
+# the rest is these targets.
+#
+# Nothing on this stack is destructive to `movielens-demo`: different project,
+# different volumes, different image tags.
+
+# Every secret in the stack is generated, so there is no default env file to
+# fall back on. Failing here, with the two commands that fix it, beats failing
+# four services later on an interpolation error.
+prod-env-guard:
+	@test -f $(PROD_ENV_FILE) || { \
+		echo "$(PROD_ENV_FILE) is missing."; \
+		echo "  cp infra/deploy/production.env.example $(PROD_ENV_FILE)"; \
+		echo "  then replace every REPLACE_ME__ value with:"; \
+		echo "    python -c \"import secrets; print(secrets.token_urlsafe(48))\""; \
+		exit 1; }
+
+up-prod: prod-env-guard
+	$(PROD_COMPOSE_ALL) build
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 240 postgres-app postgres-keycloak redis edge
+	$(PROD_COMPOSE) run --rm -T postgres-provision
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 pgbouncer keycloak
+
+# Realms, clients, the audience mapper and the three named accounts. Separate
+# from prod-seed so R-6 can run it twice and confirm the second run reports no
+# change -- a non-idempotent provisioning script is the kind of thing that only
+# shows up on the second deploy.
+prod-keycloak-provision: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T keycloak-provision
+
+# preflight -> schema -> seed as migrator, then the feature materialization the
+# sidecar's pre-deploy performs, then the serving tier. The API is started here
+# rather than in up-prod because it cannot become ready until both the realm
+# and the migrations exist, and a service that can never pass its healthcheck
+# is a worse signal than one that has not been asked to start yet.
+prod-seed: prod-env-guard prod-keycloak-provision
+	$(PROD_COMPOSE) run --rm -T release
+	$(PROD_COMPOSE) run --rm -T materialize
+	$(PROD_COMPOSE) up -d --wait --wait-timeout 300 feature-server model-server api web
+
+# The post-deploy matrix, in the order the rows depend on each other: the
+# in-deployment checks first (readiness, issuer equality, realm invariants,
+# cold-start and learned serving, the write path, artifact provenance, the
+# audit SLI), then cross-tenant isolation, then the non-latency serving
+# promises. Each one exits non-zero on a finding, so `make` stops at the first.
+#
+# The reliability harness rides in the verify service rather than one of its
+# own: it is in the same image, it wants the same identity, and the API
+# image's entrypoint execs an unrecognised mode as given.
+prod-verify: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T verify
+	$(PROD_COMPOSE) run --rm -T canary
+	$(PROD_COMPOSE) run --rm -T verify sh -c \
+		'exec python -m synthetic.load.reliability \
+			--api-url "$$API_URL" --keycloak-url "$$KEYCLOAK_URL" \
+			--realm "$$VERIFY_REALM" --client-id "$$VERIFY_CLIENT_ID" \
+			--client-secret "$$VERIFY_CLIENT_SECRET" \
+			--username "$$VERIFY_USERNAME" --password "$$VERIFY_PASSWORD"'
+
+# V-10. Deliberately weaker than the pinned CI gate, which needs Compose
+# --force-recreate, docker stats and a cgroup probe and has no remote form:
+# correctness and the warm-traffic learned assertion are enforced, p99 is
+# recorded with no verdict. CI keeps the verdict.
+prod-load: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T loadcheck
+
+# R-12. Proves the pre-deploy schema step declines to act when the database is
+# ahead of the image running it -- the difference between a rollback that ends
+# an incident and one that starts a second.
+prod-rollback-rehearsal: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T rollback-rehearsal
+
+prod-backup: prod-env-guard
+	$(PROD_COMPOSE) run --rm -T backup
+
+# The edge's own CA root, for trusting https://app.localtest.me in a browser
+# (R-5) or with curl --cacert. The containers that need it read it from the
+# shared volume instead.
+prod-edge-ca: prod-env-guard
+	@$(PROD_COMPOSE) exec -T edge cat /edge-ca/root.crt
+
+prod-logs: prod-env-guard
+	$(PROD_COMPOSE) logs --tail=200 edge web api model-server feature-server \
+		keycloak pgbouncer postgres-app postgres-keycloak redis
+
+prod-down: prod-env-guard
+	$(PROD_COMPOSE_ALL) down --remove-orphans
+
+# Destructive to movielens-prod only. The whole point of the rehearsal is that
+# the release sequence works from empty volumes with no manual priming, so this
+# is the state every rehearsal run starts from.
+prod-reset: prod-env-guard
+	$(PROD_COMPOSE_ALL) down --volumes --remove-orphans
+	$(MAKE) up-prod
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)

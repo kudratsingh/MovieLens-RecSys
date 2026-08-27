@@ -1,0 +1,91 @@
+# TLS edge for the production-mode rehearsal stack (docker-compose.prod.yml).
+#
+# There is no edge service in the deployed topology -- the platform terminates
+# TLS itself -- so this file is not a piece of production. What it rehearses is
+# everything downstream of an https hostname, which the demo stack has never
+# once exercised: Keycloak minting an https issuer behind a proxy, the API
+# pinning that issuer, Auth.js selecting __Secure- cookie names from AUTH_URL,
+# and the BFF comparing a mutation's Origin against a public origin rather than
+# an internal one. Every value of KEYCLOAK_PUBLIC_BASE_URL in the tree before
+# this stack was http://localhost:8080.
+#
+# app.localtest.me and auth.localtest.me both resolve to 127.0.0.1 with no
+# /etc/hosts entry and no DNS server, which is why they are the default
+# hostnames; the edge also carries them as Compose network aliases so
+# containers resolve the same names to this container rather than to
+# themselves. Override with EDGE_APP_HOST / EDGE_AUTH_HOST for a rehearsal on
+# a real domain -- keep the compose aliases and PUBLIC_*_ORIGIN in step.
+#
+{
+	# Nothing drives this edge remotely and the admin API has no
+	# authentication of its own, so leaving it listening would put a
+	# config-rewrite endpoint on the same private network as every service.
+	admin off
+
+	# Certificates come from Caddy's own CA, not from ACME: these hostnames
+	# are not publicly resolvable and a rehearsal must not depend on a
+	# certificate authority being reachable. The root lands in the shared
+	# `caddy_data` volume at caddy/pki/authorities/local/root.crt, which is
+	# what the release and verify jobs point SSL_CERT_FILE at.
+	local_certs
+
+	# The edge's own log. Access logs for the sites below are enabled
+	# per-site; this one carries provisioning and certificate events, which
+	# is where a hostname mismatch shows up first.
+	log {
+		output stderr
+		format console
+	}
+}
+
+# The product. Next.js serves both the pages and the BFF route handlers, so
+# this one upstream carries the browser session, the PKCE callback and every
+# mutation.
+{$EDGE_APP_HOST:app.localtest.me} {
+	tls internal
+
+	encode zstd gzip
+
+	# reverse_proxy sets X-Forwarded-For, X-Forwarded-Proto and
+	# X-Forwarded-Host on its own and strips any inbound copy, and it
+	# preserves the original Host header. Auth.js is pinned to AUTH_URL
+	# rather than trusting either, but the headers are what make the
+	# request look to the app the way it looks on the platform.
+	reverse_proxy web:3001 {
+		# A first request after a cold start can wait on Next's server
+		# boot; the default 3 s dial timeout would turn that into a 502
+		# during the rehearsal's very first page load.
+		transport http {
+			dial_timeout 10s
+		}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
+
+# Identity. Keycloak is the only other service that gets a public name, here
+# and on the platform.
+{$EDGE_AUTH_HOST:auth.localtest.me} {
+	tls internal
+
+	# The admin console is served from this same hostname and there is no
+	# path-level ACL on a platform domain either, so the rehearsal exposes
+	# exactly the surface the deployment does -- including /admin. That is a
+	# recorded, accepted risk (ADR 0013), and pretending otherwise here
+	# would rehearse a topology nobody is going to run.
+	reverse_proxy keycloak:8080 {
+		# Keycloak's JVM start is 8-15 s and the first request after a
+		# deploy can land inside it.
+		transport http {
+			dial_timeout 20s
+		}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
