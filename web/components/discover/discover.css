@@ -55,8 +55,11 @@
 
 /* Sits with the status line it explains rather than floating over the page:
    the offer is time-boxed, so it has to be somewhere a reader is already
-   looking and somewhere the keyboard reaches in one step. */
-.discover-undo {
+   looking and somewhere the keyboard reaches in one step. `Manage in Library`
+   after a rating is the same slot at a different moment — the two are never on
+   screen together, and the one that is there should be in the same place. */
+.discover-undo,
+.discover-manage {
   margin-top: 0.5rem;
 }
 

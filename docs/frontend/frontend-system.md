@@ -230,7 +230,12 @@ control reports intent (MovieStateAction)
   and a re-pressed control in `useMovieState` both rely on that.
 - **Failure rolls back and returns focus.** Dropping the pending patch restores
   the last committed truth; `lib/movie-state/focus.ts` walks control → row →
-  collection so a keyboard reader is never dropped on `<body>`.
+  collection so a keyboard reader is never dropped on `<body>`. The same walk
+  has a `restoreFocusInPlace` variant for a caller that has just scrolled
+  deliberately: `focus()` scrolls its element into view by default, and that
+  instant scroll resolves against the position a smooth one has not reached yet,
+  so a page that meant to move somewhere lands somewhere else. Discover's
+  rating follow-through is its only caller today.
 - **The relay feeds every surface.** Because recording the committed answer
   happens in the write path rather than in one route, a watchlist set on detail
   shows on the restored Browse card and on the Discover rail. It is per tab, per
