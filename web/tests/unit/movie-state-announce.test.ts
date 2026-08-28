@@ -59,9 +59,12 @@ describe("every voice keeps the four states' meanings distinct", () => {
   });
 
   it("leads a saved rating with the phrase each journey waits on", () => {
+    // Discover records a star from the follow-up panel, on a title it has
+    // already marked watched, so its line answers the question the panel
+    // leaves behind rather than stopping at "saved".
     expect(
       movieStateAnnouncement(committed(RATE), { title: "Heat", voice: "discover" }),
-    ).toBe("Rating saved for Heat.");
+    ).toBe("Rated Heat 4/5. Ratings do not reorder the list — the watch already counts.");
     expect(
       movieStateAnnouncement(committed(RATE), { title: "Heat", voice: "detail" }),
     ).toMatch(/^Rating saved\. 4 stars for Heat/);
@@ -84,6 +87,11 @@ describe("every voice keeps the four states' meanings distinct", () => {
         }),
       ).toMatch(/display feedback|not a graded/i);
     }
+    // Discover says it in the shortest form a card has room for: the watch is
+    // the signal that reaches the model, and the star is not.
+    expect(
+      movieStateAnnouncement(committed(RATE), { title: "Heat", voice: "discover" }),
+    ).toMatch(/do not reorder the list/);
   });
 });
 
