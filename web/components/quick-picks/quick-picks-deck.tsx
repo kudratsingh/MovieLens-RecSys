@@ -32,12 +32,12 @@ import {
   useReducer,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 
 import { MovieRatingControl } from "@/components/movie/movie-state-controls";
 import { PosterFallbackMark } from "@/components/movie/poster-card";
 import { Icon } from "@/components/ui/icons";
+import { useHydrated } from "@/lib/hydration";
 import { REASON_DETAIL, ResourceProblem } from "@/components/ui/resource-region";
 import type { RecommendationResponse } from "@/lib/api";
 import {
@@ -81,11 +81,6 @@ const DECISION_ORDER = ["dismiss", "watchlist", "watched"] as const;
 const CARD_REGION_ID = "quick-pick-card";
 const TITLE_ID = "quick-pick-title";
 const EXHAUSTED_TITLE_ID = "quick-pick-exhausted-title";
-
-// A store that never changes: the only signal wanted is server vs. client.
-const subscribeNever = () => () => {};
-const whileHydrated = () => true;
-const beforeHydration = () => false;
 
 function queueSource(
   state: ResourceState<RecommendationResponse>,
@@ -133,9 +128,8 @@ export function QuickPicksDeck({
   const [seedTitles, setSeedTitles] = useState<Record<number, string | null>>({});
   // Buttons, keys, and swipes all do nothing until React has attached, so the
   // deck says when that has happened and the browser tests wait for it instead
-  // of racing the first server-rendered paint. The server snapshot is what makes
-  // this a hydration signal rather than a mount effect.
-  const interactive = useSyncExternalStore(subscribeNever, whileHydrated, beforeHydration);
+  // of racing the first server-rendered paint.
+  const interactive = useHydrated();
 
   const handledCommit = useRef<unknown>(null);
   const handledRefresh = useRef(0);

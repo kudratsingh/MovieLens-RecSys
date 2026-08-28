@@ -1,6 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
+ * Opens a Library view and waits for hydration. Before it, every control on
+ * the page is real markup that does nothing — the exact shape of a press that
+ * "did not work" — and a cold dev server on a CI runner makes that window
+ * long enough to lose the first click.
+ */
+async function openLibrary(page: Page, url = "/ui-preview/library") {
+  await page.goto(url);
+  await expect(page.locator(".library-route")).toHaveAttribute("data-interactive", "true");
+}
+
+/**
  * Responsive coverage for the Library route against the recorded client.
  *
  * These run at 390, 768, and 1440 through the isolated UI projects. Service-
@@ -16,7 +27,7 @@ async function horizontalOverflow(page: Page) {
 }
 
 test("the rated collection reads as a record of the selected persona", async ({ page }) => {
-  await page.goto("/ui-preview/library");
+  await openLibrary(page);
 
   await expect(
     page.getByRole("heading", { level: 1, name: "A record of what moved you." }),
@@ -41,7 +52,7 @@ test("the rated collection reads as a record of the selected persona", async ({ 
 test("rows carry artwork, and a row without it carries the shared mark", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library");
+  await openLibrary(page);
   await expect(page.getByRole("list", { name: "Rated movies" })).toBeVisible();
 
   // Library was the one route in a poster-first product with no artwork on any
@@ -72,7 +83,7 @@ test("rows carry artwork, and a row without it carries the shared mark", async (
 });
 
 test("a row prints its year once, on the metadata line", async ({ page }) => {
-  await page.goto("/ui-preview/library");
+  await openLibrary(page);
 
   const row = page.getByRole("listitem").filter({ hasText: "Memories of Murder" });
   await expect(row.getByRole("link", { name: "Memories of Murder" })).toBeVisible();
@@ -83,7 +94,7 @@ test("a row prints its year once, on the metadata line", async ({ page }) => {
 test("the ratings summary stays a live read rather than a model explanation", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library");
+  await openLibrary(page);
 
   const summary = page.getByRole("region", { name: /A readable outline/ });
   await expect(summary).toContainText("This summary is not a deployed-model explanation.");
@@ -92,7 +103,7 @@ test("the ratings summary stays a live read rather than a model explanation", as
 });
 
 test("each collection owns its URL state and its own copy", async ({ page }) => {
-  await page.goto("/ui-preview/library");
+  await openLibrary(page);
 
   await page.getByRole("tab", { name: "Watchlist 4" }).click();
   await expect(page).toHaveURL(/tab=watchlist/);
@@ -105,7 +116,7 @@ test("each collection owns its URL state and its own copy", async ({ page }) => 
 });
 
 test("history appends its next page without repeating a row", async ({ page }) => {
-  await page.goto("/ui-preview/library?tab=history");
+  await openLibrary(page, "/ui-preview/library?tab=history");
 
   const rows = page.getByRole("list", { name: "Seen movies" }).getByRole("listitem");
   await expect(rows).toHaveCount(12);
@@ -120,7 +131,7 @@ test("history appends its next page without repeating a row", async ({ page }) =
 });
 
 test("an empty collection offers a way out to Browse", async ({ page }) => {
-  await page.goto("/ui-preview/library?tab=watchlist&empty=watchlist");
+  await openLibrary(page, "/ui-preview/library?tab=watchlist&empty=watchlist");
 
   await expect(page.getByText("Nothing saved yet")).toBeVisible();
   await expect(page.getByRole("link", { name: "Browse the catalog" })).toBeVisible();
@@ -128,7 +139,7 @@ test("an empty collection offers a way out to Browse", async ({ page }) => {
 });
 
 test("a failed collection read leaves the ratings summary readable", async ({ page }) => {
-  await page.goto("/ui-preview/library?fail=library");
+  await openLibrary(page, "/ui-preview/library?fail=library");
 
   await expect(page.getByRole("alert", { name: "Rated collection could not be loaded" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /A readable outline/ })).toBeVisible();
@@ -136,7 +147,7 @@ test("a failed collection read leaves the ratings summary readable", async ({ pa
 });
 
 test("removing history is confirmed and deleting a rating is not", async ({ page }) => {
-  await page.goto("/ui-preview/library?tab=history");
+  await openLibrary(page, "/ui-preview/library?tab=history");
 
   const row = page.getByRole("listitem").filter({ hasText: "Memories of Murder" });
   await row.getByRole("button", { name: "Remove rating" }).click();
@@ -155,7 +166,7 @@ test("removing history is confirmed and deleting a rating is not", async ({ page
 
 test("primary controls stay thumb-sized on a narrow screen", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-390", "Mobile touch-target assertion");
-  await page.goto("/ui-preview/library?tab=watchlist");
+  await openLibrary(page, "/ui-preview/library?tab=watchlist");
 
   const button = page
     .getByRole("listitem")
@@ -176,7 +187,7 @@ test("primary controls stay thumb-sized on a narrow screen", async ({ page }, te
 test("Seen leads with one title at a time, walking the list it sits above", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library?tab=history");
+  await openLibrary(page, "/ui-preview/library?tab=history");
 
   const spotlight = page.getByRole("region", { name: "Seen spotlight" });
   await expect(spotlight).toBeVisible();
@@ -206,7 +217,7 @@ test("Seen leads with one title at a time, walking the list it sits above", asyn
 test("the enriched fields arrive on top of a card that is already complete", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library?tab=history");
+  await openLibrary(page, "/ui-preview/library?tab=history");
   const spotlight = page.getByRole("region", { name: "Seen spotlight" });
 
   // Runtime and the crowd score come from the detail record; the title, the
@@ -219,7 +230,7 @@ test("the enriched fields arrive on top of a card that is already complete", asy
 test("Seen offers the filters and the rankings the collection can answer", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library?tab=history");
+  await openLibrary(page, "/ui-preview/library?tab=history");
 
   // Located by id: both controls are wrapped labels, and a select's accessible
   // name picks up its selected option's text as well as the label's.
@@ -262,7 +273,7 @@ test("Seen offers the filters and the rankings the collection can answer", async
 test("a year range that matches nothing says so, and offers a way back", async ({
   page,
 }) => {
-  await page.goto("/ui-preview/library?tab=history&year_from=1900&year_to=1910");
+  await openLibrary(page, "/ui-preview/library?tab=history&year_from=1900&year_to=1910");
 
   await expect(page.getByText("No matches in this collection")).toBeVisible();
   await expect(page.getByText("Nothing in Seen matches these filters.")).toBeVisible();
@@ -279,7 +290,7 @@ test("a page link that no longer matches the view restarts from the top", async 
   // A cursor is bound to the query fingerprint it was issued under, so this one
   // — kept from a differently sorted view — is a `400` the route recovers from
   // rather than an outage it reports.
-  await page.goto("/ui-preview/library?tab=history&cursor=recorded%3A12%3Astale-view");
+  await openLibrary(page, "/ui-preview/library?tab=history&cursor=recorded%3A12%3Astale-view");
 
   await expect(
     page.getByText(

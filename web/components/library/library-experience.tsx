@@ -23,6 +23,7 @@ import {
   resourceReasonDetail,
 } from "@/components/ui/resource-region";
 import { EmptyState } from "@/components/ui/resource-states";
+import { useHydrated } from "@/lib/hydration";
 import type { LibraryCounts, LibraryResponse, TasteSummaryResponse } from "@/lib/api";
 import { BROWSE_GENRES } from "@/lib/browse/facets";
 import { bffLibraryClient, type LibraryClient } from "@/lib/library/client";
@@ -625,9 +626,12 @@ export function LibraryExperience({
   // the readout would otherwise have to invent from the window it has loaded.
   // The fallback is only for the moment before the first page arrives.
   const spotlightTotal = collection?.page.matched ?? spotlight.movieIds.length;
+  // Every control on this route is real markup before React attaches and does
+  // nothing until it has; the attribute is what the browser tests wait for.
+  const interactive = useHydrated();
 
   return (
-    <div className="library-route">
+    <div className="library-route" data-interactive={String(interactive)}>
       {/* No `Exploring as {persona}` eyebrow here: the shell header prints that
           exact sentence about 40px above this block, and the design contract
           asks for one labelled persona rather than the same claim twice. The
