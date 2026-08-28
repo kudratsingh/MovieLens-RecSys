@@ -1,0 +1,275 @@
+/*
+ * The detail page's rating control.
+ *
+ * Everything here is derived from the tokens in `globals.css`: the gold is
+ * `--rating-star`, the acknowledgement runs on `--motion-stagger`,
+ * `--motion-pop`, and `--motion-collapse`, and the one overshoot easing in the
+ * product, `--ease-pop`, is used here and nowhere else. The JS that sequences
+ * the phases carries the same three durations as exported constants — the two
+ * have to agree, or the row unmounts halfway through its own animation.
+ *
+ * Under `prefers-reduced-motion` the component skips straight to the collapsed
+ * chip and the global reduce block flattens whatever is still running, so the
+ * result of a rating is identical and only the celebration is gone.
+ */
+
+.rating-stars {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.rating-stars legend {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 0 var(--space-2);
+  text-transform: uppercase;
+}
+
+.rating-stars-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.rating-star-row {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  /* Contains the glow, which is drawn outside each star's own box. */
+  position: relative;
+}
+
+.rating-star {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--rating-star-idle);
+  cursor: pointer;
+  display: flex;
+  /* 48px at desktop, 44px on the mobile profile: the glyph grew, and the
+     target has to stay at least as large as the one it replaced. */
+  height: 3rem;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+  width: 3rem;
+}
+
+.rating-star-glyph {
+  height: 32px;
+  position: relative;
+  width: 32px;
+  z-index: 1;
+}
+
+.rating-star.is-filled {
+  color: var(--rating-star);
+}
+
+/* The outline is the empty state; a filled star is a solid shape. */
+.rating-star.is-filled .rating-star-glyph {
+  fill: currentColor;
+}
+
+.rating-star:hover:not([aria-disabled="true"]) .rating-star-glyph {
+  transform: scale(1.06);
+}
+
+.rating-star[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+/*
+ * The commit. Stars fill left to right one `--motion-stagger` apart, the chosen
+ * one pops once at the end of its own delay, and a soft glow blooms behind it
+ * and fades. Three short animations sharing one delay expression is what makes
+ * it read as a single gesture rather than as three effects.
+ */
+.rating-star.is-committing {
+  animation: rating-fill var(--motion-fast) var(--ease-out) both;
+  animation-delay: calc(var(--star-index) * var(--motion-stagger));
+}
+
+.rating-star.is-chosen .rating-star-glyph {
+  animation: rating-pop var(--motion-pop) var(--ease-pop) both;
+  animation-delay: calc(var(--star-index) * var(--motion-stagger));
+}
+
+.rating-star.is-chosen::after {
+  animation: rating-glow var(--motion-pop) var(--ease-out) both;
+  animation-delay: calc(var(--star-index) * var(--motion-stagger));
+  background: radial-gradient(circle, var(--rating-star-glow) 0%, transparent 68%);
+  border-radius: 50%;
+  content: "";
+  inset: -40%;
+  pointer-events: none;
+  position: absolute;
+}
+
+.rating-star-row.is-collapsing {
+  animation: rating-collapse var(--motion-collapse) var(--ease-out) both;
+}
+
+@keyframes rating-fill {
+  from {
+    color: var(--rating-star-idle);
+    transform: scale(0.86);
+  }
+  to {
+    color: var(--rating-star);
+    transform: scale(1);
+  }
+}
+
+@keyframes rating-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes rating-glow {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes rating-collapse {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92) translateY(-0.25rem);
+  }
+}
+
+@keyframes rating-chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * The collapsed state: the value, and one way back in. Deliberately quiet —
+ * the decision has been made, and five 48px controls for a movie that is
+ * already rated are five chances to change it by accident.
+ */
+.rating-chip {
+  align-items: center;
+  animation: rating-chip-in var(--motion-collapse) var(--ease-out);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: 0.35rem 0.4rem 0.35rem var(--space-4);
+}
+
+.rating-chip-stars {
+  color: var(--rating-star-idle);
+  display: inline-flex;
+  gap: 0.05rem;
+}
+
+.rating-chip-stars .is-filled {
+  color: var(--rating-star);
+  fill: currentColor;
+}
+
+.rating-chip-value {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 720;
+}
+
+.rating-chip-separator {
+  color: var(--text-muted);
+}
+
+.rating-chip-change {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 720;
+  /* The chip's only control, and on mobile the primary way back into the
+     rating: it keeps the 44px target the stars it replaced had. */
+  min-height: 2.75rem;
+  padding-inline: var(--space-3);
+}
+
+.rating-chip-change:hover {
+  color: var(--text-primary);
+}
+
+.rating-clear {
+  font-size: 0.8rem;
+}
+
+.rating-note {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  margin: var(--space-3) 0 0;
+  max-width: 36rem;
+}
+
+@media (max-width: 480px) {
+  .rating-star {
+    height: 2.75rem;
+    width: 2.75rem;
+  }
+
+  .rating-star-glyph {
+    height: 28px;
+    width: 28px;
+  }
+}
+
+@media (forced-colors: active) {
+  /* `fill: currentColor` is dropped in forced colours, so a rated star has to
+     be distinguishable by something the mode preserves. */
+  .rating-star.is-filled .rating-star-glyph,
+  .rating-chip-stars .is-filled {
+    stroke-width: 3;
+  }
+
+  .rating-chip {
+    border-color: CanvasText;
+  }
+}

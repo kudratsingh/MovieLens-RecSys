@@ -30,7 +30,7 @@ isolated screenshot and responsive-test harnesses and is ignored in production.
 | `/ui-preview/discover` | fixture resolution, first-pick hierarchy | poster failure, state controls, rail, evidence drawer | recommendations, evidence |
 | `/ui-preview/browse` | catalog resource boundary | search, sort, filters/sheet, poster grid | catalog |
 | `/ui-preview/library` | selected fixture collection | collection tabs and poster states | library |
-| `/ui-preview/movies/[movieId]` | movie lookup and metadata | poster failure, state controls, rating, evidence drawer | detail fixture |
+| `/ui-preview/movies/[movieId]` | movie lookup and metadata | poster failure, state controls, rating, trailer plate, evidence drawer | detail fixture |
 | `/ui-preview/quick-picks` | queue item selection | equal button and keyboard preview paths | queue fixture |
 
 Pages and layouts remain Server Components by default. Client boundaries are
@@ -54,8 +54,14 @@ Semantic CSS variables in `web/app/globals.css` cover:
 - primary, secondary, muted, and inverse text;
 - accent and high-visibility focus;
 - success, warning, destructive, and degraded state;
-- poster fallback and overlay; and
+- poster fallback and overlay;
+- rating gold, its idle counterpart, and its glow; and
 - 4px-derived spacing, typography roles, radii, shadows, motion, and easing.
+
+Motion is `--motion-fast`, `--motion-standard`, and the acknowledgement trio
+`--motion-stagger` / `--motion-pop` / `--motion-collapse`. `--ease-out` is the
+general easing; `--ease-pop` is the only one that leaves 0–1 and exists for the
+single overshoot in the product, the star that lands when a rating commits.
 
 Dark-first is intentional. Every interactive control receives a visible
 `:focus-visible` ring. Primary mobile targets are at least 44 CSS pixels.
@@ -94,7 +100,19 @@ Reviewers can exercise the contract without a backend:
 /ui-preview/discover?fail=evidence
 /ui-preview/browse?fail=catalog
 /ui-preview/library?fail=library
+/ui-preview/movies/101?fail=movie-detail
 ```
+
+Movie detail's enrichment states are addresses rather than scripted
+interactions, because the recorded catalog carries one title per branch: `101`
+is fully enriched with a trailer and a backdrop, `103` is enriched with neither
+and already rated, `104` is enriched and rated over a backdrop, and everything
+from `111` up has no `details` at all. The preview's writes are answered by an
+in-memory `MovieStateClient` (`lib/fixtures/movie-state-preview.ts`) so the
+states a commit *produces* — the rating chip, and the reopened row behind it —
+are reachable without a backend. It applies ADR 0012's transitions by calling
+the same `applyActionToDisplay` the live surfaces use, so a preview screenshot
+cannot show a combination the product would never commit.
 
 Two properties of the shared blocks in `components/ui/resource-states.tsx`:
 a failure region is named by its **headline** rather than by the transport
@@ -140,7 +158,8 @@ change, and every surface that offers them renders the same component family in
 | Export | What it is |
 |---|---|
 | `MovieStateControls` | The watched / watchlist / dismissal row, plus the confirmation that guards removing watched history. |
-| `MovieRatingControl` | The rating editor, in whole stars or the stored half-star precision. |
+| `MovieRatingControl` | The compact rating editor, in whole stars or the stored half-star precision. Discover, Browse, the Library, and Quick Picks use it. |
+| `RatingStars` | Movie detail's large rating control (`components/movie/rating-stars.tsx`). Same intent, same write path, more room — see below. |
 | `MovieStatePanel` | Movie detail's composition: the family wired to the write path, with its own status and error regions. |
 
 Surfaces differ by *declaration*, not by forking the component. A control set is
@@ -171,7 +190,51 @@ the status line that restores both the server row and the cursor; watched does
 not, because `watched: final` on this surface means what it says, and a bare
 `Undo` there would quietly become the destructive edit the control set refuses.
 
-Three further properties are load-bearing:
+### `RatingStars`: two sizes of one control, not two controls
+
+The two rating editors are a deliberate split, and the line between them is
+whether rating is *the* decision on the surface or an edit alongside others. A
+Library row is editing a value it already has; a movie's own page is where
+somebody decides what they thought of it. So detail gets the larger stars (32px
+at desktop, 28px at 390, in a target that never drops below 44px), a preview
+fill from the left on hover and keyboard focus, a roving tab stop with arrow
+selection, and an acknowledgement.
+
+Everything that could make the two disagree is shared: both report a
+`MovieStateAction` to `useMovieState`, both write through `lib/movie-state/`,
+and both carry the same ADR 0012 sentence about what a star does and does not
+commit to. `RatingStars` adds no policy of its own; it never writes.
+
+Three properties are worth naming because they are what the acknowledgement is
+*for*, and each of them is a decision rather than an effect:
+
+- **The celebration follows the commit, never the press.** The optimistic frame
+  fills the row immediately so a press has an answer, but the stagger, the pop,
+  and the collapse are driven by the committed rating arriving. A rating that
+  fails and rolls back is never celebrated — the same commit-before-acknowledge
+  rule the auth middleware keeps for durability, applied to what the viewer
+  sees. Re-confirming the value already stored is acknowledged too, because that
+  write succeeds and changes nothing: an effect watching the value alone would
+  never fire and the row would sit open after a perfectly good press.
+- **The sequence is timers, not `animationend`.** One set of durations lives in
+  `globals.css` (`--motion-stagger`, `--motion-pop`, `--motion-collapse`,
+  `--ease-pop`) and the same numbers are exported from `rating-stars.tsx`, so
+  the phases and the CSS cannot drift apart and the whole thing is assertable
+  under fake timers. `prefers-reduced-motion` skips to the collapsed chip and
+  the result is identical.
+- **Focus is placed, not dropped.** The star that was pressed unmounts when the
+  row collapses, so focus moves to `Change rating`; reopening puts it back on
+  the recorded value. A polite `aria-live` region — deliberately *not* a second
+  `role="status"`, since the panel already owns one — says the one thing the
+  panel's sentence cannot: that the control changed shape.
+
+The new colour tokens are `--rating-star` (a brighter gold than `--warning`,
+which has to read as caution on a status line), `--rating-star-idle`, and
+`--rating-star-glow`. The same gold carries TMDB's aggregate score in the detail
+hero, so one colour on that page means "a score exists" and the words beside it
+say whose.
+
+Three further properties of the control family are load-bearing:
 
 - **Copy is shared, voice is declared.** Announcements come from
   `lib/movie-state/announce.ts`, one table keyed by outcome and surface. A

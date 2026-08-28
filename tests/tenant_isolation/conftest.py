@@ -15,11 +15,12 @@ nothing, on the one bug class the project calls highest-severity.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Generator
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 
 from src.config import Settings
 from synthetic.tenant_isolation.remote_canary import REQUIRE_STACK_ENV, live_stack_required
@@ -69,6 +70,39 @@ DEMO_PERSONA_NAME = "RLS Demo Persona Canary"
 DEFAULT_CANARY_POSTER_URL = "https://images.example/rls-default-canary.jpg"
 DEMO_CANARY_POSTER_URL = "https://images.example/rls-demo-canary.jpg"
 
+# The detail route reads ``movie_catalog_metadata.details`` and is gated on
+# ``visible = TRUE``, so unlike the four canaries above these three have to be
+# visible to be reachable at all. They carry no ratings, so nothing else in the
+# suite -- popularity, item-item, Library -- can pick them up.
+DEFAULT_DETAIL_MOVIE_ID = 900000005
+DEMO_DETAIL_MOVIE_ID = 900000006
+NO_DETAIL_MOVIE_ID = 900000007
+DEFAULT_DETAIL_TITLE = "RLS default detail canary"
+DEMO_DETAIL_TITLE = "RLS demo detail canary"
+NO_DETAIL_TITLE = "RLS detail-less canary"
+DEFAULT_DETAIL_TRAILER_KEY = "rls-default-trailer"
+DEMO_DETAIL_TRAILER_KEY = "rls-demo-trailer"
+
+_DETAIL_MOVIE_IDS = (DEFAULT_DETAIL_MOVIE_ID, DEMO_DETAIL_MOVIE_ID, NO_DETAIL_MOVIE_ID)
+_CANARY_MOVIE_IDS = (900000001, 900000002, 900000003, 900000004) + _DETAIL_MOVIE_IDS
+
+
+def _detail_payload(trailer_key: str, director: str) -> str:
+    """One catalog detail payload, in the shape the fixture writes."""
+    return json.dumps(
+        {
+            "tagline": f"{director} canary",
+            "runtime_minutes": 101,
+            "release_date": "1994-10-14",
+            "backdrop_url": "https://image.tmdb.org/t/p/w1280/rls-canary.jpg",
+            "tmdb_rating": {"average": 8.1, "count": 42},
+            "directors": [director],
+            "cast": [{"name": "Canary Lead", "character": "Self", "profile_url": None}],
+            "trailer": {"provider": "youtube", "key": trailer_key, "name": "Trailer"},
+            "fetched_at": "2026-08-28T00:00:00+00:00",
+        }
+    )
+
 
 @pytest.fixture(scope="module", autouse=True)
 def tenant_canary_rows() -> Generator[None, None, None]:
@@ -97,10 +131,10 @@ def tenant_canary_rows() -> Generator[None, None, None]:
             text("DELETE FROM demo_personas " "WHERE user_id IN (987654323, 987654324)")
         )
         connection.execute(
-            text(
-                "DELETE FROM ratings "
-                'WHERE "movieId" IN (900000001, 900000002, 900000003, 900000004)'
+            text('DELETE FROM ratings WHERE "movieId" IN :movie_ids').bindparams(
+                bindparam("movie_ids", expanding=True)
             ),
+            {"movie_ids": list(_CANARY_MOVIE_IDS)},
         )
         connection.execute(
             text("""
@@ -109,7 +143,10 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                     (900000001, :default_history_title, 'Test'),
                     (900000002, :demo_history_title, 'Test'),
                     (900000003, :default_recommendation_title, 'Test'),
-                    (900000004, :demo_recommendation_title, 'Test')
+                    (900000004, :demo_recommendation_title, 'Test'),
+                    (:default_detail_id, :default_detail_title, 'Test'),
+                    (:demo_detail_id, :demo_detail_title, 'Test'),
+                    (:no_detail_id, :no_detail_title, 'Test')
                 ON CONFLICT ("movieId") DO UPDATE SET title = EXCLUDED.title
                 """),
             {
@@ -117,6 +154,12 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                 "demo_history_title": DEMO_HISTORY_TITLE,
                 "default_recommendation_title": DEFAULT_RECOMMENDATION_TITLE,
                 "demo_recommendation_title": DEMO_RECOMMENDATION_TITLE,
+                "default_detail_id": DEFAULT_DETAIL_MOVIE_ID,
+                "demo_detail_id": DEMO_DETAIL_MOVIE_ID,
+                "no_detail_id": NO_DETAIL_MOVIE_ID,
+                "default_detail_title": DEFAULT_DETAIL_TITLE,
+                "demo_detail_title": DEMO_DETAIL_TITLE,
+                "no_detail_title": NO_DETAIL_TITLE,
             },
         )
         connection.execute(
@@ -143,9 +186,17 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                     ('default', 987654323, 900000003, to_timestamp(2000000003), 4.5,
                      to_timestamp(2000000003), 1, to_timestamp(2000000003)),
                     ('demo', 987654324, 900000004, to_timestamp(2000000004), NULL,
-                     NULL, 1, to_timestamp(2000000004))
+                     NULL, 1, to_timestamp(2000000004)),
+                    ('default', 987654323, :default_detail_id, to_timestamp(2000000005), 4.0,
+                     to_timestamp(2000000005), 1, to_timestamp(2000000005)),
+                    ('demo', 987654324, :demo_detail_id, to_timestamp(2000000006), 3.5,
+                     to_timestamp(2000000006), 1, to_timestamp(2000000006))
                 """),
-            {"user_id": CANARY_USER_ID},
+            {
+                "user_id": CANARY_USER_ID,
+                "default_detail_id": DEFAULT_DETAIL_MOVIE_ID,
+                "demo_detail_id": DEMO_DETAIL_MOVIE_ID,
+            },
         )
         connection.execute(
             text("""
@@ -183,6 +234,36 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                 "demo_poster": DEMO_CANARY_POSTER_URL,
             },
         )
+        # The detail canaries: two carrying a payload, one carrying none, so a
+        # single run sees both a populated ``details`` object and an explicit
+        # null. Movie facts are shared by design (0011) — what must not cross
+        # the boundary is the state overlaid on them, which is why each of
+        # these has a rating from exactly one tenant's persona.
+        connection.execute(
+            text("""
+                INSERT INTO movie_catalog_metadata (
+                    movie_id, sort_title, release_year, poster_url, overview,
+                    details, metadata_source, source_status, visible
+                ) VALUES
+                    (:default_detail_id, 'rls default detail canary', 1994, NULL, NULL,
+                     CAST(:default_details AS JSONB), 'reviewed-fixture', 'complete', TRUE),
+                    (:demo_detail_id, 'rls demo detail canary', 2004, NULL, NULL,
+                     CAST(:demo_details AS JSONB), 'reviewed-fixture', 'complete', TRUE),
+                    (:no_detail_id, 'rls detail-less canary', 1999, NULL, NULL,
+                     NULL, 'movielens', 'partial', TRUE)
+                ON CONFLICT (movie_id) DO UPDATE SET
+                    details = EXCLUDED.details,
+                    release_year = EXCLUDED.release_year,
+                    visible = EXCLUDED.visible
+                """),
+            {
+                "default_detail_id": DEFAULT_DETAIL_MOVIE_ID,
+                "demo_detail_id": DEMO_DETAIL_MOVIE_ID,
+                "no_detail_id": NO_DETAIL_MOVIE_ID,
+                "default_details": _detail_payload(DEFAULT_DETAIL_TRAILER_KEY, "Default Director"),
+                "demo_details": _detail_payload(DEMO_DETAIL_TRAILER_KEY, "Demo Director"),
+            },
+        )
 
     yield
 
@@ -209,16 +290,18 @@ def tenant_canary_rows() -> Generator[None, None, None]:
             text("DELETE FROM demo_personas " "WHERE user_id IN (987654323, 987654324)")
         )
         connection.execute(
-            text(
-                "DELETE FROM ratings "
-                'WHERE "movieId" IN (900000001, 900000002, 900000003, 900000004)'
+            text('DELETE FROM ratings WHERE "movieId" IN :movie_ids').bindparams(
+                bindparam("movie_ids", expanding=True)
             ),
+            {"movie_ids": list(_CANARY_MOVIE_IDS)},
         )
+        # ``movie_catalog_metadata`` has an ON DELETE CASCADE to movies, so the
+        # catalog rows -- including the visible detail canaries -- go with these.
         connection.execute(
-            text(
-                'DELETE FROM movies WHERE "movieId" '
-                "IN (900000001, 900000002, 900000003, 900000004)"
-            )
+            text('DELETE FROM movies WHERE "movieId" IN :movie_ids').bindparams(
+                bindparam("movie_ids", expanding=True)
+            ),
+            {"movie_ids": list(_CANARY_MOVIE_IDS)},
         )
     engine.dispose()
 

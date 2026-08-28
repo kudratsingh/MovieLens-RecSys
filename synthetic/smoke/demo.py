@@ -59,6 +59,18 @@ class CatalogCoverage:
     served_movie_count: int
     served_poster_count: int
     served_overview_count: int
+    # The detail payload is not on the list endpoint (it would be 48 cast lists
+    # per page), so coverage for it is one probe rather than a count.
+    detail_probe_movie_id: int | None
+
+
+@dataclass(frozen=True)
+class _FixtureMetadata:
+    """Which optional fields one fixture title claims."""
+
+    poster: bool
+    overview: bool
+    details: bool
 
 
 # The fixture the demo database is seeded from. Read as plain JSON rather than
@@ -350,14 +362,13 @@ def check_catalog_coverage(
             if expected is None:
                 continue
             served += 1
-            expected_poster, expected_overview = expected
             if item.get("poster_url"):
                 posters += 1
-            elif expected_poster:
+            elif expected.poster:
                 poster_gaps.append(int(item["movie_id"]))
             if item.get("overview"):
                 overviews += 1
-            elif expected_overview:
+            elif expected.overview:
                 overview_gaps.append(int(item["movie_id"]))
         page = payload.get("page")
         cursor = page.get("next_cursor") if isinstance(page, dict) else None
@@ -375,16 +386,62 @@ def check_catalog_coverage(
             f"`make demo-seed`: {'; '.join(gaps)}"
         )
 
+    probe = _check_detail_payload(
+        client,
+        api_url=api_url,
+        headers=headers,
+        user_id=user_id,
+        fixture=fixture,
+    )
     return CatalogCoverage(
         fixture_movie_count=len(fixture),
         served_movie_count=served,
         served_poster_count=posters,
         served_overview_count=overviews,
+        detail_probe_movie_id=probe,
     )
 
 
-def _load_fixture_catalog(path: Path) -> dict[int, tuple[bool, bool]]:
-    """Read which fixture titles claim a poster and an overview."""
+def _check_detail_payload(
+    client: httpx.Client,
+    *,
+    api_url: str,
+    headers: dict[str, str],
+    user_id: int,
+    fixture: dict[int, _FixtureMetadata],
+) -> int | None:
+    """One detail read, for the same reason the poster count exists.
+
+    ``details`` is a detail-only field, so paging the catalog cannot tell you
+    whether the database has it: a stack seeded from an image built before the
+    enrichment ran serves a full poster grid and a detail page with no trailer,
+    and agrees with itself the whole time. One title is enough to catch that —
+    the payload is written for every fixture entry by the same offline pass.
+    """
+    probe_id = next(
+        (movie_id for movie_id in sorted(fixture) if fixture[movie_id].details),
+        None,
+    )
+    if probe_id is None:
+        return None
+    payload = _get_json(
+        client,
+        f"{api_url.rstrip('/')}/users/{user_id}/movies/{probe_id}",
+        f"movie detail {probe_id}",
+        headers=headers,
+    )
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("details") is None:
+        raise DemoSmokeError(
+            "the served catalog is behind the reviewed fixture, so run "
+            f"`make demo-seed`: movie {probe_id} is served without the detail "
+            "payload the fixture has"
+        )
+    return probe_id
+
+
+def _load_fixture_catalog(path: Path) -> dict[int, _FixtureMetadata]:
+    """Read which fixture titles claim a poster, an overview and a detail payload."""
     try:
         with path.open(encoding="utf-8") as fixture_file:
             payload = json.load(fixture_file)
@@ -392,9 +449,10 @@ def _load_fixture_catalog(path: Path) -> dict[int, tuple[bool, bool]]:
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise DemoSmokeError(f"could not read the catalog fixture at {path}") from exc
     return {
-        int(movie["movie_id"]): (
-            bool(movie.get("poster_url")),
-            bool(movie.get("overview")),
+        int(movie["movie_id"]): _FixtureMetadata(
+            poster=bool(movie.get("poster_url")),
+            overview=bool(movie.get("overview")),
+            details=isinstance(movie.get("details"), dict),
         )
         for movie in movies
     }
