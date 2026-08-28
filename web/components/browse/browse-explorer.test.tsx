@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowseExplorer } from "@/components/browse/browse-explorer";
 import type { CatalogItem, CatalogResponse } from "@/lib/api";
+import { CATALOG_PAGE_LIMIT } from "@/lib/browse/query";
 import {
   browseSnapshotKey,
   saveBrowseSnapshot,
@@ -246,6 +247,41 @@ describe("cursor continuation", () => {
     );
     expect(screen.queryByRole("button", { name: "Load more movies" })).not.toBeInTheDocument();
     expect(screen.getByText("That is every title matching these filters.")).toBeVisible();
+  });
+
+  it("holds the arriving page's space open while it is in flight", async () => {
+    // The reservation is the whole point: a continuation requested near the
+    // foot of the document used to leave everything below the grid — the shell
+    // footer included — standing where it was until the page landed, and then
+    // move it a viewport down without a reader having asked for it.
+    let release: (page: Response) => void = () => {};
+    const nextPage = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      call += 1;
+      return call === 1
+        ? jsonResponse(response([item({ movie_id: 1 })], "cursor-2"))
+        : nextPage;
+    }) as unknown as typeof fetch;
+
+    const { container } = renderBrowse();
+    await screen.findByRole("list", { name: "Browse results" });
+    await userEvent.click(screen.getByRole("button", { name: "Load more movies" }));
+
+    await waitFor(() =>
+      expect(container.querySelectorAll(".catalog-skeleton-cell")).toHaveLength(
+        CATALOG_PAGE_LIMIT,
+      ),
+    );
+    // The control's own busy state already narrates this one; a second polite
+    // region would describe a single fetch twice.
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    release(jsonResponse(response([item({ movie_id: 2 })])));
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+    expect(container.querySelectorAll(".catalog-skeleton-cell")).toHaveLength(0);
   });
 
   it("carries the resume point into the URL without inventing a total", async () => {

@@ -117,6 +117,20 @@ different heights. The clamp keeps the full name reachable: it is on the link's
 accessible name and on the title's `title` attribute. The metadata line is a
 single ellipsised line for the same reason.
 
+**A loading grid is built from those same boxes,** and reserves a full page of
+them. Browse's placeholder (`CatalogGridSkeleton` in
+`components/browse/browse-explorer.tsx`) renders `CATALOG_PAGE_LIMIT` cells —
+the page size the request itself asks for — out of `poster-frame`,
+`poster-card-copy` and `catalog-cell-actions`, so no cell height is restated
+anywhere and the placeholder cannot drift out of step with the card. It stands
+in for the first page *and* for a cursor continuation. Reserving only the first
+page was the gap: pressing `Load more` near the foot of the document left the
+shell footer on screen with nothing holding the incoming page's space, and when
+the response outran the browser's window for attributing a shift to the click
+that caused it, the footer's move down the page was scored as instability the
+reader had not asked for — `browse cumulative layout shift 0.354` against a
+budget of `0.1`, on the runs slow enough to produce that ordering.
+
 **A ranked card hangs its rank in the caption gutter,** set in the display serif
 that section titles and the featured movie use and nothing else inside a card
 does. It was a cream disc pinned inside the poster's top-left, which covered

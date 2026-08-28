@@ -45,6 +45,7 @@ import {
 import {
   browseHref,
   browseFilterKey,
+  CATALOG_PAGE_LIMIT,
   DEFAULT_BROWSE_QUERY,
   catalogRequestParams,
   hasActiveBrowseFilters,
@@ -359,7 +360,14 @@ export function BrowseExplorer({
         </div>
       ) : null}
 
-      {loadingFirstPage ? <CatalogGridSkeleton /> : null}
+      {/*
+        Both loading states reserve, and both reserve here — below the loaded
+        window and above the "load more" control, which is where the arriving
+        page lands either way.
+      */}
+      {request.kind === "loading" ? (
+        <CatalogGridSkeleton announce={loadingFirstPage} />
+      ) : null}
 
       {!items.length && request.kind === "idle" ? (
         <EmptyState
@@ -481,15 +489,52 @@ function BrowseStatus({
   );
 }
 
-function CatalogGridSkeleton() {
+/**
+ * The space the page being fetched is going to occupy, claimed before it lands.
+ *
+ * Two things make it a reservation rather than a decoration. It renders exactly
+ * `CATALOG_PAGE_LIMIT` cells — the page size the request itself asks for, not a
+ * smaller number chosen to look tidy — and each cell is assembled from the
+ * card's own boxes: `poster-frame` carries the 2:3 artwork ratio, the caption
+ * carries the two reserved title lines and the single metadata line, and the
+ * control row carries its two action buttons. Nothing about a cell's height is
+ * restated here, so the placeholder cannot drift out of step with the card.
+ *
+ * Under-reserving is what a continuation felt: pressing "load more" near the
+ * foot of the document left the shell footer on screen with nothing standing in
+ * for the incoming page, and when the response outran the browser's window for
+ * attributing a shift to the click that caused it, the footer's move down the
+ * page was recorded as instability the reader had not asked for.
+ *
+ * Only the first page announces itself. A continuation is already narrated by
+ * the "load more" control's own busy state, and two polite regions describing
+ * one fetch is one more than a reader needs.
+ */
+function CatalogGridSkeleton({ announce }: { announce: boolean }) {
   return (
-    <div aria-live="polite" className="catalog-grid catalog-skeleton" role="status">
-      <span className="visually-hidden">Loading catalog results</span>
-      {Array.from({ length: 12 }, (_, index) => (
+    <div
+      aria-live={announce ? "polite" : undefined}
+      className="catalog-grid catalog-skeleton"
+      role={announce ? "status" : undefined}
+    >
+      {announce ? <span className="visually-hidden">Loading catalog results</span> : null}
+      {Array.from({ length: CATALOG_PAGE_LIMIT }, (_, index) => (
         <div aria-hidden="true" className="catalog-skeleton-cell" key={index}>
-          <div className="catalog-skeleton-poster" />
-          <div className="skeleton-line skeleton-line-strong" />
-          <div className="skeleton-line" />
+          <div className="poster-card">
+            <span className="poster-frame catalog-skeleton-poster" />
+            <span className="poster-card-copy">
+              <span className="poster-title">
+                <span className="skeleton-line skeleton-line-strong" />
+              </span>
+              <span className="poster-meta">
+                <span className="skeleton-line" />
+              </span>
+            </span>
+          </div>
+          <div className="catalog-cell-actions">
+            <span className="catalog-cell-action catalog-skeleton-action" />
+            <span className="catalog-cell-action catalog-skeleton-action" />
+          </div>
         </div>
       ))}
     </div>

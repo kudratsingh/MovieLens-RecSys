@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { CATALOG_PAGE_LIMIT } from "@/lib/browse/query";
+
 /**
  * Browse and movie detail against the recorded catalog endpoint.
  *
@@ -12,8 +14,55 @@ import { expect, test, type Page } from "@playwright/test";
 
 const GRID = { name: "Browse results" };
 
+/**
+ * A shift below this is the sub-pixel settling of a reserved box; anything
+ * above it is content arriving into space nothing was holding for it. Well
+ * under the 0.1 the browser-timing gate enforces for the whole route, because
+ * this test isolates one transition rather than measuring a page load.
+ */
+const SHIFT_TOLERANCE = 0.05;
+
 async function cardTitles(page: Page): Promise<string[]> {
   return page.locator(".catalog-cell .poster-title").allInnerTexts();
+}
+
+interface RecordedShift {
+  value: number;
+  source: string;
+}
+
+/**
+ * Collect layout shifts the reader did not ask for.
+ *
+ * Same rule the browser-timing gate applies: a shift within the browser's
+ * window for attributing one to a click is the click's own consequence and is
+ * not instability. Everything else counts, and is what this file asserts on.
+ */
+async function collectUnpromptedShifts(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const shifts: { value: number; source: string }[] = [];
+    (window as unknown as { __shifts: typeof shifts }).__shifts = shifts;
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as (PerformanceEntry & {
+        value: number;
+        hadRecentInput: boolean;
+        sources?: { node?: Node | null }[];
+      })[]) {
+        if (entry.hadRecentInput) continue;
+        const node = entry.sources?.[0]?.node as Element | null | undefined;
+        const name = node ? node.nodeName.toLowerCase() : "";
+        const className = node?.className ? String(node.className).split(" ")[0] : "";
+        shifts.push({
+          value: entry.value,
+          source: node ? `${name}${className ? `.${className}` : ""}` : "unknown",
+        });
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
+}
+
+async function unpromptedShifts(page: Page): Promise<RecordedShift[]> {
+  return page.evaluate(() => (window as unknown as { __shifts: RecordedShift[] }).__shifts);
 }
 
 async function horizontalOverflow(page: Page): Promise<number> {
@@ -108,6 +157,38 @@ test("continuing the cursor appends a page without repeating a title", async ({ 
   expect(new Set(combined).size).toBe(combined.length);
   expect(combined.slice(0, firstPage.length)).toEqual(firstPage);
   await expect(page).toHaveURL(/cursor=/);
+});
+
+test("a page in flight is waited for in the space it is going to fill", async ({ page }) => {
+  await collectUnpromptedShifts(page);
+  // Slow enough that the arriving page can no longer be attributed to the click
+  // that asked for it. A loaded CI runner produces that ordering by accident,
+  // which is why the defect this covers was intermittent rather than visible.
+  await page.route("**/api/ui-preview/catalog*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.continue();
+  });
+
+  await page.goto("/ui-preview/browse");
+  // Reserved at the page size the request asks for, not at a smaller number
+  // chosen to look tidy: half a page of placeholders reserves half a page.
+  await expect(page.locator(".catalog-skeleton-cell")).toHaveCount(CATALOG_PAGE_LIMIT);
+  await expect(page.getByRole("list", GRID)).toBeVisible();
+  const firstPage = await page.getByRole("listitem").count();
+  expect(firstPage).toBe(CATALOG_PAGE_LIMIT);
+
+  // The foot of the document is where pressing "load more" leaves the viewport:
+  // the control sits near the end, so the browser cannot centre it and clamps
+  // at the last screenful — the one screenful that a growing page pushes away.
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.getByRole("button", { name: "Load more movies" }).click();
+  await expect(page.locator(".catalog-skeleton-cell")).toHaveCount(CATALOG_PAGE_LIMIT);
+  await expect(page.getByRole("listitem")).toHaveCount(firstPage * 2);
+
+  const offenders = (await unpromptedShifts(page)).filter(
+    (shift) => shift.value > SHIFT_TOLERANCE,
+  );
+  expect(offenders).toEqual([]);
 });
 
 test("a cursor that no longer matches the query restarts at the top", async ({ page }) => {

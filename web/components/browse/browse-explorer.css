@@ -192,24 +192,58 @@
 }
 
 /*
- * The skeleton mirrors the real grid cell exactly, poster ratio included, so
- * the first paint reserves the space the results will occupy and the grid does
- * not jump when they arrive.
+ * A placeholder cell borrows the real cell's boxes instead of describing them
+ * again: same column flow, same 2:3 `poster-frame`, same reserved caption, same
+ * control row. The only thing this block adds is the shimmer, and it adds it
+ * without adding height — which is the whole point, because the height is the
+ * reservation.
  */
 .catalog-skeleton-cell {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
-.catalog-skeleton-poster {
-  aspect-ratio: 2 / 3;
-  background: var(--poster-fallback);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-3);
+/*
+ * A box with no content generates no line box, so an empty caption would
+ * collapse to nothing and reserve less than the caption it stands in for. A
+ * zero-width space restores exactly the line boxes the real title and metadata
+ * line occupy — two and one — with no height named here.
+ */
+.catalog-skeleton-cell .poster-title::before,
+.catalog-skeleton-cell .poster-meta::before {
+  content: "\200b";
 }
 
-.catalog-skeleton .skeleton-line {
-  margin-bottom: var(--space-2);
+/*
+ * The shimmer is painted inside the caption's boxes rather than stacked under
+ * them, so a placeholder line cannot claim space the real caption never had.
+ */
+.catalog-skeleton-cell .poster-title,
+.catalog-skeleton-cell .poster-meta {
+  position: relative;
+}
+
+.catalog-skeleton-cell .skeleton-line {
+  left: 0;
+  margin: 0;
+  position: absolute;
+  top: 0.2rem;
+}
+
+.catalog-skeleton-poster {
+  animation: skeleton-pulse 1.3s ease-in-out infinite alternate;
+  background: var(--surface-raised);
+}
+
+/* Sized by `.catalog-cell-action`, which is what keeps the placeholder control
+   row the same height as the row of real buttons — including the taller touch
+   target the mobile rule gives them. */
+.catalog-skeleton-action {
+  animation: skeleton-pulse 1.3s ease-in-out infinite alternate;
+  background: var(--surface-raised);
+  border-radius: 999px;
+  width: 5.5rem;
 }
 
 @media (max-width: 640px) {
@@ -224,6 +258,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .catalog-skeleton-poster,
+  .catalog-skeleton-action,
   .catalog-skeleton .skeleton-line {
     animation: none;
   }
