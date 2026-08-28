@@ -28,21 +28,39 @@ function resolve(target: FocusTarget): HTMLElement | null {
   return document.getElementById(target);
 }
 
-function tryFocus(target: FocusTarget): boolean {
+function tryFocus(target: FocusTarget, options: FocusOptions): boolean {
   const element = resolve(target);
   if (!element) return false;
-  element.focus();
+  element.focus(options);
   return document.activeElement === element;
+}
+
+function walk(chain: FocusTarget[], options: FocusOptions): void {
+  if (typeof document === "undefined") return;
+  if (tryFocus(chain[0], options)) return;
+  if (typeof window === "undefined" || !window.requestAnimationFrame) return;
+  window.requestAnimationFrame(() => {
+    for (const target of chain) {
+      if (tryFocus(target, options)) return;
+    }
+  });
 }
 
 /** Focuses the first target that will take focus, preferring the control. */
 export function restoreFocus(...chain: FocusTarget[]): void {
-  if (typeof document === "undefined") return;
-  if (tryFocus(chain[0])) return;
-  if (typeof window === "undefined" || !window.requestAnimationFrame) return;
-  window.requestAnimationFrame(() => {
-    for (const target of chain) {
-      if (tryFocus(target)) return;
-    }
-  });
+  walk(chain, {});
+}
+
+/**
+ * The same walk for a caller that has already decided where the page should be
+ * scrolled to.
+ *
+ * `focus()` scrolls its element into view by default, which is the right
+ * default for a control the viewer is already looking at and the wrong one
+ * directly after a `scrollIntoView`: the browser resolves the focus scroll
+ * immediately, against the position the smooth one has not reached yet, and
+ * the page lands somewhere neither the caller nor the viewer chose.
+ */
+export function restoreFocusInPlace(...chain: FocusTarget[]): void {
+  walk(chain, { preventScroll: true });
 }

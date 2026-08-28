@@ -111,6 +111,36 @@ not, because it is `final` on this surface and a bare `Undo` would quietly
 become the destructive edit the control set refuses. It offers the rating prompt
 and a route into the Library instead.
 
+That rating prompt is **an offer with an end**. It opens under the ranked card
+after a watched decision and it closes the moment a star commits: the panel is
+removed rather than left standing with its stars filled in, and one sentence
+takes its place in the status region — `Rated <title> 4/5. Ratings do not
+reorder the list — the watch already counts.` That sentence is the settled copy
+in full. Nothing about a refresh follows it, because a star cannot move a set
+the watch has already excluded the title from; the re-read still happens and is
+silent for the same reason. It stands for about four seconds and the region then
+returns to its resting line, and any new decision replaces it at once — a
+confirmation about one movie must never be on screen over another. `Manage in
+Library` travels with it, because watched is `final` here and the place to
+change a rating has to stay named rather than implied.
+
+A rating also **hands the page back**. The prompt sits below the ranked card and,
+at 390px, below the fold, so a commit that left the viewport where it was would
+leave the viewer reading a finished decision about a title the featured slot had
+moved past two presses earlier. On commit the featured section is scrolled into
+view — smoothly, instantly under `prefers-reduced-motion`, and only when the
+movie is genuinely off screen, so a viewer who can already see it is not scrolled
+at all — and focus moves with it, to the first control the surface's control set
+declares. The two are one movement: a scroll a keyboard reader cannot follow is
+not a return, and a focus move the eye cannot follow is not one either.
+
+Settled status copy reports the decision and the movie it moved to, and adds a
+second sentence only when there is one to add: `Recommendations refreshed.`
+after a re-read that actually changed the set, the failure when it did not
+answer, and nothing at all when the set legitimately came back identical — which
+is what a watchlist press does, and which the sentence in front of it has
+already accounted for.
+
 **Recommended initial surfaces:**
 
 - `Top picks for you` — the primary model-ranked list.
@@ -146,7 +176,9 @@ Model details become a full-width sheet on mobile.
 
 **Finish evidence:** Desktop/mobile screenshots for learned, cold-start,
 loading, empty, API-error, and failed-poster states; keyboard rail navigation;
-watched/rating refresh flow.
+watched/rating refresh flow, including the rating follow-through at 390/768/1440
+— panel gone, confirmation shown and then cleared, movie and focus back on
+screen.
 
 ## `/browse` — Catalog
 

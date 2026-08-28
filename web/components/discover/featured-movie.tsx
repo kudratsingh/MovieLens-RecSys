@@ -12,6 +12,14 @@ import type { EvidenceRecord, MovieCard } from "@/lib/movie-types";
 import "./featured-movie.css";
 
 /**
+ * The section's stable anchor. There is one featured slot per page, and a
+ * decision made below it — the rating panel, which sits under the ranked card
+ * and below the fold on a phone — has to be able to name the place it hands the
+ * viewer back to.
+ */
+export const FEATURED_MOVIE_ID = "featured-movie";
+
+/**
  * The primary movie: the first thing a viewer should read on Discover.
  *
  * The slots exist so the live route can supply its own eyebrow, movie URL,
@@ -50,6 +58,7 @@ export function FeaturedMovie({
       aria-labelledby="featured-title"
       className="featured-movie"
       data-enter-from={enterFrom ?? undefined}
+      id={FEATURED_MOVIE_ID}
     >
       <div className="featured-poster">
         <PosterCard href={movieHref} movie={movie} priority />

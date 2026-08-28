@@ -24,7 +24,15 @@ vi.mock("next/link", () => ({
     createElement("a", { href, ...props }, children),
 }));
 
+// jsdom implements neither, and the movie surfaces call both: a rail scrolls
+// itself by a card, and Discover hands the viewer back to the featured movie
+// after a rating. Tests that care about the second one assert against this mock.
 Object.defineProperty(Element.prototype, "scrollBy", {
+  configurable: true,
+  value: vi.fn(),
+});
+
+Object.defineProperty(Element.prototype, "scrollIntoView", {
   configurable: true,
   value: vi.fn(),
 });

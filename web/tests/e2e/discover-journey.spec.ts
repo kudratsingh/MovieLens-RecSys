@@ -153,17 +153,31 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
       ratingPanel.getByText(/a 1 and a 5 are the same learned signal today/),
     ).toBeVisible();
 
-    await ratingPanel.getByRole("button", { name: /^4 stars for / }).click();
-    await expect(page.getByText(/Rating saved for/)).toBeVisible();
-    // The title is already excluded by the watched write above, so this
-    // refetch legitimately returns the same ranked set — and the status line
-    // now says that rather than claiming a refresh the viewer cannot see.
-    await expect(page.locator("#discover-status")).toContainText(
-      /Recommendations refreshed|The ranked list is unchanged/,
+    // The panel sits under the ranked card, so reading it means being scrolled
+    // to it. That is the position the follow-through has to recover from, and
+    // against a real API it is the one a viewer is actually in.
+    await ratingPanel.evaluate((element) =>
+      element.scrollIntoView({ block: "start", behavior: "instant" }),
     );
-    await expect(ratingPanel.getByText("4 out of 5 recorded")).toBeVisible();
+    const scrolledDown = await page.evaluate(() => window.scrollY);
 
-    // 5. The committed state is durable: an independent read observes it.
+    await ratingPanel.getByRole("button", { name: /^4 stars for / }).click();
+
+    // 5. The decision finishes: the panel leaves rather than standing there
+    //    with its stars filled in, one sentence says what was recorded in the
+    //    product's own terms, the way to change it is still named, and the page
+    //    hands the viewer back to the movie it moved on to.
+    await expect(ratingPanel).toHaveCount(0);
+    await expect(page.locator("#discover-status")).toHaveText(
+      /^Rated .+ 4\/5\. Ratings do not reorder the list — the watch already counts\.$/,
+    );
+    await expect(page.getByRole("link", { name: "Manage in Library" })).toBeVisible();
+    await expect(
+      page.locator("section.featured-movie").getByRole("heading", { level: 1 }),
+    ).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(scrolledDown);
+
+    // 6. The committed state is durable: an independent read observes it.
     const detail = await page.evaluate(
       async ({ userId, movie }) =>
         (await fetch(`/api/users/${userId}/movies/${movie}`, {

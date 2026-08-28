@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { FeaturedMovie } from "@/components/discover/featured-movie";
+import { FEATURED_MOVIE_ID, FeaturedMovie } from "@/components/discover/featured-movie";
 import { QuickPicksEntry } from "@/components/discover/quick-picks-entry";
 import {
   featuredItem,
@@ -47,7 +47,7 @@ import {
 } from "@/lib/movie-state/announce";
 import { bffMovieStateClient, type MovieStateClient } from "@/lib/movie-state/client";
 import { readCommittedStates } from "@/lib/movie-state/committed-store";
-import { restoreFocus } from "@/lib/movie-state/focus";
+import { restoreFocus, restoreFocusInPlace } from "@/lib/movie-state/focus";
 import {
   newIdempotencyKey,
   type MovieStateMutationResult,
@@ -67,6 +67,37 @@ const STATUS_ANCHOR = "discover-status";
 /** How long the undo offer stands. Long enough to notice, short enough to pass. */
 const UNDO_WINDOW_MS = 8_000;
 
+/**
+ * How long the rating confirmation stands before the page goes quiet again.
+ *
+ * Long enough to read one sentence, short enough that it cannot still be on
+ * screen over a movie it is not about. It is a reading interval rather than a
+ * transition, so none of the motion tokens (120 ms, 220 ms) is the right value
+ * to borrow — those describe how fast a thing moves, not how long a sentence
+ * stays worth reading.
+ */
+const RATING_CONFIRMATION_MS = 4_000;
+
+/**
+ * The first control this surface declares, which is where a decision made
+ * below the fold hands focus back. Read off the control set rather than named
+ * again here: the order the set declares *is* the documented hierarchy, and a
+ * second copy of it would be free to disagree.
+ */
+const FIRST_FEATURED_CONTROL = RECOMMENDATION_CONTROLS[0].kind;
+
+/**
+ * Where a decision was made, which is what decides what happens after it.
+ *
+ * A press on the featured card or a rail card is one step through the ranked
+ * set: the cursor advances, the route re-reads, and the status line reports on
+ * both. A rating made in the follow-up panel is neither — the title left the
+ * ranked set when it was marked watched, and the star reaches no model input
+ * (ADR 0012) — so that press ends by handing the viewer back to the movie
+ * rather than by narrating a refresh it cannot have caused.
+ */
+type DecisionOrigin = "ranked-set" | "just-watched";
+
 type Flow =
   | { kind: "idle" }
   | { kind: "saving"; message: string }
@@ -74,6 +105,8 @@ type Flow =
   /** `moved` is what separates a real refresh from a re-render of the same set. */
   | { kind: "refreshed"; message: string; moved: boolean }
   | { kind: "refresh-failed"; message: string; failure: ResourceFailure }
+  /** A rating from the follow-up panel: settled copy, and no refresh tail. */
+  | { kind: "rated"; message: string }
   | { kind: "error"; message: string };
 
 /** The in-flight frame for the one movie currently being written. */
@@ -259,6 +292,9 @@ export function DiscoverExperience({
 }) {
   const movieHrefFor = (movieId: number) =>
     `${movieHrefBase}/${movieId}${movieHrefQuery}`;
+  // Named once: the rating panel and the confirmation that replaces it are the
+  // same offer at two moments, and they have to point at the same place.
+  const libraryHref = `/library?userId=${userId}`;
   const router = useRouter();
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   const [queue, setQueue] = useState<DiscoverQueue>(() =>
@@ -355,6 +391,39 @@ export function DiscoverExperience({
     });
   }, []);
 
+  /**
+   * Hands the page back to the featured movie after a decision made below it.
+   *
+   * The rating panel sits under the ranked card and, at 390px, well below the
+   * fold: committing there and leaving the viewport where it was left the
+   * viewer reading a finished panel about a title the featured slot had already
+   * moved past. Scroll and focus travel together, because a scroll a keyboard
+   * reader cannot follow is not a return.
+   *
+   * Called from the commit path rather than from an effect, so it runs exactly
+   * once per decision — a re-render that repeated it would drag back a viewer
+   * who has since scrolled somewhere on purpose.
+   */
+  const returnToFeatured = useCallback(() => {
+    if (typeof document === "undefined") return;
+    // `nearest`, not `start`: on a wide screen the movie and the panel are both
+    // on one screenful, and `start` would answer a rating by scrolling the
+    // viewer *down* past the page header to satisfy an alignment nobody asked
+    // for. `nearest` moves only when the movie is genuinely off screen, which is
+    // the case this exists for. The call itself is optional because jsdom
+    // implements neither this method nor a viewport; the focus move below is the
+    // half that must not be.
+    document.getElementById(FEATURED_MOVIE_ID)?.scrollIntoView?.({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "nearest",
+    });
+    const featured = featuredItem(queueRef.current);
+    restoreFocusInPlace(
+      featured ? `featured-${featured.movie_id}-${FIRST_FEATURED_CONTROL}` : null,
+      STATUS_ANCHOR,
+    );
+  }, [reducedMotion]);
+
   // Reading the relay is an external read, not something derivable during
   // render: the server renders this component too and has no session storage,
   // so folding it in at render time would make the two disagree. It re-runs
@@ -380,6 +449,19 @@ export function DiscoverExperience({
     const timer = window.setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
     return () => window.clearTimeout(timer);
   }, [undo]);
+
+  // The rating confirmation is a moment, not a state. It clears on its own here
+  // and immediately on the next decision, because `commit` opens by replacing
+  // the flow — a sentence about one movie left standing over another is the
+  // same defect as the panel that used to outlive its title, one size smaller.
+  useEffect(() => {
+    if (flow.kind !== "rated") return;
+    const timer = window.setTimeout(
+      () => setFlow({ kind: "idle" }),
+      RATING_CONFIRMATION_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [flow]);
 
   const remaining = remainingAfterFeatured(queue);
 
@@ -413,7 +495,7 @@ export function DiscoverExperience({
     movie: MovieCard,
     action: MovieStateAction,
     control: HTMLElement,
-    options: { advances?: boolean } = {},
+    origin: DecisionOrigin = "ranked-set",
   ) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -426,7 +508,7 @@ export function DiscoverExperience({
     intent.current = { movieId: movie.id, action, key };
 
     const currentState = cardStates[movie.id] ?? UNKNOWN_MOVIE_STATE;
-    const advances = options.advances ?? true;
+    const advances = origin === "ranked-set";
     // The rating prompt belongs to one title. A decision on any other movie has
     // moved past it, and leaving it standing is how it ended up outliving the
     // page.
@@ -512,6 +594,33 @@ export function DiscoverExperience({
     }
     if (advances) setUndo(undoOfferFor(movie, action, result.state));
 
+    if (origin === "just-watched") {
+      // The panel's life is one decision long, and this is that decision. It
+      // cannot have moved the ranked set — the watch excluded the title, and
+      // the star reaches no model input — so there is no refresh worth
+      // narrating, and the honest end of the interaction is one sentence plus
+      // the movie the viewer is now on. Leaving the panel standing with its
+      // stars filled in was the whole complaint: a finished decision that still
+      // looked like an open one, at the bottom of a page the viewer had been
+      // scrolled away from.
+      setJustWatched(null);
+      setPendingMovieId(null);
+      inFlight.current = false;
+      setFlow({ kind: "rated", message });
+      returnToFeatured();
+      // The re-read still happens, silently: the queue keeps topping itself up
+      // and the server-rendered history below has changed. Neither is something
+      // to make the viewer read past on the way back to choosing a movie, and a
+      // failed one costs nothing here — the cards on screen are still good.
+      void refetch().then((next) => {
+        if (isResourceFailure(next)) return;
+        setRecommendations(next);
+        if (hasResourceData(next)) absorb(next.data.items);
+      });
+      router.refresh();
+      return;
+    }
+
     // Focus goes to the same control on the card that just arrived, so a run of
     // decisions stays under one finger; the status line is the fallback, never
     // the target, because landing there drops a keyboard reader who was five
@@ -593,9 +702,9 @@ export function DiscoverExperience({
     router.refresh();
   }
 
-  function onAction(movie: MovieCard, options: { advances?: boolean } = {}) {
+  function onAction(movie: MovieCard) {
     return (action: MovieStateAction, control: HTMLElement) => {
-      void commit(movie, action, control, options);
+      void commit(movie, action, control);
     };
   }
 
@@ -637,6 +746,7 @@ export function DiscoverExperience({
               />
               <FlowStatus
                 flow={flow}
+                libraryHref={libraryHref}
                 onRetryRefresh={() => void reload()}
                 onUndo={(control) => undo && void runUndo(undo, control)}
                 personaName={personaName}
@@ -668,6 +778,7 @@ export function DiscoverExperience({
               aside={
                 <FlowStatus
                   flow={flow}
+                  libraryHref={libraryHref}
                   onRetryRefresh={() => void reload()}
                   onUndo={(control) => undo && void runUndo(undo, control)}
                   personaName={personaName}
@@ -702,12 +813,10 @@ export function DiscoverExperience({
             {justWatched ? (
               <JustWatched
                 busy={pendingMovieId === justWatched.id}
-                libraryHref={`/library?userId=${userId}`}
+                libraryHref={libraryHref}
                 movie={justWatched}
                 onRate={(value, control) =>
-                  void commit(justWatched, ratingAction(value), control, {
-                    advances: false,
-                  })
+                  void commit(justWatched, ratingAction(value), control, "just-watched")
                 }
                 state={cardStates[justWatched.id] ?? justWatched.state}
               />
@@ -756,9 +865,14 @@ function statusCopy(flow: Flow): string {
     case "refreshing":
       return `${flow.message} Refreshing recommendations…`;
     case "refreshed":
-      return flow.moved
-        ? `${flow.message} Recommendations refreshed.`
-        : `${flow.message} The ranked list is unchanged.`;
+      // Only movement is worth a second sentence. A set that came back
+      // identical is the honest outcome of a watchlist press, and the tail
+      // that used to say so ("The ranked list is unchanged.") reported on the
+      // machinery rather than on the decision — the sentence in front of it
+      // already names what was recorded and what is now on screen.
+      return flow.moved ? `${flow.message} Recommendations refreshed.` : flow.message;
+    case "rated":
+      return flow.message;
     case "refresh-failed":
       return `${flow.message} Recommendations could not be refreshed.`;
     case "error":
@@ -770,12 +884,14 @@ function statusCopy(flow: Flow): string {
 
 function FlowStatus({
   flow,
+  libraryHref,
   onRetryRefresh,
   onUndo,
   personaName,
   undo,
 }: {
   flow: Flow;
+  libraryHref: string;
   onRetryRefresh: () => void;
   onUndo: (control: HTMLElement) => void;
   personaName: string;
@@ -805,6 +921,18 @@ function FlowStatus({
         >
           Undo
         </button>
+      ) : null}
+      {flow.kind === "rated" ? (
+        // The panel carried the way to change a rating, and the panel is gone
+        // by the time this sentence is on screen. Watched is `final` on this
+        // surface, so the Library is where a star is edited or a watch undone,
+        // and the confirmation names it rather than implying it. It is not the
+        // last chance to get there — the shell keeps a Library link — but it is
+        // the one that is under the viewer's eyes at the moment they might want
+        // it.
+        <Link className="button-quiet discover-manage" href={libraryHref}>
+          Manage in Library
+        </Link>
       ) : null}
       {flow.kind === "refresh-failed" ? (
         <ResourceProblem
@@ -865,6 +993,12 @@ function QueueEnd({
  * The Library link is the other half of that honesty: watched is final on this
  * route by the control-set table, so the place to change it has to be named
  * rather than implied.
+ *
+ * It is an offer with an end. The panel is unmounted the moment a star commits
+ * and the confirmation takes over in the status region, which is what keeps it
+ * from becoming a second, permanent surface for a decision that is finished —
+ * filled-in stars reading "5 out of 5 recorded" at the foot of a page whose
+ * featured slot moved on two decisions ago.
  */
 function JustWatched({
   movie,
