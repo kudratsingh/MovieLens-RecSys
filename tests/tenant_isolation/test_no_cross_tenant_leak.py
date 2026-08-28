@@ -9,7 +9,9 @@ Covered today: ``/whoami``, ``/users/{id}/recommendations`` (including the
 serving-policy and exclusion evidence it now returns, and the per-item movie
 state it overlays), ``/users/{id}/history``, ``/users/{id}/audits``,
 ``/personas``, ``/users/{id}/features``, ``/users/{id}/catalog``,
-``/users/{id}/library`` (including the shared artwork its rows now carry),
+``/users/{id}/library`` (including the shared artwork its rows now carry, the
+Seen tab's search, genre, year and ranking parameters, and the exact
+``page.matched`` count they produce),
 ``/users/{id}/movies/{id}`` (including the TMDB detail payload it now carries),
 the rating write path, ``DELETE /users/{id}/ratings``, and
 ``GET|PUT /users/{id}/preferences``. Not yet covered:
@@ -278,6 +280,86 @@ def test_library_state_and_mutations_are_tenant_scoped(
     assert mutation.status_code == 200
     assert mutation.json()["state"]["rating"] == 4.0
     assert DEMO_RECOMMENDATION_TITLE in immediate_read.text
+
+
+def test_seen_filters_and_the_matched_count_stay_inside_the_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """The Seen tab's filters are each another way to ask for rows.
+
+    A search term, a genre, a year window and a ranking are four more places a
+    missing tenant predicate could widen a query, so they are fired together —
+    and with the other tenant's titles named in ``q``, which is the request a
+    curious client would actually make. ``page.matched`` gets the same
+    treatment for a different reason: it answers with a number rather than a
+    row, so a count computed across the boundary would leak the size of the
+    other tenant's collection without ever printing a title.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+    # A window both tenants' enriched canaries sit inside, so an escaped row
+    # would be returned rather than filtered out by accident.
+    view = "tab=history&sort=tmdb&genre=Test&year_from=1990&year_to=2005"
+
+    default_seen = client.get(f"/users/987654323/library?{view}", headers=default_headers)
+    demo_seen = client.get(f"/users/987654324/library?{view}", headers=demo_headers)
+    hunting = client.get(f"/users/987654323/library?{view}&q=demo", headers=default_headers)
+
+    assert default_seen.status_code == 200
+    assert demo_seen.status_code == 200
+    assert hunting.status_code == 200
+
+    # Positive control first: the filters select real rows on both sides, so an
+    # empty cross-tenant answer below is isolation rather than a typo.
+    assert [item["movie_id"] for item in default_seen.json()["items"]] == [DEFAULT_DETAIL_MOVIE_ID]
+    assert [item["movie_id"] for item in demo_seen.json()["items"]] == [
+        DEMO_DETAIL_MOVIE_ID,
+        900000004,
+    ]
+    assert default_seen.json()["page"]["matched"] == 1
+    assert demo_seen.json()["page"]["matched"] == 2
+    assert DEMO_RECOMMENDATION_TITLE not in default_seen.text
+    assert DEFAULT_RECOMMENDATION_TITLE not in demo_seen.text
+
+    # The other tenant's titles, asked for by name through every filter.
+    assert hunting.json()["items"] == []
+    assert hunting.json()["page"]["matched"] == 0
+    assert DEMO_RECOMMENDATION_TITLE not in hunting.text
+    assert DEMO_HISTORY_TITLE not in hunting.text
+
+    # The unfiltered tab totals are the caller's own as well, and they are not
+    # the filtered count: both numbers are on one screen and neither may be
+    # the other tenant's.
+    assert default_seen.json()["counts"]["history"] == 2
+    assert demo_seen.json()["counts"]["history"] == 2
+
+
+def test_a_seen_cursor_does_not_survive_a_changed_view(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """A cursor is bound to the fingerprint of the query that issued it, so a
+    link kept from another ranking is refused rather than answered with a page
+    from somewhere in the middle of a different order."""
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+    issued = client.get(
+        "/users/987654324/library?tab=history&sort=tmdb&limit=1", headers=demo_headers
+    )
+    assert issued.status_code == 200
+    cursor = issued.json()["page"]["next_cursor"]
+    assert cursor, "a limit of one over two rows must hand back a cursor"
+
+    same_view = client.get(
+        f"/users/987654324/library?tab=history&sort=tmdb&limit=1&cursor={cursor}",
+        headers=demo_headers,
+    )
+    other_view = client.get(
+        f"/users/987654324/library?tab=history&sort=release&limit=1&cursor={cursor}",
+        headers=demo_headers,
+    )
+
+    assert same_view.status_code == 200
+    assert other_view.status_code == 400
+    assert other_view.json()["detail"] == "library cursor is invalid for this query"
 
 
 def test_serving_policy_and_exclusion_evidence_are_tenant_scoped(
