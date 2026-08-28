@@ -8,6 +8,7 @@ import {
   MovieRatingControl,
   MovieStateControls,
   type MovieStateControlSet,
+  type RemovalConfirmation,
 } from "@/components/movie/movie-state-controls";
 import { PosterFallbackMark } from "@/components/movie/poster-card";
 import type { LibraryMovie } from "@/lib/api";
@@ -16,6 +17,7 @@ import {
   movieMatchesTab,
   movieMetaLine,
   stateSummary,
+  tmdbMarkText,
 } from "@/lib/library/collection";
 import type { LibraryTab } from "@/lib/library/url-state";
 import {
@@ -61,6 +63,25 @@ export function libraryControlSet(
     return [{ kind: "watched", mode: "confirm" }, ...dismissal];
   }
   return dismissal;
+}
+
+/**
+ * What removing a watched title costs, said the same way wherever it is asked.
+ *
+ * The Seen spotlight and the row beneath it both own this action for the same
+ * movie, and a consequence sentence that differed between them would be two
+ * claims about one deletion. Shared for the same reason `libraryControlSet` is.
+ */
+export function libraryRemovalConfirmation(
+  name: string,
+  persona: string,
+): RemovalConfirmation {
+  return {
+    trigger: "Remove from history",
+    action: "Remove from history",
+    groupLabel: `Confirm removing ${name} from watched history`,
+    consequence: `Removing ${name} from history deletes the watched interaction and its rating. It stops counting as a positive signal for ${persona}, and the title can appear again as unseen.`,
+  };
 }
 
 /**
@@ -128,6 +149,7 @@ export function LibraryRow({
   // hands this row `undefined` behind a type that promises `number | null`.
   const year = movie.release_year ?? null;
   const poster = movie.poster_url ?? null;
+  const tmdbMark = tmdbMarkText(movie.tmdb_rating);
   // The one name this row uses everywhere: the link, the poster mark, the
   // control labels, and the removal consequence. MovieLens titles carry their
   // year, and the row now prints that year on its own metadata line.
@@ -150,6 +172,7 @@ export function LibraryRow({
         </h3>
         <p className="library-row-genres">
           {movieMetaLine(year, movie.genres)}
+          {tmdbMark ? <span className="library-row-tmdb">{tmdbMark}</span> : null}
         </p>
         <p className="library-row-state">{stateSummary(state, tab).join(" · ")}</p>
         {inactive ? (
@@ -160,12 +183,7 @@ export function LibraryRow({
       <MovieStateControls
         busy={locked}
         classNames={classNames}
-        confirmation={{
-          trigger: "Remove from history",
-          action: "Remove from history",
-          groupLabel: `Confirm removing ${name} from watched history`,
-          consequence: `Removing ${name} from history deletes the watched interaction and its rating. It stops counting as a positive signal for ${persona}, and the title can appear again as unseen.`,
-        }}
+        confirmation={libraryRemovalConfirmation(name, persona)}
         controls={libraryControlSet(tab, state.watched_at !== null)}
         idPrefix={prefix}
         onAction={onAction}

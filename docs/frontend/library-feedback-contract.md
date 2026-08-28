@@ -2,7 +2,7 @@
 
 **Status:** Implemented in Bundle 2
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-28
 
 ## Persistence boundary
 
@@ -55,6 +55,12 @@ Discover's watch-history region carry the two fields on the same terms.
 Neither read model filters on the snapshot's `visible` column — that column
 decides what Browse lists, not whether a title the viewer has already acted on
 may show its artwork.
+
+The History tab's own evolution — the Seen spotlight, the genre and year
+filters, the `release`/`tmdb` sorts, the fingerprint-bound cursor, and the
+`page.matched` and `items[].tmdb_rating` additions — is specified in
+[`seen-contract.md`](seen-contract.md); the tab value stays `history`
+everywhere and only its visible label becomes `Seen`.
 
 `GET /users/{user_id}/taste-profile` calculates genre counts and averages from
 the current projection on each read. Its source is `live-ratings-v1`, and its

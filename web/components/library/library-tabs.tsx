@@ -4,10 +4,17 @@ import type { LibraryCounts } from "@/lib/api";
 import { LIBRARY_TABS, type LibraryTab } from "@/lib/library/url-state";
 import "./library-tabs.css";
 
+/*
+ * `history` is the tab's identity everywhere it is addressable — the URL value,
+ * the API value, the `LibraryTab` type. Only what the reader sees is `Seen`,
+ * because "History" named a chronological receipt and the tab is a place to
+ * look back at what you have watched. One rename in a label map, and every
+ * string derived from it follows.
+ */
 const LABELS: Record<LibraryTab, string> = {
   rated: "Rated",
   watchlist: "Watchlist",
-  history: "History",
+  history: "Seen",
 };
 
 export function libraryTabLabel(tab: LibraryTab): string {

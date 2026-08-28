@@ -197,6 +197,40 @@ async function clearWatchlist(page: Page, userId: number, movieId: number) {
   );
 }
 
+/**
+ * The Seen spotlight's backdrop never participates in layout.
+ *
+ * Checked structurally for the same reason `posterReservation` is: the backdrop
+ * arrives one detail read after paint, and a run that happened to serve it from
+ * cache would report CLS 0 while the markup was still capable of pushing every
+ * row down the page. Taking it out of flow is what makes the enrichment free.
+ */
+async function backdropIsOutOfFlow(page: Page): Promise<StructuralClaim> {
+  const report = await page.evaluate(() => {
+    const backdrop = document.querySelector(".library-spotlight-backdrop");
+    if (!backdrop) {
+      return { present: false, position: "", parent: "" };
+    }
+    const parent = backdrop.parentElement;
+    return {
+      present: true,
+      position: getComputedStyle(backdrop).position,
+      parent: parent ? getComputedStyle(parent).position : "",
+    };
+  });
+  if (!report.present) {
+    // Vacuous rather than failing: most of the reviewed snapshot carries no
+    // backdrop, and the spotlight is built to look right without one.
+    return { ok: true, detail: "this title has no backdrop (the spotlight renders without one)" };
+  }
+  return {
+    ok: report.position === "absolute" && report.parent === "relative",
+    detail:
+      `backdrop is position: ${report.position} inside a position: ${report.parent} parent ` +
+      "(absolute inside relative is what keeps a late image off the rows)",
+  };
+}
+
 /** The movie id the featured Discover card links to. */
 async function featuredMovieId(page: Page): Promise<number> {
   const featured = page.locator("section.featured-movie");
@@ -467,6 +501,60 @@ test("Library: tabbed collections and a rating-edit acknowledgement", async ({ p
   await rating.selectOption(original);
   await expect(rating).toBeEnabled();
   await expect(rating).toHaveValue(original);
+  assertStructural(measurement);
+  assertTiming(measurement);
+});
+
+test("Seen: a spotlight enriched after paint, and a move that costs no request", async ({
+  page,
+}) => {
+  // The Rated measurement above cannot see this: the spotlight only renders on
+  // the Seen tab, and it is the one block on the product whose content arrives
+  // in two stages — the row paints immediately, then a detail read fills in the
+  // backdrop, runtime, score and cast. That is the classic shape of a late
+  // shift, so it gets its own measurement rather than riding on the tab next
+  // door that has no spotlight at all.
+  const path = `/library?userId=${LIBRARY_PERSONA}&tab=history`;
+  const presence = await prepare(page, path);
+  if (skipMissingRoute("library-seen", path, presence)) {
+    return;
+  }
+
+  const requests = trackRequests(page);
+  await page.goto(path);
+  const spotlight = page.getByRole("region", { name: "Seen spotlight" });
+  await expect(spotlight).toBeVisible();
+  // `settle` waits for network idle, so the detail read — and any shift it
+  // causes — lands inside the window these vitals describe.
+  await settle(page);
+  const vitals = await readVitals(page);
+
+  const heading = spotlight.locator(".library-spotlight-title");
+  const before = await heading.textContent();
+  // Moving the spotlight is the route's primary control and answers entirely in
+  // the browser: the next title is already in the loaded window, so a reader
+  // pressing `Next` waits on no request at all.
+  const ackMs = await measureAcknowledgement(page, { element: spotlight }, async () => {
+    await spotlight.getByRole("button", { name: "Next seen title" }).click();
+  });
+  await expect(heading).not.toHaveText(before ?? "");
+
+  const measurement: RouteMeasurement = {
+    route: "library-seen",
+    path,
+    lcpMs: vitals.lcp,
+    cls: vitals.cls,
+    shifts: vitals.shifts,
+    acknowledgement: { label: "move the spotlight", ms: ackMs },
+    structural: {
+      reserved_poster_boxes: await posterReservation(page),
+      no_per_card_tmdb_fan_out: tmdbFanOut(requests, await page.locator(".library-row").count()),
+      spotlight_backdrop_is_out_of_flow: await backdropIsOutOfFlow(page),
+    },
+    requests,
+  };
+  record(measurement);
+
   assertStructural(measurement);
   assertTiming(measurement);
 });

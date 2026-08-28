@@ -112,6 +112,13 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:ui
+      - name: Keep the Playwright traces and screenshots when the fixture suite fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-playwright
+          path: web/test-results/
+          if-no-files-found: ignore
 
   browser-auth-e2e:
     runs-on: ubuntu-latest

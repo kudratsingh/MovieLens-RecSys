@@ -117,6 +117,24 @@ const MATRIX: MatrixState[] = [
     },
   },
   {
+    // The Seen tab, which is the one state in the matrix that puts a spotlight
+    // above a list: two decision surfaces for the same movie inside one panel,
+    // and the widest control row the product has.
+    id: "library-seen",
+    path: "/ui-preview/library?tab=history",
+    settle: async (page) => {
+      await expect(page.getByRole("region", { name: "Seen spotlight" })).toBeVisible();
+      await expect(page.getByRole("list", { name: "Seen movies" })).toBeVisible();
+    },
+  },
+  {
+    id: "library-seen-filtered-empty",
+    path: "/ui-preview/library?tab=history&year_from=1900&year_to=1910",
+    settle: async (page) => {
+      await expect(page.getByText("Nothing in Seen matches these filters.")).toBeVisible();
+    },
+  },
+  {
     id: "library-empty",
     path: "/ui-preview/library?tab=watchlist&empty=watchlist",
     settle: async (page) => {

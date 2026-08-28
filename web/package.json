@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts tests/e2e/discover-journey.spec.ts tests/e2e/featured-skip-journey.spec.ts tests/e2e/finish-gate-journey.spec.ts tests/e2e/shell-and-doors.spec.ts tests/e2e/persona-hygiene.spec.ts",
+    "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts tests/e2e/seen-journey.spec.ts tests/e2e/discover-journey.spec.ts tests/e2e/featured-skip-journey.spec.ts tests/e2e/finish-gate-journey.spec.ts tests/e2e/shell-and-doors.spec.ts tests/e2e/persona-hygiene.spec.ts",
     "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
     "test:perf": "playwright test --config playwright.perf.config.ts",
     "evidence:baseline": "playwright test tests/e2e/capture-baseline.spec.ts",
