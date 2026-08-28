@@ -72,10 +72,13 @@ function committedLine(
       const then = next ? ` Next: ${next}.` : "";
       switch (action.resource) {
         case "rating":
-          // "Rating saved for …" leads on purpose: it is the phrase the
-          // service-backed Discover journey waits on.
+          // A star is recorded here from the follow-up panel, on a title that
+          // is already watched — so the sentence has to answer the question the
+          // panel leaves behind ("did that change the list?") rather than
+          // stop at "saved". It says the ADR 0012 truth in the viewer's terms:
+          // the watch is the signal, the star is not.
           return saved
-            ? `Rating saved for ${title}.${then}`
+            ? `Rated ${title} ${action.rating}/5. Ratings do not reorder the list — the watch already counts.${then}`
             : `Rating removed from ${title}; watched history was preserved.${then}`;
         case "watched":
           return saved

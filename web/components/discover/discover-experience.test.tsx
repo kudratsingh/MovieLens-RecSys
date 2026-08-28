@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -430,9 +430,14 @@ describe("a committed action refreshes recommendations before it says so", () =>
     renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
     await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
 
-    await screen.findByText(/The ranked list is unchanged/);
+    // The decision and the movie it moved to, and nothing after them. The tail
+    // that used to follow ("The ranked list is unchanged.") reported on the
+    // refetch rather than on anything the viewer had asked for.
+    await screen.findByText(
+      "The Handmaiden saved to watchlist. Next: In the Mood for Love.",
+    );
     expect(screen.queryByText(/Recommendations refreshed/)).not.toBeInTheDocument();
-    expect(screen.getByText(/saved to watchlist/)).toBeVisible();
+    expect(screen.queryByText(/ranked list is unchanged/)).not.toBeInTheDocument();
   });
 
   it("keeps a second press out of the way while the first is in flight", async () => {
@@ -825,5 +830,213 @@ describe("the featured slot is a queue position, not a projection", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
     ).toBeVisible();
+  });
+});
+
+/**
+ * What happens after the star, which is the half the panel used to leave out.
+ *
+ * `Mark watched` opens the rating panel below the ranked card, and on a phone
+ * that is well below the fold. Committing a rating there used to change almost
+ * nothing on screen: the panel stayed, its stars filled in and reading "5 out
+ * of 5 recorded", the status line added a tail about a refresh, and the viewer
+ * was left at the bottom of the page reading a finished decision about a title
+ * the featured slot had moved past two presses earlier.
+ */
+describe("a rating from the follow-up panel finishes the decision", () => {
+  const CONFIRMATION =
+    "Rated The Handmaiden 4/5. Ratings do not reorder the list — the watch already counts.";
+  const WATCHED_AT = "2026-08-21T09:00:00Z";
+
+  // jsdom implements no viewport, so the shared setup file stands
+  // `scrollIntoView` up as a mock; the tests below replace it with one that
+  // records its receiver and put the shared one back afterwards.
+  const sharedScrollIntoView = Element.prototype.scrollIntoView;
+
+  afterEach(() => {
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: sharedScrollIntoView,
+    });
+    vi.useRealTimers();
+  });
+
+  /** Records what was scrolled and how, which is all jsdom can observe. */
+  function watchScrolling(): { id: string; behavior?: string }[] {
+    const scrolls: { id: string; behavior?: string }[] = [];
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: Element, options?: ScrollIntoViewOptions | boolean) {
+        scrolls.push({
+          id: this.id,
+          behavior: typeof options === "object" ? options.behavior : undefined,
+        });
+      },
+    });
+    return scrolls;
+  }
+
+  /** The CSRF read, the watched write, the rating write, and every refetch. */
+  function stubRatingStack() {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watched")) {
+        return Response.json(committed({ watched_at: WATCHED_AT, watchlisted_at: null }));
+      }
+      if (url.includes("/rating")) {
+        return Response.json(
+          committed({
+            revision: 4,
+            rating: 4,
+            watched_at: WATCHED_AT,
+            watchlisted_at: null,
+          }),
+        );
+      }
+      // The decision that follows a rating, on the movie the slot moved to.
+      if (url.includes("/watchlist")) {
+        return Response.json(committed({ movie_id: 102, revision: 1 }));
+      }
+      // A watched title is excluded server-side, so the honest refetch is the
+      // ranked set without it.
+      return Response.json({
+        ...learnedRecommendations,
+        items: learnedRecommendations.items.slice(1),
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    return calls;
+  }
+
+  /** Marks the featured movie watched and hands back the panel that follows. */
+  async function openRatingPanel(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(featuredRegion().getByRole("button", { name: "Mark watched" }));
+    const panel = await screen.findByRole("region", { name: "Rate The Handmaiden" });
+    // The watched decision ends by moving focus to the same control on the card
+    // that arrived, and that move can land a frame later. Waiting for it is
+    // what lets the rating below start from the settled state a viewer would
+    // actually be rating from, rather than racing the press that opened this.
+    await waitFor(() =>
+      expect(document.getElementById("featured-102-watched")).toHaveFocus(),
+    );
+    return within(panel);
+  }
+
+  function ratingPanel() {
+    return screen.queryByRole("region", { name: "Rate The Handmaiden" });
+  }
+
+  it("takes the panel away and confirms the rating in one sentence", async () => {
+    const user = userEvent.setup();
+    stubRatingStack();
+
+    const { container } = renderDiscover(
+      readyState("recommendations", learnedRecommendations, REQUEST_ID),
+    );
+    const panel = await openRatingPanel(user);
+    await user.click(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+
+    const confirmation = await screen.findByText(CONFIRMATION);
+    await waitFor(() => expect(ratingPanel()).not.toBeInTheDocument());
+    // Politely, in the region every other decision on this route announces
+    // through — a rating is not an interruption.
+    expect(confirmation).toHaveAttribute("aria-live", "polite");
+    expect(confirmation).toHaveAttribute("id", "discover-status");
+    // No refresh tail behind it: a star cannot move a ranked set the watch
+    // already excluded the title from.
+    expect(screen.queryByText(/Recommendations refreshed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be refreshed/)).not.toBeInTheDocument();
+    // The panel carried the way to change a rating, so the sentence that
+    // replaces it carries the same one.
+    expect(screen.getByRole("link", { name: "Manage in Library" })).toHaveAttribute(
+      "href",
+      "/library?userId=900000101",
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("clears the confirmation on its own rather than leaving it standing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    stubRatingStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const panel = await openRatingPanel(user);
+    await user.click(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+    await screen.findByText(CONFIRMATION);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    expect(screen.queryByText(CONFIRMATION)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Manage in Library" })).not.toBeInTheDocument();
+    // Back to the resting line, not to a blank region.
+    expect(screen.getByText(/Recorded feedback updates/)).toBeVisible();
+  });
+
+  it("clears the confirmation the moment the viewer decides again", async () => {
+    const user = userEvent.setup();
+    stubRatingStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const panel = await openRatingPanel(user);
+    await user.click(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+    await screen.findByText(CONFIRMATION);
+
+    // The next decision is about a different movie, and a sentence about the
+    // last one has no business outliving it.
+    await user.click(
+      within(screen.getByRole("region", { name: "In the Mood for Love" })).getByRole(
+        "button",
+        { name: "Watchlist" },
+      ),
+    );
+    await screen.findByText(/In the Mood for Love saved to watchlist/);
+    expect(screen.queryByText(CONFIRMATION)).not.toBeInTheDocument();
+  });
+
+  it("scrolls back to the featured movie and lands on its first action", async () => {
+    const user = userEvent.setup();
+    const scrolls = watchScrolling();
+    stubRatingStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const panel = await openRatingPanel(user);
+    await user.click(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+    await screen.findByText(CONFIRMATION);
+
+    // One return per rating, to the featured section rather than the document
+    // top, and smoothly because nothing here asked for reduced motion.
+    expect(scrolls).toEqual([{ id: "featured-movie", behavior: "smooth" }]);
+    // Focus follows it to the first control the surface declares, so the next
+    // decision is one key away instead of a scroll and a hunt.
+    await waitFor(() =>
+      expect(document.getElementById("featured-102-watchlist")).toHaveFocus(),
+    );
+  });
+
+  it("returns instantly under reduced motion and says exactly the same thing", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const scrolls = watchScrolling();
+    stubRatingStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const panel = await openRatingPanel(user);
+    await user.click(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+
+    await screen.findByText(CONFIRMATION);
+    expect(scrolls).toEqual([{ id: "featured-movie", behavior: "auto" }]);
   });
 });
