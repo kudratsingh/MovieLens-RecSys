@@ -56,7 +56,7 @@ Semantic CSS variables in `web/app/globals.css` cover:
 - success, warning, destructive, and degraded state;
 - poster fallback and overlay;
 - rating gold, its idle counterpart, and its glow; and
-- 4px-derived spacing, typography roles, radii, shadows, motion, and easing.
+- 4px-derived spacing, typography roles, radii, elevation, motion, and easing.
 
 Motion is `--motion-fast`, `--motion-standard`, and the acknowledgement trio
 `--motion-stagger` / `--motion-pop` / `--motion-collapse`. `--ease-out` is the
@@ -66,6 +66,26 @@ single overshoot in the product, the star that lands when a rating commits.
 Dark-first is intentional. Every interactive control receives a visible
 `:focus-visible` ring. Primary mobile targets are at least 44 CSS pixels.
 Forced-color and reduced-motion media queries preserve meaning and operation.
+
+### Elevation
+
+A cast shadow does very little work on a `#0b0a09` canvas — a dark poster on a
+dark ground reads as a hole rather than as an object — so the scale is a pair:
+a shadow that says how far off the page something sits, and a hairline
+highlight along its top edge that says where the object starts.
+
+| Token | Where it belongs |
+|---|---|
+| `--elevation-1` | A resting card: poster frames, rail control chips. |
+| `--elevation-2` | A control under the pointer. |
+| `--elevation-3` | The pointer lift on a poster. |
+| `--elevation-spill` | A low-alpha accent glow, composed *alongside* an elevation step so a lifted poster changes temperature as well as depth. Never used alone. |
+| `--edge-highlight` | The hairline top edge. Applied over the element's own content — the poster frame paints it on the scrim above the artwork, because an inset shadow on a frame that clips an image would be hidden behind the image. |
+| `--shadow-raised` | Predates the scale, and stays with the overlay surfaces (drawer, auth menu) that want a soft, wide shadow rather than a card's tight one. |
+
+The lift itself (`translateY`) sits behind `prefers-reduced-motion:
+no-preference`; the shadow and border response does not, so a reduced-motion
+viewer still gets the full hover feedback without the movement.
 
 ## Posters and titles
 
@@ -88,6 +108,23 @@ Two rules, each stated once and consumed by every surface:
 A poster card is **one link** wrapping the artwork and the caption together. It
 used to be two anchors to the same href, which cost a keyboard reader an extra
 tab stop on every card in a rail.
+
+**The caption reserves two title lines,** whether the title needs one or two, so
+a card's caption — and therefore anything placed under it — is the same height
+across a row. `Toy Story` beside `To Kill a Mockingbird` otherwise set two
+different baselines and left neighbouring cards offering their decisions at
+different heights. The clamp keeps the full name reachable: it is on the link's
+accessible name and on the title's `title` attribute. The metadata line is a
+single ellipsised line for the same reason.
+
+**A ranked card hangs its rank in the caption gutter,** set in the display serif
+that section titles and the featured movie use and nothing else inside a card
+does. It was a cream disc pinned inside the poster's top-left, which covered
+whatever that poster's own designer had put there and all but vanished on a pale
+sheet. In the gutter it costs no vertical space, never touches artwork, and
+reads as what it is: a position in an edited list rather than a badge stuck on a
+tile. It is `aria-hidden` — the link already names the movie, and a screen
+reader should not be handed a bare numeral before every title.
 
 ## Independent failure contract
 
@@ -247,7 +284,26 @@ Three further properties of the control family are load-bearing:
   column is not the control family's business.
 - **In-flight controls are `aria-disabled`, not `disabled`.** A disabled element
   cannot hold focus, and returning focus to the control that failed is exactly
-  what a rollback has to do.
+  what a rollback has to do. The one control whose `aria-disabled` is permanent
+  rather than in-flight — `watched: final` on a movie already watched — carries
+  `movie-state-recorded` so it looks recorded instead of greyed out and waiting.
+- **`compact` shortens the word, never the action.** At a rail card's width a
+  pill holds one line, and `Mark watched` needed two. The compact rendering
+  prints `Watched` and `Watchlist` and moves the full state into `aria-label`,
+  so `Mark watched` and `In watchlist` remain the accessible names — what a
+  screen reader announces, what speech input reaches the control by, and what
+  every journey still asks for. Because the visible word does not change with
+  the state, a pill cannot change width and the row cannot jiggle under the
+  viewer; the recorded state is carried instead by `aria-pressed`, a filled
+  mark, and — on the rail — an accent tint at low alpha rather than a solid
+  coral fill that would out-shout nine posters. The family stops at the
+  one-line promise; how wide a compact pill is, where it sits, and what a
+  recorded one is painted in stay with the surface, so the Discover rail's
+  density lives in `movie-rail.css` and the Browse grid's in
+  `catalog-grid.css`. The rail's row is
+  `repeat(auto-fit, minmax(5.25rem, 1fr))`, so its two pills sit side by side
+  wherever a labelled pill fits and stack where one does not, without a
+  viewport breakpoint deciding for them.
 
 ## The write path
 

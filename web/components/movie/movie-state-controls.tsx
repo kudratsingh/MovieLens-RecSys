@@ -234,31 +234,42 @@ export function MovieStateControls({
   function renderControl(control: MovieStateControl): React.ReactNode {
     const props = buttonProps(control.kind);
     const action = classNames?.action;
+    const kind = `movie-state-${control.kind}`;
 
     if (control.kind === "watchlist") {
       if (control.mode === "remove") {
         return current.watchlisted ? (
           <button
             {...props}
-            className={classes("button-quiet", action)}
+            className={classes("button-quiet", kind, action)}
             onClick={act({ resource: "watchlist", method: "DELETE" })}
           >
             Remove from watchlist
           </button>
         ) : null;
       }
+      const saved = current.watchlisted;
       return (
         <button
           {...props}
-          aria-pressed={current.watchlisted}
+          // At rail density a pill is one line wide, and `In watchlist` is two
+          // of them. The compact rendering keeps the shorter word on screen and
+          // moves the full state into the accessible name, so the pressed pill
+          // is still `In watchlist` to a screen reader, to speech input, and to
+          // every test that asks for it by name — while the visible label, and
+          // therefore the pill's width, never changes as the state does.
+          aria-label={compact && saved ? "In watchlist" : undefined}
+          aria-pressed={saved}
           className={classes(
-            current.watchlisted ? "button-primary" : "button-secondary",
+            saved ? "button-primary" : "button-secondary",
+            kind,
+            saved && "movie-state-on",
             action,
           )}
           onClick={act(toggleAction("watchlist", current))}
         >
           <Icon name="bookmark" />
-          {current.watchlisted ? "In watchlist" : "Watchlist"}
+          {compact || !saved ? "Watchlist" : "In watchlist"}
         </button>
       );
     }
@@ -269,7 +280,12 @@ export function MovieStateControls({
         <button
           {...props}
           aria-pressed={control.mode === "toggle" ? current.dismissed : undefined}
-          className={classes("button-quiet", action)}
+          className={classes(
+            "button-quiet",
+            kind,
+            current.dismissed && "movie-state-on",
+            action,
+          )}
           onClick={act(toggleAction("dismissal", current))}
         >
           {current.dismissed ? "Undo not for me" : "Not for me"}
@@ -277,7 +293,7 @@ export function MovieStateControls({
       );
     }
 
-    const watched = classes("button-secondary", action);
+    const watched = classes("button-secondary", kind, action);
 
     // The removal is confirmed rather than immediate, because it deletes the
     // one interaction the recommender actually observed.
@@ -286,7 +302,7 @@ export function MovieStateControls({
         <button
           {...props}
           aria-pressed
-          className={classes(watched, "movie-state-action-danger")}
+          className={classes(watched, "movie-state-on", "movie-state-action-danger")}
           onClick={() => {
             if (!busy) setConfirming(true);
           }}
@@ -301,7 +317,14 @@ export function MovieStateControls({
     // undoing it is a destructive edit and belongs in Library or on detail.
     if (control.mode === "final" && current.watched) {
       return (
-        <button {...props} aria-disabled aria-pressed className={watched}>
+        <button
+          {...props}
+          aria-disabled
+          aria-pressed
+          // `aria-disabled` here is permanent rather than in-flight, so it must
+          // not borrow the faded, cursor-progress look that means "wait".
+          className={classes(watched, "movie-state-on", "movie-state-recorded")}
+        >
           <Icon name="check" />
           Watched
         </button>
@@ -313,7 +336,7 @@ export function MovieStateControls({
         <button
           {...props}
           aria-pressed
-          className={watched}
+          className={classes(watched, "movie-state-on")}
           onClick={act({ resource: "watched", method: "DELETE" })}
         >
           <Icon name="check" />
@@ -325,12 +348,17 @@ export function MovieStateControls({
     return (
       <button
         {...props}
+        // Same rule as `Watchlist` above: the visible word shortens at rail
+        // density, the action it performs does not. `Watched` is a substring of
+        // `Mark watched`, so the accessible name still contains what is on
+        // screen and speech input still reaches the control by what it reads.
+        aria-label={compact ? "Mark watched" : undefined}
         aria-pressed={false}
         className={watched}
         onClick={act({ resource: "watched", method: "PUT" })}
       >
         <Icon name="check" />
-        Mark watched
+        {compact ? "Watched" : "Mark watched"}
       </button>
     );
   }
