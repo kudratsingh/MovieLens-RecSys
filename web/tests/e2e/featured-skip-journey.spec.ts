@@ -79,7 +79,12 @@ test("a watchlisted title can be skipped, then held back from the featured slot"
   await restoreFeaturedPreference(page);
   await page.reload();
 
-  const heading = page.getByRole("heading", { level: 1 });
+  // The route streams: a level-1 heading exists before the movie does (the
+  // loading placeholder's "Finding a strong first pick…"), so wait for the
+  // movie's own section and read the heading inside it.
+  const featuredSection = page.locator("section.featured-movie");
+  await expect(featuredSection).toBeVisible();
+  const heading = featuredSection.getByRole("heading", { level: 1 });
   await expect(heading).toBeVisible();
   const savedTitle = (await heading.textContent())?.trim() ?? "";
   const savedId = await featuredMovieId(page);
@@ -96,7 +101,12 @@ test("a watchlisted title can be skipped, then held back from the featured slot"
     //    recommendation response carries the state the API committed — not
     //    because anything was cached in the tab.
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1, name: savedTitle })).toBeVisible();
+    await expect(page.locator("section.featured-movie")).toBeVisible();
+    await expect(
+      page
+        .locator("section.featured-movie")
+        .getByRole("heading", { level: 1, name: savedTitle }),
+    ).toBeVisible();
     const featured = page.getByRole("region", { name: savedTitle });
     await expect(featured.getByText("On your watchlist")).toBeVisible();
     const skip = featured.getByRole("button", { name: "Skip" });
@@ -108,29 +118,45 @@ test("a watchlisted title can be skipped, then held back from the featured slot"
     await expect(
       page.getByText(`Skipped ${savedTitle} — still on your watchlist.`),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(savedTitle);
+    await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(
+      savedTitle,
+    );
     const rail = page.getByRole("region", { name: "Next in this ranked set" });
-    await expect(rail.getByRole("link", { name: new RegExp(escape(savedTitle)) })).toBeVisible();
+    await expect(
+      rail.getByRole("link", { name: new RegExp(escape(savedTitle)) }),
+    ).toBeVisible();
 
     // 4. Turn featuring off through the permanent setting, and read back what
     //    the API stored rather than what the button was clicked to.
-    await page.getByRole("button", { name: "Feature watchlisted titles" }).click();
+    await page
+      .getByRole("button", { name: "Feature watchlisted titles" })
+      .click();
     await expect(
-      page.getByText("Watchlisted titles will not be featured. They stay in the ranked list below."),
+      page.getByText(
+        "Watchlisted titles will not be featured. They stay in the ranked list below.",
+      ),
     ).toBeVisible();
 
     // 5. It survives the reload, and the title keeps its rail card.
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(savedTitle);
+    await expect(page.getByRole("heading", { level: 1 })).not.toHaveText(
+      savedTitle,
+    );
     await expect(
       page.getByRole("button", { name: "Feature watchlisted titles" }),
     ).toHaveAttribute("aria-pressed", "false");
-    const heldRail = page.getByRole("region", { name: "Next in this ranked set" });
-    const heldCard = heldRail.getByRole("link", { name: new RegExp(escape(savedTitle)) });
+    const heldRail = page.getByRole("region", {
+      name: "Next in this ranked set",
+    });
+    const heldCard = heldRail.getByRole("link", {
+      name: new RegExp(escape(savedTitle)),
+    });
     await expect(heldCard).toBeVisible();
     // Held back from the slot, not removed from the set — and still reported as
     // watchlisted, because nothing about the preference touched the state.
-    await expect(heldRail.getByRole("button", { name: "In watchlist" }).first()).toBeVisible();
+    await expect(
+      heldRail.getByRole("button", { name: "In watchlist" }).first(),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Skip" })).toHaveCount(0);
   } finally {
     await restoreFeaturedPreference(page);
