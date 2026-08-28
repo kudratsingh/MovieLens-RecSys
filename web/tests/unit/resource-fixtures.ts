@@ -145,6 +145,7 @@ export const movieDetailResponse: MovieDetailResponse = {
 
 export const libraryResponse: LibraryResponse = {
   counts: { history: 6, rated: 4, watchlist: 2 },
+  genre: null,
   items: [
     {
       genres: ["Crime", "Mystery"],
@@ -153,14 +154,17 @@ export const libraryResponse: LibraryResponse = {
       release_year: 2003,
       state: movieState,
       title: "Memories of Murder",
+      tmdb_rating: 8.1,
     },
   ],
-  page: { has_more: false, next_cursor: null },
+  page: { has_more: false, matched: 1, next_cursor: null },
   query: null,
   sort: "recent",
   tab: "rated",
   tenant_id: "demo",
   user_id: 900000101,
+  year_from: null,
+  year_to: null,
 };
 
 export const tasteSummaryResponse: TasteSummaryResponse = {

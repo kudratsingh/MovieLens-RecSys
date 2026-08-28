@@ -622,12 +622,9 @@ export function LibraryExperience({
         ) ?? null)
       : null;
   // `matched` is the exact number of rows this query has, which is the number
-  // the readout would otherwise have to invent. Without it, the loaded window
-  // is the only honest denominator.
-  const spotlightTotal =
-    typeof collection?.page.matched === "number"
-      ? collection.page.matched
-      : spotlight.movieIds.length;
+  // the readout would otherwise have to invent from the window it has loaded.
+  // The fallback is only for the moment before the first page arrives.
+  const spotlightTotal = collection?.page.matched ?? spotlight.movieIds.length;
 
   return (
     <div className="library-route">

@@ -78,7 +78,7 @@ export function LibrarySpotlight({
   href: string;
   /** One-based, for the readout. */
   position: number;
-  /** `page.matched` where the API reports it, the loaded window otherwise. */
+  /** `page.matched` — every row this query has, not just the loaded window. */
   total: number;
   hasPrevious: boolean;
   hasNext: boolean;

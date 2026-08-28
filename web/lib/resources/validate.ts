@@ -280,10 +280,10 @@ function isLibraryMovie(value: unknown): boolean {
     isNumber(value.movie_id) &&
     isString(value.title) &&
     arrayOf(isString)(value.genres) &&
-    // Absent as well as null: the crowd score is newer than this guard, and an
-    // API image that predates it sends no key at all. Same tolerance
-    // `movieMetaLine` applies to `release_year`, for the same deployment reason.
-    (value.tmdb_rating === undefined || nullable(isNumber)(value.tmdb_rating)) &&
+    // Null where the catalog snapshot has no usable crowd score, but always
+    // present: the contract marks it required, and the two images deploy at one
+    // commit SHA, so an absent key is a broken API rather than an older one.
+    nullable(isNumber)(value.tmdb_rating) &&
     isMovieState(value.state)
   );
 }
@@ -300,16 +300,12 @@ function isLibraryCounts(value: unknown): boolean {
 /**
  * The Library page block, plus the exact match count the Seen spotlight reads.
  *
- * `matched` is optional here rather than required: it is a count of one
- * persona's own bounded rows, and a web image newer than the API would
- * otherwise fail a healthy response over a number it can fall back from.
+ * `matched` counts one persona's own bounded rows for the tab and filters,
+ * ignoring cursor and limit, which is what lets the spotlight say "3 of 42"
+ * truthfully rather than counting the window it happens to have loaded.
  */
 function isLibraryPage(value: unknown): boolean {
-  return (
-    isCursorPage(value) &&
-    isRecord(value) &&
-    (value.matched === undefined || isNumber(value.matched))
-  );
+  return isCursorPage(value) && isRecord(value) && isNumber(value.matched);
 }
 
 export function isLibraryResponse(value: unknown): value is LibraryResponse {
@@ -324,10 +320,11 @@ export function isLibraryResponse(value: unknown): value is LibraryResponse {
     // broken region, which is the failure this list exists to prevent.
     oneOf(["recent", "title", "rating", "release", "tmdb"] as const)(value.sort) &&
     nullable(isString)(value.query) &&
-    // Echoed filters, optional for the same reason `matched` is.
-    (value.genre === undefined || nullable(isString)(value.genre)) &&
-    (value.year_from === undefined || nullable(isNumber)(value.year_from)) &&
-    (value.year_to === undefined || nullable(isNumber)(value.year_to)) &&
+    // The echoed filters. Reading them back from the response rather than from
+    // the URL is what keeps the readout and the rows describing one same query.
+    nullable(isString)(value.genre) &&
+    nullable(isNumber)(value.year_from) &&
+    nullable(isNumber)(value.year_to) &&
     everyItem(isLibraryMovie)(value.items)
   );
 }

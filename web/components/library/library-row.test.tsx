@@ -43,6 +43,7 @@ function movie(overrides: Partial<LibraryMovie> = {}): LibraryMovie {
     release_year: 2003,
     state: state(),
     title: "Memories of Murder (2003)",
+    tmdb_rating: 8.1,
     ...overrides,
   };
 }
