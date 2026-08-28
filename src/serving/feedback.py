@@ -172,6 +172,23 @@ _RECENT_COLUMN: dict[LibraryTab, str] = {
 }
 
 
+def require_demo_persona(connection: Connection, *, user_id: int) -> None:
+    """Authorize a ``/users/{id}`` target as a writable demo persona.
+
+    Module level rather than a method because it is not about feedback: every
+    persona-scoped resource asks the same question, and a second copy of the
+    query is how two of them end up disagreeing about which ids are writable.
+    RLS has already bounded the read to the request tenant, so a persona from
+    another tenant is invisible here and fails closed as unknown.
+    """
+    exists = connection.execute(
+        text("SELECT 1 FROM demo_personas WHERE user_id = :user_id AND synthetic IS TRUE"),
+        {"user_id": user_id},
+    ).scalar_one_or_none()
+    if exists is None:
+        raise UnknownDemoPersonaError(f"user {user_id} is not a writable demo persona")
+
+
 class FeedbackService:
     """Own current-state transitions and append exactly one event per request ID."""
 
@@ -585,12 +602,7 @@ class FeedbackService:
 
     @staticmethod
     def _require_demo_persona(connection: Connection, *, user_id: int) -> None:
-        exists = connection.execute(
-            text("SELECT 1 FROM demo_personas WHERE user_id = :user_id AND synthetic IS TRUE"),
-            {"user_id": user_id},
-        ).scalar_one_or_none()
-        if exists is None:
-            raise UnknownDemoPersonaError(f"user {user_id} is not a writable demo persona")
+        require_demo_persona(connection, user_id=user_id)
 
     @staticmethod
     def _require_movie(connection: Connection, *, movie_id: int) -> None:
@@ -607,13 +619,13 @@ def _row_to_state(row: object) -> MovieState:
         tenant_id=str(getattr(row, "tenant_id")),
         user_id=int(getattr(row, "user_id")),
         movie_id=int(getattr(row, "movie_id")),
-        watched_at=_as_datetime(getattr(row, "watched_at")),
+        watched_at=as_utc_datetime(getattr(row, "watched_at")),
         rating=(float(getattr(row, "rating")) if getattr(row, "rating") is not None else None),
-        rating_updated_at=_as_datetime(getattr(row, "rating_updated_at")),
-        watchlisted_at=_as_datetime(getattr(row, "watchlisted_at")),
-        dismissed_at=_as_datetime(getattr(row, "dismissed_at")),
+        rating_updated_at=as_utc_datetime(getattr(row, "rating_updated_at")),
+        watchlisted_at=as_utc_datetime(getattr(row, "watchlisted_at")),
+        dismissed_at=as_utc_datetime(getattr(row, "dismissed_at")),
         state_version=int(getattr(row, "state_version")),
-        updated_at=_as_datetime(getattr(row, "updated_at")) or datetime.now(UTC),
+        updated_at=as_utc_datetime(getattr(row, "updated_at")) or datetime.now(UTC),
     )
 
 
@@ -661,13 +673,13 @@ def _snapshot_to_state(snapshot: dict[str, object], *, tenant_id: str) -> MovieS
         tenant_id=tenant_id,
         user_id=_required_int(snapshot["user_id"]),
         movie_id=_required_int(snapshot["movie_id"]),
-        watched_at=_as_datetime(snapshot.get("watched_at")),
+        watched_at=as_utc_datetime(snapshot.get("watched_at")),
         rating=_optional_float(snapshot.get("rating")),
-        rating_updated_at=_as_datetime(snapshot.get("rating_updated_at")),
-        watchlisted_at=_as_datetime(snapshot.get("watchlisted_at")),
-        dismissed_at=_as_datetime(snapshot.get("dismissed_at")),
+        rating_updated_at=as_utc_datetime(snapshot.get("rating_updated_at")),
+        watchlisted_at=as_utc_datetime(snapshot.get("watchlisted_at")),
+        dismissed_at=as_utc_datetime(snapshot.get("dismissed_at")),
         state_version=_required_int(snapshot["state_version"]),
-        updated_at=_as_datetime(snapshot.get("updated_at")) or datetime.now(UTC),
+        updated_at=as_utc_datetime(snapshot.get("updated_at")) or datetime.now(UTC),
     )
 
 
@@ -692,7 +704,14 @@ def _optional_float(value: object) -> float | None:
     raise TypeError(f"expected a numeric value, got {value!r}")
 
 
-def _as_datetime(value: object) -> datetime | None:
+def as_utc_datetime(value: object) -> datetime | None:
+    """Whatever the driver or a JSON snapshot handed us, as aware UTC.
+
+    Public because it is not about feedback: SQLite hands a ``DATETIME`` column
+    back as text where psycopg2 hands back a ``datetime``, and every module that
+    reads a timestamp off a raw row has to survive both. One coercion, so two
+    modules cannot disagree about what a naive value means.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):

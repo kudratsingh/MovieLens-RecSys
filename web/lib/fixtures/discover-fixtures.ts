@@ -15,11 +15,13 @@
 import { FIXTURE_REQUEST_ID } from "@/lib/resources/fixture-gate";
 import type {
   HistoryResponse,
+  MovieState,
   OnlineUserFeatures,
   RecommendationAuditResponse,
   RecommendationItem,
   RecommendationResponse,
   ServingPolicy,
+  UserPreferences,
 } from "@/lib/api";
 
 export const FIXTURE_TENANT_ID = "demo";
@@ -228,6 +230,67 @@ export const posterFailureRecommendations: RecommendationResponse = response(
     ),
   ),
 );
+
+/**
+ * A watchlist entry the API has already committed, recorded in the shape a
+ * recommendation response carries it in. `revision` is 2 rather than 1 on
+ * purpose: a real watchlist entry is rarely a persona's first write, and a
+ * fixture that always said 1 would let a client that assumes revision 0 or 1
+ * pass the recorded matrix and fail on the stack.
+ */
+function watchlistedState(movieId: number): MovieState {
+  return {
+    tenant_id: FIXTURE_TENANT_ID,
+    user_id: FIXTURE_USER_ID,
+    movie_id: movieId,
+    watched_at: null,
+    rating: null,
+    rating_updated_at: null,
+    watchlisted_at: "2026-08-27T19:12:00+00:00",
+    dismissed_at: null,
+    revision: 2,
+    updated_at: "2026-08-27T19:12:00+00:00",
+  };
+}
+
+/**
+ * The first four titles are already on the persona's watchlist.
+ *
+ * Four rather than one because the states the harness has to reach are a
+ * sequence: skip, skip, skip — which is what earns the one-time nudge — and
+ * then a fourth watchlisted title still standing so the preference has
+ * something visible to hold back afterwards.
+ */
+export const WATCHLISTED_MOVIE_IDS: readonly number[] = [101, 102, 103, 104];
+
+export const watchlistedRecommendations: RecommendationResponse = response(
+  learnedPolicy,
+  "item-item-v3/lgbm-ranker-2026.08",
+  SEEDS.map((seed) => {
+    const base = item(seed, LEARNED_REASON);
+    return WATCHLISTED_MOVIE_IDS.includes(seed.movie_id)
+      ? { ...base, state: watchlistedState(seed.movie_id) }
+      : base;
+  }),
+);
+
+/** The untouched default: watchlisted titles may take the featured slot. */
+export const featuredPreferencesOn: UserPreferences = {
+  tenant_id: FIXTURE_TENANT_ID,
+  user_id: FIXTURE_USER_ID,
+  feature_watchlisted_titles: true,
+  revision: 0,
+  updated_at: null,
+};
+
+/** The answered state, at the revision a real first write would leave. */
+export const featuredPreferencesOff: UserPreferences = {
+  tenant_id: FIXTURE_TENANT_ID,
+  user_id: FIXTURE_USER_ID,
+  feature_watchlisted_titles: false,
+  revision: 1,
+  updated_at: "2026-08-27T19:20:00+00:00",
+};
 
 export const discoverHistory: HistoryResponse = {
   tenant_id: FIXTURE_TENANT_ID,

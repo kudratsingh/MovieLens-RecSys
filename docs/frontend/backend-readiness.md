@@ -5,7 +5,7 @@ and scalable local catalog/detail. The Bundle 6 backend prerequisite —
 separate positive-history and excluded-ID serving inputs plus audit evidence —
 is implemented (PR #54).
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-28
 
 ## Outcome
 
@@ -22,6 +22,7 @@ parts of the route design are implementation claims.
 |---|---|---|
 | Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy. Each ranked item also carries the caller's own `state` for that title, or `null` | Static artifacts and snapshot features still do not update on each rating |
 | Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
+| Presentation preferences | `GET|PUT /users/{user_id}/preferences` store one typed per-persona setting — `feature_watchlisted_titles` — in forced-RLS `user_preferences` (migration 0013). The write is a full-object PUT with `expected_revision`, reports `changed`/`no_change`, records the acting OIDC subject, and commits before the 200 like every other mutation. An untouched persona reads the documented default at revision 0 with a null `updated_at` | Presentation only: no serving path reads the table, so a response's `serving_policy`, exclusion count, and audit row are identical either way. There is no change history — the append-only feedback log is movie-scoped and would have to misfile a preference as a movie decision. Adding a preference is a migration rather than a JSON key |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
 | Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, a truthful `live-ratings-v1` summary, and each row's `release_year` and `poster_url` from the shared metadata snapshot | The resources remain selected-persona mode until `/me` ownership mapping lands |
 | Catalog | Filter-bound keyset cursor, search, genre/year filters, three stable sorts, 48-item cap, local detail, and complete watched/rating/watchlist/dismissal state overlay | Selected-persona ownership remains the boundary; full-catalog query profiling is still required before widening the reviewed fixture |
@@ -38,6 +39,8 @@ parts of the route design are implementation claims.
 - [Authentication and transaction lifecycle](../../src/auth/middleware.py)
 - [FastAPI routes and response contracts](../../src/serving/app.py)
 - [Catalog, history, and rating persistence](../../src/serving/recommendations.py)
+- [Per-persona presentation preferences](../../src/serving/preferences.py) and
+  [their table](../../alembic/versions/0014_user_preferences.py)
 - [Online routing and learned/fallback policy](../../src/serving/orchestration.py)
 - [TMDB client and process-local cache](../../src/serving/tmdb.py)
 - [Feast materialization](../../src/features/materialize.py) and
@@ -64,6 +67,10 @@ The first frontend implementation may say:
 - `Similar to movies in this persona's watched history.` only when structured
   candidate-source evidence supports it.
 - `Popular while we learn.` for histories below the accepted threshold.
+- `Movies you have watched or marked "Not for me" never come back to Discover.`
+  — the exclusion set does exactly that before retrieval runs.
+- `Skipped <title> — still on your watchlist.` after a featured-slot skip, which
+  issues no request and changes no stored state.
 
 It must not say:
 
@@ -73,6 +80,8 @@ It must not say:
 - `Your private library` while the route is a selected shared demo persona.
 - `Personalized after one rating` while the accepted threshold is five.
 - `All 62,423 movies can be recommended` merely because they can be browsed.
+- `Skipping this teaches the recommender` — a skip writes nothing, and the
+  `Featured picks` preference reaches no serving path (ADR 0012, 2026-08-28).
 
 ## Required product contracts
 

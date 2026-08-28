@@ -38,6 +38,9 @@ export type RecommendationAuditResponse =
   components["schemas"]["RecommendationAuditResponse"];
 export type OnlineUserFeatures =
   components["schemas"]["OnlineUserFeaturesResponse"];
+export type UserPreferences = components["schemas"]["UserPreferencesResponse"];
+export type UserPreferencesMutation =
+  components["schemas"]["UserPreferencesMutationResponse"];
 
 export interface UserDashboard {
   recommendations: RecommendationResponse;

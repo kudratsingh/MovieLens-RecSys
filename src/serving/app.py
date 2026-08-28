@@ -15,6 +15,8 @@ The authenticated surface currently includes:
   * ``GET /users/{user_id}/movies/{movie_id}`` — local detail plus durable state.
   * ``GET /users/{user_id}/library`` — cursor-paginated durable movie state.
   * ``GET /users/{user_id}/taste-profile`` — live, non-model rating summary.
+  * ``GET|PUT /users/{user_id}/preferences`` — per-persona presentation
+    preferences. Read by clients only; no serving path consumes them.
   * ``PUT|DELETE /users/{user_id}/movies/{movie_id}/*`` — idempotent watched,
     rating, watchlist, and dismissal resources.
   * ``PUT /users/{user_id}/ratings/{movie_id}`` — RLS-scoped feedback write.
@@ -86,6 +88,11 @@ from src.serving.feedback import (
 )
 from src.serving.models import ModelServerClient
 from src.serving.orchestration import RecommendationCoordinator
+from src.serving.preferences import (
+    DEFAULT_FEATURE_WATCHLISTED_TITLES,
+    PreferencesService,
+    UserPreferences,
+)
 from src.serving.ratelimit import (
     LIMIT_HEADER,
     REMAINING_HEADER,
@@ -134,6 +141,7 @@ _jwks = JwksCache(
 _tenant_router = TenantRouter(_app_engine)
 _recommendations = RecommendationService()
 _feedback = FeedbackService()
+_preferences = PreferencesService()
 _audits = RecommendationAuditService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _model_server = ModelServerClient(
@@ -381,6 +389,35 @@ class FeedbackMutationResponse(BaseModel):
     replayed: bool
     outcome: Literal["changed", "no_change"]
     state: MovieStateResponse
+
+
+class UserPreferencesResponse(BaseModel):
+    """One persona's presentation preferences, or the defaults it has not left.
+
+    Presentation only. Nothing here reaches candidate retrieval, the ranker, or
+    the exclusion set — a preference decides what the client shows, and the
+    audit for a request is unchanged by it (ADR 0012, 2026-08-28 note).
+    ``revision`` is the same optimistic-locking token movie state uses; a
+    persona that has never written one sits at revision 0 with a null
+    ``updated_at``, because a default is not an edit.
+    """
+
+    tenant_id: str
+    user_id: int
+    feature_watchlisted_titles: bool = DEFAULT_FEATURE_WATCHLISTED_TITLES
+    revision: int
+    updated_at: datetime | None
+
+
+class UserPreferencesRequest(BaseModel):
+    """The full object, always. A partial write has no revision to assert."""
+
+    feature_watchlisted_titles: bool
+
+
+class UserPreferencesMutationResponse(BaseModel):
+    outcome: Literal["changed", "no_change"]
+    preferences: UserPreferencesResponse
 
 
 class LibraryMovieResponse(BaseModel):
@@ -1125,6 +1162,69 @@ async def taste_profile(user_id: int, request: Request) -> TasteSummaryResponse:
     )
 
 
+@app.get(
+    "/users/{user_id}/preferences",
+    response_model=UserPreferencesResponse,
+    operation_id="getUserPreferences",
+)
+async def user_preferences(user_id: int, request: Request) -> UserPreferencesResponse:
+    """Return one persona's presentation preferences, or its untouched defaults."""
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        preferences = await run_in_threadpool(
+            _preferences.get,
+            connection,
+            tenant_id=principal.tenant_id,
+            user_id=user_id,
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _preferences_response(preferences)
+
+
+@app.put(
+    "/users/{user_id}/preferences",
+    response_model=UserPreferencesMutationResponse,
+    operation_id="setUserPreferences",
+)
+async def set_user_preferences(
+    user_id: int,
+    payload: UserPreferencesRequest,
+    request: Request,
+    expected_revision: int | None = Query(default=None, ge=0),
+) -> UserPreferencesMutationResponse:
+    """Replace the whole preference object, asserting the revision it replaces.
+
+    The write lands on the RLS-bound request connection and the middleware
+    commits that transaction before this 200 is returned, so an acknowledged
+    preference is a durable one — the same rule every other mutation on this
+    surface follows.
+    """
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    try:
+        result = await run_in_threadpool(
+            _preferences.set,
+            connection,
+            tenant_id=principal.tenant_id,
+            actor_user_id=principal.user_id,
+            user_id=user_id,
+            feature_watchlisted_titles=payload.feature_watchlisted_titles,
+            expected_revision=expected_revision,
+        )
+    except UnknownDemoPersonaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return UserPreferencesMutationResponse(
+        outcome=result.outcome,
+        preferences=_preferences_response(result.preferences),
+    )
+
+
 @app.put(
     "/users/{user_id}/movies/{movie_id}/watched",
     response_model=FeedbackMutationResponse,
@@ -1533,6 +1633,16 @@ def _movie_state_response(state: MovieState) -> MovieStateResponse:
         dismissed_at=state.dismissed_at,
         revision=state.state_version,
         updated_at=state.updated_at,
+    )
+
+
+def _preferences_response(preferences: UserPreferences) -> UserPreferencesResponse:
+    return UserPreferencesResponse(
+        tenant_id=preferences.tenant_id,
+        user_id=preferences.user_id,
+        feature_watchlisted_titles=preferences.feature_watchlisted_titles,
+        revision=preferences.revision,
+        updated_at=preferences.updated_at,
     )
 
 

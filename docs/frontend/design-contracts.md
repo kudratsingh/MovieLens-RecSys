@@ -2,7 +2,7 @@
 
 **Status:** Accepted direction; implementation pending
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-28
 
 ## Shared product contract
 
@@ -141,6 +141,48 @@ answer, and nothing at all when the set legitimately came back identical — whi
 is what a watchlist press does, and which the sentence in front of it has
 already accounted for.
 
+A title already on the viewer's watchlist **may still be featured**, and there
+is a way past it. The featured card carries an `On your watchlist` cue and a
+`Skip` control beside the three state buttons — beside them and not among them,
+because those three write and this one does not. `Skip` is offered only where
+the route actually knows the title is watchlisted: a recommendation can arrive
+with no per-item state, and "not told" is not "not saved", so a card with
+unknown state gets no cue and no control.
+
+**A skip writes nothing.** Not a watched, not a dismissal, not a rating, and
+never a training negative (ADR 0012 and its 2026-08-28 note). It moves the
+featured slot on and leaves everything else exactly as it was, so the sentence
+it announces says so — `Skipped <title> — still on your watchlist. Next:
+<title>.` — and there is no `Undo` beside it, because nothing was undone. The
+skipped title keeps its place in the ranked rail rather than disappearing: it
+is still a recommendation, and being able to see it there is what makes the
+skip reversible by looking rather than by remembering.
+
+After the **third** skip of a watchlisted title in a session, the status region
+asks once: `Stop featuring titles on your watchlist?`, with `Stop featuring
+them` and `Keep featuring them`. Once, at the threshold — a viewer who keeps
+skipping past the offer is answering it by not answering, and either explicit
+answer settles it for the session including across a reload. The counter is per
+tab and per persona and lives in session storage; the answer is durable and
+goes to the API.
+
+The answer also has a **permanent home**: a `Featured picks` setting at the foot
+of the featured section, above the rail, governing the slot directly above it.
+It is a labelled two-state button with one sentence under it, not a menu or a
+popover — the shared forbidden defaults rule out hover-only information needed
+to act, and a one-time question that is the only route to a setting is a setting
+the viewer cannot change their mind about. With featuring off, the featured slot
+passes watchlisted titles over and takes the first title it has no saved state
+for; those titles stay in the ranked rail marked `In watchlist`. When every
+remaining title is held back, the slot says exactly that rather than claiming
+the ranked set is exhausted, and the rail stays on screen beneath it.
+
+The preference is **presentation, not serving**. The API stores it and no
+serving path reads it, so the response, its `serving_policy`, its exclusion
+count, and its audit row are identical either way. Copy may never suggest
+otherwise: neither the skip nor the setting changes what the recommender
+learns, and both say so where a viewer is deciding.
+
 **Recommended initial surfaces:**
 
 - `Top picks for you` — the primary model-ranked list.
@@ -170,6 +212,15 @@ were below it — `serving_policy` can legitimately report a high
 instance), and the copy has to say the true thing in that case rather than
 "28 of the 5 watched signals".
 
+The drawer also states **what never comes back**. Watched and dismissed titles
+are dropped from the exclusion set before retrieval runs — true at the source
+since Bundle 6 and, until now, invisible to the person it is about. One line
+says it, and says the other half in the same breath: watchlisted titles do come
+back, and whether they can be featured is the viewer's own `Featured picks`
+setting. It sits below the plain sentence rather than inside it, because it
+answers a standing question about the product rather than a question about this
+one response.
+
 **Responsive priority:** Poster, title, reason, and actions remain together.
 Rails show a partial next card or clear next controls to signal continuation.
 Model details become a full-width sheet on mobile.
@@ -178,7 +229,10 @@ Model details become a full-width sheet on mobile.
 loading, empty, API-error, and failed-poster states; keyboard rail navigation;
 watched/rating refresh flow, including the rating follow-through at 390/768/1440
 — panel gone, confirmation shown and then cleared, movie and focus back on
-screen.
+screen. The `Featured picks` states join them: a watchlisted featured title with
+its cue and `Skip`, the one-time question after the third skip, and the held-back
+slot with the saved titles still in the rail (`?demo=watchlisted` and
+`?demo=watchlist-held-back`).
 
 ## `/browse` — Catalog
 

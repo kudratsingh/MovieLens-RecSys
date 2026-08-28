@@ -17,6 +17,7 @@ import type {
   OnlineUserFeatures,
   RecommendationAuditResponse,
   RecommendationResponse,
+  UserPreferences,
 } from "@/lib/api";
 import type { ApiSession } from "@/lib/bff-auth";
 import {
@@ -27,15 +28,22 @@ import {
   emptyRecommendations,
   fallbackAudits,
   fallbackRecommendations,
+  featuredPreferencesOff,
+  featuredPreferencesOn,
   learnedRecommendations,
   posterFailureRecommendations,
+  watchlistedRecommendations,
 } from "@/lib/fixtures/discover-fixtures";
 import {
   fixtureResourceState,
   fixtureResourcesEnabled,
   injectedResourceFailure,
 } from "@/lib/resources/fixture-gate";
-import { loadHistory, loadRecommendations } from "@/lib/resources/server";
+import {
+  loadHistory,
+  loadRecommendations,
+  loadUserPreferences,
+} from "@/lib/resources/server";
 import { loadingState, type ResourceState } from "@/lib/resources/state";
 
 /**
@@ -60,6 +68,13 @@ export type DiscoverResources = {
   recommendations: ResourceState<RecommendationResponse>;
   history: ResourceState<HistoryResponse>;
   /**
+   * The `Featured picks` setting. Read alongside the ranked set because it
+   * decides which of its titles leads — but never gated on: a failed read is
+   * the documented default, not an error region, because the setting chooses
+   * between two honest cards rather than deciding whether there is one.
+   */
+  preferences: ResourceState<UserPreferences>;
+  /**
    * Present only under the recorded harness. A live route leaves this null and
    * the drawer fetches evidence on demand, so evidence never delays the movie.
    */
@@ -76,6 +91,11 @@ export const DISCOVER_SCENARIOS = [
   "history-error",
   "evidence-error",
   "poster-failure",
+  // The two `Featured picks` states: a watchlisted title leading the ranked set
+  // with a Skip beside it, and the same set with the preference turned off so
+  // the slot passes those titles over and the rail keeps them.
+  "watchlisted",
+  "watchlist-held-back",
 ] as const;
 
 export type DiscoverScenario = (typeof DISCOVER_SCENARIOS)[number];
@@ -100,7 +120,28 @@ export function discoverScenario(
     : null;
 }
 
+type RecordedRegions = Omit<DiscoverResources, "preferences">;
+
+/**
+ * The recorded preference for a scenario. Every scenario carries one, because
+ * the route always has a `Featured picks` setting — the only question is which
+ * of its two states is being recorded.
+ */
+function recordedPreference(scenario: DiscoverScenario) {
+  return fixtureResourceState(
+    "preferences",
+    scenario === "watchlist-held-back" ? featuredPreferencesOff : featuredPreferencesOn,
+  );
+}
+
 function recordedResources(scenario: DiscoverScenario): DiscoverResources {
+  return {
+    ...recordedRegions(scenario),
+    preferences: recordedPreference(scenario),
+  };
+}
+
+function recordedRegions(scenario: DiscoverScenario): RecordedRegions {
   const history = fixtureResourceState("history", discoverHistory);
   const evidence: RecordedEvidence = {
     audits: fixtureResourceState(
@@ -185,6 +226,19 @@ function recordedResources(scenario: DiscoverScenario): DiscoverResources {
         history,
         recordedEvidence: evidence,
       };
+    // One recorded set serves both `Featured picks` states; the preference is
+    // what differs, and it is applied above. Recording two nearly identical
+    // ranked sets would only invite them to drift.
+    case "watchlisted":
+    case "watchlist-held-back":
+      return {
+        recommendations: fixtureResourceState(
+          "recommendations",
+          watchlistedRecommendations,
+        ),
+        history,
+        recordedEvidence: evidence,
+      };
     default:
       return {
         recommendations: fixtureResourceState("recommendations", learnedRecommendations),
@@ -203,14 +257,18 @@ export async function loadDiscoverResources(input: {
   if (input.scenario) return recordedResources(input.scenario);
 
   const options = { session: input.session, requestId: input.requestId };
-  // Started together on purpose: history is supporting context and must never
-  // sit in front of the first movie.
-  const [recommendations, history] = await Promise.all([
+  // Started together on purpose: history is supporting context and the setting
+  // is a small read, and neither may sit in front of the first movie.
+  const [recommendations, history, preferences] = await Promise.all([
     loadRecommendations(input.userId, {
       ...options,
       limit: DISCOVER_RECOMMENDATION_LIMIT,
     }),
     loadHistory(input.userId, { ...options, limit: DISCOVER_HISTORY_LIMIT }),
+    // Started with them, not after them: it decides which of the ranked titles
+    // leads, so a serial read would put a settings lookup in front of the first
+    // movie. A failure here is the documented default, never an error region.
+    loadUserPreferences(input.userId, options),
   ]);
-  return { recommendations, history, recordedEvidence: null };
+  return { recommendations, history, preferences, recordedEvidence: null };
 }

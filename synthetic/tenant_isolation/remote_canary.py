@@ -161,10 +161,12 @@ class PersonaRoute:
     template: str
     query: str = ""
     json_body: Mapping[str, Any] | None = None
-    # True for the one route that mutates every rating under a user id rather
-    # than a single named movie. It is probed at a user id nobody owns, so a
-    # broken guard hits the unknown-persona 404 instead of clearing a real
-    # persona's ratings. The 403 assertion is unchanged either way.
+    # True for a route whose blast radius is a whole user rather than one named
+    # movie: the bulk rating reset, and the preference write, which names no
+    # movie at all. Those are probed at a user id nobody owns, so a broken guard
+    # hits the unknown-persona 404 instead of clearing a real persona's ratings
+    # or changing what a real viewer is shown. The 403 assertion is unchanged
+    # either way.
     unscoped_mutation: bool = False
 
     def path(self, *, user_id: int, movie_id: int) -> str:
@@ -183,10 +185,17 @@ PERSONA_ROUTES: tuple[PersonaRoute, ...] = (
     PersonaRoute("GET", "/users/{user_id}/catalog", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/library", query="?tab=rated&limit=1"),
     PersonaRoute("GET", "/users/{user_id}/taste-profile"),
+    PersonaRoute("GET", "/users/{user_id}/preferences"),
     PersonaRoute("GET", "/users/{user_id}/movies/{movie_id}"),
     PersonaRoute("GET", "/users/{user_id}/movies/{movie_id}/state"),
     PersonaRoute("PUT", "/users/{user_id}/ratings/{movie_id}", json_body={"rating": 5.0}),
     PersonaRoute("DELETE", "/users/{user_id}/ratings", unscoped_mutation=True),
+    PersonaRoute(
+        "PUT",
+        "/users/{user_id}/preferences",
+        json_body={"feature_watchlisted_titles": False},
+        unscoped_mutation=True,
+    ),
     PersonaRoute("PUT", "/users/{user_id}/movies/{movie_id}/watched", json_body={}),
     PersonaRoute("DELETE", "/users/{user_id}/movies/{movie_id}/watched"),
     PersonaRoute("PUT", "/users/{user_id}/movies/{movie_id}/rating", json_body={"rating": 5.0}),

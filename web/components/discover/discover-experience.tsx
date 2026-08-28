@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FEATURED_MOVIE_ID, FeaturedMovie } from "@/components/discover/featured-movie";
 import { QuickPicksEntry } from "@/components/discover/quick-picks-entry";
 import {
+  featuredIndex,
   featuredItem,
   initialQueue,
   mergeBehindCursor,
@@ -14,7 +15,10 @@ import {
   recordDecision,
   remainingAfterFeatured,
   restoreQueue,
+  skipFeatured,
+  upcomingItems,
   type DiscoverQueue,
+  type FeaturedPassOver,
 } from "@/components/discover/queue";
 import { WhyThis } from "@/components/discover/why-this";
 import type { PreloadedTechnicalEvidence } from "@/components/discover/technical-evidence";
@@ -26,9 +30,39 @@ import {
 } from "@/components/movie/movie-state-controls";
 import { ResourceProblem, ResourceRegion } from "@/components/ui/resource-region";
 import { EmptyState, PosterSkeleton } from "@/components/ui/resource-states";
-import type { MovieState, RecommendationItem, RecommendationResponse } from "@/lib/api";
+import type {
+  MovieState,
+  RecommendationItem,
+  RecommendationResponse,
+  UserPreferences,
+} from "@/lib/api";
+import {
+  DEFAULT_FEATURED_PREFERENCE,
+  featuredPassOver,
+  featuredPreferenceFrom,
+  isWatchlisted,
+  NUDGE_CONFIRM,
+  NUDGE_DISMISS,
+  NUDGE_QUESTION,
+  SETTING_EYEBROW,
+  SETTING_LABEL,
+  settingNote,
+  SKIP_LABEL,
+  skipAnnouncement,
+  WATCHLIST_CUE,
+  type FeaturedPreference,
+} from "@/lib/discover/featured-preference";
 import { recommendationCards } from "@/lib/discover/movie-card";
 import { describeServingPolicy } from "@/lib/discover/policy";
+import {
+  bffPreferenceClient,
+  type PreferenceClient,
+} from "@/lib/discover/preference-client";
+import {
+  markNudgeAnswered,
+  nudgeEarnedBy,
+  recordWatchlistSkip,
+} from "@/lib/discover/skip-counter";
 import { displayTitle, type MovieCard } from "@/lib/movie-types";
 import {
   applyActionToDisplay,
@@ -63,6 +97,14 @@ import {
 import "./discover.css";
 
 const STATUS_ANCHOR = "discover-status";
+
+/**
+ * The permanent `Featured picks` switch, named so the one-time nudge can hand
+ * focus to it after it unmounts itself. A viewer who answers the question and
+ * then changes their mind has to land somewhere that can change it back.
+ */
+const FEATURED_PICKS_TOGGLE_ID = "featured-picks-toggle";
+const FEATURED_PICKS_NOTE_ID = "featured-picks-note";
 
 /** How long the undo offer stands. Long enough to notice, short enough to pass. */
 const UNDO_WINDOW_MS = 8_000;
@@ -107,6 +149,15 @@ type Flow =
   | { kind: "refresh-failed"; message: string; failure: ResourceFailure }
   /** A rating from the follow-up panel: settled copy, and no refresh tail. */
   | { kind: "rated"; message: string }
+  /**
+   * A pass-over. It is its own kind rather than a `refreshed` with different
+   * words because nothing was written and nothing was re-read: the sentence has
+   * to be able to say that, and a `refreshed` frame would eventually grow a
+   * "Recommendations refreshed" tail onto a decision that made no request.
+   */
+  | { kind: "skipped"; message: string }
+  /** The `Featured picks` setting answering for itself. */
+  | { kind: "preference"; message: string }
   | { kind: "error"; message: string };
 
 /** The in-flight frame for the one movie currently being written. */
@@ -142,6 +193,28 @@ function rankedItems(
   state: ResourceState<RecommendationResponse>,
 ): readonly RecommendationItem[] {
   return hasResourceData(state) ? state.data.items : [];
+}
+
+/** The canonical records a response carried, keyed for `adopt`. */
+function statesById(
+  items: readonly RecommendationItem[],
+): Record<number, MovieState> {
+  const states: Record<number, MovieState> = {};
+  for (const item of items) {
+    if (item.state) states[item.movie_id] = item.state;
+  }
+  return states;
+}
+
+/**
+ * The tab's session storage, or nothing.
+ *
+ * Read through a function rather than held in a variable so the server render
+ * and the browser render agree: this component is rendered on both sides, and a
+ * module-scope read would be baked into the HTML.
+ */
+function sessionStore(): Storage | null {
+  return typeof window === "undefined" ? null : window.sessionStorage;
 }
 
 /** Same ids in the same order: the viewer would see no difference. */
@@ -267,6 +340,7 @@ export function DiscoverExperience({
   userId,
   personaName,
   initialRecommendations,
+  initialPreferences,
   recordedEvidence,
   browseHref,
   quickPicksHref,
@@ -274,10 +348,17 @@ export function DiscoverExperience({
   movieHrefQuery = "",
   limit,
   stateClient = bffMovieStateClient,
+  preferenceClient = bffPreferenceClient,
 }: {
   userId: number;
   personaName: string;
   initialRecommendations: ResourceState<RecommendationResponse>;
+  /**
+   * The `Featured picks` setting as the server read it. A failed read is the
+   * documented default rather than an error region — the setting decides which
+   * of two honest cards leads, so it must never be the reason no movie loads.
+   */
+  initialPreferences?: ResourceState<UserPreferences>;
   recordedEvidence?: PreloadedTechnicalEvidence | null;
   browseHref: string;
   quickPicksHref: string;
@@ -289,6 +370,7 @@ export function DiscoverExperience({
   movieHrefQuery?: string;
   limit: number;
   stateClient?: MovieStateClient;
+  preferenceClient?: PreferenceClient;
 }) {
   const movieHrefFor = (movieId: number) =>
     `${movieHrefBase}/${movieId}${movieHrefQuery}`;
@@ -300,8 +382,18 @@ export function DiscoverExperience({
   const [queue, setQueue] = useState<DiscoverQueue>(() =>
     initialQueue(rankedItems(initialRecommendations)),
   );
-  /** Canonical records this route has learned, by movie. Never a guess. */
-  const [known, setKnown] = useState<Record<number, MovieState>>({});
+  /**
+   * Canonical records this route has learned, by movie. Never a guess.
+   *
+   * Seeded from the first response's own per-item state, which is the reason
+   * that field exists (ADR 0012): without it a reloaded page knows nothing
+   * about a title it watchlisted a minute ago, so the featured slot could not
+   * say `On your watchlist` and could not offer a Skip that means anything.
+   * The tab-local relay still fills in what the response has not caught up to.
+   */
+  const [known, setKnown] = useState<Record<number, MovieState>>(() =>
+    statesById(rankedItems(initialRecommendations)),
+  );
   const [optimistic, setOptimistic] = useState<Optimistic | null>(null);
   const [pendingMovieId, setPendingMovieId] = useState<number | null>(null);
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
@@ -312,6 +404,15 @@ export function DiscoverExperience({
   /** The direction the last advance travelled, for the incoming card. */
   const [advanceFrom, setAdvanceFrom] = useState<DecisionDirection | null>(null);
   const [extending, setExtending] = useState(false);
+  /** What the viewer is shown, never what the recommender is told. */
+  const [preference, setPreference] = useState<FeaturedPreference>(() =>
+    initialPreferences
+      ? featuredPreferenceFrom(initialPreferences)
+      : DEFAULT_FEATURED_PREFERENCE,
+  );
+  const [preferenceBusy, setPreferenceBusy] = useState(false);
+  /** The one-time offer, raised by the third skip and settled by either answer. */
+  const [nudge, setNudge] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
 
   // Serialising writes is what keeps `expected_revision` meaningful: two
@@ -331,6 +432,14 @@ export function DiscoverExperience({
    * render closure. Only `applyQueue` writes either one.
    */
   const queueRef = useRef(queue);
+  /**
+   * The pass-over rule as the last render computed it, for the paths that run
+   * outside a render: a commit that has to know which card the viewer lands on,
+   * and a merge that has to know which card must not be replaced. Kept in sync
+   * by an effect rather than assigned during render, so it is never a value
+   * from a render React discarded.
+   */
+  const passOverRef = useRef<FeaturedPassOver>(() => false);
 
   const applyQueue = useCallback(
     (update: (current: DiscoverQueue) => DiscoverQueue): DiscoverQueue => {
@@ -342,40 +451,12 @@ export function DiscoverExperience({
     [],
   );
 
-  const refetch = useCallback(
-    () =>
-      readBffResource(
-        RECOMMENDATIONS,
-        `/api/users/${userId}/recommendations?limit=${limit}`,
-      ),
-    [limit, userId],
-  );
-
-  /**
-   * Folds a response into the queue behind the cursor. Every path that reads
-   * the ranked set goes through here, so there is one rule for what happens to
-   * the card being read: nothing.
-   */
-  const absorb = useCallback(
-    (incoming: readonly RecommendationItem[]) => {
-      const next = applyQueue((current) => mergeBehindCursor(current, incoming));
-      extendedAt.current = next.items.length;
-    },
-    [applyQueue],
-  );
-
-  const reload = useCallback(async () => {
-    setRecommendations({ status: "loading", resource: "recommendations" });
-    const next = await refetch();
-    setRecommendations(next);
-    if (hasResourceData(next)) absorb(next.data.items);
-  }, [absorb, refetch]);
-
   /**
    * Adopts a canonical record the API committed, wherever it came from: this
-   * session's own write, the conflict re-read, or the relay another route left
-   * behind. A record only wins if it is newer than what is already held, so an
-   * older echo can never overwrite a fresher answer.
+   * session's own write, a recommendation response's per-item state, the
+   * conflict re-read, or the relay another route left behind. A record only
+   * wins if it is newer than what is already held, so an older echo can never
+   * overwrite a fresher answer.
    */
   const adopt = useCallback((states: readonly MovieState[]) => {
     setKnown((current) => {
@@ -390,6 +471,44 @@ export function DiscoverExperience({
       return changed ? next : current;
     });
   }, []);
+
+  const refetch = useCallback(
+    () =>
+      readBffResource(
+        RECOMMENDATIONS,
+        `/api/users/${userId}/recommendations?limit=${limit}`,
+      ),
+    [limit, userId],
+  );
+
+  /**
+   * Folds a response into the queue behind the card being read. Every path that
+   * reads the ranked set goes through here, so there is one rule for what
+   * happens to the card being read: nothing.
+   *
+   * The per-item states travel with it. They are canonical records from the API
+   * and go through `adopt` like any other, so a response can correct what this
+   * session believes about a title but an older echo can never overwrite a
+   * fresher answer.
+   */
+  const absorb = useCallback(
+    (incoming: readonly RecommendationItem[]) => {
+      const next = applyQueue((current) =>
+        mergeBehindCursor(current, incoming, passOverRef.current),
+      );
+      extendedAt.current = next.items.length;
+      const states = Object.values(statesById(incoming));
+      if (states.length) adopt(states);
+    },
+    [adopt, applyQueue],
+  );
+
+  const reload = useCallback(async () => {
+    setRecommendations({ status: "loading", resource: "recommendations" });
+    const next = await refetch();
+    setRecommendations(next);
+    if (hasResourceData(next)) absorb(next.data.items);
+  }, [absorb, refetch]);
 
   /**
    * Hands the page back to the featured movie after a decision made below it.
@@ -417,7 +536,7 @@ export function DiscoverExperience({
       behavior: reducedMotion ? "auto" : "smooth",
       block: "nearest",
     });
-    const featured = featuredItem(queueRef.current);
+    const featured = featuredItem(queueRef.current, passOverRef.current);
     restoreFocusInPlace(
       featured ? `featured-${featured.movie_id}-${FIRST_FEATURED_CONTROL}` : null,
       STATUS_ANCHOR,
@@ -463,11 +582,39 @@ export function DiscoverExperience({
     return () => window.clearTimeout(timer);
   }, [flow]);
 
-  const remaining = remainingAfterFeatured(queue);
+  const cardStates = useMemo(() => {
+    const states: Record<number, MovieDisplayState> = {};
+    for (const [movieId, state] of Object.entries(known)) {
+      states[Number(movieId)] = displayState(state);
+    }
+    if (optimistic) states[optimistic.movieId] = optimistic.state;
+    return states;
+  }, [known, optimistic]);
+
+  // Which titles may not take the featured slot: the ones this session skipped
+  // by hand, and — when the preference is off — the ones already on the
+  // watchlist. Built here rather than inside the queue so the queue stays a
+  // list with a cursor and knows nothing about watchlists or settings.
+  const passOver = useMemo(
+    () =>
+      featuredPassOver({
+        preference,
+        states: cardStates,
+        skipped: queue.skipped,
+      }),
+    [cardStates, preference, queue.skipped],
+  );
+  useEffect(() => {
+    passOverRef.current = passOver;
+  }, [passOver]);
+
+  const remaining = remainingAfterFeatured(queue, passOver);
 
   // Top up before the viewer arrives at the end. The post-decision refetch
   // usually gets there first; this is what covers a refetch that failed or
   // came back short, and it appends without touching the card being read.
+  // `remaining` counts what could still be *featured*, so a queue whose whole
+  // tail is held back tops itself up rather than sitting on an empty slot.
   useEffect(() => {
     if (remaining > QUEUE_EXTENSION_TRIGGER) return;
     if (!hasResourceData(recommendations)) return;
@@ -481,15 +628,6 @@ export function DiscoverExperience({
       if (hasResourceData(next)) absorb(next.data.items);
     });
   }, [absorb, queue.items.length, recommendations, refetch, remaining]);
-
-  const cardStates = useMemo(() => {
-    const states: Record<number, MovieDisplayState> = {};
-    for (const [movieId, state] of Object.entries(known)) {
-      states[Number(movieId)] = displayState(state);
-    }
-    if (optimistic) states[optimistic.movieId] = optimistic.state;
-    return states;
-  }, [known, optimistic]);
 
   async function commit(
     movie: MovieCard,
@@ -574,7 +712,10 @@ export function DiscoverExperience({
     // once this decision is recorded, so the announcement and the focus target
     // name the card the viewer is about to be looking at.
     const arriving = advances
-      ? featuredItem(applyQueue((current) => recordDecision(current, movie.id)))
+      ? featuredItem(
+          applyQueue((current) => recordDecision(current, movie.id)),
+          passOverRef.current,
+        )
       : null;
     if (advances) setAdvanceFrom(reducedMotion ? null : decisionDirection(action));
 
@@ -702,6 +843,111 @@ export function DiscoverExperience({
     router.refresh();
   }
 
+  /**
+   * Passes the featured title over. This is the one control on the surface that
+   * makes no request at all.
+   *
+   * Nothing is written: not a watched, not a dismissal, not a rating, and
+   * emphatically not a training negative (ADR 0012). The title keeps its
+   * watchlist entry, keeps its place in the ranked set, and moves to the rail —
+   * so the sentence says `still on your watchlist` rather than reporting a
+   * decision, and there is no undo to offer because nothing was undone.
+   *
+   * It is deliberately not routed through `commit`: sharing that path would
+   * mean sharing its idempotency key, its optimistic frame, its revision
+   * assertion, and its refetch, all for a press that changes no state anywhere.
+   */
+  function skip(movie: MovieCard, control: HTMLElement) {
+    // A write in flight owns the queue until it settles; moving the cursor out
+    // from under it would make its `Next:` sentence name the wrong movie.
+    if (inFlight.current) return;
+
+    const next = applyQueue((current) => skipFeatured(current, movie.id));
+    // Built from the queue this press just produced rather than from the
+    // memoised predicate, which still has the pre-skip list.
+    const arriving = featuredItem(
+      next,
+      featuredPassOver({ preference, states: cardStates, skipped: next.skipped }),
+    );
+    setUndo(null);
+    // The rating prompt belongs to one title, and the page has moved past it.
+    if (justWatched && justWatched.id !== movie.id) setJustWatched(null);
+    // No direction: an advance animates the way a decision travelled, and a
+    // skip is not a decision. The card swaps in place.
+    setAdvanceFrom(null);
+    setFlow({
+      kind: "skipped",
+      message: skipAnnouncement(
+        movie.title,
+        arriving ? displayTitle(arriving.title, arriving.release_year) : null,
+      ),
+    });
+
+    const record = recordWatchlistSkip(sessionStore(), userId);
+    if (nudgeEarnedBy(record)) setNudge(true);
+
+    // The same control on the arriving card first, so a run of skips stays
+    // under one finger — but only if that card offers one, which it does only
+    // when it is watchlisted too.
+    restoreFocus(
+      arriving ? `featured-${arriving.movie_id}-skip` : null,
+      arriving ? `featured-${arriving.movie_id}-${FIRST_FEATURED_CONTROL}` : control,
+      control,
+      STATUS_ANCHOR,
+    );
+  }
+
+  /**
+   * Writes the `Featured picks` setting and reports what is now stored.
+   *
+   * Separate from `commit` because it is a different kind of thing: it changes
+   * what the viewer is shown and nothing the recommender reads, so it has no
+   * optimistic frame worth keeping (the answer arrives in a request or two of
+   * latency), no undo offer, and no refetch — the same response, re-ordered by
+   * this client, is the whole effect.
+   */
+  async function applyPreference(
+    featureWatchlistedTitles: boolean,
+    control: HTMLElement,
+    fallbackFocus: string,
+  ) {
+    if (preferenceBusy) return;
+    setPreferenceBusy(true);
+    const result = await preferenceClient.set({
+      userId,
+      featureWatchlistedTitles,
+      expectedRevision: preference.revision,
+    });
+    setPreferenceBusy(false);
+    setNudge(false);
+    markNudgeAnswered(sessionStore(), userId);
+
+    if (result.status === "committed") {
+      setPreference(result.preference);
+      setFlow({
+        kind: "preference",
+        message: result.preference.featureWatchlistedTitles
+          ? "Watchlisted titles can be featured again."
+          : "Watchlisted titles will not be featured. They stay in the ranked list below.",
+      });
+    } else if (result.status === "conflict") {
+      // Somebody — another tab, another device — set it first. Adopting what is
+      // stored and saying so beats leaving a toggle showing a value nobody has.
+      if (result.canonical) setPreference(result.canonical);
+      setFlow({
+        kind: "error",
+        message:
+          "The Featured picks setting was changed somewhere else. The switch now shows what is stored.",
+      });
+    } else {
+      setFlow({
+        kind: "error",
+        message: "The Featured picks setting could not be saved, so nothing changed.",
+      });
+    }
+    restoreFocus(control, fallbackFocus, STATUS_ANCHOR);
+  }
+
   function onAction(movie: MovieCard) {
     return (action: MovieStateAction, control: HTMLElement) => {
       void commit(movie, action, control);
@@ -733,60 +979,118 @@ export function DiscoverExperience({
       state={recommendations}
     >
       {(data) => {
-        const item = featuredItem(queue);
-        if (!item) {
-          return extending ? (
-            <PosterSkeleton count={3} />
-          ) : (
+        // Ranks are positions in the queue rather than in the slice on screen,
+        // so the seventh decision is not labelled "Rank 1" again.
+        const cards = recommendationCards(queue.items, cardStates);
+        const index = featuredIndex(queue, passOver);
+        const item = index < 0 ? null : queue.items[index];
+        // The rail's membership is the queue's rule, read back rather than
+        // re-derived: a held-back title is still a recommendation and keeps its
+        // card here, which is what makes `Skip` and the preference reversible
+        // by looking rather than by remembering.
+        const railIds = new Set(
+          upcomingItems(queue, passOver).map((entry) => entry.movie_id),
+        );
+        const rest = cards.filter((card) => railIds.has(card.id));
+        const featured = index < 0 ? null : cards[index];
+        const policy = describeServingPolicy(data);
+
+        const status = (
+          <FlowStatus
+            featureWatchlistedTitles={preference.featureWatchlistedTitles}
+            flow={flow}
+            libraryHref={libraryHref}
+            nudge={nudge}
+            onNudge={(next, control) =>
+              void applyPreference(next, control, FEATURED_PICKS_TOGGLE_ID)
+            }
+            onRetryRefresh={() => void reload()}
+            onUndo={(control) => undo && void runUndo(undo, control)}
+            personaName={personaName}
+            preferenceBusy={preferenceBusy}
+            undo={undo}
+          />
+        );
+        const rail = rest.length ? (
+          <MovieRail
+            eyebrow={policy.label}
+            footer={(movie) => (
+              <MovieStateControls
+                busy={pendingMovieId === movie.id}
+                compact
+                controls={RECOMMENDATION_CONTROLS}
+                idPrefix={`rail-${movie.id}`}
+                onAction={onAction(movie)}
+                state={movie.state}
+                title={movie.title}
+              />
+            )}
+            movieHref={(movie) => movieHrefFor(movie.id)}
+            movies={rest}
+            seeAllHref={browseHref}
+            title="Next in this ranked set"
+          />
+        ) : null;
+
+        if (!item || !featured) {
+          if (extending) return <PosterSkeleton count={3} />;
+          return (
             <>
               <QueueEnd
                 browseHref={browseHref}
                 decisions={queue.acted.length}
+                heldBack={rest.length}
                 quickPicksHref={quickPicksHref}
               />
-              <FlowStatus
-                flow={flow}
-                libraryHref={libraryHref}
-                onRetryRefresh={() => void reload()}
-                onUndo={(control) => undo && void runUndo(undo, control)}
-                personaName={personaName}
-                undo={undo}
+              {status}
+              {/* The setting is what caused an all-held-back slot, so it has to
+                  stay reachable from the state it produced. */}
+              <FeaturedPicksSetting
+                busy={preferenceBusy}
+                featureWatchlistedTitles={preference.featureWatchlistedTitles}
+                onToggle={(next, control) =>
+                  void applyPreference(next, control, STATUS_ANCHOR)
+                }
               />
+              {rail}
             </>
           );
         }
-        // Ranks are positions in the queue rather than in the slice on screen,
-        // so the seventh decision is not labelled "Rank 1" again.
-        const cards = recommendationCards(queue.items, cardStates);
-        const featured = cards[queue.cursor];
-        const rest = cards.slice(queue.cursor + 1);
-        const policy = describeServingPolicy(data);
-        if (!featured) return null;
+        const featuredIsWatchlisted = isWatchlisted(cardStates[featured.id]);
         return (
           <>
             <FeaturedMovie
               actions={
-                <MovieStateControls
-                  busy={pendingMovieId === featured.id}
-                  controls={RECOMMENDATION_CONTROLS}
-                  idPrefix={`featured-${featured.id}`}
-                  onAction={onAction(featured)}
-                  state={featured.state}
-                  title={featured.title}
-                />
+                <>
+                  <MovieStateControls
+                    busy={pendingMovieId === featured.id}
+                    controls={RECOMMENDATION_CONTROLS}
+                    idPrefix={`featured-${featured.id}`}
+                    onAction={onAction(featured)}
+                    state={featured.state}
+                    title={featured.title}
+                  />
+                  {featuredIsWatchlisted ? (
+                    // Beside the state controls rather than inside them: those
+                    // three all write, and this one writes nothing. Offered only
+                    // for a title the route actually knows is watchlisted —
+                    // "unknown state" is not "not watchlisted", and a Skip on a
+                    // card with nothing to skip past would mean nothing.
+                    <button
+                      className="button-quiet discover-skip"
+                      id={`featured-${featured.id}-skip`}
+                      onClick={(event) => skip(featured, event.currentTarget)}
+                      type="button"
+                    >
+                      {SKIP_LABEL}
+                    </button>
+                  ) : null}
+                </>
               }
-              aside={
-                <FlowStatus
-                  flow={flow}
-                  libraryHref={libraryHref}
-                  onRetryRefresh={() => void reload()}
-                  onUndo={(control) => undo && void runUndo(undo, control)}
-                  personaName={personaName}
-                  undo={undo}
-                />
-              }
+              aside={status}
               disclosure={
                 <WhyThis
+                  featureWatchlistedTitles={preference.featureWatchlistedTitles}
                   item={item}
                   preloadedEvidence={recordedEvidence}
                   requestId={
@@ -801,6 +1105,12 @@ export function DiscoverExperience({
                 <>
                   <span className={`policy-chip policy-chip-${policy.kind}`}>{policy.label}</span>
                   <span className="policy-rank">Rank {featured.rank ?? 1}</span>
+                  {featuredIsWatchlisted ? (
+                    // A cue, not a claim about the ranking: it says why a Skip
+                    // is on offer next to it and nothing about why the title is
+                    // here.
+                    <span className="featured-watchlist-cue">{WATCHLIST_CUE}</span>
+                  ) : null}
                 </>
               }
               href={movieHrefFor(featured.id)}
@@ -822,26 +1132,19 @@ export function DiscoverExperience({
               />
             ) : null}
 
-            {rest.length ? (
-              <MovieRail
-                eyebrow={policy.label}
-                footer={(movie) => (
-                  <MovieStateControls
-                    busy={pendingMovieId === movie.id}
-                    compact
-                    controls={RECOMMENDATION_CONTROLS}
-                    idPrefix={`rail-${movie.id}`}
-                    onAction={onAction(movie)}
-                    state={movie.state}
-                    title={movie.title}
-                  />
-                )}
-                movieHref={(movie) => movieHrefFor(movie.id)}
-                movies={rest}
-                seeAllHref={browseHref}
-                title="Next in this ranked set"
-              />
-            ) : null}
+            {/* Under the featured decision and above the rail: it is about the
+                slot directly above it, and it is a setting rather than a
+                decision, so it must not sit among the three buttons that
+                write. */}
+            <FeaturedPicksSetting
+              busy={preferenceBusy}
+              featureWatchlistedTitles={preference.featureWatchlistedTitles}
+              onToggle={(next, control) =>
+                void applyPreference(next, control, STATUS_ANCHOR)
+              }
+            />
+
+            {rail}
 
             <p className="discover-browse-path">
               Nothing here?{" "}
@@ -872,6 +1175,8 @@ function statusCopy(flow: Flow): string {
       // already names what was recorded and what is now on screen.
       return flow.moved ? `${flow.message} Recommendations refreshed.` : flow.message;
     case "rated":
+    case "skipped":
+    case "preference":
       return flow.message;
     case "refresh-failed":
       return `${flow.message} Recommendations could not be refreshed.`;
@@ -883,18 +1188,26 @@ function statusCopy(flow: Flow): string {
 }
 
 function FlowStatus({
+  featureWatchlistedTitles,
   flow,
   libraryHref,
+  nudge,
+  onNudge,
   onRetryRefresh,
   onUndo,
   personaName,
+  preferenceBusy,
   undo,
 }: {
+  featureWatchlistedTitles: boolean;
   flow: Flow;
   libraryHref: string;
+  nudge: boolean;
+  onNudge: (featureWatchlistedTitles: boolean, control: HTMLElement) => void;
   onRetryRefresh: () => void;
   onUndo: (control: HTMLElement) => void;
   personaName: string;
+  preferenceBusy: boolean;
   undo: UndoOffer | null;
 }) {
   return (
@@ -934,6 +1247,34 @@ function FlowStatus({
           Manage in Library
         </Link>
       ) : null}
+      {nudge && featureWatchlistedTitles ? (
+        // Asked here rather than in a modal or a toast: the question is about
+        // the presses the viewer has just been making, it is asked once, and
+        // both answers are ordinary buttons a keyboard reaches in one step. It
+        // is `group` rather than `alert` because it interrupts nothing — the
+        // skip that raised it has already been announced on the line above.
+        <div aria-label={NUDGE_QUESTION} className="discover-nudge" role="group">
+          <p className="discover-nudge-question">{NUDGE_QUESTION}</p>
+          <span className="discover-nudge-actions">
+            <button
+              aria-disabled={preferenceBusy}
+              className="button-secondary"
+              onClick={(event) => onNudge(false, event.currentTarget)}
+              type="button"
+            >
+              {NUDGE_CONFIRM}
+            </button>
+            <button
+              aria-disabled={preferenceBusy}
+              className="button-quiet"
+              onClick={(event) => onNudge(true, event.currentTarget)}
+              type="button"
+            >
+              {NUDGE_DISMISS}
+            </button>
+          </span>
+        </div>
+      ) : null}
       {flow.kind === "refresh-failed" ? (
         <ResourceProblem
           failure={flow.failure}
@@ -942,6 +1283,55 @@ function FlowStatus({
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The permanent home of the answer the nudge asks for once.
+ *
+ * A one-time offer that is the only way to reach a setting is a setting the
+ * viewer cannot change their mind about, so the same switch lives here for the
+ * whole session — at the foot of the featured section, which is the thing it
+ * governs. Deliberately not a menu or a popover: the design contract rules out
+ * hover-only information needed to act, and a single labelled switch with a
+ * sentence under it needs neither.
+ *
+ * `aria-pressed` rather than a checkbox, matching the `Watchlist` control it
+ * sits below: both are a two-state button whose label says what it does.
+ */
+function FeaturedPicksSetting({
+  busy,
+  featureWatchlistedTitles,
+  onToggle,
+}: {
+  busy: boolean;
+  featureWatchlistedTitles: boolean;
+  onToggle: (featureWatchlistedTitles: boolean, control: HTMLElement) => void;
+}) {
+  return (
+    <section aria-labelledby="featured-picks-heading" className="featured-picks">
+      <p className="eyebrow" id="featured-picks-heading">
+        {SETTING_EYEBROW}
+      </p>
+      <button
+        aria-busy={busy}
+        aria-describedby={FEATURED_PICKS_NOTE_ID}
+        aria-disabled={busy}
+        aria-pressed={featureWatchlistedTitles}
+        className={featureWatchlistedTitles ? "button-primary" : "button-secondary"}
+        id={FEATURED_PICKS_TOGGLE_ID}
+        onClick={(event) => {
+          if (busy) return;
+          onToggle(!featureWatchlistedTitles, event.currentTarget);
+        }}
+        type="button"
+      >
+        {SETTING_LABEL}
+      </button>
+      <p className="featured-picks-note" id={FEATURED_PICKS_NOTE_ID}>
+        {settingNote(featureWatchlistedTitles)}
+      </p>
+    </section>
   );
 }
 
@@ -956,12 +1346,25 @@ function FlowStatus({
 function QueueEnd({
   browseHref,
   decisions,
+  heldBack,
   quickPicksHref,
 }: {
   browseHref: string;
   decisions: number;
+  /** Titles still in the rail that are not eligible for the featured slot. */
+  heldBack: number;
   quickPicksHref: string;
 }) {
+  // Two different situations wearing one empty state would be the lie: an
+  // exhausted queue has nothing left, while a held-back one has titles on the
+  // page right now and a setting that explains them. The copy has to be able to
+  // tell a viewer which of the two they are looking at.
+  const message =
+    heldBack > 0
+      ? `Every remaining title is on your watchlist, and the Featured picks setting is holding them back from the featured slot. ${heldBack === 1 ? "It is" : "They are"} still listed below.`
+      : decisions > 0
+        ? `That is every title the ranked set had for now. Your ${decisions} ${decisions === 1 ? "decision" : "decisions"} are recorded, and the next request will be built from them.`
+        : "The recommendation API has no more unseen titles for this persona right now.";
   return (
     <EmptyState
       action={
@@ -975,12 +1378,10 @@ function QueueEnd({
           />
         </>
       }
-      message={
-        decisions > 0
-          ? `That is every title the ranked set had for now. Your ${decisions} ${decisions === 1 ? "decision" : "decisions"} are recorded, and the next request will be built from them.`
-          : "The recommendation API has no more unseen titles for this persona right now."
+      message={message}
+      title={
+        heldBack > 0 ? "Nothing new for the featured slot" : "You are through this ranked set"
       }
-      title="You are through this ranked set"
     />
   );
 }
