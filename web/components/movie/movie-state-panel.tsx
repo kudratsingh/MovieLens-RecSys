@@ -96,8 +96,13 @@ export function MovieStatePanel({
         in the accessibility tree before its text changes, and swapping the
         role between renders is exactly how announcements get dropped.
       */}
-      <p className="movie-state-panel-message" role="status">
-        {message?.tone === "ok" ? message.text : ""}
+      <p
+        className={`movie-state-panel-message${message?.tone === "note" ? " is-note" : ""}`}
+        role="status"
+      >
+        {/* A refused transition shares the polite region with a success: it is
+            a rule being stated, not a failure to interrupt anyone with. */}
+        {message && message.tone !== "error" ? message.text : ""}
       </p>
       <p className="movie-state-panel-message is-error" role="alert">
         {message?.tone === "error" ? message.text : ""}

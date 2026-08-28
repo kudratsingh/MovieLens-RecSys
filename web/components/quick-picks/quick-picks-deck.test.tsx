@@ -44,7 +44,6 @@ function renderDeck(
     <QuickPicksDeck
       browseHref="/browse?user=900000101"
       initial={initial}
-      personaLabel="Action Fan"
       transport={transport}
     />,
   );
@@ -89,7 +88,10 @@ describe("the decision card", () => {
       screen.getByText(/A performer loses her footing between image, memory, and reality/),
     ).toBeVisible();
     expect(screen.getByText("Popular with viewers in this tenant")).toBeVisible();
-    expect(screen.getByText("Exploring as Action Fan")).toBeVisible();
+    // The persona is not named here. `AppShell` prints `Exploring as {name}`
+    // directly above this header, and the design contract asks for one
+    // labelled persona rather than the same claim twice.
+    expect(screen.queryByText(/Exploring as/)).not.toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -140,6 +142,23 @@ describe("decisions reach the same canonical outcome from every input", () => {
     );
   });
 
+  it("keeps the shortcuts under Caps Lock and ignores a Shift chord", async () => {
+    const user = userEvent.setup();
+    renderDeck();
+
+    // Shift+J is a chord, not a decision: the card must not move.
+    await user.keyboard("{Shift>}J{/Shift}");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Perfect Blue");
+
+    // Caps Lock sends the same uppercase key with Shift up, and that is still
+    // someone pressing the dismiss key.
+    fireEvent.keyDown(window, { key: "J", shiftKey: false });
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love"),
+    );
+  });
+
   it("advances the queue from a pointer swipe", async () => {
     const { container } = renderDeck();
     const poster = container.querySelector(".quick-pick-poster");
@@ -152,6 +171,68 @@ describe("decisions reach the same canonical outcome from every input", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love"),
     );
+  });
+
+  it("takes the swipe from anywhere on the card, not only the artwork", async () => {
+    // The poster is 136×204 on a phone; what reads as the swipeable thing is
+    // the card. A gesture that started on the title used to do nothing.
+    renderDeck();
+    const title = screen.getByRole("heading", { level: 1 });
+
+    fireEvent.pointerDown(title, { clientX: 200, clientY: 200, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(title, { clientX: 200 - SWIPE_DISTANCE_PX, clientY: 200, pointerId: 1 });
+    fireEvent.pointerUp(title, { clientX: 200 - SWIPE_DISTANCE_PX, clientY: 200, pointerId: 1 });
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love"),
+    );
+  });
+
+  it("leaves a drag that starts on a control to that control", async () => {
+    renderDeck();
+    const watchlist = screen.getByRole("button", { name: /^Watchlist/ });
+
+    fireEvent.pointerDown(watchlist, { clientX: 200, clientY: 200, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(watchlist, { clientX: 120, clientY: 200, pointerId: 1 });
+    fireEvent.pointerUp(watchlist, { clientX: 120, clientY: 200, pointerId: 1 });
+
+    // No dismissal, and the card has not moved: dragging off a button is a
+    // cancelled press, not a decision on the movie behind it.
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Perfect Blue");
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+});
+
+describe("artwork", () => {
+  it("names the gap with the shared mark when the poster fails to load", async () => {
+    const { container } = renderDeck();
+    const poster = container.querySelector("img");
+    if (!poster) throw new Error("The recorded card has no poster to fail");
+
+    fireEvent.error(poster);
+
+    // The one fallback in the product, not a deck-local one: Quick Picks used
+    // to render an empty frame where every other surface named the gap.
+    const fallback = screen.getByTestId("poster-fallback");
+    expect(fallback).toHaveTextContent("Artwork unavailable");
+    expect(fallback).toHaveTextContent("PB");
+    expect(container.querySelector("img")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("keeps the card operable once the artwork is gone", async () => {
+    const user = userEvent.setup();
+    const { container } = renderDeck();
+    fireEvent.error(container.querySelector("img")!);
+
+    await user.click(dismissButton());
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love"),
+    );
+    // The next card has its own artwork; the failure did not follow it.
+    expect(container.querySelector("img")).toBeInTheDocument();
+    expect(screen.queryByTestId("poster-fallback")).not.toBeInTheDocument();
   });
 });
 

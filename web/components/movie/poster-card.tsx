@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Icon } from "@/components/ui/icons";
-import type { MovieCard as MovieCardType } from "@/lib/movie-types";
+import { posterInitials, type MovieCard as MovieCardType } from "@/lib/movie-types";
 import "./poster-card.css";
 
 export function PosterCard({
@@ -23,48 +23,59 @@ export function PosterCard({
   /** Source-aware metadata status, shown only when the record is incomplete. */
   metadataNote?: string | null;
 }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  const showFallback = !movie.posterSrc || imageFailed;
+  // Which source failed, not that something failed: a card whose movie changes
+  // under it — the featured slot advancing, a rail re-rendering in place —
+  // otherwise inherits the previous movie's broken poster and shows a fallback
+  // over artwork that loads perfectly well.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const posterSrc = movie.posterSrc;
+  const showFallback = !posterSrc || failedSrc === posterSrc;
   const detailHref = href ?? `/ui-preview/movies/${movie.id}`;
 
   return (
     <article className={`poster-card poster-card-${density}`}>
-      <Link aria-label={`Open ${movie.title}`} className="poster-frame" href={detailHref}>
-        {showFallback || !posterSrc ? (
-          <PosterFallbackMark title={movie.title} />
-        ) : (
-          <Image
-            alt={movie.posterAlt}
-            fill
-            onError={() => setImageFailed(true)}
-            priority={priority}
-            sizes="(max-width: 480px) 44vw, (max-width: 900px) 28vw, 220px"
-            src={posterSrc}
-          />
-        )}
-        {movie.rank ? <span className="rank-badge">#{movie.rank}</span> : null}
-        <span className="poster-open-cue">
-          Open <Icon name="arrow" />
-        </span>
-      </Link>
-      <div className="poster-card-copy">
-        <div>
-          <Link className="poster-title" href={detailHref}>
-            {movie.title}
-          </Link>
-          <p className="poster-meta">
-            {movie.year ?? "Year unknown"}
-            {movie.genres[0] ? ` · ${movie.genres[0]}` : " · Genre unavailable"}
-          </p>
-          {metadataNote ? <p className="poster-metadata-note">{metadataNote}</p> : null}
-        </div>
-        {movie.state.watchlisted ? (
-          <span aria-label="In watchlist" className="poster-state" role="img">
-            <Icon name="bookmark" />
+      {/*
+        One link per card, wrapping the artwork and the caption. They used to be
+        two anchors to the same href, which cost a keyboard viewer an extra stop
+        on every card in a rail — 45 of them for a rail of nine — and announced
+        the same destination twice. The caption stays inside `.poster-card-copy`
+        because the featured slot hides that block to print its own title.
+      */}
+      <Link aria-label={`Open ${movie.title}`} className="poster-card-link" href={detailHref}>
+        <span className="poster-frame">
+          {showFallback || !posterSrc ? (
+            <PosterFallbackMark title={movie.title} />
+          ) : (
+            <Image
+              alt={movie.posterAlt}
+              fill
+              onError={() => setFailedSrc(posterSrc)}
+              priority={priority}
+              sizes="(max-width: 480px) 44vw, (max-width: 900px) 28vw, 220px"
+              src={posterSrc}
+            />
+          )}
+          {movie.rank ? <span className="rank-badge">#{movie.rank}</span> : null}
+          <span className="poster-open-cue">
+            Open <Icon name="arrow" />
           </span>
-        ) : null}
-      </div>
+        </span>
+        <div className="poster-card-copy">
+          <div>
+            <span className="poster-title">{movie.title}</span>
+            <p className="poster-meta">
+              {movie.year ?? "Year unknown"}
+              {movie.genres[0] ? ` · ${movie.genres[0]}` : " · Genre unavailable"}
+            </p>
+            {metadataNote ? <p className="poster-metadata-note">{metadataNote}</p> : null}
+          </div>
+          {movie.state.watchlisted ? (
+            <span aria-label="In watchlist" className="poster-state" role="img">
+              <Icon name="bookmark" />
+            </span>
+          ) : null}
+        </div>
+      </Link>
       {density === "standard" && movie.reason ? (
         <p className="poster-reason">{movie.reason}</p>
       ) : null}
@@ -73,20 +84,11 @@ export function PosterCard({
 }
 
 /**
- * Derived from the title alone, so the same movie shows the same mark on every
- * render and in every screenshot. Exported because movie detail needs the
- * identical fallback: a poster that is missing in the grid must not look like
- * a different kind of gap one route later.
+ * The one fallback mark in the product. Exported because detail, the Library
+ * rows, and the Quick Picks deck all need the identical treatment: a missing
+ * poster must not look like a different kind of gap one route later. The rule
+ * that derives the mark lives in `lib/movie-types.ts`; pass it a display title.
  */
-export function posterInitials(title: string): string {
-  return title
-    .split(" ")
-    .filter((word) => !["the", "a", "of", "in", "to"].includes(word.toLowerCase()))
-    .slice(0, 2)
-    .map((word) => word[0])
-    .join("");
-}
-
 export function PosterFallbackMark({ title }: { title: string }) {
   return (
     <span className="poster-fallback" data-testid="poster-fallback">

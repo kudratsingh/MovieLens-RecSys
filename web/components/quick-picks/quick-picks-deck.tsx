@@ -17,6 +17,11 @@
  * - Stars are a way of marking watched, not a second step after it. Pressing a
  *   star records watched *with* that rating in one mutation, so the rating can
  *   never disagree with the watched signal it implies.
+ *
+ * The deck does not name the persona. It printed `Exploring as {name}` until
+ * the route moved inside `AppShell`, which prints the same sentence about 40px
+ * above it; the design contract asks for one labelled persona, not for the same
+ * claim twice. The shell owns it, here and everywhere else.
  */
 
 import Image from "next/image";
@@ -31,6 +36,7 @@ import {
 } from "react";
 
 import { MovieRatingControl } from "@/components/movie/movie-state-controls";
+import { PosterFallbackMark } from "@/components/movie/poster-card";
 import { Icon } from "@/components/ui/icons";
 import { REASON_DETAIL, ResourceProblem } from "@/components/ui/resource-region";
 import type { RecommendationResponse } from "@/lib/api";
@@ -65,6 +71,9 @@ import {
   isResourceFailure,
   type ResourceState,
 } from "@/lib/resources/state";
+// The deck renders the product's shared poster fallback, so it needs the styles
+// that mark is defined with; it is the only thing it borrows from that file.
+import "@/components/movie/poster-card.css";
 import "./quick-picks.css";
 
 const DECISION_ORDER = ["dismiss", "watchlist", "watched"] as const;
@@ -106,12 +115,10 @@ function isRenderablePoster(url: string | null): url is string {
 export function QuickPicksDeck({
   browseHref,
   initial,
-  personaLabel,
   transport,
 }: {
   browseHref: string;
   initial: QuickPickQueuePayload;
-  personaLabel: string;
   transport: QuickPickTransport;
 }) {
   const [payload, setPayload] = useState(initial);
@@ -209,6 +216,11 @@ export function QuickPicksDeck({
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
+        // `event.key` already carries the shift state as an uppercase letter,
+        // so the resolver needs the flag to tell Shift+J (a modifier chord,
+        // never a decision) from Caps Lock (`J` with Shift genuinely up, which
+        // is still the viewer pressing the dismiss key).
+        shiftKey: event.shiftKey,
         inField,
       });
       if (!action) return;
@@ -254,7 +266,6 @@ export function QuickPicksDeck({
       <header className="quick-picks-header">
         <div>
           <p className="eyebrow">Quick picks</p>
-          <p className="quick-picks-persona">Exploring as {personaLabel}</p>
         </div>
         <div className="quick-picks-header-actions">
           {payload.queue.source === "recorded-contract-fixture" ? (
@@ -381,26 +392,42 @@ function DecisionCard({
   remaining: number;
 }) {
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  const [posterFailed, setPosterFailed] = useState<string | null>(null);
   const origin = useRef<{ x: number; y: number; at: number } | null>(null);
+  const posterUrl = card.posterUrl;
+  const showPoster = isRenderablePoster(posterUrl) && posterFailed !== posterUrl;
 
-  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+  function onPointerDown(event: React.PointerEvent<HTMLElement>) {
     // A secondary touch in a multi-touch gesture is not a decision.
     if (busy || event.isPrimary === false) return;
+    // The swipe surface is the whole card, so a drag that starts on a control
+    // has to stay that control's business — otherwise dragging across the star
+    // row would resolve as a decision, and capturing the pointer here would
+    // retarget the click away from the button that was pressed.
+    const onControl =
+      event.target instanceof Element &&
+      event.target.closest('button, a, input, [role="button"]') !== null;
+    if (onControl) return;
     origin.current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
-  function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+  function onPointerMove(event: React.PointerEvent<HTMLElement>) {
     const start = origin.current;
     if (!start || motion === "none") return;
     setDrag({ dx: event.clientX - start.x, dy: event.clientY - start.y });
   }
 
-  function onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+  function onPointerUp(event: React.PointerEvent<HTMLElement>) {
     const start = origin.current;
     origin.current = null;
     setDrag(null);
     if (!start) return;
+    // A drag that left a text selection behind was a selection. Now that the
+    // whole card is the swipe surface, most of what is under the pointer is
+    // prose, and 72px inside 900ms is an entirely ordinary highlight — reading
+    // that as "not for me" would be a decision the viewer never made.
+    if (globalThis.getSelection?.()?.isCollapsed === false) return;
     const action = resolveSwipe({
       dx: event.clientX - start.x,
       dy: event.clientY - start.y,
@@ -421,33 +448,39 @@ function DecisionCard({
       // Lets the service-backed journey check the same id against serving.
       data-movie-id={card.movieId}
       id={CARD_REGION_ID}
+      // The gesture belongs to the card, not to the 136×204 poster it used to
+      // be bound to: on a phone the poster is a fraction of what reads as the
+      // thing being swiped, and a swipe that started on the title did nothing.
+      onPointerCancel={onPointerCancel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       tabIndex={-1}
     >
       <div
         className="quick-pick-poster"
         data-motion={motion}
-        onPointerCancel={onPointerCancel}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
+        // The transform stays on the poster — it is the card's moving part, and
+        // flinging the copy and the buttons with it would be a different, and
+        // much louder, animation.
         style={drag ? { transform: `translate(${drag.dx}px, ${drag.dy}px)` } : undefined}
       >
-        {isRenderablePoster(card.posterUrl) ? (
+        {showPoster && posterUrl ? (
           <Image
-            alt={`${card.title} poster`}
+            alt=""
             className="quick-pick-poster-image"
             // Native image dragging would cancel the pointer stream mid-swipe.
             draggable={false}
             fill
+            // A poster that 404s left this one surface showing an empty frame
+            // while every other surface named the gap.
+            onError={() => setPosterFailed(posterUrl)}
             priority
             sizes="(max-width: 700px) 40vw, 340px"
-            src={card.posterUrl}
+            src={posterUrl}
           />
         ) : (
-          <span className="quick-pick-poster-fallback">
-            <span aria-hidden="true">{card.title.slice(0, 2)}</span>
-            <span>Artwork unavailable</span>
-          </span>
+          <PosterFallbackMark title={card.title} />
         )}
       </div>
 

@@ -16,7 +16,7 @@
 
 import type { CatalogItem, MovieState } from "@/lib/api";
 import { displayState } from "@/lib/movie-state/actions";
-import type { MovieCard } from "@/lib/movie-types";
+import { displayTitle, type MovieCard } from "@/lib/movie-types";
 
 type MetadataSource = CatalogItem["metadata_source"];
 type SourceStatus = CatalogItem["source_status"];
@@ -71,7 +71,9 @@ export function genresText(item: CatalogItem): string {
 export function catalogItemToCard(item: CatalogItem): MovieCard {
   return {
     id: item.movie_id,
-    title: item.title,
+    // The grid prints the year on its own metadata line, so the title must not
+    // carry it as well — and the poster mark is derived from this string.
+    title: displayTitle(item.title, item.release_year),
     year: item.release_year,
     genres: item.genres,
     posterSrc: item.poster_url,

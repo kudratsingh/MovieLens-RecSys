@@ -31,6 +31,7 @@ import {
   releaseYearText,
 } from "@/lib/browse/catalog-card";
 import type { MovieStateClient } from "@/lib/movie-state/client";
+import { displayTitle } from "@/lib/movie-types";
 import { returnHrefLabel } from "@/lib/navigation";
 import "@/components/movie/poster-card.css";
 import "./movie-detail-view.css";
@@ -68,16 +69,21 @@ export function MovieDetailView({
   stateClient?: MovieStateClient;
   onCommitted?: (state: MovieState) => void;
 }) {
+  // One name for this movie on this page: the heading, the poster mark, and
+  // every sentence the state controls announce. The metadata line below already
+  // prints the release year, so the title must not print it again.
+  const title = displayTitle(item.title, item.release_year);
+
   return (
     <article className="movie-detail" aria-labelledby="movie-title">
       <div className="movie-detail-poster">
-        <DetailPoster posterUrl={item.poster_url} title={item.title} />
+        <DetailPoster posterUrl={item.poster_url} title={title} />
       </div>
 
       <div className="movie-detail-copy">
         <p className="eyebrow">{metadataSummary(item)}</p>
         <h1 className="display-title" id="movie-title">
-          {item.title}
+          {title}
         </h1>
         <p className="movie-detail-meta">
           {releaseYearText(item)} · {genresText(item)}
@@ -98,7 +104,7 @@ export function MovieDetailView({
           initialState={item.state}
           movieId={item.movie_id}
           onCommitted={onCommitted}
-          title={item.title}
+          title={title}
           userId={userId}
         />
 
@@ -161,8 +167,11 @@ function DetailPoster({
   posterUrl: string | null;
   title: string;
 }) {
-  const [failed, setFailed] = useState(false);
-  const showImage = Boolean(posterUrl) && !failed;
+  // The failing source, not a bare boolean: this route remounts per movie
+  // today, but a client-side transition between two detail pages would
+  // otherwise carry one movie's broken poster onto the next one's artwork.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const showImage = Boolean(posterUrl) && failedSrc !== posterUrl;
 
   return (
     <div className="poster-frame detail-poster">
@@ -170,7 +179,7 @@ function DetailPoster({
         <Image
           alt=""
           fill
-          onError={() => setFailed(true)}
+          onError={() => setFailedSrc(posterUrl)}
           priority
           sizes="(max-width: 768px) 80vw, 340px"
           src={posterUrl}

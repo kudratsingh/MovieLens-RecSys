@@ -34,3 +34,8 @@
 .movie-state-panel-message.is-error {
   color: var(--destructive);
 }
+
+/* A refused transition is a rule, not a fault: warned rather than alarmed. */
+.movie-state-panel-message.is-note {
+  color: var(--warning);
+}
