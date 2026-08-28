@@ -3,20 +3,36 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIBRARY_USER_ID,
   LIBRARY_TABS,
+  hasLibraryFilters,
   libraryHref,
   libraryUrlQuery,
   libraryViewKey,
   nextLibraryUrlState,
   normalizeSort,
   parseLibraryUrlState,
+  parseLibraryYear,
   sortsForTab,
   type LibrarySort,
   type LibraryUrlState,
 } from "@/lib/library/url-state";
 
-function roundTrip(state: LibraryUrlState): LibraryUrlState {
+function state(overrides: Partial<LibraryUrlState> = {}): LibraryUrlState {
+  return {
+    userId: DEFAULT_LIBRARY_USER_ID,
+    tab: "rated",
+    sort: "recent",
+    query: "",
+    genre: null,
+    yearFrom: null,
+    yearTo: null,
+    cursor: null,
+    ...overrides,
+  };
+}
+
+function roundTrip(value: LibraryUrlState): LibraryUrlState {
   return parseLibraryUrlState(
-    Object.fromEntries(libraryUrlQuery(state).entries()),
+    Object.fromEntries(libraryUrlQuery(value).entries()),
   );
 }
 
@@ -26,108 +42,171 @@ describe("library URL state", () => {
       for (const sort of sortsForTab(tab)) {
         for (const query of ["", "murder"]) {
           for (const cursor of [null, "opaque-cursor-2"]) {
-            const state: LibraryUrlState = {
-              userId: 900000104,
-              tab,
-              sort,
-              query,
-              cursor,
-            };
-            expect(roundTrip(state)).toEqual(state);
+            expect(roundTrip(state({ userId: 900000104, tab, sort, query, cursor }))).toEqual(
+              state({ userId: 900000104, tab, sort, query, cursor }),
+            );
           }
         }
       }
     }
   });
 
-  it("writes only what differs from the defaults", () => {
-    const resting = libraryUrlQuery({
-      userId: DEFAULT_LIBRARY_USER_ID,
-      tab: "rated",
-      sort: "recent",
-      query: "",
-      cursor: null,
+  it("round-trips the genre and year bounds the Seen tab adds", () => {
+    const filtered = state({
+      tab: "history",
+      sort: "tmdb",
+      genre: "Sci-Fi",
+      yearFrom: 1990,
+      yearTo: 1999,
     });
 
-    expect(resting.toString()).toBe(`userId=${DEFAULT_LIBRARY_USER_ID}`);
-    expect(libraryHref({
-      userId: 900000104,
+    expect(roundTrip(filtered)).toEqual(filtered);
+    expect(libraryHref(filtered)).toBe(
+      `/library?userId=${DEFAULT_LIBRARY_USER_ID}&tab=history&sort=tmdb&genre=Sci-Fi&year_from=1990&year_to=1999`,
+    );
+  });
+
+  it("clamps a year to the window the endpoint accepts, and drops anything else", () => {
+    expect(parseLibraryYear("1990")).toBe(1990);
+    expect(parseLibraryYear("1877")).toBeNull();
+    expect(parseLibraryYear("2101")).toBeNull();
+    expect(parseLibraryYear("19x0")).toBeNull();
+    expect(parseLibraryYear("")).toBeNull();
+
+    const parsed = parseLibraryUrlState({ year_from: "1200", year_to: "2019" });
+    expect(parsed.yearFrom).toBeNull();
+    expect(parsed.yearTo).toBe(2019);
+  });
+
+  it("drops both bounds when the range is inverted, as the endpoint would 422", () => {
+    const parsed = parseLibraryUrlState({
       tab: "history",
-      sort: "title",
-      query: "fall",
-      cursor: null,
-    })).toBe("/library?userId=900000104&tab=history&sort=title&q=fall");
+      year_from: "2010",
+      year_to: "1999",
+    });
+    expect(parsed.yearFrom).toBeNull();
+    expect(parsed.yearTo).toBeNull();
+
+    const edited = nextLibraryUrlState(state({ tab: "history", yearTo: 1999 }), {
+      yearFrom: 2010,
+    });
+    expect(edited.yearFrom).toBeNull();
+    expect(edited.yearTo).toBeNull();
+  });
+
+  it("writes only what differs from the defaults", () => {
+    expect(libraryUrlQuery(state()).toString()).toBe(
+      `userId=${DEFAULT_LIBRARY_USER_ID}`,
+    );
+    expect(
+      libraryHref(state({ userId: 900000104, tab: "history", sort: "title", query: "fall" })),
+    ).toBe("/library?userId=900000104&tab=history&sort=title&q=fall");
   });
 
   it("writes preview knobs and an alternate base path when asked", () => {
-    const href = libraryHref(
-      { userId: 900000101, tab: "watchlist", sort: "recent", query: "", cursor: null },
-      "/ui-preview/library",
-      { fail: "library", empty: "" },
-    );
+    const href = libraryHref(state({ tab: "watchlist" }), "/ui-preview/library", {
+      fail: "library",
+      empty: "",
+    });
 
     expect(href).toBe(
-      "/ui-preview/library?userId=900000101&tab=watchlist&fail=library",
+      `/ui-preview/library?userId=${DEFAULT_LIBRARY_USER_ID}&tab=watchlist&fail=library`,
     );
   });
 
   it("falls back rather than trusting an unknown tab, sort, or user", () => {
-    const state = parseLibraryUrlState({
-      userId: "not-a-user",
-      tab: "archive",
-      sort: "sideways",
-      q: "  spaced  ",
-    });
-
-    expect(state).toEqual({
-      userId: DEFAULT_LIBRARY_USER_ID,
-      tab: "rated",
-      sort: "recent",
-      query: "spaced",
-      cursor: null,
-    });
+    expect(
+      parseLibraryUrlState({
+        userId: "not-a-user",
+        tab: "archive",
+        sort: "sideways",
+        q: "  spaced  ",
+        genre: "   ",
+      }),
+    ).toEqual(state({ query: "spaced" }));
   });
 
-  it("keeps rating sort to the one collection where every row has a rating", () => {
-    expect(sortsForTab("rated")).toContain("rating");
-    expect(sortsForTab("watchlist")).not.toContain("rating");
-    expect(normalizeSort("history", "rating" as LibrarySort)).toBe("recent");
-
-    const moved = nextLibraryUrlState(
-      { userId: 1, tab: "rated", sort: "rating", query: "", cursor: null },
-      { tab: "watchlist" },
+  it("collapses whitespace so one search is one view", () => {
+    // The endpoint normalizes before it fingerprints the query, and the cursor
+    // is bound to that fingerprint — two spellings of one search must not
+    // produce two incompatible page positions.
+    expect(parseLibraryUrlState({ q: "  the   thing " }).query).toBe("the thing");
+    expect(libraryViewKey(state({ query: "the thing" }))).toBe(
+      libraryViewKey(parseLibraryUrlState({ q: "the   thing" })),
     );
-    expect(moved.sort).toBe("recent");
+  });
+
+  it("offers each collection only the orderings it can answer", () => {
+    expect(sortsForTab("rated")).toEqual(["recent", "title", "rating"]);
+    expect(sortsForTab("watchlist")).toEqual(["recent", "title"]);
+    expect(sortsForTab("history")).toEqual([
+      "recent",
+      "title",
+      "rating",
+      "release",
+      "tmdb",
+    ]);
+
+    // A hand-edited sort a tab does not offer lands on Most recent rather than
+    // on an error the reader cannot act on.
+    expect(normalizeSort("rated", "tmdb" as LibrarySort)).toBe("recent");
+    expect(normalizeSort("watchlist", "rating" as LibrarySort)).toBe("recent");
+    expect(normalizeSort("history", "tmdb" as LibrarySort)).toBe("tmdb");
+
+    expect(
+      nextLibraryUrlState(state({ sort: "rating" }), { tab: "watchlist" }).sort,
+    ).toBe("recent");
   });
 
   it("drops a cursor whenever the view it was issued for changes", () => {
-    const paged: LibraryUrlState = {
-      userId: 1,
-      tab: "history",
-      sort: "recent",
-      query: "",
-      cursor: "opaque-2",
-    };
+    const paged = state({ tab: "history", cursor: "opaque-2" });
 
     expect(nextLibraryUrlState(paged, { tab: "rated" }).cursor).toBeNull();
     expect(nextLibraryUrlState(paged, { sort: "title" }).cursor).toBeNull();
     expect(nextLibraryUrlState(paged, { query: "burning" }).cursor).toBeNull();
+    expect(nextLibraryUrlState(paged, { genre: "Drama" }).cursor).toBeNull();
+    expect(nextLibraryUrlState(paged, { yearFrom: 1990 }).cursor).toBeNull();
+    expect(nextLibraryUrlState(paged, { yearTo: 1999 }).cursor).toBeNull();
+    // Clearing a filter is a change like any other, and it has to be heard:
+    // "All genres" and "no year" both arrive as an explicit null.
+    expect(nextLibraryUrlState(paged, { genre: null }).genre).toBeNull();
+    expect(
+      nextLibraryUrlState(state({ tab: "history", genre: "Drama", yearTo: 1999 }), {
+        genre: null,
+        yearTo: null,
+      }),
+    ).toMatchObject({ genre: null, yearTo: null });
     // Re-selecting the same view is not a change, so the page position holds.
     expect(nextLibraryUrlState(paged, { tab: "history" }).cursor).toBe("opaque-2");
+    // And asking for the top of an unchanged view is honoured rather than read
+    // as "no opinion about the cursor".
+    expect(nextLibraryUrlState(paged, { cursor: null }).cursor).toBeNull();
   });
 
   it("identifies a view precisely enough to tell a reload from a move", () => {
-    const base: LibraryUrlState = {
-      userId: 1,
-      tab: "rated",
-      sort: "recent",
-      query: "",
-      cursor: null,
-    };
+    const base = state();
 
     expect(libraryViewKey(base)).toBe(libraryViewKey({ ...base }));
-    expect(libraryViewKey(base)).not.toBe(libraryViewKey({ ...base, cursor: "next" }));
-    expect(libraryViewKey(base)).not.toBe(libraryViewKey({ ...base, query: "x" }));
-    expect(libraryViewKey(base)).not.toBe(libraryViewKey({ ...base, userId: 2 }));
+    for (const moved of [
+      { cursor: "next" },
+      { query: "x" },
+      { userId: 2 },
+      { tab: "history" as const },
+      { sort: "title" as const },
+      { genre: "Drama" },
+      { yearFrom: 1990 },
+      { yearTo: 1999 },
+    ]) {
+      expect(libraryViewKey(base)).not.toBe(libraryViewKey({ ...base, ...moved }));
+    }
+  });
+
+  it("knows when the collection has been narrowed", () => {
+    expect(hasLibraryFilters(state())).toBe(false);
+    expect(hasLibraryFilters(state({ query: "blade" }))).toBe(true);
+    expect(hasLibraryFilters(state({ genre: "Drama" }))).toBe(true);
+    expect(hasLibraryFilters(state({ yearTo: 1999 }))).toBe(true);
+    // A sort reorders the same set; it narrows nothing.
+    expect(hasLibraryFilters(state({ tab: "history", sort: "tmdb" }))).toBe(false);
   });
 });

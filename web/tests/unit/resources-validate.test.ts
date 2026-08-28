@@ -128,6 +128,36 @@ describe("runtime validators accept the published contract", () => {
     ).toBe(true);
   });
 
+  it("accepts the Seen orderings, an exact match count, and an absent score", () => {
+    // The API and the web app deploy as separate images. A guard narrower than
+    // the endpoint turns a healthy `sort: "tmdb"` into a broken region, and one
+    // that insists on `tmdb_rating` fails a response written before the field
+    // existed — both are contract drift rendered as an outage.
+    for (const sort of ["release", "tmdb"] as const) {
+      expect(isLibraryResponse({ ...libraryResponse, sort })).toBe(true);
+    }
+
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        genre: "Sci-Fi",
+        year_from: 1990,
+        year_to: 1999,
+        items: [{ ...libraryResponse.items[0], tmdb_rating: 8.4 }],
+        page: { has_more: true, matched: 42, next_cursor: "eyJ2IjoyfQ" },
+        sort: "tmdb",
+        tab: "history",
+      }),
+    ).toBe(true);
+
+    for (const row of [
+      { ...libraryResponse.items[0], tmdb_rating: null },
+      without(libraryResponse.items[0], "tmdb_rating"),
+    ]) {
+      expect(isLibraryResponse({ ...libraryResponse, items: [row] })).toBe(true);
+    }
+  });
+
   it("accepts a history payload", () => {
     expect(
       isHistoryResponse({
@@ -153,6 +183,21 @@ describe("runtime validators reject payloads the UI cannot render", () => {
   it("rejects a response that lost its tenant scope", () => {
     expect(isRecommendationResponse(without(recommendationResponse, "tenant_id"))).toBe(false);
     expect(isLibraryResponse({ ...libraryResponse, user_id: "900000101" })).toBe(false);
+  });
+
+  it("rejects Library fields that arrived with the wrong type", () => {
+    // Absent is tolerated; present-and-wrong is drift worth catching, because
+    // the readout and the row mark both render the value directly.
+    expect(
+      isLibraryResponse({ ...libraryResponse, page: { ...libraryResponse.page, matched: "42" } }),
+    ).toBe(false);
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        items: [{ ...libraryResponse.items[0], tmdb_rating: "8.4" }],
+      }),
+    ).toBe(false);
+    expect(isLibraryResponse({ ...libraryResponse, sort: "popular" })).toBe(false);
   });
 
   it("rejects an item whose required fields drifted", () => {

@@ -280,6 +280,10 @@ function isLibraryMovie(value: unknown): boolean {
     isNumber(value.movie_id) &&
     isString(value.title) &&
     arrayOf(isString)(value.genres) &&
+    // Absent as well as null: the crowd score is newer than this guard, and an
+    // API image that predates it sends no key at all. Same tolerance
+    // `movieMetaLine` applies to `release_year`, for the same deployment reason.
+    (value.tmdb_rating === undefined || nullable(isNumber)(value.tmdb_rating)) &&
     isMovieState(value.state)
   );
 }
@@ -293,15 +297,37 @@ function isLibraryCounts(value: unknown): boolean {
   );
 }
 
+/**
+ * The Library page block, plus the exact match count the Seen spotlight reads.
+ *
+ * `matched` is optional here rather than required: it is a count of one
+ * persona's own bounded rows, and a web image newer than the API would
+ * otherwise fail a healthy response over a number it can fall back from.
+ */
+function isLibraryPage(value: unknown): boolean {
+  return (
+    isCursorPage(value) &&
+    isRecord(value) &&
+    (value.matched === undefined || isNumber(value.matched))
+  );
+}
+
 export function isLibraryResponse(value: unknown): value is LibraryResponse {
   return (
     isRecord(value) &&
     hasTenantScope(value) &&
-    isCursorPage(value.page) &&
+    isLibraryPage(value.page) &&
     isLibraryCounts(value.counts) &&
     oneOf(["rated", "watchlist", "history"] as const)(value.tab) &&
-    oneOf(["recent", "title", "rating"] as const)(value.sort) &&
+    // All five orderings, including the two the endpoint accepts on every tab.
+    // A validator narrower than the API turns a healthy `sort: "tmdb"` into a
+    // broken region, which is the failure this list exists to prevent.
+    oneOf(["recent", "title", "rating", "release", "tmdb"] as const)(value.sort) &&
     nullable(isString)(value.query) &&
+    // Echoed filters, optional for the same reason `matched` is.
+    (value.genre === undefined || nullable(isString)(value.genre)) &&
+    (value.year_from === undefined || nullable(isNumber)(value.year_from)) &&
+    (value.year_to === undefined || nullable(isNumber)(value.year_to)) &&
     everyItem(isLibraryMovie)(value.items)
   );
 }
