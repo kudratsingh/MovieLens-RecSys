@@ -21,7 +21,14 @@ test("the rated collection reads as a record of the selected persona", async ({ 
   await expect(
     page.getByRole("heading", { level: 1, name: "A record of what moved you." }),
   ).toBeVisible();
-  await expect(page.getByText("Exploring as Action Fan")).toBeVisible();
+  // The persona is named once, by the shell. The route used to print its own
+  // `Exploring as {persona}` eyebrow directly under the header that already
+  // said it.
+  await expect(page.locator(".persona-cluster")).toContainText("Action Fan");
+  await expect(page.locator(".library-intro")).not.toContainText("Exploring as");
+  await expect(
+    page.getByText(/not the signed-in actor's private library/i),
+  ).toContainText("Action Fan");
   await expect(page.getByRole("tab", { name: "Rated 12" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -29,6 +36,48 @@ test("the rated collection reads as a record of the selected persona", async ({ 
   await expect(page.getByRole("list", { name: "Rated movies" })).toBeVisible();
   await expect(page.getByLabel("Rating for Memories of Murder")).toHaveValue("4.5");
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("rows carry artwork, and a row without it carries the shared mark", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/library");
+  await expect(page.getByRole("list", { name: "Rated movies" })).toBeVisible();
+
+  // Library was the one route in a poster-first product with no artwork on any
+  // tab at any width. The frame is reserved either way, so a missing poster
+  // never moves the rows below it.
+  const thumbs = page.locator(".library-thumb");
+  await expect(thumbs.first()).toBeVisible();
+  const frames = await page.$$eval(".library-thumb", (nodes) =>
+    nodes.map((node) => ({
+      marked: Boolean(node.querySelector('[data-testid="poster-fallback"]')),
+      broken: Boolean(
+        node.querySelector("img")?.complete && node.querySelector("img")?.naturalWidth === 0,
+      ),
+      width: Math.round(node.getBoundingClientRect().width),
+    })),
+  );
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.filter((frame) => frame.broken)).toEqual([]);
+  expect(frames.some((frame) => !frame.marked)).toBe(true);
+  expect(frames.some((frame) => frame.marked)).toBe(true);
+  for (const frame of frames) expect(frame.width).toBeGreaterThan(0);
+
+  // The mark's caption is dropped at row density — 56px cannot carry it — and
+  // the row's own title is the name, so nothing is lost.
+  const mark = page.locator('.library-thumb [data-testid="poster-fallback"]').first();
+  await expect(mark.locator("span").first()).toBeVisible();
+  await expect(mark.getByText("Artwork unavailable")).toBeHidden();
+});
+
+test("a row prints its year once, on the metadata line", async ({ page }) => {
+  await page.goto("/ui-preview/library");
+
+  const row = page.getByRole("listitem").filter({ hasText: "Memories of Murder" });
+  await expect(row.getByRole("link", { name: "Memories of Murder" })).toBeVisible();
+  await expect(row).toContainText("2003 · Crime · Mystery");
+  await expect(row).not.toContainText("Memories of Murder (2003)");
 });
 
 test("the ratings summary stays a live read rather than a model explanation", async ({
@@ -81,7 +130,7 @@ test("an empty collection offers a way out to Browse", async ({ page }) => {
 test("a failed collection read leaves the ratings summary readable", async ({ page }) => {
   await page.goto("/ui-preview/library?fail=library");
 
-  await expect(page.getByRole("alert", { name: "Rated collection upstream-error" })).toBeVisible();
+  await expect(page.getByRole("alert", { name: "Rated collection could not be loaded" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /A readable outline/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Watchlist" })).toBeVisible();
 });

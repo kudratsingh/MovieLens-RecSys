@@ -109,7 +109,10 @@ export function ResourceProblem({
   const headline = resourceProblemHeadline(failure, label);
   return (
     <section
-      aria-label={`${label} ${failure.status}`}
+      // The headline, not the status enum. `Recommendations upstream-error`
+      // is a name only this codebase can read; a screen reader gets the same
+      // sentence a sighted viewer does.
+      aria-label={headline}
       className={`resource-state resource-error resource-${failure.status}`}
       role="alert"
     >

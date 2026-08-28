@@ -24,6 +24,10 @@ export class FrontendErrorBoundary extends Component<
         <ErrorState
           label={this.props.label ?? "This section"}
           message="An unexpected interface error occurred. Navigation and other resources remain available."
+          // Re-mounting the subtree is a real retry: a render that failed on a
+          // transient value — a resource that has since resolved, say — comes
+          // back on the second attempt, and one that cannot lands here again.
+          onRetry={() => this.setState({ failed: false })}
         />
       );
     }

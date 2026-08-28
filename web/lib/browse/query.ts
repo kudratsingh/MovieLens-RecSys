@@ -15,9 +15,21 @@
  *    at the one place filters can change, rather than at each call site.
  */
 
-export const BROWSE_SORTS = ["title", "newest", "popular"] as const;
+/** Offer order, and the order the sort control lists them in. */
+export const BROWSE_SORTS = ["popular", "title", "newest"] as const;
 
 export type BrowseSort = (typeof BROWSE_SORTS)[number];
+
+/**
+ * Browse opens on what this tenant actually watches.
+ *
+ * Alphabetical was the original default, which opens a discovery product on
+ * `2001`, `Ace Ventura`, `Aladdin` — an ordering that carries no signal and,
+ * against the seeded catalog, sorts most of the poster-backed titles off the
+ * first page. `popular` is the endpoint's interaction-count ordering, so the
+ * first viewport is the part of the catalog the demo can actually show.
+ */
+export const DEFAULT_BROWSE_SORT: BrowseSort = "popular";
 
 /** The endpoint's default page size; its hard maximum is 48. */
 export const CATALOG_PAGE_LIMIT = 24;
@@ -46,7 +58,7 @@ export const DEFAULT_BROWSE_QUERY: BrowseQuery = {
   genre: null,
   yearFrom: null,
   yearTo: null,
-  sort: "title",
+  sort: DEFAULT_BROWSE_SORT,
   cursor: null,
 };
 
@@ -72,7 +84,7 @@ function normalizeYear(value: string | null): number | null {
 function normalizeSort(value: string | null): BrowseSort {
   return BROWSE_SORTS.includes(value as BrowseSort)
     ? (value as BrowseSort)
-    : "title";
+    : DEFAULT_BROWSE_SORT;
 }
 
 function normalizeCursor(value: string | null): string | null {
@@ -110,7 +122,7 @@ export function browseSearchParams(query: BrowseQuery): URLSearchParams {
   if (query.genre) params.set("genre", query.genre);
   if (query.yearFrom !== null) params.set("year_from", String(query.yearFrom));
   if (query.yearTo !== null) params.set("year_to", String(query.yearTo));
-  if (query.sort !== "title") params.set("sort", query.sort);
+  if (query.sort !== DEFAULT_BROWSE_SORT) params.set("sort", query.sort);
   if (query.cursor) params.set("cursor", query.cursor);
   return params;
 }
@@ -159,8 +171,16 @@ export function withBrowseFilters(
   return inverted ? { ...next, yearFrom: null, yearTo: null } : next;
 }
 
+/**
+ * Whether the viewer has narrowed the catalog.
+ *
+ * The sort is deliberately excluded. It is a reordering of the same result
+ * set, not a filter, and it has its own always-visible control — so counting
+ * it here would light up an "Active filters" row that has nothing to show,
+ * and would offer to "remove" an ordering that cannot be absent.
+ */
 export function hasActiveBrowseFilters(query: BrowseQuery): boolean {
-  return browseFilterKey(query).length > 0;
+  return browseFilterKey({ ...query, sort: DEFAULT_BROWSE_SORT }).length > 0;
 }
 
 /** Query string for `GET /users/{id}/catalog` through the BFF. */

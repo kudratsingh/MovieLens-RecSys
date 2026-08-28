@@ -32,6 +32,53 @@ test("Browse renders a poster grid without claiming a total", async ({ page }) =
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
 });
 
+test("Browse opens on the most-watched cut, and the sort is not a chip", async ({ page }) => {
+  const catalogRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/ui-preview/catalog")) catalogRequests.push(request.url());
+  });
+
+  await page.goto("/ui-preview/browse");
+  await expect(page.getByRole("list", GRID)).toBeVisible();
+
+  expect(catalogRequests[0]).toContain("sort=popular");
+  // The default cut is still the one canonical address, with nothing in it.
+  expect(new URL(page.url()).search).toBe("");
+  await expect(page.getByRole("combobox", { name: "Sort" })).toHaveValue("popular");
+  // "Most watched here ×" read as a filter the viewer had applied. Only
+  // search, genre, and decade belong in that row, and none of them is set.
+  await expect(page.getByLabel("Active filters")).toHaveCount(0);
+  // The endpoint's interaction ordering, not the alphabet: the recorded
+  // catalog's most-watched title leads.
+  expect((await cardTitles(page))[0]).toBe("Lady Bird");
+});
+
+test("the alphabetical cut is one selection away and pages the same way", async ({ page }) => {
+  await page.goto("/ui-preview/browse");
+  await expect(page.getByRole("list", GRID)).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Sort" }).selectOption("title");
+  // `title` is no longer the default, so the address has to spell it out or a
+  // reload would quietly reorder the grid underneath the viewer.
+  await expect(page).toHaveURL(/sort=title/);
+  // Sampled only once the alphabetical window has actually landed: the old
+  // grid stays on screen while the new page is in flight.
+  await expect(page.locator(".catalog-cell .poster-title").first()).toHaveText("Aftersun");
+  await expect(page.getByLabel("Active filters")).toHaveCount(0);
+
+  const firstPage = await cardTitles(page);
+  await page.getByRole("button", { name: "Load more movies" }).click();
+  await expect(page.getByRole("listitem")).toHaveCount(firstPage.length * 2);
+
+  // A cursor is bound to the query fingerprint it was issued under, and the
+  // request has always named the sort, so continuation is unaffected.
+  const combined = await cardTitles(page);
+  expect(new Set(combined).size).toBe(combined.length);
+  expect(combined.slice(0, firstPage.length)).toEqual(firstPage);
+  await expect(page).toHaveURL(/sort=title/);
+  await expect(page).toHaveURL(/cursor=/);
+});
+
 test("search and genre filters are serialized into the address", async ({ page }) => {
   await page.goto("/ui-preview/browse");
   await expect(page.getByRole("list", GRID)).toBeVisible();
@@ -110,10 +157,29 @@ test("incomplete metadata reads as a named gap, not a broken card", async ({ pag
   }
 });
 
+test("every card offers watched beside watchlist, at a thumb-sized target", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/browse");
+  await expect(page.getByRole("list", GRID)).toBeVisible();
+
+  // The grid used to offer `Watchlist` and nothing else, so the only state a
+  // viewer could record from Browse was the one that changes no recommendation.
+  const cell = page.locator(".catalog-cell").first();
+  const actions = cell.getByRole("group");
+  await expect(actions).toHaveAccessibleName(/^Actions for .+/);
+  await expect(actions.getByRole("button", { name: /^(Watchlist|In watchlist)$/ })).toBeVisible();
+  const watched = actions.getByRole("button", { name: /^(Mark watched|Watched)$/ });
+  await expect(watched).toBeVisible();
+  expect((await watched.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(36);
+
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 test("a failed catalog read is its own state with a way to retry", async ({ page }) => {
   await page.goto("/ui-preview/browse?fail=catalog");
 
-  const alert = page.getByRole("alert", { name: "Catalog upstream-error" });
+  const alert = page.getByRole("alert", { name: "Catalog could not be loaded" });
   await expect(alert).toContainText("Catalog could not be loaded");
   await expect(alert.getByRole("button", { name: "Try again" })).toBeVisible();
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
@@ -141,7 +207,7 @@ test("movie detail leads with the movie and discloses its provenance", async ({ 
 test("an unknown movie uses the shared not-found state", async ({ page }) => {
   await page.goto("/ui-preview/movies/999999");
 
-  const alert = page.getByRole("alert", { name: "Movie detail not-found" });
+  const alert = page.getByRole("alert", { name: "Movie detail not found" });
   await expect(alert).toContainText("Movie detail not found");
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(0);
 });

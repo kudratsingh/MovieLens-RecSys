@@ -70,7 +70,9 @@ describe("resource region states", () => {
   it("offers a reauthentication path when the session expired", async () => {
     const { container } = renderRegion(failure("auth-expired", "session-expired"));
 
-    const alert = screen.getByRole("alert", { name: "Recommendations auth-expired" });
+    // The region is named by its headline, not by the transport status: the
+    // enum is for logs, and a screen reader is not reading logs.
+    const alert = screen.getByRole("alert", { name: "Your session expired" });
     expect(alert).toHaveTextContent("Your session expired");
     expect(screen.getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/");
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
@@ -79,11 +81,15 @@ describe("resource region states", () => {
 
   it("names the forbidden and not-found outcomes distinctly", async () => {
     const forbidden = renderRegion(failure("forbidden", "forbidden"));
+    expect(screen.getByRole("alert")).toHaveAccessibleName(
+      "Recommendations this session cannot open",
+    );
     expect(screen.getByRole("alert")).toHaveTextContent("Recommendations this session cannot open");
     expect(await axe(forbidden.container)).toHaveNoViolations();
     forbidden.unmount();
 
     const missing = renderRegion(failure("not-found", "not-found"));
+    expect(screen.getByRole("alert")).toHaveAccessibleName("Recommendations not found");
     expect(screen.getByRole("alert")).toHaveTextContent("Recommendations not found");
     expect(await axe(missing.container)).toHaveNoViolations();
   });
@@ -124,7 +130,9 @@ describe("regions fail independently", () => {
 
     expect(screen.getByText("Browse the shelves")).toBeVisible();
     expect(screen.getByText("Rated titles")).toBeVisible();
-    expect(screen.getByRole("alert", { name: "Recommendations upstream-error" })).toBeVisible();
+    expect(
+      screen.getByRole("alert", { name: "Recommendations could not be loaded" }),
+    ).toBeVisible();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -148,7 +156,9 @@ describe("regions fail independently", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1, name: "The Handmaiden" })).toBeVisible();
-    expect(screen.getByRole("alert", { name: "Prediction audits upstream-error" })).toBeVisible();
+    expect(
+      screen.getByRole("alert", { name: "Prediction audits could not be loaded" }),
+    ).toBeVisible();
     expect(await axe(container)).toHaveNoViolations();
   });
 });
