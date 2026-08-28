@@ -33,7 +33,12 @@ import { MovieTrailerSection } from "@/components/movie/movie-trailer";
 import { PosterFallbackMark } from "@/components/movie/poster-card";
 import { Drawer } from "@/components/ui/drawer";
 import { Icon } from "@/components/ui/icons";
-import type { CatalogItem, MovieDetailItem, MovieDetails, MovieState } from "@/lib/api";
+import type {
+  CatalogItem,
+  MovieDetailItem,
+  MovieDetails,
+  MovieState,
+} from "@/lib/api";
 import {
   genresText,
   metadataSummary,
@@ -109,7 +114,11 @@ export function MovieDetailView({
 
           {score ? (
             <p className="movie-detail-score">
-              <Icon aria-hidden="true" className="movie-detail-score-star" name="star" />
+              <Icon
+                aria-hidden="true"
+                className="movie-detail-score-star"
+                name="star"
+              />
               <span>{score}</span>
             </p>
           ) : null}
@@ -173,7 +182,11 @@ export function MovieDetailView({
               </div>
               <div>
                 <dt>External reference</dt>
-                <dd>{item.tmdb_id ? `TMDB ${item.tmdb_id}` : "MovieLens metadata only"}</dd>
+                <dd>
+                  {item.tmdb_id
+                    ? `TMDB ${item.tmdb_id}`
+                    : "MovieLens metadata only"}
+                </dd>
               </div>
               <div>
                 <dt>Enriched details</dt>
@@ -193,10 +206,10 @@ export function MovieDetailView({
               </div>
             </dl>
             <p className="record-note">
-              Detail metadata is read from the local catalog snapshot. This route
-              makes no live third-party request, and it carries no ranking score
-              — a movie can be in the catalog without being eligible for any
-              serving policy.
+              Detail metadata is read from the local catalog snapshot. This
+              route makes no live third-party request, and it carries no ranking
+              score — a movie can be in the catalog without being eligible for
+              any serving policy.
             </p>
           </Drawer>
 
@@ -225,7 +238,9 @@ export function MovieDetailView({
  */
 function metaLine(item: CatalogItem, details: MovieDetails | null): string {
   const runtime = runtimeText(details?.runtime_minutes);
-  return [releaseYearText(item), runtime, genresText(item)].filter(Boolean).join(" · ");
+  return [releaseYearText(item), runtime, genresText(item)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**
@@ -253,10 +268,15 @@ function Backdrop({ src }: { src: string }) {
       <Image
         alt=""
         fetchPriority="low"
-        fill
+        // Explicit dimensions rather than `fill`: the box is fixed either way,
+        // but the width/height attributes are what declares the intrinsic ratio
+        // up front, which is the property the reserved-box CLS guard reads.
+        // The stylesheet stretches and crops it to the veil.
+        height={720}
         onError={() => setFailed(true)}
         sizes="100vw"
         src={src}
+        width={1280}
       />
       <span className="movie-detail-backdrop-veil" />
     </div>
