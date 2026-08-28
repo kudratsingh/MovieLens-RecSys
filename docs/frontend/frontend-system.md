@@ -37,6 +37,15 @@ Pages and layouts remain Server Components by default. Client boundaries are
 placed at navigation highlighting, image-error recovery, local controls,
 drawers, filter/tab state, and keyboard behavior.
 
+**Every product route renders `AppShell`**, `/quick-picks` included. It was the
+last route running its own composition — no `<main>`, no skip link, neither
+navigation, no way to sign out, and a `Demo persona {id}` placeholder where the
+other four name the persona. Wrapping it changed nothing about the deck: the
+design contract lets Quick Picks stay a Discover entry point rather than a
+fourth navigation slot, and the deck's full-height composition already reserved
+the header's `5rem`. What it gained is the four landmarks and the one exit every
+other route has.
+
 ## Visual contract
 
 Semantic CSS variables in `web/app/globals.css` cover:
@@ -52,6 +61,28 @@ Dark-first is intentional. Every interactive control receives a visible
 `:focus-visible` ring. Primary mobile targets are at least 44 CSS pixels.
 Forced-color and reduced-motion media queries preserve meaning and operation.
 
+## Posters and titles
+
+Two rules, each stated once and consumed by every surface:
+
+- **One display title.** `displayTitle(title, releaseYear)` in
+  `web/lib/movie-types.ts` strips MovieLens's trailing parenthetical year only
+  when it matches the structured `release_year`. The year is then printed once,
+  on the metadata line, so a card no longer reads `Babe (1995)` above
+  `1995 · Children`. Discover, Browse, movie detail, Library, and Quick Picks
+  all call it; nothing re-implements it.
+- **One fallback mark.** When artwork is missing or fails to load, every surface
+  renders `PosterFallbackMark` from `components/movie/poster-card.tsx` over
+  `posterInitials(displayTitle)` — uppercase, at most two letters, stop-words
+  dropped, `?` when nothing survives. That rule replaced four hand-rolled
+  `slice(0, 2)` calls that produced `B(`, `T(`, `A(` and `QU`. A failure is
+  remembered per movie, not per slot: the next movie to occupy the same frame
+  starts from its own artwork.
+
+A poster card is **one link** wrapping the artwork and the caption together. It
+used to be two anchors to the same href, which cost a keyboard reader an extra
+tab stop on every card in a rail.
+
 ## Independent failure contract
 
 Recorded resources return the discriminated `ResourceResult<T>` union. Expected
@@ -64,6 +95,14 @@ Reviewers can exercise the contract without a backend:
 /ui-preview/browse?fail=catalog
 /ui-preview/library?fail=library
 ```
+
+Two properties of the shared blocks in `components/ui/resource-states.tsx`:
+a failure region is named by its **headline** rather than by the transport
+status enum, so a screen reader hears `Recommendations could not be loaded`
+rather than `Recommendations upstream-error`; and `Try again` is offered only
+when the caller passed an `onRetry` it can actually run. Both blocks collapse to
+a single column at ≤480px with their actions in one full-span row, in the order
+they were offered.
 
 This is scaffolding for the later visual integration of independent BFF
 requests. The live routes retain the real Auth.js server session, BFF token
@@ -110,7 +149,8 @@ its documented hierarchy:
 
 | Surface | Control set | Why |
 |---|---|---|
-| Discover card, featured movie | `watchlist: toggle`, `watched: final`, `dismissal: toggle` | Discover ranks unseen movies. `Watched` is a one-way statement there; undoing it is a destructive edit that belongs elsewhere. |
+| Discover card, featured movie | `watchlist: toggle`, `watched: final`, `dismissal: toggle` | Discover ranks unseen movies. `Watched` is a one-way statement there; undoing it is a destructive edit that belongs elsewhere. **All three decisions advance the featured slot, and only on commit** — see below. |
+| Browse card | `watchlist: toggle`, `watched: final` | A grid is a passing surface, so it offers the reversible organizational choice first and states the recorded one second. `final` rather than `mark` because `mark` has no branch for an already-watched movie and would offer `Mark watched` beside a card that already says `Watched`. Declared in `components/browse/catalog-grid.tsx`; the grid carries **one** `aria-live` region for all its cards rather than forty. |
 | Movie detail | `watchlist: toggle`, `watched: confirm`, `dismissal: toggle` | Detail is where a title is managed. `Watchlist` leads while the movie is unseen, and removing history is confirmed. |
 | Library — Rated | `dismissal: undo` + half-star rating editor | Editing or clearing a star value is the collection's job. |
 | Library — Watchlist | `watched: mark`, `watchlist: remove`, `dismissal: toggle` | The row leads with the action that moves the movie forward. |
@@ -118,7 +158,20 @@ its documented hierarchy:
 | Quick Picks | Its own three decision buttons + the shared star editor | The deck's buttons are queue decisions with keyboard hints, gesture parity, and an `undo-dismiss` that has no card or row equivalent, so they stay with the machine that drives them. The rating is the same control everywhere else uses. |
 | `/ui-preview` | `watchlist: toggle`, `watched: toggle`, no writes | Recorded surfaces toggle locally and announce `Preview only`. |
 
-Three properties are load-bearing:
+**The Discover featured slot is a queue position, not a card.** The route holds
+a queue (24 deep, extended in the background at three remaining) and the
+featured slot shows its head. Every decision — watchlist included — advances it,
+and only after the API has committed: a slot that advanced optimistically and
+rolled back would re-show a title the viewer had just dismissed. The outgoing
+decision travels in the direction map `lib/movie-state/actions.ts` shares with
+Quick Picks' swipes (watchlist right, watched up, dismissal left), and under
+`prefers-reduced-motion` the advance collapses to an instant swap with the
+announcement unchanged. Watchlist and dismissal leave a time-boxed `Undo` beside
+the status line that restores both the server row and the cursor; watched does
+not, because `watched: final` on this surface means what it says, and a bare
+`Undo` there would quietly become the destructive edit the control set refuses.
+
+Three further properties are load-bearing:
 
 - **Copy is shared, voice is declared.** Announcements come from
   `lib/movie-state/announce.ts`, one table keyed by outcome and surface. A
@@ -161,9 +214,17 @@ control reports intent (MovieStateAction)
 - **Nothing invents a revision.** The optimistic frame never touches
   `revision`; only a committed response replaces the record the next write
   asserts against.
-- **A conflict is corrected, not reported.** `409` triggers a canonical re-read
-  through `MovieStateClient.readState`; the control shows what is stored and the
-  next click asserts a revision the server issued.
+- **A conflict is corrected, not reported — and the intent is replayed once.**
+  `409` triggers a canonical re-read through `MovieStateClient.readState`, and
+  the same intent is then replayed against the revision that came back. Exactly
+  one replay: a second `409` is a genuine conflict and is reported as one, with
+  the canonical record attached. Re-reading and stopping there was the P0 —
+  three surfaces had each built that half, so a viewer's *first* press on any
+  title carrying a revision above zero was silently discarded and only a second
+  one committed. Replaying is safe in both directions because the revision
+  conflict is raised before any feedback event is written, and because both
+  attempts carry the same idempotency key, so a lost response replays the stored
+  result rather than applying it twice.
 - **One intent, one key.** A retry of the same intent replays the original
   commit rather than writing a second feedback event. `Try again` in the Library
   and a re-pressed control in `useMovieState` both rely on that.
@@ -175,10 +236,16 @@ control reports intent (MovieStateAction)
   shows on the restored Browse card and on the Discover rail. It is per tab, per
   persona, capped, expiring, and never authoritative: a fresh read always wins.
 
-`RecommendationItem` carries no `state`, so Discover seeds its cards from the
-relay after hydration and corrects anything it does not know through the
-conflict path. Per-card state reads are deliberately not the answer: that is the
-fan-out the local catalog snapshot exists to prevent.
+`RecommendationItem` now carries a nullable `state` — the caller's own record
+for that title, overlaid by one bounded keyed read on the request connection
+rather than by a per-card fan-out, which is exactly what the local catalog
+snapshot exists to prevent. A ranked title is never watched or dismissed
+(serving excludes both before ranking) but it can be watchlisted, and it can
+carry a revision above zero with every flag null — the row an added-then-undone
+write leaves behind, which is the state the P0 above was about. Discover still
+seeds from the tab-local relay after hydration and still corrects through the
+conflict path; the field is what lets the *first* press assert a revision the
+server issued instead of guessing zero.
 
 ## Returning from a movie
 

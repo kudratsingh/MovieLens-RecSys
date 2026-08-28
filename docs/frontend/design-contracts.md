@@ -96,6 +96,21 @@ year, genres, compact reason, and match/rank signal with honest terminology.
 scan-friendly rails. A rail is allowed only when its label reflects a real
 selection rule. The strongest recommendation appears first/left.
 
+The featured slot is a **queue position the route owns**, not a fixed card. The
+queue is 24 deep and extends in the background at three remaining, so a viewer
+can make roughly two dozen decisions before the end state — which names Browse
+and Quick Picks rather than reading as a generic empty region. All three
+decisions advance the slot, watchlist included, and **only on commit**: a slot
+that advanced optimistically and then rolled back would re-show a title the
+viewer had already dismissed. The outgoing decision travels in the direction
+vocabulary Quick Picks' swipes use — watchlist right, watched up, dismissal left
+— and under `prefers-reduced-motion` the advance is an instant swap with the
+announcement unchanged. Watchlist and dismissal leave a time-boxed `Undo` in the
+status region that restores both the server state and the cursor; `Watched` does
+not, because it is `final` on this surface and a bare `Undo` would quietly
+become the destructive edit the control set refuses. It offers the rating prompt
+and a route into the Library instead.
+
 **Recommended initial surfaces:**
 
 - `Top picks for you` — the primary model-ranked list.
@@ -107,9 +122,20 @@ Do not manufacture separate personalized policies by slicing one list into
 misleading categories. When only one ranked list is available, show one rail
 plus honest genre exploration links.
 
-**ML evidence:** `Why this?` opens a drawer or sheet containing reason,
-candidate/ranker/feature versions, policy, fallback reason, request ID, and
-latency. Detailed prediction features remain an advanced disclosure.
+**ML evidence:** `Why this?` opens a drawer or sheet that **answers in a
+sentence before it answers in a table** — one plain statement built only from
+values the response actually reported, with the existing tables unchanged
+beneath a `Model evidence` heading. Reason, candidate/ranker/feature versions,
+policy, fallback reason, request ID, and latency all remain there, and detailed
+prediction features remain an advanced disclosure: the audit is still two
+deliberate actions away, so it can never delay the first movie.
+
+The sentence is bound to the reported values, not inferred from them. A
+fallback note may not describe a signal count above the threshold as though it
+were below it — `serving_policy` can legitimately report a high
+`positive_signal_count` alongside `learned: false` (an unseeded retrieval, for
+instance), and the copy has to say the true thing in that case rather than
+"28 of the 5 watched signals".
 
 **Responsive priority:** Poster, title, reason, and actions remain together.
 Rails show a partial next card or clear next controls to signal continuation.
@@ -143,9 +169,22 @@ descriptions at this level.
 genre, year/decade, rated status, watched status, and watchlist status. Add
 duration or provider only when data exists.
 
+**Default ordering: `Most watched here`,** not alphabetical. An unfiltered first
+visit is a browsing surface, and the first window it shows is what tells a
+viewer whether this catalog is worth exploring — alphabetical order opens on
+whatever titles happen to begin with a digit or an `A`, which is an arbitrary
+answer to the only question the first screen is asked. The sort is spelled in
+the URL when it is not the default, and it does not count as an *active filter*:
+it reorders the result set rather than narrowing it, so it does not appear in the
+active-filters row.
+
 **Movie-card actions:** Opening the card is primary. Watchlist and watched are
-available through a visible secondary action or accessible action menu. Rating
-should follow `Watched`, not cover every card permanently.
+available through a visible secondary action or accessible action menu, rendered
+by the shared movie-state control family inside a group named for the movie, so
+the buttons can name the action while the group names the title. Rating should
+follow `Watched`, not cover every card permanently. Watched is a *statement* on
+a card — undoing it deletes the one interaction the recommender observed, and
+that belongs on movie detail or in the Library.
 
 **Responsive priority:** Filters collapse into an accessible sheet; active
 filters and result count remain visible. Grid column count changes without

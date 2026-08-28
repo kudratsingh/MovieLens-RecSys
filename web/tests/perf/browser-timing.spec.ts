@@ -338,11 +338,22 @@ test("Movie detail: reserved artwork and a committed-state acknowledgement", asy
   await page.goto(`/browse?user=${BROWSE_PERSONA}`);
   await settle(page);
   // A card that rendered artwork, so the reserved-box check has something to
-  // check rather than passing vacuously on a fallback mark.
-  const card = page.locator(".catalog-cell:has(img) a[href^='/movies/']").first();
+  // check rather than passing vacuously on a fallback mark — and one this
+  // persona has not already watched. Browse opens on "Most watched here" since
+  // F3, so the first artwork card is now one of the persona's own watched
+  // titles, and the API refuses `watchlist` on a watched movie (409, "a watched
+  // movie cannot be added to the watchlist"). `aria-pressed="true"` is how the
+  // shared control family states an already-recorded decision, so excluding it
+  // picks a title the measured interaction can actually commit.
+  const card = page
+    .locator(".catalog-cell:has(img):not(:has(button[aria-pressed='true'])) a[href^='/movies/']")
+    .first();
   const href = await card.getAttribute("href");
   const movieId = Number(/\/movies\/(\d+)/.exec(href ?? "")?.[1]);
-  expect(movieId, `expected a movie link with artwork, got ${href}`).toBeGreaterThan(0);
+  expect(
+    movieId,
+    `expected an undecided movie link with artwork, got ${href}`,
+  ).toBeGreaterThan(0);
 
   const path = `/movies/${movieId}?user=${BROWSE_PERSONA}`;
   await page.goto(path);

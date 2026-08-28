@@ -21,9 +21,12 @@ import { COLD_START, readColdStartContract } from "./personas";
  * reads. It repairs nothing — a persona that needed repairing here is a journey
  * that forgot its own cleanup, and the point is that the run says so.
  *
- * It is the last file in `test:e2e`'s list and sorts last alphabetically, so it
- * stays last whether the suite is run through the script or through a bare
- * `playwright test`.
+ * Playwright orders spec files alphabetically regardless of the order the
+ * script names them, so `shell-and-doors.spec.ts` now runs after this file.
+ * That is safe only because that suite is read-only and borrows no persona; a
+ * spec added after `persona-hygiene` in the alphabet that *does* write would
+ * escape this guard, and the fix then is to make this file sort last rather
+ * than to trust the script's argument order.
  */
 test("the run leaves Cold Start with zero positive signals", async ({ page }) => {
   await signInThroughKeycloak(page);
