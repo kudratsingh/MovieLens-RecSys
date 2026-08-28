@@ -22,6 +22,24 @@ jobs:
               exit 1
             }
           done
+      # The CI load overlay's whole claim is that Postgres's data directory is
+      # on tmpfs and the named volume is gone. Compose merges `volumes` by
+      # target, so an edit on either side of that merge could quietly restore
+      # the volume over the tmpfs and leave the gate measuring the runner's disk
+      # again while looking unchanged. Cheap to assert here; expensive to
+      # discover from a load run.
+      - name: Verify the CI load overlay keeps Postgres off the runner's disk
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.demo.yml \
+            -f docker-compose.ci-load.yml --profile load config --format json \
+            | python3 -c '
+          import json, sys
+          postgres = json.load(sys.stdin)["services"]["postgres"]
+          mounts = {v["target"]: v["type"] for v in postgres.get("volumes", [])}
+          assert mounts.get("/var/lib/postgresql/data") == "tmpfs", mounts
+          assert "volume" not in mounts.values(), mounts
+          print("postgres data directory:", mounts)'
+
       - name: Verify pinned k6 image
         run: |
           version=$(tr -d '[:space:]' < infra/ci/k6-version)
@@ -279,6 +297,14 @@ jobs:
   synthetic-load-smoke:
     runs-on: ubuntu-latest
     needs: test
+    # Postgres's data directory runs on tmpfs for this job and no other. Every
+    # request commits a durable audit row before it answers, so the runner's
+    # block device is otherwise inside every percentile this job measures — and
+    # runner disks differ from each other by more than the whole SLO (ADR 0010,
+    # 2026-08-28). Set at job level because it has to apply to every demo-*
+    # target below, seeding included: a tmpfs data directory starts empty.
+    env:
+      DEMO_COMPOSE_EXTRA: -f docker-compose.ci-load.yml
     steps:
       - uses: actions/checkout@v4
 

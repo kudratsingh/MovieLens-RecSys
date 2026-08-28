@@ -32,6 +32,14 @@ every traffic class pays, including the cold path that never reaches a model.
 All three are optional — an older evidence directory summarizes exactly as it
 did before, with `n/a` where a file is missing.
 
+The COMMIT is why the breakdown also reports the storage the window ran on: what
+medium Postgres's data directory was mounted from, what one WAL sync cost, and
+the `storage_stall` classification built from those counters (see
+`STORAGE_STALL_RULE`). CI takes the runner's disk out of the measurement
+entirely by running that directory on tmpfs; the line says so, so an artifact
+never leaves a reader guessing which of the two it measured. Like the joins
+above, it explains a verdict and never moves one.
+
 Two workloads share this tool:
 
 `recommendations`
@@ -110,6 +118,51 @@ RE_MEASURE_RULE = (
     f"latency breached AND >= {RE_MEASURE_MIN_SECONDS} of the {SLOWEST_SECONDS} "
     f"slowest seconds at >= {RE_MEASURE_STEAL_PCT:.0f}% CPU steal"
 )
+
+# --- the storage classification (informational) -----------------------------
+# Every request commits a durable audit row before it answers, and a commit
+# costs one `fdatasync`, so the device under Postgres's WAL sits inside every
+# percentile this gate reports — including the cold path that never reaches a
+# model. `storage_stall` names that condition when the window's own counters
+# show it:
+#
+#   storage_stall  <=>  WAL sync time / WAL syncs  >
+#                       STORAGE_STALL_MULTIPLE x STORAGE_STALL_BASELINE_MS_PER_SYNC
+#
+# It is informational and deliberately powerless: `remeasure` belongs to the
+# steal rule and to nothing else, and no threshold reads this. Its job is to let
+# a reader say "the storage was the problem" from the artifact instead of from a
+# hunch.
+#
+# The baseline is observed rather than chosen. A healthy CI window cost 0.21 ms
+# per sync (723 ms across 3,385) and a quiet laptop cost 0.43 ms (1.43 s across
+# 3,303); 0.5 ms sits above both. The failing runner that prompted this cost
+# 3.15 ms (9,703 ms across 3,085), so a 4x multiple separates the two
+# populations with a wide margin on each side rather than splitting the
+# difference between them. The minimum sync count keeps a window that barely
+# committed anything — a stack that failed early, a workload that never got
+# going — from producing a ratio out of noise.
+#
+# The other candidate rule, "outside-the-handler p99 exceeds handler p99 by a
+# factor", was rejected: those two percentiles come from different populations
+# (k6 counts the measured requests, the audit counts every handled one), so
+# their difference is not a duration and can be negative — the accepted passing
+# artifact reports -33.18 ms for it. WAL sync time and sync count are the same
+# server's counters over the same window, and their ratio is what one commit
+# cost in milliseconds.
+STORAGE_STALL_BASELINE_MS_PER_SYNC = 0.5
+STORAGE_STALL_MULTIPLE = 4.0
+STORAGE_STALL_MIN_SYNCS = 100
+STORAGE_STALL_MS_PER_SYNC = STORAGE_STALL_BASELINE_MS_PER_SYNC * STORAGE_STALL_MULTIPLE
+STORAGE_STALL_RULE = (
+    f"informational: WAL sync time per sync > {STORAGE_STALL_MULTIPLE:.0f}x the "
+    f"{STORAGE_STALL_BASELINE_MS_PER_SYNC:.2f} ms baseline "
+    f"(> {STORAGE_STALL_MS_PER_SYNC:.2f} ms) over at least "
+    f"{STORAGE_STALL_MIN_SYNCS} syncs; it does not change `remeasure`"
+)
+# How the caller spells what it found. `unknown` is the default so an evidence
+# directory captured before this existed summarizes exactly as it did.
+TMPFS_CHOICES = ("yes", "no", "unknown")
 
 _NANOSECOND_TIME = re.compile(r"^(.*\.\d{1,6})\d*([+-]\d{2}:\d{2})$")
 
@@ -276,6 +329,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="This window is the verdict; never ask for another measurement.",
     )
+    parser.add_argument(
+        "--postgres-data-on-tmpfs",
+        choices=TMPFS_CHOICES,
+        default="unknown",
+        help=(
+            "Whether Postgres's data directory was on tmpfs for this window. "
+            "run_gate.sh reads it off the container; it makes the artifact "
+            "self-describing about what the window measured."
+        ),
+    )
     # All three default to the window directory's own names, so an evidence
     # tree captured before these probes existed summarizes unchanged.
     parser.add_argument("--disk-fsync", type=Path, default=None)
@@ -288,12 +351,13 @@ def main(argv: list[str] | None = None) -> int:
     fsync = _read_disk_fsync(args.disk_fsync or window / DISK_FSYNC_NAME)
     server = _read_server_side(args.server_side or window / SERVER_SIDE_NAME)
     server_before = _read_server_side(args.server_side_before or window / SERVER_SIDE_BEFORE_NAME)
+    storage = _storage_evidence(server_before, server, args.postgres_data_on_tmpfs)
 
     raw = _find_raw_metrics(window)
     if raw is None:
         print(f"[load-summary] no k6 sample stream under {window}; skipping the breakdown")
         decision = _unavailable_decision("no k6 sample stream")
-        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None)
+        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None, storage=storage)
         _write_decision(window, decision)
         return _emit(decision, _gate(window, workload, args))
 
@@ -303,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     if not buckets:
         print(f"[load-summary] {raw.name} holds no {workload}-tagged latency samples")
         decision = _unavailable_decision("no measured latency samples")
-        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None)
+        _attach_evidence(decision, fsync=fsync, slowest=[], comparison=None, storage=storage)
         _write_decision(window, decision)
         return _emit(decision, _gate(window, workload, args))
 
@@ -321,9 +385,20 @@ def main(argv: list[str] | None = None) -> int:
     slowest = sorted(buckets, key=lambda bucket: bucket.p99, reverse=True)[:SLOWEST_SECONDS]
     comparison = _compare(samples, server, buckets)
     decision = _decide(window, workload, buckets, slowest, args)
-    _attach_evidence(decision, fsync=fsync, slowest=slowest, comparison=comparison)
+    _attach_evidence(decision, fsync=fsync, slowest=slowest, comparison=comparison, storage=storage)
     _write_decision(window, decision)
-    _report(window, buckets, slowest, steps, decision, comparison, fsync, server_before, server)
+    _report(
+        window,
+        buckets,
+        slowest,
+        steps,
+        decision,
+        comparison,
+        fsync,
+        server_before,
+        server,
+        storage,
+    )
     return _emit(decision, _gate(window, workload, args))
 
 
@@ -345,6 +420,7 @@ def _report(
     fsync: DiskFsync,
     server_before: ServerSide,
     server_after: ServerSide,
+    storage: dict[str, Any],
 ) -> None:
     total = sum(bucket.count for bucket in buckets)
     over_slo = sum(bucket.over_slo for bucket in buckets)
@@ -366,6 +442,8 @@ def _report(
     print(_render_fsync(fsync))
     print("\n[load-summary] Postgres counters across the window:")
     print(_render_stat_deltas(server_before, server_after))
+    print("\n[load-summary] storage under the measured window:")
+    print(_render_storage(storage))
     print(f"\n[load-summary] {decision['label']}")
 
 
@@ -782,17 +860,55 @@ def _percentiles(label: str, values: list[float]) -> Percentiles:
     )
 
 
+def _counter_delta(before: ServerSide, after: ServerSide, section: str, field: str) -> float | None:
+    """One Postgres counter's movement across the window, or None if unreadable."""
+    start = _optional_float((before.stats.get(section) or {}).get(field))
+    end = _optional_float((after.stats.get(section) or {}).get(field))
+    if start is None or end is None:
+        return None
+    return end - start
+
+
+def _storage_evidence(before: ServerSide, after: ServerSide, tmpfs: str) -> dict[str, Any]:
+    """What one commit cost on this window's storage, and what it was sitting on.
+
+    Both halves are informational. The medium comes from the caller because only
+    the shell wrapper can ask Docker; the cost comes from Postgres's own WAL
+    counters, which is the one place the fdatasync a commit pays for is timed
+    without a probe perturbing the thing it is timing.
+    """
+    on_tmpfs = {"yes": True, "no": False}.get(tmpfs)
+    syncs = _counter_delta(before, after, "wal", "wal_sync")
+    sync_ms = _counter_delta(before, after, "wal", "wal_sync_time")
+    evidence: dict[str, Any] = {
+        "postgres_data_on_tmpfs": on_tmpfs,
+        "wal_syncs": int(syncs) if syncs is not None else None,
+        "wal_sync_ms": _rounded(sync_ms),
+        "wal_sync_ms_per_sync": None,
+        "storage_stall": None,
+        "storage_stall_rule": STORAGE_STALL_RULE,
+    }
+    if syncs is None or sync_ms is None or syncs < STORAGE_STALL_MIN_SYNCS:
+        return evidence
+    per_sync = sync_ms / syncs
+    evidence["wal_sync_ms_per_sync"] = _rounded(per_sync, 3)
+    evidence["storage_stall"] = per_sync > STORAGE_STALL_MS_PER_SYNC
+    return evidence
+
+
 def _attach_evidence(
     decision: dict[str, Any],
     *,
     fsync: DiskFsync,
     slowest: list[SecondBucket],
     comparison: Comparison | None,
+    storage: dict[str, Any],
 ) -> None:
     """Add the informational fields — and only those.
 
     `remeasure` and `label` are produced by `_decide` and are never touched
-    here: this evidence exists to explain a verdict, not to change one.
+    here: this evidence exists to explain a verdict, not to change one. That
+    includes `storage_stall`, which names a slow device and changes nothing.
     """
     ordered = sorted(fsync.all_samples)
     decision["fsync_probe_p50_ms"] = _rounded(_percentile(ordered, 0.50)) if ordered else None
@@ -806,6 +922,7 @@ def _attach_evidence(
     outside = comparison.outside if comparison is not None else None
     decision["handler_p99_ms"] = _rounded(handler.p99) if handler is not None else None
     decision["outside_handler_p99_ms"] = _rounded(outside.p99) if outside is not None else None
+    decision.update(storage)
 
 
 # --- reading k6's sample stream ---------------------------------------------
@@ -1072,6 +1189,44 @@ def _render_fsync(fsync: DiskFsync) -> str:
 
 def _render_ms(value: Any) -> str:
     return f"{float(value):.2f} ms" if isinstance(value, int | float) else "n/a"
+
+
+def _render_storage(storage: dict[str, Any]) -> str:
+    """What the window's commits were writing to, and what they cost.
+
+    The first line is the one that makes an artifact self-describing: a
+    breakdown that cannot say whether the runner's disk was in the measurement
+    leaves every number in it open to the same argument twice.
+    """
+    on_tmpfs = storage.get("postgres_data_on_tmpfs")
+    if on_tmpfs is True:
+        medium = "tmpfs — the host's block device is out of this measurement"
+    elif on_tmpfs is False:
+        medium = "not tmpfs — commits are landing on the host's block device"
+    else:
+        medium = "not recorded for this window"
+    lines = [f"  Postgres data directory: {medium}"]
+
+    per_sync = storage.get("wal_sync_ms_per_sync")
+    syncs = storage.get("wal_syncs")
+    if isinstance(per_sync, int | float) and isinstance(syncs, int):
+        lines.append(
+            f"  commit cost: {float(per_sync):.3f} ms per WAL sync across {syncs:,} syncs "
+            f"(baseline {STORAGE_STALL_BASELINE_MS_PER_SYNC:.2f} ms, "
+            f"flagged above {STORAGE_STALL_MS_PER_SYNC:.2f} ms)"
+        )
+    elif isinstance(syncs, int):
+        lines.append(
+            f"  commit cost: n/a ({syncs:,} syncs is below the "
+            f"{STORAGE_STALL_MIN_SYNCS}-sync minimum for a ratio worth reading)"
+        )
+    else:
+        lines.append("  commit cost: n/a (no WAL counters for this window)")
+
+    stall = storage.get("storage_stall")
+    verdict = "n/a" if stall is None else ("yes" if stall else "no")
+    lines.append(f"  storage_stall: {verdict} — {STORAGE_STALL_RULE}")
+    return "\n".join(lines)
 
 
 # The counters worth reading for a latency tail, in the order they explain one:
