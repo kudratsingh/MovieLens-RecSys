@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { LibraryExperience } from "@/components/library/library-experience";
 import {
   createRecordedLibraryClient,
   RECORDED_PERSONA,
+  recordedLibraryCursor,
 } from "@/lib/fixtures/library-fixtures";
 import type { LibraryClient } from "@/lib/library/client";
 import {
@@ -32,6 +33,9 @@ function urlState(overrides: Partial<LibraryUrlState> = {}): LibraryUrlState {
     tab: "rated",
     sort: "recent",
     query: "",
+    genre: null,
+    yearFrom: null,
+    yearTo: null,
     cursor: null,
     ...overrides,
   };
@@ -60,6 +64,10 @@ async function renderLibrary(
   };
 
   const result = render(await view(state));
+  // The Seen spotlight asks for its current title's enriched record as soon as
+  // it mounts. Flushing that here keeps every test's first assertion from
+  // racing a state update it did not ask for.
+  await act(async () => {});
   return {
     ...result,
     user: userEvent.setup(),
@@ -70,6 +78,7 @@ async function renderLibrary(
      */
     async serverRenderFor(target: LibraryUrlState) {
       result.rerender(await view(target));
+      await act(async () => {});
     },
   };
 }
@@ -198,16 +207,18 @@ describe("collections load independently and own their URL state", () => {
     await user.click(screen.getByRole("button", { name: "Load more" }));
     await waitFor(() =>
       expect(
-        within(screen.getByRole("list", { name: "History movies" })).getAllByRole(
+        within(screen.getByRole("list", { name: "Seen movies" })).getAllByRole(
           "listitem",
         ),
       ).toHaveLength(15),
     );
 
-    await serverRenderFor(urlState({ tab: "history", cursor: "recorded:12" }));
+    await serverRenderFor(
+      urlState({ tab: "history", cursor: recordedLibraryCursor(urlState({ tab: "history" }), 12) }),
+    );
 
     expect(
-      within(screen.getByRole("list", { name: "History movies" })).getAllByRole(
+      within(screen.getByRole("list", { name: "Seen movies" })).getAllByRole(
         "listitem",
       ),
     ).toHaveLength(15);
@@ -234,7 +245,7 @@ describe("collections load independently and own their URL state", () => {
     );
 
     const before = within(
-      screen.getByRole("list", { name: "History movies" }),
+      screen.getByRole("list", { name: "Seen movies" }),
     ).getAllByRole("listitem");
     expect(before).toHaveLength(LIBRARY_PAGE_SIZE);
 
@@ -242,17 +253,21 @@ describe("collections load independently and own their URL state", () => {
 
     await waitFor(() =>
       expect(
-        within(screen.getByRole("list", { name: "History movies" })).getAllByRole(
+        within(screen.getByRole("list", { name: "Seen movies" })).getAllByRole(
           "listitem",
         ),
       ).toHaveLength(15),
     );
-    const titles = screen
+    // Scoped to the list: the spotlight above it prints the current title as
+    // its own heading, which is the same movie deliberately, not a repeat row.
+    const titles = within(screen.getByRole("list", { name: "Seen movies" }))
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
     expect(new Set(titles).size).toBe(titles.length);
     expect(replace).toHaveBeenLastCalledWith(
-      `/library?userId=${DEFAULT_LIBRARY_USER_ID}&tab=history&cursor=recorded%3A12`,
+      `/library?userId=${DEFAULT_LIBRARY_USER_ID}&tab=history&cursor=${encodeURIComponent(
+        recordedLibraryCursor(urlState({ tab: "history" }), 12),
+      )}`,
       { scroll: false },
     );
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();

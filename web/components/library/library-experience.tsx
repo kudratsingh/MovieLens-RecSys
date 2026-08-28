@@ -6,6 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { LibraryRow, libraryRowAnchorId } from "@/components/library/library-row";
 import {
+  LIBRARY_SPOTLIGHT_ID,
+  LibrarySpotlight,
+  type SpotlightDetailReader,
+} from "@/components/library/library-spotlight";
+import {
   LibraryTabs,
   libraryPanelId,
   libraryTabId,
@@ -19,13 +24,26 @@ import {
 } from "@/components/ui/resource-region";
 import { EmptyState } from "@/components/ui/resource-states";
 import type { LibraryCounts, LibraryResponse, TasteSummaryResponse } from "@/lib/api";
+import { BROWSE_GENRES } from "@/lib/browse/facets";
 import { bffLibraryClient, type LibraryClient } from "@/lib/library/client";
 import {
   affectsTasteSummary,
   appendLibraryPage,
   mapMovieState,
+  movieMatchesTab,
   replaceMovieState,
 } from "@/lib/library/collection";
+import {
+  EMPTY_SPOTLIGHT,
+  isFirstSpotlight,
+  isLastSpotlight,
+  nextSpotlight,
+  previousSpotlight,
+  removeCurrent,
+  shouldExtendSpotlight,
+  syncToWindow,
+  type SpotlightState,
+} from "@/lib/library/spotlight";
 import {
   applyActionToState,
   type MovieStateAction,
@@ -41,7 +59,9 @@ import {
   LIBRARY_BASE_PATH,
   LIBRARY_PAGE_SIZE,
   LIBRARY_TABS,
+  hasLibraryFilters,
   libraryHref,
+  parseLibraryYear,
   libraryViewKey,
   nextLibraryUrlState,
   sortsForTab,
@@ -63,13 +83,18 @@ import "./library.css";
 const COLLECTION_TITLE: Record<LibraryTab, string> = {
   rated: "Titles with a star value",
   watchlist: "Saved for later",
-  history: "Watched titles",
+  history: "Everything you have watched",
 };
 
 /**
  * What each collection means to the deployed system. These lines are the
  * difference between a library that documents itself and one that lets a
  * reviewer assume a star value is training data.
+ *
+ * Seen states the exclusion guarantee rather than implementing anything: the
+ * serving filter (`watched-and-dismissed-excluded-v1`) is what keeps a watched
+ * title out of Discover's featured slot and ranked rail, and this tab's job is
+ * to say so where a reader is looking at the titles it applies to.
  */
 const COLLECTION_MEANING: Record<LibraryTab, string> = {
   rated:
@@ -77,13 +102,15 @@ const COLLECTION_MEANING: Record<LibraryTab, string> = {
   watchlist:
     "Saving is organizational only: it seeds no candidates, excludes nothing, and changes no model features.",
   history:
-    "Watched titles are the positive interactions candidate lookup and unseen filtering read from.",
+    "Watched titles are the positive interactions candidate lookup reads from, and serving already excludes them from Discover's featured slot and ranked rail. A star value is display feedback and never a training signal.",
 };
 
 const SORT_LABEL: Record<LibrarySort, string> = {
   recent: "Most recent",
   title: "Title",
   rating: "Highest rated",
+  release: "Newest release",
+  tmdb: "Highest TMDB score",
 };
 
 const EMPTY_COPY: Record<LibraryTab, { title: string; message: string }> = {
@@ -113,6 +140,8 @@ type PendingMutation = {
   request: MovieStateMutationInput;
   /** The control the reader used, held so focus can go back to it. */
   control: HTMLElement;
+  /** Which surface asked, so focus falls back to the right second stop. */
+  origin: "row" | "spotlight";
   /** The collection exactly as it stood before the optimistic write. */
   rollback: LibraryResponse;
 };
@@ -126,6 +155,10 @@ function withCollection(
   return data.items.length
     ? readyState("library", data, state.requestId, state.source)
     : emptyState("library", data, state.requestId, state.source);
+}
+
+function sameWindow(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 export function LibraryExperience({
@@ -160,6 +193,12 @@ export function LibraryExperience({
   const router = useRouter();
   const [urlState, setUrlState] = useState(initialUrlState);
   const [queryDraft, setQueryDraft] = useState(initialUrlState.query);
+  const [yearFromDraft, setYearFromDraft] = useState(
+    initialUrlState.yearFrom === null ? "" : String(initialUrlState.yearFrom),
+  );
+  const [yearToDraft, setYearToDraft] = useState(
+    initialUrlState.yearTo === null ? "" : String(initialUrlState.yearTo),
+  );
   const [views, setViews] = useState<Partial<Record<LibraryTab, TabView>>>(() => ({
     [initialUrlState.tab]: {
       key: libraryViewKey(initialUrlState),
@@ -172,10 +211,12 @@ export function LibraryExperience({
   const [taste, setTaste] = useState(initialTaste);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageFailure, setPageFailure] = useState<ResourceFailure | null>(null);
+  const [staleCursor, setStaleCursor] = useState(false);
   const [busyMovieId, setBusyMovieId] = useState<number | null>(null);
   const [mutationFailure, setMutationFailure] = useState<ResourceFailure | null>(null);
   const [pending, setPending] = useState<PendingMutation | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const [spotlight, setSpotlight] = useState<SpotlightState>(EMPTY_SPOTLIGHT);
 
   // The request each tab has already asked for. A ref because it gates an
   // effect that must not re-run when unrelated state changes, and because a
@@ -215,6 +256,10 @@ export function LibraryExperience({
     requested.current = { [initialUrlState.tab]: serverViewKey };
     setUrlState(initialUrlState);
     setQueryDraft(initialUrlState.query);
+    setYearFromDraft(
+      initialUrlState.yearFrom === null ? "" : String(initialUrlState.yearFrom),
+    );
+    setYearToDraft(initialUrlState.yearTo === null ? "" : String(initialUrlState.yearTo));
     setViews({ [initialUrlState.tab]: { key: serverViewKey, state: initialLibrary } });
     // A failed server read still names the right view; it just cannot restate
     // the counts, so the tabs keep the last numbers they were given.
@@ -231,10 +276,31 @@ export function LibraryExperience({
   // and it is only ever called from an event handler.
   const href = (state: LibraryUrlState) => libraryHref(state, basePath, urlExtras);
 
-  const { tab, sort, query, cursor, userId } = urlState;
+  /*
+   * The URL write, mirrored in a ref.
+   *
+   * The load callback below rewrites the address after dropping a stale cursor,
+   * and it must not take the router or this component's props into its
+   * dependency list to do it: a callback that changes identity every render
+   * re-runs the load effect every render, and the one commit where that effect
+   * disagrees with the state it is about to adopt would issue a second read for
+   * a collection the reader has already navigated away from.
+   */
+  const replaceUrl = useRef((state: LibraryUrlState) => {
+    router.replace(href(state), { scroll: false });
+  });
+  useEffect(() => {
+    replaceUrl.current = (state: LibraryUrlState) => {
+      router.replace(href(state), { scroll: false });
+    };
+  });
+
+  const { tab, sort, query, genre, cursor, userId } = urlState;
   const viewKey = libraryViewKey(urlState);
   const view = views[tab];
   const tabLabel = libraryTabLabel(tab);
+  const collection = view && hasResourceData(view.state) ? view.state.data : null;
+  const filtered = hasLibraryFilters(urlState);
 
   const setView = useCallback((target: LibraryTab, next: TabView) => {
     setViews((current) => ({ ...current, [target]: next }));
@@ -247,6 +313,9 @@ export function LibraryExperience({
         tab: state.tab,
         sort: state.sort,
         query: state.query,
+        genre: state.genre,
+        yearFrom: state.yearFrom,
+        yearTo: state.yearTo,
         cursor: state.cursor,
         limit,
       }),
@@ -254,11 +323,12 @@ export function LibraryExperience({
   );
 
   const loadFirstPage = useCallback(
-    async (target: LibraryUrlState) => {
+    async (target: LibraryUrlState, options: { restarted?: boolean } = {}) => {
       const key = libraryViewKey(target);
       requested.current[target.tab] = key;
       setView(target.tab, { key, state: loadingState("library") });
       setPageFailure(null);
+      setStaleCursor(Boolean(options.restarted));
 
       const next = await readPage(target);
       // A newer request for the same tab may have started while this one was
@@ -277,10 +347,57 @@ export function LibraryExperience({
     void loadFirstPage(urlState);
   }, [viewKey, urlState, loadFirstPage]);
 
+  /*
+   * A page position that expired, rather than an outage.
+   *
+   * The API binds a cursor to the fingerprint of the tab, sort and filters it
+   * was issued under, so a link somebody kept from before any of those changed
+   * earns a `400`. The view itself still exists, so it is reloaded from the top
+   * behind a plain notice instead of being shown as a failed collection.
+   *
+   * Keyed on the failed state rather than done inside the read, because the
+   * server renders the first page too: a stale link opened cold arrives here as
+   * a failure that no client read produced, and it has to recover the same way.
+   */
+  const staleCursorRejected =
+    Boolean(cursor) &&
+    view !== undefined &&
+    isResourceFailure(view.state) &&
+    view.state.reason === "bad-request";
+  useEffect(() => {
+    if (!staleCursorRejected) return;
+    const restarted = { ...shownRef.current, cursor: null };
+    setUrlState(restarted);
+    replaceUrl.current(restarted);
+    void loadFirstPage(restarted, { restarted: true });
+  }, [staleCursorRejected, loadFirstPage]);
+
+  /*
+   * The window the Seen spotlight walks: the loaded rows that still belong to
+   * this collection, in the order the list shows them. A row that has left the
+   * collection stays on screen until the view reloads — it says so — but the
+   * spotlight is a single-title presentation and cannot honestly feature a
+   * title the reader has just removed.
+   */
+  const spotlightIds = useMemo(() => {
+    if (tab !== "history" || !collection) return [];
+    return collection.items
+      .filter((movie) => movieMatchesTab(movie.state, "history"))
+      .map((movie) => movie.movie_id);
+  }, [collection, tab]);
+
+  // Adjusted during render rather than in an effect, so the spotlight and the
+  // rows below it are never one frame out of step with each other.
+  if (!sameWindow(spotlight.movieIds, spotlightIds)) {
+    setSpotlight((current) => syncToWindow(current, spotlightIds));
+  }
+
   function navigate(change: Parameters<typeof nextLibraryUrlState>[1]) {
     const next = nextLibraryUrlState(urlState, change);
     setUrlState(next);
     setQueryDraft(next.query);
+    setYearFromDraft(next.yearFrom === null ? "" : String(next.yearFrom));
+    setYearToDraft(next.yearTo === null ? "" : String(next.yearTo));
     router.replace(href(next), { scroll: false });
   }
 
@@ -313,6 +430,27 @@ export function LibraryExperience({
     setUrlState(advanced);
     router.replace(href(advanced), { scroll: false });
   }
+
+  /*
+   * The spotlight extends through the same cursor the list's button uses: one
+   * window, one cursor, appended in one place. A failed append stops it until
+   * the reader retries, so a dead endpoint cannot be asked once per render.
+   */
+  const extendForSpotlight =
+    tab === "history" &&
+    Boolean(collection?.page.has_more) &&
+    !loadingMore &&
+    !pageFailure &&
+    spotlightIds.length > 0 &&
+    shouldExtendSpotlight(spotlight);
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => {
+    loadMoreRef.current = loadMore;
+  });
+  useEffect(() => {
+    if (!extendForSpotlight) return;
+    void loadMoreRef.current();
+  }, [extendForSpotlight]);
 
   /**
    * Counts and the ratings summary are computed by the API, so they are read
@@ -364,6 +502,12 @@ export function LibraryExperience({
 
       if (result.status === "committed") {
         settled = replaceMovieState(mutation.rollback, mutation.movieId, result.state);
+        // A title that has left this collection leaves the spotlight with it,
+        // so the announcement and the focus walk below both name what is
+        // current now rather than a movie on its way out.
+        if (!movieMatchesTab(result.state, from.tab)) {
+          setSpotlight((current) => removeCurrent(current, mutation.movieId));
+        }
         setAnnouncement(
           movieStateAnnouncement({ kind: "committed", action: mutation.action }, voice),
         );
@@ -394,10 +538,14 @@ export function LibraryExperience({
 
       setView(from.tab, { key: base.key, state: withCollection(base.state, settled) });
       setBusyMovieId(null);
-      // The control the reader used, then the row, then the collection.
+      // The control the reader used, then the surface it belongs to, then the
+      // collection. A spotlight control can outlive its own movie, so its
+      // second stop is the section rather than the row that is leaving.
       restoreFocus(
         mutation.control,
-        libraryRowAnchorId(mutation.movieId),
+        mutation.origin === "spotlight"
+          ? LIBRARY_SPOTLIGHT_ID
+          : libraryRowAnchorId(mutation.movieId),
         libraryTabId(from.tab),
       );
 
@@ -408,7 +556,12 @@ export function LibraryExperience({
     [client, personaLabel, refreshDerivedState, setView],
   );
 
-  function act(movieId: number, title: string, revision: number) {
+  function act(
+    movieId: number,
+    title: string,
+    revision: number,
+    origin: PendingMutation["origin"] = "row",
+  ) {
     return (action: MovieStateAction, control: HTMLElement) => {
       if (!view || !hasResourceData(view.state)) return;
       void runMutation(
@@ -417,6 +570,7 @@ export function LibraryExperience({
           title,
           action,
           control,
+          origin,
           rollback: view.state.data,
           request: {
             userId,
@@ -444,6 +598,36 @@ export function LibraryExperience({
     movieHref ??
     ((movieId: number) =>
       `/movies/${movieId}?user=${userId}&returnTo=${encodeURIComponent(href(urlState))}`);
+
+  const readSpotlightDetail = useCallback<SpotlightDetailReader>(
+    (movieId, signal) => client.readMovieDetail(userId, movieId, { signal }),
+    [client, userId],
+  );
+
+  /*
+   * A filtered collection with no rows is not an empty one. The distinction is
+   * the whole difference between "you have watched nothing" and "nothing here
+   * matches", and only the second one has a way out that is not Browse.
+   */
+  const emptyMessage = !filtered
+    ? EMPTY_COPY[tab].message
+    : tab === "history" || !query
+      ? `Nothing in ${tabLabel} matches these filters.`
+      : `Nothing in ${tabLabel.toLowerCase()} matches \u201C${query}\u201D.`;
+
+  const spotlightMovie =
+    tab === "history" && collection
+      ? (collection.items.find(
+          (movie) => movie.movie_id === spotlight.movieIds[spotlight.index],
+        ) ?? null)
+      : null;
+  // `matched` is the exact number of rows this query has, which is the number
+  // the readout would otherwise have to invent. Without it, the loaded window
+  // is the only honest denominator.
+  const spotlightTotal =
+    typeof collection?.page.matched === "number"
+      ? collection.page.matched
+      : spotlight.movieIds.length;
 
   return (
     <div className="library-route">
@@ -494,7 +678,15 @@ export function LibraryExperience({
               className="library-filter"
               onSubmit={(event) => {
                 event.preventDefault();
-                navigate({ query: queryDraft });
+                navigate({
+                  query: queryDraft,
+                  ...(tab === "history"
+                    ? {
+                        yearFrom: parseLibraryYear(yearFromDraft),
+                        yearTo: parseLibraryYear(yearToDraft),
+                      }
+                    : {}),
+                });
               }}
             >
               <label className="visually-hidden" htmlFor="library-search">
@@ -508,10 +700,58 @@ export function LibraryExperience({
                 type="search"
                 value={queryDraft}
               />
+              {/* The year bounds are typed rather than chosen, so they are
+                  committed with the search rather than on every keystroke: a
+                  half-typed "19" is a filter nobody asked for. */}
+              {tab === "history" ? (
+                <span className="library-years">
+                  <label className="library-year" htmlFor="library-year-from">
+                    From year
+                    <input
+                      className="library-input library-year-input"
+                      id="library-year-from"
+                      inputMode="numeric"
+                      maxLength={4}
+                      onChange={(event) => setYearFromDraft(event.target.value)}
+                      value={yearFromDraft}
+                    />
+                  </label>
+                  <label className="library-year" htmlFor="library-year-to">
+                    To year
+                    <input
+                      className="library-input library-year-input"
+                      id="library-year-to"
+                      inputMode="numeric"
+                      maxLength={4}
+                      onChange={(event) => setYearToDraft(event.target.value)}
+                      value={yearToDraft}
+                    />
+                  </label>
+                </span>
+              ) : null}
               <button className="button-secondary library-action" type="submit">
                 Filter
               </button>
             </form>
+
+            {tab === "history" ? (
+              <label className="library-sort" htmlFor="library-genre">
+                Genre
+                <select
+                  className="library-select"
+                  id="library-genre"
+                  onChange={(event) => navigate({ genre: event.target.value || null })}
+                  value={genre ?? ""}
+                >
+                  <option value="">All genres</option>
+                  {BROWSE_GENRES.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <label className="library-sort" htmlFor="library-sort">
               Sort
@@ -546,6 +786,13 @@ export function LibraryExperience({
             />
           ) : null}
 
+          {staleCursor ? (
+            <p className="library-continued" role="status">
+              That page link no longer matches this view, so the list starts from
+              the beginning.
+            </p>
+          ) : null}
+
           {cursor ? (
             <p className="library-continued">
               Continued from an earlier page of this collection.{" "}
@@ -563,13 +810,15 @@ export function LibraryExperience({
             empty={
               <EmptyState
                 action={
-                  query ? (
+                  filtered ? (
                     <button
                       className="button-secondary"
-                      onClick={() => navigate({ query: "" })}
+                      onClick={() =>
+                        navigate({ query: "", genre: null, yearFrom: null, yearTo: null })
+                      }
                       type="button"
                     >
-                      Clear the filter
+                      {tab === "history" ? "Clear filters" : "Clear the filter"}
                     </button>
                   ) : (
                     <Link className="button-secondary" href="/browse">
@@ -577,12 +826,8 @@ export function LibraryExperience({
                     </Link>
                   )
                 }
-                message={
-                  query
-                    ? `Nothing in ${tabLabel.toLowerCase()} matches “${query}”.`
-                    : EMPTY_COPY[tab].message
-                }
-                title={query ? "No matches in this collection" : EMPTY_COPY[tab].title}
+                message={emptyMessage}
+                title={filtered ? "No matches in this collection" : EMPTY_COPY[tab].title}
               />
             }
             label={`${tabLabel} collection`}
@@ -592,30 +837,57 @@ export function LibraryExperience({
             onRetry={() => void loadFirstPage(urlState)}
             state={view?.state ?? loadingState("library")}
           >
-            {(collection) => (
-              <ul aria-label={`${tabLabel} movies`} className="library-list">
-                {collection.items.map((movie) => (
-                  <LibraryRow
-                    busy={busyMovieId === movie.movie_id}
-                    // One write at a time keeps revisions predictable and stops a
-                    // second click landing while the first is in flight.
-                    disabled={busyMovieId !== null && busyMovieId !== movie.movie_id}
-                    href={detailHref(movie.movie_id)}
-                    key={movie.movie_id}
-                    movie={movie}
+            {(loaded) => (
+              <>
+                {spotlightMovie ? (
+                  <LibrarySpotlight
+                    busy={busyMovieId !== null}
+                    hasNext={!isLastSpotlight(spotlight)}
+                    hasPrevious={!isFirstSpotlight(spotlight)}
+                    href={detailHref(spotlightMovie.movie_id)}
+                    movie={spotlightMovie}
                     onAction={act(
-                      movie.movie_id,
-                      // The announcement names the movie the row shows, not the
-                      // raw catalog string: "Babe (1995) is now watched" reads
-                      // like a database dump being spoken aloud.
-                      displayTitle(movie.title, movie.release_year ?? null),
-                      movie.state.revision,
+                      spotlightMovie.movie_id,
+                      displayTitle(
+                        spotlightMovie.title,
+                        spotlightMovie.release_year ?? null,
+                      ),
+                      spotlightMovie.state.revision,
+                      "spotlight",
                     )}
+                    onNext={() => setSpotlight(nextSpotlight)}
+                    onPrevious={() => setSpotlight(previousSpotlight)}
                     persona={personaLabel}
-                    tab={tab}
+                    position={spotlight.index + 1}
+                    readDetail={readSpotlightDetail}
+                    total={spotlightTotal}
                   />
-                ))}
-              </ul>
+                ) : null}
+
+                <ul aria-label={`${tabLabel} movies`} className="library-list">
+                  {loaded.items.map((movie) => (
+                    <LibraryRow
+                      busy={busyMovieId === movie.movie_id}
+                      // One write at a time keeps revisions predictable and stops a
+                      // second click landing while the first is in flight.
+                      disabled={busyMovieId !== null && busyMovieId !== movie.movie_id}
+                      href={detailHref(movie.movie_id)}
+                      key={movie.movie_id}
+                      movie={movie}
+                      onAction={act(
+                        movie.movie_id,
+                        // The announcement names the movie the row shows, not the
+                        // raw catalog string: "Babe (1995) is now watched" reads
+                        // like a database dump being spoken aloud.
+                        displayTitle(movie.title, movie.release_year ?? null),
+                        movie.state.revision,
+                      )}
+                      persona={personaLabel}
+                      tab={tab}
+                    />
+                  ))}
+                </ul>
+              </>
             )}
           </ResourceRegion>
 
@@ -628,7 +900,7 @@ export function LibraryExperience({
             />
           ) : null}
 
-          {view && hasResourceData(view.state) && view.state.data.page.has_more ? (
+          {collection?.page.has_more ? (
             <div className="library-more">
               <button
                 className="button-secondary"

@@ -1,0 +1,195 @@
+/*
+ * The Seen spotlight.
+ *
+ * Same visual family as Discover's featured slot — poster left, identity and
+ * decision right, the backdrop used as a wash that ends on the page's own
+ * ground — built from the shared primitives rather than by borrowing that
+ * component's class names. Its copy column carries a pager, a rating fieldset,
+ * and a confirmation panel that the featured slot does not, and the featured
+ * layout hands its children to the page grid on a phone (`display: contents`),
+ * so reusing those rules would have placed this column's extra children into a
+ * grid that knows nothing about them.
+ */
+
+.library-spotlight {
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: clamp(1.25rem, 4vw, 3rem);
+  grid-template-columns: minmax(0, 9.4rem) minmax(0, 1fr);
+  margin-bottom: var(--space-8);
+  overflow: hidden;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  position: relative;
+}
+
+/* The section takes focus after a removal, and a focus ring on a block this
+   large reads as a selection rather than as a target, so it is drawn on the
+   border instead. */
+.library-spotlight:focus-visible {
+  border-color: var(--accent-strong);
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.library-spotlight-backdrop {
+  inset: 0;
+  overflow: hidden;
+  position: absolute;
+  z-index: 0;
+}
+
+.library-spotlight-backdrop img {
+  filter: saturate(0.85);
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.4;
+  width: 100%;
+}
+
+/*
+ * The veil is darkest where the words are. The vertical ramp ends on
+ * `--surface-canvas` itself, which is why the pager, the stars and the actions
+ * sit on the same ground they would have with no backdrop at all.
+ */
+.library-spotlight-veil {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-canvas) 46%, transparent) 0%,
+      color-mix(in srgb, var(--surface-canvas) 78%, transparent) 55%,
+      var(--surface-canvas) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--surface-canvas) 22%, transparent) 0%,
+      color-mix(in srgb, var(--surface-canvas) 42%, transparent) 40%,
+      color-mix(in srgb, var(--surface-canvas) 82%, transparent) 100%
+    );
+  inset: 0;
+  position: absolute;
+}
+
+.library-spotlight-poster,
+.library-spotlight-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.library-spotlight-poster {
+  align-self: start;
+}
+
+/* The poster's own caption repeats the title and year the column already
+   prints, exactly as it does in the featured slot. */
+.library-spotlight-poster .poster-card-copy,
+.library-spotlight-poster .poster-reason {
+  display: none;
+}
+
+.library-spotlight-copy {
+  min-width: 0;
+}
+
+.library-spotlight-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.library-spotlight-step {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  padding-inline: var(--space-4);
+}
+
+.library-spotlight-step[disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.library-spotlight-position {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.library-spotlight-title {
+  font-size: clamp(1.9rem, 5vw, 3rem);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.library-spotlight-meta {
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  margin: var(--space-4) 0 0;
+}
+
+.library-spotlight-score {
+  align-items: center;
+  color: var(--text-secondary);
+  display: flex;
+  font-size: 0.85rem;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.library-spotlight-score svg {
+  color: var(--accent);
+}
+
+.library-spotlight-seen,
+.library-spotlight-cast {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: var(--space-2) 0 0;
+}
+
+.library-spotlight-cast {
+  color: var(--text-muted);
+}
+
+.library-spotlight-rating {
+  margin-top: var(--space-5);
+}
+
+.library-spotlight-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.library-spotlight-confirm {
+  margin-top: var(--space-5);
+}
+
+@media (min-width: 768px) {
+  .library-spotlight {
+    grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+    padding: clamp(1.5rem, 3vw, 2.5rem);
+  }
+}
+
+@media (max-width: 420px) {
+  .library-spotlight {
+    grid-template-columns: minmax(0, 7.4rem) minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .library-spotlight-step {
+    font-size: 0.78rem;
+    padding-inline: var(--space-3);
+  }
+}

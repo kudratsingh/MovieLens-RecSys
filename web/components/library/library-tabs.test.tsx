@@ -23,7 +23,10 @@ describe("library tabs", () => {
       "true",
     );
     expect(screen.getByRole("tab", { name: "Watchlist 4" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "History 15" })).toBeVisible();
+    // The tab's identity stays `history` in the URL, the API, and the type;
+    // only what the reader sees became `Seen`.
+    expect(screen.getByRole("tab", { name: "Seen 15" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: /History/ })).not.toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
