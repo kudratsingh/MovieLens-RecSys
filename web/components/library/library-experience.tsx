@@ -36,6 +36,7 @@ import {
   newIdempotencyKey,
   type MovieStateMutationInput,
 } from "@/lib/movie-state/mutate";
+import { displayTitle } from "@/lib/movie-types";
 import {
   LIBRARY_BASE_PATH,
   LIBRARY_PAGE_SIZE,
@@ -182,6 +183,49 @@ export function LibraryExperience({
   const requested = useRef<Partial<Record<LibraryTab, string>>>({
     [initialUrlState.tab]: libraryViewKey(initialUrlState),
   });
+
+  // Mirrors the view currently on screen for the adoption effect below.
+  // Declared before it so the mirror is already current by the time that
+  // effect runs in the same commit.
+  const shownRef = useRef(urlState);
+  useEffect(() => {
+    shownRef.current = urlState;
+  });
+
+  /*
+   * The URL owns this route's tab, sort, filter, and page position; the state
+   * above is the local copy that lets a tab click paint its skeleton without
+   * waiting for the router. The two agree for every edit made *here* — the copy
+   * moves first and the URL follows it — but the route used to read the
+   * server's parse exactly once, so anything that moved the URL from outside
+   * was ignored: a browser Back left the reader on the collection they had just
+   * navigated away from, with an address bar that disagreed.
+   *
+   * Adopting the server's parse rather than re-reading `useSearchParams` keeps
+   * this to one source of truth, and it arrives with the first page that goes
+   * with it — so a Back into a view this session has not loaded is served from
+   * the server render instead of costing a second round trip.
+   */
+  const serverViewKey = libraryViewKey(initialUrlState);
+  useEffect(() => {
+    if (libraryViewKey(shownRef.current) === serverViewKey) return;
+    // Only the adopted collection survives: keeping the other tabs' cached
+    // pages while dropping the requests that produced them is what would leave
+    // a tab claiming to be loaded with nothing to show.
+    requested.current = { [initialUrlState.tab]: serverViewKey };
+    setUrlState(initialUrlState);
+    setQueryDraft(initialUrlState.query);
+    setViews({ [initialUrlState.tab]: { key: serverViewKey, state: initialLibrary } });
+    // A failed server read still names the right view; it just cannot restate
+    // the counts, so the tabs keep the last numbers they were given.
+    setCounts((current) =>
+      hasResourceData(initialLibrary) ? initialLibrary.data.counts : current,
+    );
+    // The payload is read from the render that moved the key, which is the one
+    // carrying the page for it. Listing it as a dependency would re-run this on
+    // every server re-render and throw away an accumulated window.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverViewKey]);
 
   // Where this route writes its own URL. Cheap enough to rebuild per render,
   // and it is only ever called from an event handler.
@@ -333,6 +377,14 @@ export function LibraryExperience({
         }
         setAnnouncement(movieStateAnnouncement({ kind: "conflict" }, voice));
         setPending(null);
+      } else if (result.status === "refused") {
+        // A rule, not a race: the row is already back on `mutation.rollback`,
+        // nothing was stored to re-read, and `Try again` is dropped because a
+        // second press would ask the same rule the same question.
+        setAnnouncement(
+          movieStateAnnouncement({ kind: "refused", detail: result.detail }, voice),
+        );
+        setPending(null);
       } else {
         setMutationFailure(result.failure);
         setAnnouncement(
@@ -395,8 +447,13 @@ export function LibraryExperience({
 
   return (
     <div className="library-route">
+      {/* No `Exploring as {persona}` eyebrow here: the shell header prints that
+          exact sentence about 40px above this block, and the design contract
+          asks for one labelled persona rather than the same claim twice. The
+          lede below still says whose record this is, which is the part the
+          shell cannot say — that the signed-in actor and the persona are two
+          different identities. */}
       <header className="library-intro">
-        <p className="eyebrow">Exploring as {personaLabel}</p>
         <h1 className="display-title library-title" id="library-title" tabIndex={-1}>
           A record of what moved you.
         </h1>
@@ -546,7 +603,14 @@ export function LibraryExperience({
                     href={detailHref(movie.movie_id)}
                     key={movie.movie_id}
                     movie={movie}
-                    onAction={act(movie.movie_id, movie.title, movie.state.revision)}
+                    onAction={act(
+                      movie.movie_id,
+                      // The announcement names the movie the row shows, not the
+                      // raw catalog string: "Babe (1995) is now watched" reads
+                      // like a database dump being spoken aloud.
+                      displayTitle(movie.title, movie.release_year ?? null),
+                      movie.state.revision,
+                    )}
                     persona={personaLabel}
                     tab={tab}
                   />

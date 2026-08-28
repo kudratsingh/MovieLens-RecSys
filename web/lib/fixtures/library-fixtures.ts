@@ -47,32 +47,44 @@ type Seed = {
   movieId: number;
   title: string;
   genres: string[];
+  year: number;
+  /** The same local artwork the shared movie fixtures use for this id. */
+  poster?: string;
   watchedAt?: string;
   watchlistedAt?: string;
   rating?: number;
   dismissedAt?: string;
 };
 
+/*
+ * Poster coverage here is deliberately partial, and split by tab rather than
+ * scattered: Rated and History carry artwork for most rows, and Watchlist
+ * carries none. That is what makes one capture prove the row's poster treatment
+ * and another prove the shared fallback mark, instead of the matrix depending
+ * on which rows happened to sort into the first page.
+ */
 const SEEDS: readonly Seed[] = [
-  { movieId: 101, title: "The Handmaiden", genres: ["Thriller", "Drama"], watchedAt: "2026-08-18T20:10:00Z", rating: 5 },
-  { movieId: 102, title: "In the Mood for Love", genres: ["Romance", "Drama"], watchedAt: "2026-08-17T19:40:00Z", rating: 4.5 },
-  { movieId: 103, title: "Memories of Murder", genres: ["Crime", "Mystery"], watchedAt: "2026-08-16T21:05:00Z", rating: 4.5 },
-  { movieId: 104, title: "Portrait of a Lady on Fire", genres: ["Drama", "Romance"], watchedAt: "2026-08-15T18:25:00Z", rating: 5 },
-  { movieId: 105, title: "Perfect Blue", genres: ["Animation", "Thriller"], watchedAt: "2026-08-14T22:15:00Z", rating: 4 },
-  { movieId: 106, title: "Moonlight", genres: ["Drama"], watchedAt: "2026-08-13T20:00:00Z", rating: 4.5 },
-  { movieId: 107, title: "The Worst Person in the World", genres: ["Comedy", "Drama"], watchedAt: "2026-08-12T19:30:00Z", rating: 3.5 },
-  { movieId: 108, title: "Burning", genres: ["Mystery", "Drama"], watchedAt: "2026-08-11T21:45:00Z", rating: 4 },
-  { movieId: 109, title: "A Separation", genres: ["Drama"], watchedAt: "2026-08-10T18:05:00Z", rating: 4.5 },
-  { movieId: 110, title: "Decision to Leave", genres: ["Mystery", "Romance"], watchedAt: "2026-08-09T20:20:00Z", rating: 4 },
-  { movieId: 111, title: "Drive My Car", genres: ["Drama"], watchedAt: "2026-08-08T17:50:00Z" },
-  { movieId: 112, title: "Parasite", genres: ["Thriller", "Comedy"], watchedAt: "2026-08-07T22:00:00Z", rating: 5 },
-  { movieId: 113, title: "The Wailing", genres: ["Horror", "Mystery"], watchedAt: "2026-08-06T23:10:00Z" },
-  { movieId: 114, title: "Oldboy", genres: ["Thriller", "Action"], watchedAt: "2026-08-05T21:30:00Z", rating: 4 },
-  { movieId: 115, title: "Shoplifters", genres: ["Drama"], watchedAt: "2026-08-04T19:15:00Z" },
-  { movieId: 116, title: "Aftersun", genres: ["Drama"], watchlistedAt: "2026-08-19T09:00:00Z" },
-  { movieId: 117, title: "Past Lives", genres: ["Romance", "Drama"], watchlistedAt: "2026-08-18T08:30:00Z" },
-  { movieId: 118, title: "The Zone of Interest", genres: ["Drama", "War"], watchlistedAt: "2026-08-17T07:45:00Z" },
-  { movieId: 119, title: "Anatomy of a Fall", genres: ["Crime", "Drama"], watchlistedAt: "2026-08-16T10:20:00Z", dismissedAt: "2026-08-20T11:00:00Z" },
+  { movieId: 101, title: "The Handmaiden", genres: ["Thriller", "Drama"], year: 2016, poster: "/posters/handmaiden.svg", watchedAt: "2026-08-18T20:10:00Z", rating: 5 },
+  { movieId: 102, title: "In the Mood for Love", genres: ["Romance", "Drama"], year: 2000, poster: "/posters/in-the-mood.svg", watchedAt: "2026-08-17T19:40:00Z", rating: 4.5 },
+  { movieId: 103, title: "Memories of Murder", genres: ["Crime", "Mystery"], year: 2003, poster: "/posters/memories.svg", watchedAt: "2026-08-16T21:05:00Z", rating: 4.5 },
+  { movieId: 104, title: "Portrait of a Lady on Fire", genres: ["Drama", "Romance"], year: 2019, poster: "/posters/portrait.svg", watchedAt: "2026-08-15T18:25:00Z", rating: 5 },
+  { movieId: 105, title: "Perfect Blue", genres: ["Animation", "Thriller"], year: 1997, poster: "/posters/perfect-blue.svg", watchedAt: "2026-08-14T22:15:00Z", rating: 4 },
+  { movieId: 106, title: "Moonlight", genres: ["Drama"], year: 2016, poster: "/posters/moonlight.svg", watchedAt: "2026-08-13T20:00:00Z", rating: 4.5 },
+  { movieId: 107, title: "The Worst Person in the World", genres: ["Comedy", "Drama"], year: 2021, poster: "/posters/worst-person.svg", watchedAt: "2026-08-12T19:30:00Z", rating: 3.5 },
+  { movieId: 108, title: "Burning", genres: ["Mystery", "Drama"], year: 2018, poster: "/posters/burning.svg", watchedAt: "2026-08-11T21:45:00Z", rating: 4 },
+  // No artwork in the shared fixtures either, so the mark shows on the first
+  // page of Rated at every width.
+  { movieId: 109, title: "A Separation", genres: ["Drama"], year: 2011, watchedAt: "2026-08-10T18:05:00Z", rating: 4.5 },
+  { movieId: 110, title: "Decision to Leave", genres: ["Mystery", "Romance"], year: 2022, poster: "/posters/decision.svg", watchedAt: "2026-08-09T20:20:00Z", rating: 4 },
+  { movieId: 111, title: "Drive My Car", genres: ["Drama"], year: 2021, watchedAt: "2026-08-08T17:50:00Z" },
+  { movieId: 112, title: "Parasite", genres: ["Thriller", "Comedy"], year: 2019, watchedAt: "2026-08-07T22:00:00Z", rating: 5 },
+  { movieId: 113, title: "The Wailing", genres: ["Horror", "Mystery"], year: 2016, watchedAt: "2026-08-06T23:10:00Z" },
+  { movieId: 114, title: "Oldboy", genres: ["Thriller", "Action"], year: 2003, watchedAt: "2026-08-05T21:30:00Z", rating: 4 },
+  { movieId: 115, title: "Shoplifters", genres: ["Drama"], year: 2018, watchedAt: "2026-08-04T19:15:00Z" },
+  { movieId: 116, title: "Aftersun", genres: ["Drama"], year: 2022, watchlistedAt: "2026-08-19T09:00:00Z" },
+  { movieId: 117, title: "Past Lives", genres: ["Romance", "Drama"], year: 2023, watchlistedAt: "2026-08-18T08:30:00Z" },
+  { movieId: 118, title: "The Zone of Interest", genres: ["Drama", "War"], year: 2023, watchlistedAt: "2026-08-17T07:45:00Z" },
+  { movieId: 119, title: "Anatomy of a Fall", genres: ["Crime", "Drama"], year: 2023, watchlistedAt: "2026-08-16T10:20:00Z", dismissedAt: "2026-08-20T11:00:00Z" },
 ];
 
 function seedState(seed: Seed): MovieState {
@@ -94,6 +106,8 @@ export function recordedLibraryMovies(): LibraryMovie[] {
   return SEEDS.map((seed) => ({
     genres: [...seed.genres],
     movie_id: seed.movieId,
+    poster_url: seed.poster ?? null,
+    release_year: seed.year,
     state: seedState(seed),
     title: seed.title,
   }));
