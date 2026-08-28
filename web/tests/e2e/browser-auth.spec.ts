@@ -12,12 +12,13 @@ import { COLD_START, clearDismissal, resetColdStart } from "./personas";
  * indistinguishable from a bug in the code under test. One journey, one
  * persona:
  *
- * | Persona                   | Journey                               |
- * | ------------------------- | ------------------------------------- |
- * | 900000101 Action Fan      | Library — rating and watched history  |
- * | 900000102 Drama Fan       | Discover — `discover-journey.spec.ts` |
- * | 900000103 Eclectic Viewer | Browse — watchlist only               |
- * | 900000104 Cold Start      | PKCE, then Quick Picks                |
+ * | Persona                   | Journey                                    |
+ * | ------------------------- | ------------------------------------------ |
+ * | 900000101 Action Fan      | Library — rating and watched history, and  |
+ * |                           | the Seen spotlight (`seen-journey.spec.ts`)|
+ * | 900000102 Drama Fan       | Discover — `discover-journey.spec.ts`      |
+ * | 900000103 Eclectic Viewer | Browse — watchlist only                    |
+ * | 900000104 Cold Start      | PKCE, then Quick Picks                     |
  *
  * Cold Start is the one deliberate share, and its rule is the strict one:
  * **every journey that touches it hands it on with zero positive signals**, in

@@ -38,19 +38,23 @@ function movie(movieId: number, overrides: Partial<MovieState> = {}): LibraryMov
     release_year: 2003,
     state: state({ movie_id: movieId, ...overrides }),
     title: `Movie ${movieId}`,
+    tmdb_rating: null,
   };
 }
 
 function page(items: LibraryMovie[], nextCursor: string | null): LibraryResponse {
   return {
     counts: { history: 15, rated: 12, watchlist: 4 },
+    genre: null,
     items,
-    page: { has_more: nextCursor !== null, next_cursor: nextCursor },
+    page: { has_more: nextCursor !== null, matched: items.length, next_cursor: nextCursor },
     query: null,
     sort: "recent",
     tab: "history",
     tenant_id: "demo",
     user_id: 900000101,
+    year_from: null,
+    year_to: null,
   };
 }
 

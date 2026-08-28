@@ -200,10 +200,13 @@ export function loadMovieDetail(
 
 export type LibraryQuery = {
   tab?: "rated" | "watchlist" | "history";
-  sort?: "recent" | "title" | "rating";
+  sort?: "recent" | "title" | "rating" | "release" | "tmdb";
   limit?: number;
   cursor?: string;
   q?: string;
+  genre?: string;
+  year_from?: number;
+  year_to?: number;
 };
 
 export function loadLibrary(

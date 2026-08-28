@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import Connection, create_engine, text
 
 from src.serving.recommendations import RecommendationService, UnknownDemoPersonaError
+
+# One enriched title in the shared store, in the shape the catalog fixture
+# writes, so the reads that hang off it — the Library's TMDB mark and its
+# ``tmdb`` ordering — have both a scored and an unscored case in one run.
+_ACTION_ONE_DETAILS = json.dumps({"tmdb_rating": {"average": 8.4, "count": 512}})
 
 
 def _connection() -> Connection:
@@ -27,7 +34,7 @@ def _connection() -> Connection:
             "CREATE TABLE movie_catalog_metadata ("
             "movie_id INTEGER PRIMARY KEY, sort_title TEXT NOT NULL, release_year INTEGER, "
             "poster_url TEXT, overview TEXT, metadata_source TEXT NOT NULL, "
-            "source_status TEXT NOT NULL, visible BOOLEAN NOT NULL)"
+            "source_status TEXT NOT NULL, visible BOOLEAN NOT NULL, details TEXT)"
         )
     )
     connection.execute(
@@ -77,8 +84,8 @@ def _connection() -> Connection:
         text(
             "INSERT INTO movie_catalog_metadata VALUES "
             "(1, 'action one', 1998, 'https://images.example/action-one.jpg', NULL, "
-            "'reviewed-fixture', 'complete', TRUE), "
-            "(2, 'drama two', 2001, NULL, NULL, 'movielens', 'partial', TRUE)"
+            f"'reviewed-fixture', 'complete', TRUE, '{_ACTION_ONE_DETAILS}'), "
+            "(2, 'drama two', 2001, NULL, NULL, 'movielens', 'partial', TRUE, NULL)"
         )
     )
     connection.execute(

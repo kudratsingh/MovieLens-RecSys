@@ -210,7 +210,7 @@ its documented hierarchy:
 | Movie detail | `watchlist: toggle`, `watched: confirm`, `dismissal: toggle` | Detail is where a title is managed. `Watchlist` leads while the movie is unseen, and removing history is confirmed. |
 | Library — Rated | `dismissal: undo` + half-star rating editor | Editing or clearing a star value is the collection's job. |
 | Library — Watchlist | `watched: mark`, `watchlist: remove`, `dismissal: toggle` | The row leads with the action that moves the movie forward. |
-| Library — History | `watched: confirm`, `dismissal: undo` + rating editor | History owns the one destructive action in the route, and `Remove rating` stays visibly different from `Remove from history`. |
+| Library — Seen (`history`) | `watched: confirm`, `dismissal: undo` + rating editor | Seen owns the one destructive action in the route, and `Remove rating` stays visibly different from `Remove from history`. The spotlight above the list declares the same set through the same `libraryControlSet("history", watched)` call, so the two surfaces cannot offer different actions for one movie. |
 | Quick Picks | Its own three decision buttons + the shared star editor | The deck's buttons are queue decisions with keyboard hints, gesture parity, and an `undo-dismiss` that has no card or row equivalent, so they stay with the machine that drives them. The rating is the same control everywhere else uses. |
 | `/ui-preview` | `watchlist: toggle`, `watched: toggle`, no writes | Recorded surfaces toggle locally and announce `Preview only`. |
 
@@ -226,6 +226,51 @@ announcement unchanged. Watchlist and dismissal leave a time-boxed `Undo` beside
 the status line that restores both the server row and the cursor; watched does
 not, because `watched: final` on this surface means what it says, and a bare
 `Undo` there would quietly become the destructive edit the control set refuses.
+
+### The Seen spotlight
+
+`/library?tab=history` is the Seen experience: the tab's identity is still
+`history` in the URL, in the API, and in the `LibraryTab` type — only its label
+changed — and above the list it now presents one watched title at a time, in the
+same visual family as Discover's featured slot.
+
+It is a sibling of that presentation rather than a second copy of it.
+`components/library/library-spotlight.tsx` composes the shared primitives
+(`PosterCard`, `RatingStars`, `MovieStateControls`) and carries its own layout,
+because the featured slot hands its children to the page grid on a phone
+(`display: contents`) and the spotlight's column has a pager, a rating fieldset,
+and a confirmation panel that grid knows nothing about.
+
+Four rules make it a view of the list rather than a second list:
+
+- **Its queue is the loaded window.** Same rows, same order, same filters, same
+  sort; a position is an index into what is on screen. The pure reducer in
+  `lib/library/spotlight.ts` owns clamping (it never wraps), following a movie
+  through an appended page or a departed row, and advancing past a title the
+  reader removes.
+- **It extends through the same cursor.** Within three of the end of the window
+  it runs the `Load more` the list's own button runs — one window, one cursor,
+  appended once. A failed append stops it until the reader retries.
+- **The base layer never waits.** Poster, title, year, genres, the seen-on date,
+  the rating control and the actions all come from the row. The enriched
+  fields — backdrop, runtime, crowd score with its vote count, cast — are read
+  from the detail resource for the current title only and *added* on `ready`. A
+  failed, timed-out or `not-found` read is silent, and none of it can blank the
+  list: the detail read is not one of the list's regions.
+- **It announces navigation, and nothing else.** One `aria-live` region for
+  `Psycho, 1960. 4 of 42 in Seen.`; mutations keep announcing through the
+  route's existing region, because two live regions in one panel is how one of
+  them stops being read. Moving the spotlight does not move focus, so a repeated
+  `Next` keeps working, and `ArrowLeft`/`ArrowRight` are ignored inside an
+  input, a select, or `.rating-stars` — the star row documents that binding
+  first.
+
+The list beside it gains a title search (already there), one genre, a release-
+year range, and five orderings (`recent`, `title`, `rating`, `release`, `tmdb`),
+all owned by the URL through `lib/library/url-state.ts` and all of them dropping
+the cursor when they change, because the endpoint binds a cursor to the
+fingerprint of exactly that set. `page.matched` is what the position readout
+counts against; without it the loaded window is the only honest denominator.
 
 ### `RatingStars`: two sizes of one control, not two controls
 

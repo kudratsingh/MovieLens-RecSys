@@ -112,6 +112,34 @@
   color: var(--text-muted);
 }
 
+/*
+ * The year bounds. They sit inside the filter form so they commit with the
+ * search rather than on every keystroke, and they are sized to the four digits
+ * they hold — a full-width field would read as another search box.
+ */
+.library-years {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-2);
+}
+
+.library-year {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 0.78rem;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.library-year-input {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-inline: var(--space-3);
+  width: 5rem;
+}
+
 .library-sort,
 .library-rating {
   align-items: center;
@@ -119,6 +147,8 @@
   display: inline-flex;
   font-size: 0.85rem;
   gap: var(--space-3);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .library-select {
@@ -128,6 +158,12 @@
   color: var(--text-primary);
   min-height: 2.75rem;
   padding: 0 var(--space-3);
+  /* A select is sized by its widest option, so `Highest TMDB score` in a wide
+     system font is enough on its own to push a 320px control row past the
+     viewport. Letting it shrink is what keeps the row inside the page. */
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 .library-list {
@@ -226,6 +262,24 @@
 
 .library-row-genres {
   color: var(--text-muted);
+}
+
+/*
+ * The crowd score, where the snapshot has one. A pill rather than another
+ * `·`-separated fragment: it is a different kind of fact from the year and the
+ * genres, and a row with no score simply prints nothing here.
+ */
+.library-row-tmdb {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  margin-left: var(--space-2);
+  padding: 0.1rem var(--space-2);
+  white-space: nowrap;
 }
 
 .library-row-state {
@@ -378,6 +432,25 @@
 }
 
 @media (max-width: 640px) {
+  /* The two bounds take a row of their own and stack their labels: side by
+     side with the label beside the field, four digits and two words do not fit
+     a 320px screen once the system font is a wide one. */
+  .library-years {
+    display: grid;
+    flex: 1 1 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .library-year {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .library-year-input {
+    width: 100%;
+  }
+
   .library-collection-heading {
     align-items: flex-start;
     flex-direction: column;

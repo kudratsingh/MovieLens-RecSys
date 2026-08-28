@@ -22,7 +22,16 @@ async function library(
   }
   const source = new URL(request.url).searchParams;
   const target = new URLSearchParams();
-  for (const name of ["tab", "sort", "limit", "cursor", "q"]) {
+  for (const name of [
+    "tab",
+    "sort",
+    "limit",
+    "cursor",
+    "q",
+    "genre",
+    "year_from",
+    "year_to",
+  ]) {
     const value = source.get(name);
     if (value) target.set(name, value);
   }

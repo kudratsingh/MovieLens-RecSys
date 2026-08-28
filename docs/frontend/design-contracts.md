@@ -283,9 +283,14 @@ shrinking posters below useful recognition size.
 results, slow metadata, poster fallback, long titles, keyboard traversal, and
 back-navigation scroll restoration.
 
-## `/library` — Ratings, Watchlist, and History
+## `/library` — Rated, Watchlist, and Seen
 
 **User and job:** Review and manage the movie state already created.
+
+**Tab identity:** The three collections are `rated`, `watchlist`, and `history`
+in the URL, in the API, and in the `LibraryTab` type. The third is *labelled*
+`Seen`, and every string derived from that label follows it. Renaming the value
+is not on the table: it is a cursor fingerprint, a saved link, and a contract.
 
 **First-read object:** The selected persona's active library collection, not a
 summary dashboard. The route becomes `Your library` only after `/me` ownership
@@ -295,18 +300,40 @@ is implemented.
 
 - Rated: edit or remove a rating.
 - Watchlist: open or remove a saved movie.
-- History: inspect a chronological interaction and open the movie.
+- Seen: look back at one watched title at a time — re-rate it, remove it, or
+  open it — and narrow the collection to the part being looked for.
 
 **Density:** Compact and scannable. The library may use a list on narrow screens
 and a compact poster grid or list on wide screens.
 
 **Hierarchy:**
 
-1. `Rated`, `Watchlist`, and `History` tabs with counts.
+1. `Rated`, `Watchlist`, and `Seen` tabs with counts.
 2. Sort/filter controls appropriate to the active collection.
-3. Movie state and primary action.
-4. Optional taste-profile summary based only on real features.
-5. Destructive profile reset inside settings/disclosure.
+3. On Seen: the spotlight — one watched title, presented in the same visual
+   family as Discover's featured slot.
+4. Movie state and primary action.
+5. Optional taste-profile summary based only on real features.
+6. Destructive profile reset inside settings/disclosure.
+
+**Seen's spotlight:** A view of the list, never a second one. It walks the
+loaded window in the list's own order under the list's own filters, extends
+through the same cursor, and writes through the same path with the same
+declared control set as a row. Its enriched fields (backdrop, runtime, crowd
+score, cast) come from the detail resource for the current title only and are
+added when they arrive; a failed read is silent and the list never blanks.
+`Previous` / `Next` clamp rather than wrap, `ArrowLeft` / `ArrowRight` move it
+unless the event belongs to a field or to the star row, and moving it announces
+title and position without moving focus. Full contract: `docs/frontend/seen-contract.md`.
+
+**Seen's filters and rankings:** a title search, one genre, a release-year
+range, and five orderings — most recent, title, highest rated, newest release,
+highest TMDB score. The URL owns all of them, only non-defaults are written, and
+any change drops the cursor because the endpoint binds a cursor to the
+fingerprint of exactly that set. A filtered collection with no rows says
+`Nothing in Seen matches these filters.` and offers `Clear filters`; an unfiltered
+empty collection still points at Browse. `release` and `tmdb` are offered on Seen
+alone for now even though the endpoint accepts them on every tab.
 
 **Interaction model:** Persistent tabbed library. URL state preserves the
 selected tab, filters, and sort. Rating edits provide optimistic feedback with
@@ -326,8 +353,11 @@ Secondary metadata moves into detail. Do not transform every desktop row into
 a large, equal-weight mobile card.
 
 **Finish evidence:** Empty collections, rating edit/remove, watchlist remove,
-history pagination, reset confirmation, auth expiry, long history, focus after
-mutation, and tenant-isolation tests.
+Seen pagination, reset confirmation, auth expiry, long history, focus after
+mutation, and tenant-isolation tests. For Seen specifically: the spotlight at
+390 / 768 / 1440 and its filtered-empty state, both in the finish-gate matrix;
+the stale-cursor restart; and one service-backed journey that changes a rating
+from the spotlight and restores it.
 
 ## `/movies/[movieId]` — Movie detail
 

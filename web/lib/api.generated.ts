@@ -499,6 +499,8 @@ export interface components {
         CursorPageResponse: {
             /** Has More */
             has_more: boolean;
+            /** Matched */
+            matched: number;
             /** Next Cursor */
             next_cursor: string | null;
         };
@@ -575,10 +577,14 @@ export interface components {
             state: components["schemas"]["MovieStateResponse"];
             /** Title */
             title: string;
+            /** Tmdb Rating */
+            tmdb_rating: number | null;
         };
         /** LibraryResponse */
         LibraryResponse: {
             counts: components["schemas"]["LibraryCountsResponse"];
+            /** Genre */
+            genre: string | null;
             /** Items */
             items: components["schemas"]["LibraryMovieResponse"][];
             page: components["schemas"]["CursorPageResponse"];
@@ -588,7 +594,7 @@ export interface components {
              * Sort
              * @enum {string}
              */
-            sort: "recent" | "title" | "rating";
+            sort: "recent" | "title" | "rating" | "release" | "tmdb";
             /**
              * Tab
              * @enum {string}
@@ -598,6 +604,10 @@ export interface components {
             tenant_id: string;
             /** User Id */
             user_id: number;
+            /** Year From */
+            year_from: number | null;
+            /** Year To */
+            year_to: number | null;
         };
         /** MovieCastMember */
         MovieCastMember: {
@@ -1626,10 +1636,13 @@ export interface operations {
         parameters: {
             query?: {
                 tab?: "rated" | "watchlist" | "history";
-                sort?: "recent" | "title" | "rating";
+                sort?: "recent" | "title" | "rating" | "release" | "tmdb";
+                q?: string | null;
+                genre?: string | null;
+                year_from?: number | null;
+                year_to?: number | null;
                 limit?: number;
                 cursor?: string | null;
-                q?: string | null;
             };
             header?: never;
             path: {
@@ -1648,7 +1661,7 @@ export interface operations {
                     "application/json": components["schemas"]["LibraryResponse"];
                 };
             };
-            /** @description Request parameters are invalid or cursor does not match query */
+            /** @description Cursor is invalid for this query */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1675,7 +1688,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Requested persona or movie does not exist */
+            /** @description Demo persona was not found */
             404: {
                 headers: {
                     [name: string]: unknown;

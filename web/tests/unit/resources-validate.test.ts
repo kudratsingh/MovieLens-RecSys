@@ -128,6 +128,36 @@ describe("runtime validators accept the published contract", () => {
     ).toBe(true);
   });
 
+  it("accepts the Seen orderings, an exact match count, and an unscored row", () => {
+    // A guard narrower than the endpoint turns a healthy `sort: "tmdb"` into a
+    // broken region, which is contract drift rendered as an outage.
+    for (const sort of ["release", "tmdb"] as const) {
+      expect(isLibraryResponse({ ...libraryResponse, sort })).toBe(true);
+    }
+
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        genre: "Sci-Fi",
+        year_from: 1990,
+        year_to: 1999,
+        items: [{ ...libraryResponse.items[0], tmdb_rating: 8.4 }],
+        page: { has_more: true, matched: 42, next_cursor: "eyJ2IjoyfQ" },
+        sort: "tmdb",
+        tab: "history",
+      }),
+    ).toBe(true);
+
+    // Most of the reviewed snapshot has no enriched TMDB record, so `null` is
+    // the ordinary case rather than the edge one.
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        items: [{ ...libraryResponse.items[0], tmdb_rating: null }],
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a history payload", () => {
     expect(
       isHistoryResponse({
@@ -153,6 +183,42 @@ describe("runtime validators reject payloads the UI cannot render", () => {
   it("rejects a response that lost its tenant scope", () => {
     expect(isRecommendationResponse(without(recommendationResponse, "tenant_id"))).toBe(false);
     expect(isLibraryResponse({ ...libraryResponse, user_id: "900000101" })).toBe(false);
+  });
+
+  it("rejects Library fields the contract requires but the payload dropped", () => {
+    // Every one of these is `required` in the published schema, and the two
+    // images deploy at one commit SHA — so a missing key is a broken API rather
+    // than an older one, and failing the region beats rendering "3 of undefined".
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        page: without(libraryResponse.page, "matched"),
+      }),
+    ).toBe(false);
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        items: [without(libraryResponse.items[0], "tmdb_rating")],
+      }),
+    ).toBe(false);
+    for (const field of ["genre", "year_from", "year_to"] as const) {
+      expect(isLibraryResponse(without(libraryResponse, field))).toBe(false);
+    }
+  });
+
+  it("rejects Library fields that arrived with the wrong type", () => {
+    // Present-and-wrong is drift worth catching, because the readout and the
+    // row mark both render the value directly.
+    expect(
+      isLibraryResponse({ ...libraryResponse, page: { ...libraryResponse.page, matched: "42" } }),
+    ).toBe(false);
+    expect(
+      isLibraryResponse({
+        ...libraryResponse,
+        items: [{ ...libraryResponse.items[0], tmdb_rating: "8.4" }],
+      }),
+    ).toBe(false);
+    expect(isLibraryResponse({ ...libraryResponse, sort: "popular" })).toBe(false);
   });
 
   it("rejects an item whose required fields drifted", () => {

@@ -290,6 +290,10 @@
             "title": "Has More",
             "type": "boolean"
           },
+          "matched": {
+            "title": "Matched",
+            "type": "integer"
+          },
           "next_cursor": {
             "anyOf": [
               {
@@ -304,7 +308,8 @@
         },
         "required": [
           "next_cursor",
-          "has_more"
+          "has_more",
+          "matched"
         ],
         "title": "CursorPageResponse",
         "type": "object"
@@ -523,6 +528,17 @@
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "tmdb_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tmdb Rating"
           }
         },
         "required": [
@@ -531,6 +547,7 @@
           "genres",
           "release_year",
           "poster_url",
+          "tmdb_rating",
           "state"
         ],
         "title": "LibraryMovieResponse",
@@ -540,6 +557,17 @@
         "properties": {
           "counts": {
             "$ref": "#/components/schemas/LibraryCountsResponse"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
           },
           "items": {
             "items": {
@@ -566,7 +594,9 @@
             "enum": [
               "recent",
               "title",
-              "rating"
+              "rating",
+              "release",
+              "tmdb"
             ],
             "title": "Sort",
             "type": "string"
@@ -587,6 +617,28 @@
           "user_id": {
             "title": "User Id",
             "type": "integer"
+          },
+          "year_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year From"
+          },
+          "year_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year To"
           }
         },
         "required": [
@@ -595,6 +647,9 @@
           "tab",
           "sort",
           "query",
+          "genre",
+          "year_from",
+          "year_to",
           "counts",
           "page",
           "items"
@@ -2701,10 +2756,82 @@
               "enum": [
                 "recent",
                 "title",
-                "rating"
+                "rating",
+                "release",
+                "tmdb"
               ],
               "title": "Sort",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "genre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1878,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1878,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year To"
             }
           },
           {
@@ -2735,23 +2862,6 @@
               ],
               "title": "Cursor"
             }
-          },
-          {
-            "in": "query",
-            "name": "q",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 120,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Q"
-            }
           }
         ],
         "responses": {
@@ -2773,7 +2883,7 @@
                 }
               }
             },
-            "description": "Request parameters are invalid or cursor does not match query"
+            "description": "Cursor is invalid for this query"
           },
           "401": {
             "content": {
@@ -2803,7 +2913,7 @@
                 }
               }
             },
-            "description": "Requested persona or movie does not exist"
+            "description": "Demo persona was not found"
           },
           "409": {
             "content": {

@@ -82,6 +82,7 @@ from src.serving.feedback import (
     InvalidLibraryCursorError,
     InvalidStateTransitionError,
     LibraryPage,
+    LibraryQuery,
     MovieState,
     MutationResult,
     StateRevisionConflictError,
@@ -426,6 +427,9 @@ class LibraryMovieResponse(BaseModel):
     genres: list[str]
     release_year: int | None
     poster_url: str | None
+    # The crowd average alone. The vote count belongs on the detail view, where
+    # there is room to print it next to the score it qualifies.
+    tmdb_rating: float | None
     state: MovieStateResponse
 
 
@@ -438,14 +442,24 @@ class LibraryCountsResponse(BaseModel):
 class CursorPageResponse(BaseModel):
     next_cursor: str | None
     has_more: bool
+    # Exact, and present on every page. Counting one viewer's own rows is not
+    # the shared catalog's "no invented total" case: the number is bounded by
+    # what that viewer has done, and it is what a position readout would
+    # otherwise have to guess.
+    matched: int
 
 
 class LibraryResponse(BaseModel):
     tenant_id: str
     user_id: int
     tab: Literal["rated", "watchlist", "history"]
-    sort: Literal["recent", "title", "rating"]
+    sort: Literal["recent", "title", "rating", "release", "tmdb"]
+    # The normalized query, echoed so a client can tell what was actually
+    # applied — and, for ``query``, in the case it was typed in.
     query: str | None
+    genre: str | None
+    year_from: int | None
+    year_to: int | None
     counts: LibraryCountsResponse
     page: CursorPageResponse
     items: list[LibraryMovieResponse]
@@ -1093,15 +1107,22 @@ async def movie_state(user_id: int, movie_id: int, request: Request) -> MovieSta
     "/users/{user_id}/library",
     response_model=LibraryResponse,
     operation_id="listLibrary",
+    responses={
+        400: {"model": ErrorResponse, "description": "Cursor is invalid for this query"},
+        404: {"model": ErrorResponse, "description": "Demo persona was not found"},
+    },
 )
 async def library(
     user_id: int,
     request: Request,
     tab: Literal["rated", "watchlist", "history"] = "rated",
-    sort: Literal["recent", "title", "rating"] = "recent",
+    sort: Literal["recent", "title", "rating", "release", "tmdb"] = "recent",
+    q: str | None = Query(default=None, max_length=120),
+    genre: str | None = Query(default=None, max_length=40),
+    year_from: int | None = Query(default=None, ge=1878, le=2100),
+    year_to: int | None = Query(default=None, ge=1878, le=2100),
     limit: int = Query(default=24, ge=1, le=50),
     cursor: str | None = Query(default=None, max_length=1024),
-    q: str | None = Query(default=None, max_length=120),
 ) -> LibraryResponse:
     """Return one bounded keyset page plus counts for all Library tabs."""
     _require_demo_persona_access(request)
@@ -1112,24 +1133,27 @@ async def library(
             _feedback.library,
             connection,
             user_id=user_id,
-            tab=tab,
-            sort=sort,
-            limit=limit,
-            cursor=cursor,
-            query=q,
+            query=LibraryQuery(
+                tab=tab,
+                sort=sort,
+                q=q,
+                genre=genre,
+                year_from=year_from,
+                year_to=year_to,
+                limit=limit,
+                cursor=cursor,
+            ),
         )
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InvalidLibraryCursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _library_response(
-        page,
-        tenant_id=principal.tenant_id,
-        user_id=user_id,
-        tab=tab,
-        sort=sort,
-        query=q.strip() if q and q.strip() else None,
-    )
+    except ValueError as exc:
+        # An inverted year range is the caller's parameters contradicting each
+        # other, which is the same class of problem as a year outside the
+        # bounds — and the enum and range checks above already answer 422.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _library_response(page, tenant_id=principal.tenant_id, user_id=user_id)
 
 
 @app.get(
@@ -1699,23 +1723,22 @@ def _mutation_response(result: MutationResult) -> FeedbackMutationResponse:
     )
 
 
-def _library_response(
-    page: LibraryPage,
-    *,
-    tenant_id: str,
-    user_id: int,
-    tab: Literal["rated", "watchlist", "history"],
-    sort: Literal["recent", "title", "rating"],
-    query: str | None,
-) -> LibraryResponse:
+def _library_response(page: LibraryPage, *, tenant_id: str, user_id: int) -> LibraryResponse:
     return LibraryResponse(
         tenant_id=tenant_id,
         user_id=user_id,
-        tab=tab,
-        sort=sort,
-        query=query,
+        tab=page.query.tab,
+        sort=page.query.sort,
+        query=page.query.q,
+        genre=page.query.genre,
+        year_from=page.query.year_from,
+        year_to=page.query.year_to,
         counts=LibraryCountsResponse(**page.counts.__dict__),
-        page=CursorPageResponse(next_cursor=page.next_cursor, has_more=page.has_more),
+        page=CursorPageResponse(
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+            matched=page.matched,
+        ),
         items=[
             LibraryMovieResponse(
                 movie_id=item.movie_id,
@@ -1723,6 +1746,7 @@ def _library_response(
                 genres=item.genres,
                 release_year=item.release_year,
                 poster_url=item.poster_url,
+                tmdb_rating=item.tmdb_rating,
                 state=_movie_state_response(item.state),
             )
             for item in page.items

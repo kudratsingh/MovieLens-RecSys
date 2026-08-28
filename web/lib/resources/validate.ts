@@ -280,6 +280,10 @@ function isLibraryMovie(value: unknown): boolean {
     isNumber(value.movie_id) &&
     isString(value.title) &&
     arrayOf(isString)(value.genres) &&
+    // Null where the catalog snapshot has no usable crowd score, but always
+    // present: the contract marks it required, and the two images deploy at one
+    // commit SHA, so an absent key is a broken API rather than an older one.
+    nullable(isNumber)(value.tmdb_rating) &&
     isMovieState(value.state)
   );
 }
@@ -293,15 +297,34 @@ function isLibraryCounts(value: unknown): boolean {
   );
 }
 
+/**
+ * The Library page block, plus the exact match count the Seen spotlight reads.
+ *
+ * `matched` counts one persona's own bounded rows for the tab and filters,
+ * ignoring cursor and limit, which is what lets the spotlight say "3 of 42"
+ * truthfully rather than counting the window it happens to have loaded.
+ */
+function isLibraryPage(value: unknown): boolean {
+  return isCursorPage(value) && isRecord(value) && isNumber(value.matched);
+}
+
 export function isLibraryResponse(value: unknown): value is LibraryResponse {
   return (
     isRecord(value) &&
     hasTenantScope(value) &&
-    isCursorPage(value.page) &&
+    isLibraryPage(value.page) &&
     isLibraryCounts(value.counts) &&
     oneOf(["rated", "watchlist", "history"] as const)(value.tab) &&
-    oneOf(["recent", "title", "rating"] as const)(value.sort) &&
+    // All five orderings, including the two the endpoint accepts on every tab.
+    // A validator narrower than the API turns a healthy `sort: "tmdb"` into a
+    // broken region, which is the failure this list exists to prevent.
+    oneOf(["recent", "title", "rating", "release", "tmdb"] as const)(value.sort) &&
     nullable(isString)(value.query) &&
+    // The echoed filters. Reading them back from the response rather than from
+    // the URL is what keeps the readout and the rows describing one same query.
+    nullable(isString)(value.genre) &&
+    nullable(isNumber)(value.year_from) &&
+    nullable(isNumber)(value.year_to) &&
     everyItem(isLibraryMovie)(value.items)
   );
 }

@@ -25,8 +25,17 @@ export type CurrentActorResponse = components["schemas"]["CurrentActorResponse"]
 export type MovieState = components["schemas"]["MovieStateResponse"];
 export type FeedbackMutationResponse =
   components["schemas"]["FeedbackMutationResponse"];
-export type LibraryMovie = components["schemas"]["LibraryMovieResponse"];
 export type LibraryResponse = components["schemas"]["LibraryResponse"];
+export type LibraryMovie = components["schemas"]["LibraryMovieResponse"];
+/** The ordering a Library page was built under, echoed back by the endpoint. */
+export type LibrarySortValue = LibraryResponse["sort"];
+/**
+ * The Library page block. `CursorPageResponse` is the Library's alone — the
+ * catalog carries its own `CatalogPageInfo`, which is what keeps `matched` off
+ * a response the catalog contract forbids to invent a total for.
+ */
+export type LibraryPage = components["schemas"]["CursorPageResponse"];
+
 export type LibraryCounts = components["schemas"]["LibraryCountsResponse"];
 export type CursorPage = components["schemas"]["CursorPageResponse"];
 export type TasteSummaryResponse = components["schemas"]["TasteSummaryResponse"];

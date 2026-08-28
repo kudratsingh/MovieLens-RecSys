@@ -90,7 +90,7 @@ export function movieMatchesTab(state: MovieState, tab: LibraryTab): boolean {
 const LEFT_COLLECTION: Record<LibraryTab, string> = {
   rated: "No longer rated. It leaves Rated when this view reloads.",
   watchlist: "No longer saved. It leaves Watchlist when this view reloads.",
-  history: "No longer watched. It leaves History when this view reloads.",
+  history: "No longer watched. It leaves Seen when this view reloads.",
 };
 
 export function leftCollectionNote(tab: LibraryTab): string {
@@ -106,10 +106,40 @@ const DATE_FORMAT = new Intl.DateTimeFormat("en", {
   year: "numeric",
 });
 
+const UNAVAILABLE_DATE = "date unavailable";
+
 export function formatLibraryDate(value: string | null): string {
-  if (!value) return "date unavailable";
+  if (!value) return UNAVAILABLE_DATE;
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "date unavailable" : DATE_FORMAT.format(parsed);
+  return Number.isNaN(parsed.getTime()) ? UNAVAILABLE_DATE : DATE_FORMAT.format(parsed);
+}
+
+/**
+ * The spotlight's own date line.
+ *
+ * It uses `formatLibraryDate`, so a capture and a runner print the same day for
+ * the same row — but it names the gap differently: a spotlight sentence reading
+ * "Seen on date unavailable" is a formatter leaking into prose.
+ */
+export function seenOnText(watchedAt: string | null): string {
+  const date = formatLibraryDate(watchedAt);
+  return date === UNAVAILABLE_DATE ? "Seen on an unknown date" : `Seen on ${date}`;
+}
+
+/**
+ * The compact crowd-score mark on a row.
+ *
+ * Null when there is no score, and the row then shows nothing in its place. A
+ * missing synopsis is named because the reader is looking for one; a missing
+ * crowd score beside a movie is noise. The vote count is deliberately absent —
+ * the row has no room for it, and the detail record is where the count travels
+ * with the average.
+ */
+export function tmdbMarkText(rating: number | null | undefined): string | null {
+  if (typeof rating !== "number" || !Number.isFinite(rating) || rating <= 0) {
+    return null;
+  }
+  return `TMDB ${rating.toFixed(1)}`;
 }
 
 export function formatRating(rating: number | null): string {
