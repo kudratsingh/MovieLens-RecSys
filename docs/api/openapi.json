@@ -602,10 +602,169 @@
         "title": "LibraryResponse",
         "type": "object"
       },
+      "MovieCastMember": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "profile_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Url"
+          }
+        },
+        "required": [
+          "name",
+          "character",
+          "profile_url"
+        ],
+        "title": "MovieCastMember",
+        "type": "object"
+      },
+      "MovieDetailItem": {
+        "description": "A catalog item plus the detail-only payload.\n\nDetail is its own model rather than a field on ``CatalogItem`` so the list\nendpoint cannot grow it by accident: a Browse page of 24 titles carrying 24\ncast lists and backdrops is a page-size regression that no caller asked\nfor, and the type system is a cheaper place to say so than a review comment\n(``docs/frontend/catalog-contract.md``).",
+        "properties": {
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovieDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "genres": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Genres",
+            "type": "array"
+          },
+          "interaction_count": {
+            "title": "Interaction Count",
+            "type": "integer"
+          },
+          "metadata_source": {
+            "enum": [
+              "reviewed-fixture",
+              "tmdb-snapshot",
+              "movielens"
+            ],
+            "title": "Metadata Source",
+            "type": "string"
+          },
+          "movie_id": {
+            "title": "Movie Id",
+            "type": "integer"
+          },
+          "overview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overview"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
+          "release_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Year"
+          },
+          "source_status": {
+            "enum": [
+              "complete",
+              "partial",
+              "unavailable"
+            ],
+            "title": "Source Status",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovieStateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tmdb_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tmdb Id"
+          }
+        },
+        "required": [
+          "movie_id",
+          "title",
+          "genres",
+          "tmdb_id",
+          "release_year",
+          "poster_url",
+          "overview",
+          "metadata_source",
+          "source_status",
+          "state",
+          "interaction_count",
+          "details"
+        ],
+        "title": "MovieDetailItem",
+        "type": "object"
+      },
       "MovieDetailResponse": {
         "properties": {
           "item": {
-            "$ref": "#/components/schemas/CatalogItem"
+            "$ref": "#/components/schemas/MovieDetailItem"
           },
           "tenant_id": {
             "title": "Tenant Id",
@@ -622,6 +781,106 @@
           "item"
         ],
         "title": "MovieDetailResponse",
+        "type": "object"
+      },
+      "MovieDetails": {
+        "description": "The offline TMDB detail payload for one title.\n\nDates stay strings on purpose: ``release_date`` is a calendar date the page\nprints, ``fetched_at`` says how old the snapshot is, and neither is\narithmetic anyone does here. Parsing them into date objects would buy a\nstricter schema at the price of dropping an otherwise good payload \u2014 cast,\ntrailer and all \u2014 over a field the page only renders.",
+        "properties": {
+          "backdrop_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backdrop Url"
+          },
+          "cast": {
+            "items": {
+              "$ref": "#/components/schemas/MovieCastMember"
+            },
+            "title": "Cast",
+            "type": "array"
+          },
+          "directors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Directors",
+            "type": "array"
+          },
+          "fetched_at": {
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "release_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Date"
+          },
+          "runtime_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Minutes"
+          },
+          "tagline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tagline"
+          },
+          "tmdb_rating": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TmdbRating"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trailer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovieTrailer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tagline",
+          "runtime_minutes",
+          "release_date",
+          "backdrop_url",
+          "tmdb_rating",
+          "directors",
+          "cast",
+          "trailer",
+          "fetched_at"
+        ],
+        "title": "MovieDetails",
         "type": "object"
       },
       "MovieStateResponse": {
@@ -720,6 +979,31 @@
           "updated_at"
         ],
         "title": "MovieStateResponse",
+        "type": "object"
+      },
+      "MovieTrailer": {
+        "description": "One playable trailer. ``key`` is a YouTube id, validated where it was\nwritten (``synthetic/personas/enrich_details.py``) rather than trusted\nhere, because the client interpolates it into an embed URL.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "const": "youtube",
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "key",
+          "name"
+        ],
+        "title": "MovieTrailer",
         "type": "object"
       },
       "OnlineUserFeaturesResponse": {
@@ -1410,6 +1694,25 @@
           "explanation"
         ],
         "title": "TasteSummaryResponse",
+        "type": "object"
+      },
+      "TmdbRating": {
+        "description": "The crowd score TMDB reports, or absent when nobody has voted.\n\n``count`` travels with ``average`` because an 8.4 from nine people and an\n8.4 from nine thousand are not the same claim, and the page says which.",
+        "properties": {
+          "average": {
+            "title": "Average",
+            "type": "number"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "average",
+          "count"
+        ],
+        "title": "TmdbRating",
         "type": "object"
       },
       "ValidationError": {

@@ -9,10 +9,10 @@ Covered today: ``/whoami``, ``/users/{id}/recommendations`` (including the
 serving-policy and exclusion evidence it now returns, and the per-item movie
 state it overlays), ``/users/{id}/history``, ``/users/{id}/audits``,
 ``/personas``, ``/users/{id}/features``, ``/users/{id}/catalog``,
-``/users/{id}/library`` (including the shared artwork its rows now carry), the
-rating write path, and ``DELETE /users/{id}/ratings``. Not yet covered:
-``/users/{id}/movies/{id}``
-and ``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
+``/users/{id}/library`` (including the shared artwork its rows now carry),
+``/users/{id}/movies/{id}`` (including the TMDB detail payload it now carries),
+the rating write path, and ``DELETE /users/{id}/ratings``. Not yet covered:
+``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
 the test's job is to be the tenant-isolation gate every serving PR passes
 through in CI.
 """
@@ -26,13 +26,18 @@ from src.serving.app import app
 from tests.tenant_isolation.conftest import (
     CANARY_USER_ID,
     DEFAULT_CANARY_POSTER_URL,
+    DEFAULT_DETAIL_MOVIE_ID,
+    DEFAULT_DETAIL_TRAILER_KEY,
     DEFAULT_HISTORY_TITLE,
     DEFAULT_PERSONA_NAME,
     DEFAULT_RECOMMENDATION_TITLE,
     DEMO_CANARY_POSTER_URL,
+    DEMO_DETAIL_MOVIE_ID,
+    DEMO_DETAIL_TRAILER_KEY,
     DEMO_HISTORY_TITLE,
     DEMO_PERSONA_NAME,
     DEMO_RECOMMENDATION_TITLE,
+    NO_DETAIL_MOVIE_ID,
     TokenMinter,
 )
 
@@ -533,6 +538,101 @@ def test_recommendation_state_overlay_is_confined_to_the_active_tenant(
     assert overlay["watched_at"] is None
     assert overlay["dismissed_at"] is None
     assert overlay["revision"] == settled_revision
+
+
+def test_movie_detail_publishes_shared_facts_and_only_the_callers_own_state(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """The detail payload is shared metadata; the overlay on it is not.
+
+    ``details`` comes from ``movie_catalog_metadata``, which is global by
+    design (0011) — both tenants are *supposed* to see the same trailer for the
+    same title. What must never cross is the state overlaid on it and the
+    persona the read is addressed to, so this asserts three separate things:
+    the payload is served to its own tenant, the state beside it belongs to the
+    caller, and a persona in the other tenant is a 404 that carries neither.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get(f"/users/987654323/movies/{DEFAULT_DETAIL_MOVIE_ID}")
+    own = client.get(f"/users/987654323/movies/{DEFAULT_DETAIL_MOVIE_ID}", headers=default_headers)
+    # The same shared title, read by the other tenant's persona: the facts are
+    # the same, the state overlay is empty because that row is not theirs.
+    shared = client.get(f"/users/987654324/movies/{DEFAULT_DETAIL_MOVIE_ID}", headers=demo_headers)
+    cross_tenant = client.get(
+        f"/users/987654323/movies/{DEFAULT_DETAIL_MOVIE_ID}", headers=demo_headers
+    )
+    without_details = client.get(
+        f"/users/987654323/movies/{NO_DETAIL_MOVIE_ID}", headers=default_headers
+    )
+
+    assert unauthenticated.status_code == 401
+    assert own.status_code == 200
+    assert shared.status_code == 200
+    # 987654323 is a default-tenant persona; a demo caller must not find it.
+    assert cross_tenant.status_code == 404
+    assert DEFAULT_DETAIL_TRAILER_KEY not in cross_tenant.text
+
+    item = own.json()["item"]
+    assert own.json()["tenant_id"] == "default"
+    assert item["details"]["trailer"]["key"] == DEFAULT_DETAIL_TRAILER_KEY
+    assert item["details"]["directors"] == ["Default Director"]
+    assert len(item["details"]["cast"]) == 1
+    assert item["state"] is not None
+    assert item["state"]["tenant_id"] == "default"
+    assert item["state"]["rating"] == 4.0
+
+    shared_item = shared.json()["item"]
+    assert shared.json()["tenant_id"] == "demo"
+    assert shared_item["details"] == item["details"]
+    assert shared_item["state"] is None, "the other tenant's rating is not visible here"
+    assert DEMO_DETAIL_TRAILER_KEY not in own.text
+
+    # A title the offline enrichment has not reached returns the field as an
+    # explicit null rather than omitting it, so a client can tell "no payload"
+    # from "this response did not look".
+    assert without_details.status_code == 200
+    assert "details" in without_details.json()["item"]
+    assert without_details.json()["item"]["details"] is None
+
+
+def test_movie_detail_state_overlay_survives_a_write_without_crossing_tenants(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """A write through one tenant's detail page is invisible from the other."""
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    added = client.put(
+        f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/watchlist",
+        headers=demo_headers,
+    )
+    assert added.status_code == 200
+    try:
+        demo_detail = client.get(
+            f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}", headers=demo_headers
+        )
+        default_detail = client.get(
+            f"/users/987654323/movies/{DEMO_DETAIL_MOVIE_ID}", headers=default_headers
+        )
+
+        assert demo_detail.status_code == 200
+        assert default_detail.status_code == 200
+        assert demo_detail.json()["item"]["state"]["watchlisted_at"] is not None
+        assert demo_detail.json()["item"]["state"]["tenant_id"] == "demo"
+        # Same shared title, same details payload, no demo state on it.
+        assert default_detail.json()["item"]["details"]["trailer"]["key"] == (
+            DEMO_DETAIL_TRAILER_KEY
+        )
+        assert default_detail.json()["item"]["state"] is None
+        assert '"tenant_id":"demo"' not in default_detail.text
+    finally:
+        removed = client.delete(
+            f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/watchlist",
+            headers=demo_headers,
+        )
+        assert removed.status_code == 200
 
 
 def _item_state(items: list[dict[str, object]], movie_id: int) -> dict[str, object] | None:

@@ -53,6 +53,12 @@ class CatalogMovie:
     source_status: MetadataStatus
     state: MovieState | None
     interaction_count: int
+    # The offline TMDB detail payload, and the one field the list read
+    # deliberately does not select: a page of 24 titles would carry two dozen
+    # cast lists and backdrops to render a grid of posters. ``None`` on every
+    # row a list query produced, and on any title the enrichment has not
+    # reached (``docs/frontend/catalog-contract.md``).
+    details: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,7 @@ class CatalogService:
                     cm.release_year,
                     cm.poster_url,
                     cm.overview,
+                    cm.details,
                     cm.metadata_source,
                     cm.source_status,
                     current.tenant_id AS state_tenant_id,
@@ -208,7 +215,7 @@ class CatalogService:
         ).one_or_none()
         if row is None:
             raise UnknownMovieError(f"movie {movie_id} is not in the visible catalog")
-        return _catalog_movie(row)
+        return _catalog_movie(row, with_details=True)
 
     def metadata_for_movies(
         self,
@@ -353,7 +360,7 @@ def _sort_sql(
     )
 
 
-def _catalog_movie(row: object) -> CatalogMovie:
+def _catalog_movie(row: object, *, with_details: bool = False) -> CatalogMovie:
     return CatalogMovie(
         movie_id=int(row.movie_id),  # type: ignore[attr-defined]
         title=str(row.title),  # type: ignore[attr-defined]
@@ -382,7 +389,25 @@ def _catalog_movie(row: object) -> CatalogMovie:
         ),
         state=_movie_state(row),
         interaction_count=int(row.interaction_count),  # type: ignore[attr-defined]
+        details=_details(getattr(row, "details", None)) if with_details else None,
     )
+
+
+def _details(value: object) -> dict[str, object] | None:
+    """Read the JSONB detail payload without trusting what is in it.
+
+    psycopg2 hands back a decoded object; SQLite (the unit-test store) hands
+    back the text it was given. Anything that is not an object — a row written
+    by hand, a payload from a fixture that has since changed shape — is read as
+    "no details" rather than as a shape the response model then has to reject,
+    because a detail page missing its trailer is a page and a 500 is not.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return {str(key): item for key, item in value.items()} if isinstance(value, dict) else None
 
 
 def _movie_state(row: object) -> MovieState | None:

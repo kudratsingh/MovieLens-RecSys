@@ -5,7 +5,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.serving.app import RatingRequest, app
+from src.serving.app import RatingRequest, _movie_details_response, app
+from src.serving.catalog import CatalogMovie
 
 
 def _schema() -> dict[str, Any]:
@@ -158,6 +159,112 @@ def test_library_and_history_rows_publish_local_artwork() -> None:
         assert {"release_year", "poster_url"} <= set(schemas[name]["required"])
         assert properties["release_year"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
         assert properties["poster_url"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
+def test_detail_carries_the_tmdb_payload_and_the_list_deliberately_does_not() -> None:
+    """Detail is a superset of a catalog item, declared as its own schema.
+
+    The split is the contract: a Browse page of up to 48 titles must not grow a
+    backdrop, six cast members and a trailer per row to render a poster grid
+    (``docs/frontend/catalog-contract.md``).
+    """
+    schemas = _schema()["components"]["schemas"]
+
+    assert schemas["MovieDetailResponse"]["properties"]["item"] == {
+        "$ref": "#/components/schemas/MovieDetailItem"
+    }
+    assert "details" not in schemas["CatalogItem"]["properties"]
+    assert schemas["CatalogResponse"]["properties"]["items"]["items"] == {
+        "$ref": "#/components/schemas/CatalogItem"
+    }
+    detail = schemas["MovieDetailItem"]
+    assert "details" in detail["required"], "null means 'no payload', not 'not looked up'"
+    assert detail["properties"]["details"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MovieDetails"},
+        {"type": "null"},
+    ]
+    # Every field a catalog item carries is still on the detail item.
+    assert set(schemas["CatalogItem"]["properties"]) < set(detail["properties"])
+
+    details = schemas["MovieDetails"]
+    assert set(details["required"]) == {
+        "tagline",
+        "runtime_minutes",
+        "release_date",
+        "backdrop_url",
+        "tmdb_rating",
+        "directors",
+        "cast",
+        "trailer",
+        "fetched_at",
+    }
+    assert details["properties"]["cast"]["items"] == {
+        "$ref": "#/components/schemas/MovieCastMember"
+    }
+    assert details["properties"]["trailer"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MovieTrailer"},
+        {"type": "null"},
+    ]
+    assert schemas["MovieTrailer"]["properties"]["provider"]["const"] == "youtube"
+    assert set(schemas["TmdbRating"]["required"]) == {"average", "count"}
+    assert set(schemas["MovieCastMember"]["required"]) == {"name", "character", "profile_url"}
+
+
+def _catalog_movie(details: object) -> CatalogMovie:
+    return CatalogMovie(
+        movie_id=1,
+        title="Alpha (1990)",
+        genres=["Drama"],
+        tmdb_id="101",
+        release_year=1990,
+        poster_url=None,
+        overview=None,
+        metadata_source="reviewed-fixture",
+        source_status="complete",
+        state=None,
+        interaction_count=0,
+        details=details,  # type: ignore[arg-type]
+    )
+
+
+def test_a_payload_that_does_not_validate_degrades_to_null(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed row must not take the detail page down with it.
+
+    It is the module that was added last; the poster, the synopsis and the
+    rating panel do not depend on it, so the response drops the field and says
+    so in the log rather than answering 500.
+    """
+    valid = {
+        "tagline": None,
+        "runtime_minutes": 101,
+        "release_date": "1990-04-01",
+        "backdrop_url": None,
+        "tmdb_rating": {"average": 7.4, "count": 12},
+        "directors": [],
+        "cast": [{"name": "A Star", "character": None, "profile_url": None}],
+        "trailer": {"provider": "youtube", "key": "abc123", "name": "Trailer"},
+        "fetched_at": "2026-08-28T00:00:00+00:00",
+    }
+
+    assert _movie_details_response(_catalog_movie(None)) is None
+    parsed = _movie_details_response(_catalog_movie(valid))
+    assert parsed is not None
+    assert parsed.trailer is not None and parsed.trailer.key == "abc123"
+    assert parsed.tmdb_rating is not None and parsed.tmdb_rating.count == 12
+
+    with caplog.at_level("WARNING"):
+        assert _movie_details_response(_catalog_movie({"tagline": "only this"})) is None
+        # A provider this API does not serve is refused rather than passed on
+        # to a client that would have to guess how to embed it.
+        assert (
+            _movie_details_response(
+                _catalog_movie(dict(valid, trailer={"provider": "vimeo", "key": "k", "name": "n"}))
+            )
+            is None
+        )
+    assert "catalog detail payload failed validation" in caplog.text
 
 
 @pytest.mark.parametrize("rating", [0.5, 1.0, 4.5, 5.0])
