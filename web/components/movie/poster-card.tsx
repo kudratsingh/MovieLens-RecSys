@@ -55,25 +55,41 @@ export function PosterCard({
               src={posterSrc}
             />
           )}
-          {movie.rank ? <span className="rank-badge">#{movie.rank}</span> : null}
           <span className="poster-open-cue">
             Open <Icon name="arrow" />
           </span>
         </span>
+        {/*
+          The rank hangs beside the caption rather than sitting on the artwork.
+          A badge pinned to the poster's top-left covered whatever the designer
+          of that poster put there, and on a pale sheet — Forrest Gump, Toy
+          Story — the cream disc all but disappeared into it. In the gutter it
+          costs no vertical space, never obscures a frame, and reads as what it
+          is: a position in an edited list. It stays inside the link because the
+          link's `aria-label` already names the movie, so a screen reader is not
+          handed a bare numeral before every title.
+        */}
         <div className="poster-card-copy">
-          <div>
-            <span className="poster-title">{movie.title}</span>
-            <p className="poster-meta">
-              {movie.year ?? "Year unknown"}
-              {movie.genres[0] ? ` · ${movie.genres[0]}` : " · Genre unavailable"}
-            </p>
-            {metadataNote ? <p className="poster-metadata-note">{metadataNote}</p> : null}
-          </div>
+          {movie.rank ? (
+            <span aria-hidden="true" className="poster-rank">
+              {movie.rank}
+            </span>
+          ) : null}
+          {/* Clamped to two reserved lines; the full title is on the link's
+              accessible name, and `title` gives a pointer viewer the rest. */}
+          <span className="poster-title" title={movie.title}>
+            {movie.title}
+          </span>
           {movie.state.watchlisted ? (
             <span aria-label="In watchlist" className="poster-state" role="img">
               <Icon name="bookmark" />
             </span>
           ) : null}
+          <p className="poster-meta">
+            {movie.year ?? "Year unknown"}
+            {movie.genres[0] ? ` · ${movie.genres[0]}` : " · Genre unavailable"}
+          </p>
+          {metadataNote ? <p className="poster-metadata-note">{metadataNote}</p> : null}
         </div>
       </Link>
       {density === "standard" && movie.reason ? (
