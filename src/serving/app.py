@@ -70,6 +70,7 @@ from src.serving.catalog import (
     CatalogQuery,
     CatalogService,
     InvalidCatalogCursorError,
+    LocalMovieMetadata,
 )
 from src.serving.features import FeatureServerClient
 from src.serving.feedback import (
@@ -95,6 +96,7 @@ from src.serving.ratelimit import (
 )
 from src.serving.recommendations import (
     RecommendationService,
+    RecommendedMovie,
     UnknownDemoPersonaError,
     UnknownMovieError,
 )
@@ -160,6 +162,22 @@ _READINESS_PROBE_TIMEOUT_SECONDS = 2.0
 _readiness_probe = httpx.AsyncClient(timeout=_READINESS_PROBE_TIMEOUT_SECONDS)
 
 
+# One movie's durable product state, as the caller's tenant sees it. Declared
+# ahead of the response models that embed it — a forward reference would leave
+# them incomplete until Pydantic got around to rebuilding them.
+class MovieStateResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    movie_id: int
+    watched_at: datetime | None
+    rating: float | None
+    rating_updated_at: datetime | None
+    watchlisted_at: datetime | None
+    dismissed_at: datetime | None
+    revision: int
+    updated_at: datetime
+
+
 class RecommendationItem(BaseModel):
     movie_id: int
     title: str
@@ -171,6 +189,12 @@ class RecommendationItem(BaseModel):
     overview: str | None
     release_year: int | None
     metadata_source: Literal["reviewed-fixture", "tmdb-snapshot", "movielens"]
+    # The caller's own state for this title, on the same terms as CatalogItem.
+    # A ranked title is never watched or dismissed — those are excluded before
+    # ranking — but it can be watchlisted, and it can carry a revision from a
+    # write that has since been undone. Without this a client has to assume
+    # revision 0 and its first write is rejected as stale (ADR 0012).
+    state: MovieStateResponse | None
 
 
 class ErrorResponse(BaseModel):
@@ -225,6 +249,8 @@ class HistoryItem(BaseModel):
     movie_id: int
     title: str
     genres: list[str]
+    release_year: int | None
+    poster_url: str | None
     rating: float | None
     timestamp: int
 
@@ -245,19 +271,6 @@ class PersonaItem(BaseModel):
 class PersonaResponse(BaseModel):
     tenant_id: str
     items: list[PersonaItem]
-
-
-class MovieStateResponse(BaseModel):
-    tenant_id: str
-    user_id: int
-    movie_id: int
-    watched_at: datetime | None
-    rating: float | None
-    rating_updated_at: datetime | None
-    watchlisted_at: datetime | None
-    dismissed_at: datetime | None
-    revision: int
-    updated_at: datetime
 
 
 class CatalogItem(BaseModel):
@@ -313,6 +326,8 @@ class LibraryMovieResponse(BaseModel):
     movie_id: int
     title: str
     genres: list[str]
+    release_year: int | None
+    poster_url: str | None
     state: MovieStateResponse
 
 
@@ -737,9 +752,10 @@ async def recommendations(
         decision.exclusion_hash,
         getattr(request.state, "request_id", None),
     )
-    metadata_by_id = await run_in_threadpool(
-        _catalog.metadata_for_movies,
+    metadata_by_id, state_by_id = await run_in_threadpool(
+        _recommendation_overlays,
         connection,
+        user_id=user_id,
         movie_ids=[item.movie_id for item in items],
     )
     return RecommendationResponse(
@@ -758,33 +774,10 @@ async def recommendations(
             excluded_count=decision.serving_policy.excluded_count,
         ),
         items=[
-            RecommendationItem(
-                movie_id=item.movie_id,
-                title=item.title,
-                genres=item.genres,
-                tmdb_id=item.tmdb_id,
-                score=item.score,
-                reason=item.reason,
-                poster_url=(
-                    metadata_by_id[item.movie_id].poster_url
-                    if item.movie_id in metadata_by_id
-                    else None
-                ),
-                overview=(
-                    metadata_by_id[item.movie_id].overview
-                    if item.movie_id in metadata_by_id
-                    else None
-                ),
-                release_year=(
-                    metadata_by_id[item.movie_id].release_year
-                    if item.movie_id in metadata_by_id
-                    else None
-                ),
-                metadata_source=(
-                    metadata_by_id[item.movie_id].metadata_source
-                    if item.movie_id in metadata_by_id
-                    else "movielens"
-                ),
+            _recommendation_item(
+                item,
+                metadata=metadata_by_id.get(item.movie_id),
+                state=state_by_id.get(item.movie_id),
             )
             for item in items
         ],
@@ -836,6 +829,8 @@ async def history(
                 movie_id=item.movie_id,
                 title=item.title,
                 genres=item.genres,
+                release_year=item.release_year,
+                poster_url=item.poster_url,
                 rating=item.rating,
                 timestamp=item.timestamp,
             )
@@ -1417,6 +1412,54 @@ async def _probe_sidecar(name: str, base_url: str, path: str) -> Literal["ok", "
     return "ok"
 
 
+def _recommendation_overlays(
+    connection: Connection,
+    *,
+    user_id: int,
+    movie_ids: list[int],
+) -> tuple[dict[int, LocalMovieMetadata], dict[int, MovieState]]:
+    """Read the two per-item overlays a recommendation response carries.
+
+    Both are bounded keyed reads over the ranked set — shared catalog metadata,
+    and the caller's own movie state — and they share one hand-off to the
+    thread pool rather than taking one each. Neither is folded into the
+    candidate or popularity SQL: those statements are compiled once at import
+    and their plans are what the k6 latency gate measures, so a join added for
+    a display concern would be paid on the stage the SLO is written against.
+    """
+    return (
+        _catalog.metadata_for_movies(connection, movie_ids=movie_ids),
+        _feedback.states_for_movies(connection, user_id=user_id, movie_ids=movie_ids),
+    )
+
+
+def _recommendation_item(
+    movie: RecommendedMovie,
+    *,
+    metadata: LocalMovieMetadata | None,
+    state: MovieState | None,
+) -> RecommendationItem:
+    """Compose one ranked movie with whatever the two overlays knew about it.
+
+    A missing metadata row is not an error: the ranked set is drawn from the
+    whole tenant catalog, while the snapshot covers the titles that have been
+    enriched. Such an item degrades to MovieLens fields rather than dropping out.
+    """
+    return RecommendationItem(
+        movie_id=movie.movie_id,
+        title=movie.title,
+        genres=movie.genres,
+        tmdb_id=movie.tmdb_id,
+        score=movie.score,
+        reason=movie.reason,
+        poster_url=metadata.poster_url if metadata is not None else None,
+        overview=metadata.overview if metadata is not None else None,
+        release_year=metadata.release_year if metadata is not None else None,
+        metadata_source=metadata.metadata_source if metadata is not None else "movielens",
+        state=_movie_state_response(state) if state is not None else None,
+    )
+
+
 def _movie_state_response(state: MovieState) -> MovieStateResponse:
     return MovieStateResponse(
         tenant_id=state.tenant_id,
@@ -1479,6 +1522,8 @@ def _library_response(
                 movie_id=item.movie_id,
                 title=item.title,
                 genres=item.genres,
+                release_year=item.release_year,
+                poster_url=item.poster_url,
                 state=_movie_state_response(item.state),
             )
             for item in page.items

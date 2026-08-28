@@ -66,6 +66,8 @@ DEFAULT_RECOMMENDATION_TITLE = "RLS default recommendation canary"
 DEMO_RECOMMENDATION_TITLE = "RLS demo recommendation canary"
 DEFAULT_PERSONA_NAME = "RLS Default Persona Canary"
 DEMO_PERSONA_NAME = "RLS Demo Persona Canary"
+DEFAULT_CANARY_POSTER_URL = "https://images.example/rls-default-canary.jpg"
+DEMO_CANARY_POSTER_URL = "https://images.example/rls-demo-canary.jpg"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -154,6 +156,32 @@ def tenant_canary_rows() -> Generator[None, None, None]:
                     ('demo', 987654324, 'demo-canary', :demo_name, 'Test', 1, TRUE)
                 """),
             {"default_name": DEFAULT_PERSONA_NAME, "demo_name": DEMO_PERSONA_NAME},
+        )
+        # Artwork for exactly two of the four canary titles, so a single run
+        # sees both the populated and the missing case on each read model.
+        # ``visible`` is FALSE on purpose: these rows must not surface in a
+        # Browse page while the fixture is alive, and Library and history
+        # artwork is deliberately not conditioned on catalog visibility.
+        # The FK to movies is ON DELETE CASCADE, so teardown takes them with it.
+        connection.execute(
+            text("""
+                INSERT INTO movie_catalog_metadata (
+                    movie_id, sort_title, release_year, poster_url, overview,
+                    metadata_source, source_status, visible
+                ) VALUES
+                    (900000001, 'rls default history canary', 1994,
+                     :default_poster, NULL, 'reviewed-fixture', 'complete', FALSE),
+                    (900000004, 'rls demo recommendation canary', 2004,
+                     :demo_poster, NULL, 'reviewed-fixture', 'complete', FALSE)
+                ON CONFLICT (movie_id) DO UPDATE SET
+                    poster_url = EXCLUDED.poster_url,
+                    release_year = EXCLUDED.release_year,
+                    visible = EXCLUDED.visible
+                """),
+            {
+                "default_poster": DEFAULT_CANARY_POSTER_URL,
+                "demo_poster": DEMO_CANARY_POSTER_URL,
+            },
         )
 
     yield

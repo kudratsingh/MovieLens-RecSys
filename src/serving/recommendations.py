@@ -51,6 +51,12 @@ class HistoryMovie:
     movie_id: int
     title: str
     genres: list[str]
+    # Read from the shared ``movie_catalog_metadata`` snapshot in the same
+    # query, so a history row can carry a thumbnail and a structured year
+    # instead of leaving the client to parse "Title (1995)". Both are None for
+    # a title the snapshot has never covered.
+    release_year: int | None
+    poster_url: str | None
     rating: float | None
     timestamp: int
 
@@ -359,10 +365,13 @@ class RecommendationService:
                     m."movieId" AS movie_id,
                     m.title,
                     m.genres,
+                    cm.release_year,
+                    cm.poster_url,
                     state.rating,
                     state.watched_at
                 FROM user_movie_state AS state
                 JOIN movies AS m ON m."movieId" = state.movie_id
+                LEFT JOIN movie_catalog_metadata AS cm ON cm.movie_id = state.movie_id
                 WHERE state.user_id = :user_id
                   AND state.watched_at IS NOT NULL
                   AND state.dismissed_at IS NULL
@@ -376,6 +385,8 @@ class RecommendationService:
                 movie_id=int(row.movie_id),
                 title=str(row.title),
                 genres=_split_genres(str(row.genres)),
+                release_year=int(row.release_year) if row.release_year is not None else None,
+                poster_url=str(row.poster_url) if row.poster_url is not None else None,
                 rating=float(row.rating) if row.rating is not None else None,
                 timestamp=_timestamp(row.watched_at),
             )

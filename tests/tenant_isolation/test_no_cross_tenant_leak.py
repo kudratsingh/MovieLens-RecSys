@@ -6,10 +6,12 @@ B against the live docker-compose stack and hits every authenticated
 endpoint, asserting the returned payload matches the caller's tenant.
 
 Covered today: ``/whoami``, ``/users/{id}/recommendations`` (including the
-serving-policy and exclusion evidence it now returns), ``/users/{id}/history``,
-``/users/{id}/audits``, ``/personas``, ``/users/{id}/features``,
-``/users/{id}/catalog``, ``/users/{id}/library``, the rating write path, and
-``DELETE /users/{id}/ratings``. Not yet covered: ``/users/{id}/movies/{id}``
+serving-policy and exclusion evidence it now returns, and the per-item movie
+state it overlays), ``/users/{id}/history``, ``/users/{id}/audits``,
+``/personas``, ``/users/{id}/features``, ``/users/{id}/catalog``,
+``/users/{id}/library`` (including the shared artwork its rows now carry), the
+rating write path, and ``DELETE /users/{id}/ratings``. Not yet covered:
+``/users/{id}/movies/{id}``
 and ``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
 the test's job is to be the tenant-isolation gate every serving PR passes
 through in CI.
@@ -23,9 +25,11 @@ from fastapi.testclient import TestClient
 from src.serving.app import app
 from tests.tenant_isolation.conftest import (
     CANARY_USER_ID,
+    DEFAULT_CANARY_POSTER_URL,
     DEFAULT_HISTORY_TITLE,
     DEFAULT_PERSONA_NAME,
     DEFAULT_RECOMMENDATION_TITLE,
+    DEMO_CANARY_POSTER_URL,
     DEMO_HISTORY_TITLE,
     DEMO_PERSONA_NAME,
     DEMO_RECOMMENDATION_TITLE,
@@ -409,3 +413,132 @@ def test_rating_reset_cannot_reach_a_persona_in_another_tenant(
     assert blocked.status_code == 404
     assert survivors.status_code == 200
     assert DEMO_RECOMMENDATION_TITLE in survivors.text
+
+
+def test_library_and_history_artwork_reads_the_shared_snapshot(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """Poster and year on Library and history rows come from the shared
+    ``movie_catalog_metadata`` snapshot, which is global by design (migration
+    0011). The rows they hang off are not: each tenant sees its own titles,
+    each carries the artwork of the title it names, and a title with no
+    snapshot row still returns with both fields explicitly null.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    default_history = client.get(f"/users/{CANARY_USER_ID}/history", headers=default_headers)
+    demo_history = client.get(f"/users/{CANARY_USER_ID}/history", headers=demo_headers)
+    default_library = client.get("/users/987654323/library?tab=rated", headers=default_headers)
+    demo_library = client.get("/users/987654324/library?tab=history", headers=demo_headers)
+
+    for response in (default_history, demo_history, default_library, demo_library):
+        assert response.status_code == 200
+        for item in response.json()["items"]:
+            assert "poster_url" in item
+            assert "release_year" in item
+
+    default_history_rows = {item["movie_id"]: item for item in default_history.json()["items"]}
+    demo_history_rows = {item["movie_id"]: item for item in demo_history.json()["items"]}
+    default_library_rows = {item["movie_id"]: item for item in default_library.json()["items"]}
+    demo_library_rows = {item["movie_id"]: item for item in demo_library.json()["items"]}
+
+    # Enriched on one side of each pair, absent on the other.
+    assert default_history_rows[900000001]["poster_url"] == DEFAULT_CANARY_POSTER_URL
+    assert default_history_rows[900000001]["release_year"] == 1994
+    assert demo_history_rows[900000002]["poster_url"] is None
+    assert demo_history_rows[900000002]["release_year"] is None
+    assert default_library_rows[900000003]["poster_url"] is None
+    assert default_library_rows[900000003]["release_year"] is None
+    assert demo_library_rows[900000004]["poster_url"] == DEMO_CANARY_POSTER_URL
+    assert demo_library_rows[900000004]["release_year"] == 2004
+    # The other tenant's artwork is not reachable through either read model.
+    assert DEMO_CANARY_POSTER_URL not in default_history.text
+    assert DEMO_CANARY_POSTER_URL not in default_library.text
+    assert DEFAULT_CANARY_POSTER_URL not in demo_history.text
+    assert DEFAULT_CANARY_POSTER_URL not in demo_library.text
+
+
+def test_recommendation_state_overlay_is_confined_to_the_active_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """A ranked item now carries the caller's own state for that title.
+
+    That is tenant-owned data on a payload that was previously derived from the
+    shared catalog alone, so it needs its own canary. The write also proves the
+    reason the field exists: after a watchlist entry is added and taken off
+    again the row survives at a higher revision with no product flag set, and a
+    client that could not see it would address its next write to revision 0.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    first = client.get("/users/987654324/recommendations?limit=5", headers=demo_headers)
+    cross_tenant = client.get("/users/987654324/recommendations?limit=5", headers=default_headers)
+
+    assert first.status_code == 200
+    # Not a 404: a user id this tenant has never seen is a cold-start user, and
+    # answering it with the tenant's own popular titles is the documented path
+    # (ADR 0011), not a miss. The boundary is therefore proven by what the
+    # payload carries, never by the status code — the same read answered for
+    # `default` is scoped to `default` and reaches none of the demo state below.
+    assert cross_tenant.status_code == 200
+    assert cross_tenant.json()["tenant_id"] == "default"
+    assert all(item["state"] is None for item in cross_tenant.json()["items"])
+    ranked = first.json()["items"]
+    assert ranked, "the demo canary persona must have something to rank"
+    for item in ranked:
+        assert "state" in item
+        if item["state"] is not None:
+            assert item["state"]["tenant_id"] == "demo"
+    movie_id = ranked[0]["movie_id"]
+
+    added = client.put(
+        f"/users/987654324/movies/{movie_id}/watchlist",
+        headers=demo_headers,
+    )
+    assert added.status_code == 200
+    watchlisted_revision = added.json()["state"]["revision"]
+
+    try:
+        with_state = client.get("/users/987654324/recommendations?limit=5", headers=demo_headers)
+        assert with_state.status_code == 200
+        overlay = _item_state(with_state.json()["items"], movie_id)
+        assert overlay is not None
+        assert overlay["tenant_id"] == "demo"
+        assert overlay["watchlisted_at"] is not None
+        assert overlay["revision"] == watchlisted_revision
+
+        # The probe that matters: with a demo watchlist row standing, the same
+        # user id read from the other tenant still carries no state at all.
+        leaked = client.get("/users/987654324/recommendations?limit=5", headers=default_headers)
+        assert leaked.status_code == 200
+        assert leaked.json()["tenant_id"] == "default"
+        assert all(item["state"] is None for item in leaked.json()["items"])
+        assert '"tenant_id":"demo"' not in leaked.text
+    finally:
+        removed = client.delete(
+            f"/users/987654324/movies/{movie_id}/watchlist",
+            headers=demo_headers,
+        )
+        assert removed.status_code == 200
+
+    settled_revision = removed.json()["state"]["revision"]
+    after_undo = client.get("/users/987654324/recommendations?limit=5", headers=demo_headers)
+    overlay = _item_state(after_undo.json()["items"], movie_id)
+
+    assert settled_revision > watchlisted_revision
+    assert overlay is not None, "a row left behind by an undone write must still be reported"
+    assert overlay["watchlisted_at"] is None
+    assert overlay["watched_at"] is None
+    assert overlay["dismissed_at"] is None
+    assert overlay["revision"] == settled_revision
+
+
+def _item_state(items: list[dict[str, object]], movie_id: int) -> dict[str, object] | None:
+    for item in items:
+        if item["movie_id"] == movie_id:
+            state = item["state"]
+            assert state is None or isinstance(state, dict)
+            return state
+    raise AssertionError(f"movie {movie_id} left the ranked set between reads")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -77,6 +78,12 @@ class LibraryMovie:
     movie_id: int
     title: str
     genres: list[str]
+    # Artwork and the structured year come from the shared
+    # ``movie_catalog_metadata`` snapshot, so a Library row can be rendered at
+    # the same poster density as the rest of the product without a TMDB call
+    # per row. Both are None for a title the snapshot has never covered.
+    release_year: int | None
+    poster_url: str | None
     state: MovieState
 
 
@@ -112,10 +119,32 @@ class TasteSummary:
     explanation: str
 
 
-_STATE_COLUMNS = """
-    tenant_id, user_id, movie_id, watched_at, rating, rating_updated_at,
-    watchlisted_at, dismissed_at, state_version, updated_at
-"""
+_STATE_COLUMN_NAMES = (
+    "tenant_id",
+    "user_id",
+    "movie_id",
+    "watched_at",
+    "rating",
+    "rating_updated_at",
+    "watchlisted_at",
+    "dismissed_at",
+    "state_version",
+    "updated_at",
+)
+_STATE_COLUMNS = ", ".join(_STATE_COLUMN_NAMES)
+# The Library query joins a table that also has a ``movie_id`` and a
+# ``release_year``, so its projection has to name the state table explicitly.
+_ALIASED_STATE_COLUMNS = ", ".join(f"s.{column}" for column in _STATE_COLUMN_NAMES)
+
+# Keyed on the movie set alone. A recommended title can carry a state row whose
+# product flags are all null — adding a movie to the watchlist and taking it off
+# again leaves the row behind at revision 2 — and that row is exactly what a
+# client needs in order to send a correct ``expected_revision`` on its first
+# press, so filtering on the flags here would hide the case this read exists for.
+_STATES_FOR_MOVIES = text(
+    f"SELECT {_STATE_COLUMNS} FROM user_movie_state "
+    "WHERE user_id = :user_id AND movie_id IN :movie_ids"
+).bindparams(bindparam("movie_ids", expanding=True))
 
 _INSERT_EVENT = text("""
     INSERT INTO user_feedback_events (
@@ -268,6 +297,31 @@ class FeedbackService:
         self._require_demo_persona(connection, user_id=user_id)
         return self._get_state(connection, user_id=user_id, movie_id=movie_id)
 
+    def states_for_movies(
+        self,
+        connection: Connection,
+        *,
+        user_id: int,
+        movie_ids: Sequence[int],
+    ) -> dict[int, MovieState]:
+        """Batch-read one user's current state for a set of movies.
+
+        This is the overlay a recommendation response carries so a client can
+        show what it already knows about a ranked title — and, more importantly,
+        can address its first write to the revision the row is actually at. The
+        persona check the mutation paths run is deliberately not repeated: the
+        caller has already been authorized for this user, RLS bounds the read to
+        the request tenant, and a second round trip on the recommendation path
+        would be paid on every request to re-prove what the handler knows.
+        """
+        if not movie_ids:
+            return {}
+        rows = connection.execute(
+            _STATES_FOR_MOVIES,
+            {"user_id": user_id, "movie_ids": list(dict.fromkeys(movie_ids))},
+        )
+        return {int(row.movie_id): _row_to_state(row) for row in rows}
+
     def library(
         self,
         connection: Connection,
@@ -324,10 +378,12 @@ class FeedbackService:
         rows = list(
             connection.execute(
                 text(f"""
-                    SELECT {_STATE_COLUMNS}, m.title, m.genres,
+                    SELECT {_ALIASED_STATE_COLUMNS}, m.title, m.genres,
+                           cm.release_year, cm.poster_url,
                            {sort_expression} AS cursor_value
                     FROM user_movie_state AS s
                     JOIN movies AS m ON m."movieId" = s.movie_id
+                    LEFT JOIN movie_catalog_metadata AS cm ON cm.movie_id = s.movie_id
                     WHERE {' AND '.join(where)}
                     ORDER BY {order}
                     LIMIT :limit
@@ -342,6 +398,8 @@ class FeedbackService:
                 movie_id=int(row.movie_id),
                 title=str(row.title),
                 genres=_split_genres(str(row.genres)),
+                release_year=(int(row.release_year) if row.release_year is not None else None),
+                poster_url=(str(row.poster_url) if row.poster_url is not None else None),
                 state=_row_to_state(row),
             )
             for row in page_rows

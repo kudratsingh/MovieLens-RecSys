@@ -504,8 +504,12 @@ export interface components {
             genres: string[];
             /** Movie Id */
             movie_id: number;
+            /** Poster Url */
+            poster_url: string | null;
             /** Rating */
             rating: number | null;
+            /** Release Year */
+            release_year: number | null;
             /** Timestamp */
             timestamp: number;
             /** Title */
@@ -535,6 +539,10 @@ export interface components {
             genres: string[];
             /** Movie Id */
             movie_id: number;
+            /** Poster Url */
+            poster_url: string | null;
+            /** Release Year */
+            release_year: number | null;
             state: components["schemas"]["MovieStateResponse"];
             /** Title */
             title: string;
@@ -781,6 +789,7 @@ export interface components {
             release_year: number | null;
             /** Score */
             score: number;
+            state: components["schemas"]["MovieStateResponse"] | null;
             /** Title */
             title: string;
             /** Tmdb Id */

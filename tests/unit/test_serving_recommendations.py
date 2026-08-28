@@ -24,6 +24,14 @@ def _connection() -> Connection:
     connection.execute(text('CREATE TABLE links ("movieId" INTEGER PRIMARY KEY, "tmdbId" TEXT)'))
     connection.execute(
         text(
+            "CREATE TABLE movie_catalog_metadata ("
+            "movie_id INTEGER PRIMARY KEY, sort_title TEXT NOT NULL, release_year INTEGER, "
+            "poster_url TEXT, overview TEXT, metadata_source TEXT NOT NULL, "
+            "source_status TEXT NOT NULL, visible BOOLEAN NOT NULL)"
+        )
+    )
+    connection.execute(
+        text(
             'CREATE TABLE ratings (tenant_id TEXT, "userId" INTEGER, "movieId" INTEGER, '
             "rating FLOAT, timestamp INTEGER)"
         )
@@ -63,6 +71,16 @@ def _connection() -> Connection:
         )
     )
     connection.execute(text("INSERT INTO links VALUES (1, '101'), (2, NULL), (3, '303')"))
+    # Movie 3 is deliberately left out of the snapshot: every read that joins it
+    # has to keep the row and report the missing artwork as NULL, not drop it.
+    connection.execute(
+        text(
+            "INSERT INTO movie_catalog_metadata VALUES "
+            "(1, 'action one', 1998, 'https://images.example/action-one.jpg', NULL, "
+            "'reviewed-fixture', 'complete', TRUE), "
+            "(2, 'drama two', 2001, NULL, NULL, 'movielens', 'partial', TRUE)"
+        )
+    )
     connection.execute(
         text(
             "INSERT INTO ratings VALUES "
@@ -166,6 +184,24 @@ def test_recent_history_is_descending_and_limited() -> None:
     assert items[0].movie_id == 2
     assert items[0].rating == 3.5
     assert items[0].timestamp == 200
+
+
+def test_recent_history_carries_snapshot_artwork_without_a_second_read() -> None:
+    """History rows are rendered poster-first, so they carry the same local
+    snapshot Browse reads. A title the snapshot has never covered still returns
+    a row — with both fields NULL — rather than disappearing from the list."""
+    connection = _connection()
+    try:
+        items = RecommendationService().recent_history(connection, user_id=11, limit=10)
+    finally:
+        connection.close()
+
+    by_id = {item.movie_id: item for item in items}
+    assert [item.movie_id for item in items] == [3, 1]
+    assert by_id[1].poster_url == "https://images.example/action-one.jpg"
+    assert by_id[1].release_year == 1998
+    assert by_id[3].poster_url is None
+    assert by_id[3].release_year is None
 
 
 def test_list_demo_personas_uses_stable_display_order() -> None:

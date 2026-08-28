@@ -46,6 +46,16 @@ bounded pages, stable movie-ID tie-breakers, opaque versioned cursors, counts,
 title filtering, and recent/title/rating sorts where meaningful. A cursor is
 bound to its tab, sort, and query and is rejected when reused for another view.
 
+Each Library row also carries `release_year` and `poster_url`, read in the same
+query from the shared `movie_catalog_metadata` snapshot that Browse and movie
+detail already use. There is no per-row upstream call and no TMDB fan-out;
+both fields are `null` for a title the snapshot has never covered, which the
+frontend renders as the same fallback mark it uses everywhere else. The rows on
+Discover's watch-history region carry the two fields on the same terms.
+Neither read model filters on the snapshot's `visible` column — that column
+decides what Browse lists, not whether a title the viewer has already acted on
+may show its artwork.
+
 `GET /users/{user_id}/taste-profile` calculates genre counts and averages from
 the current projection on each read. Its source is `live-ratings-v1`, and its
 copy explicitly says it is not a deployed-model explanation. It does not claim
@@ -71,6 +81,9 @@ to the active tab/collection heading.
 - transition, idempotency, revision, event-count, and live-read unit tests;
 - watchlist-no-effect and dismissal-not-positive serving tests;
 - stable/filter-bound cursor, counts, search, and taste-summary tests;
+- snapshot-artwork tests on the Library and history reads, including the title
+  with no snapshot row, which must return with both fields null rather than
+  disappear from the page;
 - migration source-boundary, RLS/grant/index/constraint checks;
 - generated OpenAPI and TypeScript drift gates; and
 - tenant integration canaries for Library read, mutation, immediate read, and

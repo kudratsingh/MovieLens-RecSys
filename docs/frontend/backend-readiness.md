@@ -20,10 +20,10 @@ parts of the route design are implementation claims.
 
 | Concern | What works now | Boundary or gap |
 |---|---|---|
-| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy | Static artifacts and snapshot features still do not update on each rating |
+| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy. Each ranked item also carries the caller's own `state` for that title, or `null` | Static artifacts and snapshot features still do not update on each rating |
 | Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
-| Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, and a truthful `live-ratings-v1` summary | The resources remain selected-persona mode until `/me` ownership mapping lands |
+| Library | Cursor-paginated Rated, Watchlist, and History resources expose canonical state, counts, title filtering, stable sorts, a truthful `live-ratings-v1` summary, and each row's `release_year` and `poster_url` from the shared metadata snapshot | The resources remain selected-persona mode until `/me` ownership mapping lands |
 | Catalog | Filter-bound keyset cursor, search, genre/year filters, three stable sorts, 48-item cap, local detail, and complete watched/rating/watchlist/dismissal state overlay | Selected-persona ownership remains the boundary; full-catalog query profiling is still required before widening the reviewed fixture |
 | Demo catalog | Reviewed 120-title fixture; 24 complete poster/overview records; 480 background interactions make all 120 titles artifact-eligible after regeneration | Visible, poster-backed, and policy-specific eligibility remain separate measures |
 | Metadata | Shared persisted read model supplies Browse, detail, and recommendation hydration with complete/partial/unavailable status | Snapshot enrichment is offline; partial titles intentionally render deterministic fallbacks |
@@ -202,6 +202,31 @@ The first honest learned reason is `Similar to movies in this persona's watched
 history`, backed by source-item similarity contributions. `Because you liked`
 is not valid while watched history ignores star magnitude. SHAP and calibrated
 match percentages remain later model/explanation work.
+
+### Per-item overlays on the ranked set and the Library
+
+**Implemented.** Three read models were widened so a surface no longer has to
+guess at what it is rendering, and none of the three costs a TMDB call:
+
+- `RecommendationItem.state` carries the caller's own movie state for that
+  title, or `null` when no row exists — the same required-and-nullable shape
+  `CatalogItem.state` already used. A ranked title is never watched or
+  dismissed, but it can be watchlisted, and it can hold a revision left behind
+  by a write that has since been undone. Without the field a client has to
+  assume revision 0, and its first write on such a title is rejected as stale.
+  The overlay is a bounded keyed read on the request's RLS-bound connection,
+  taken alongside the metadata hydration rather than joined into the compiled
+  candidate and popularity statements, whose plans are what the k6 gate measures.
+- `LibraryMovieResponse` and `HistoryItem` carry `release_year` and
+  `poster_url` from the shared `movie_catalog_metadata` snapshot, joined in the
+  query that already reads the rows. Both are `null` for a title the snapshot
+  has never covered, and neither is conditioned on `visible` — that column
+  governs what Browse lists, not whether a title the viewer has already acted
+  on may show its artwork.
+
+The cross-tenant canaries cover all three fields: the artwork on both read
+models per tenant (populated on one canary title, absent on another), and the
+recommendation state overlay across a watchlist write and its undo.
 
 ## Platform requirements before broad route fan-out
 

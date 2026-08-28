@@ -346,3 +346,71 @@ def test_library_title_search_and_live_rating_taste_copy_are_truthful() -> None:
     assert summary.average_rating == 3.0
     assert "not a deployed-model explanation" in summary.explanation
     assert summary.top_genres[0].genre in {"Action", "Drama", "Thriller"}
+
+
+def test_library_rows_carry_local_artwork_and_a_structured_year() -> None:
+    """A Library row is rendered at the same poster density as everything else,
+    so it reads the shared snapshot in its own query. Movie 3 has no snapshot
+    row: it still appears, with both fields NULL, because the row is about the
+    viewer's state and not about how well enriched the title is."""
+    connection = _connection()
+    service = FeedbackService()
+    try:
+        _mutate(service, connection, movie_id=1, action="watched_set", minute=1)
+        _mutate(service, connection, movie_id=3, action="watched_set", minute=2)
+        page = service.library(
+            connection,
+            user_id=USER,
+            tab="history",
+            sort="recent",
+            limit=10,
+            cursor=None,
+            query=None,
+        )
+    finally:
+        connection.close()
+
+    rows = {item.movie_id: item for item in page.items}
+    assert set(rows) == {1, 3}
+    assert rows[1].poster_url == "https://images.example/action-one.jpg"
+    assert rows[1].release_year == 1998
+    assert rows[3].poster_url is None
+    assert rows[3].release_year is None
+
+
+def test_states_for_movies_reports_a_revision_left_by_an_undone_write() -> None:
+    """The case the recommendation overlay exists for: a title whose watchlist
+    entry was added and taken off again holds no product flag at all, but its
+    revision has moved twice. A client that assumed 0 would have its first
+    write rejected as stale."""
+    connection = _connection()
+    service = FeedbackService()
+    try:
+        _mutate(service, connection, movie_id=1, action="watchlist_set", minute=0)
+        _mutate(service, connection, movie_id=1, action="watchlist_deleted", minute=1)
+        _mutate(service, connection, movie_id=2, action="watchlist_set", minute=2)
+        states = service.states_for_movies(connection, user_id=USER, movie_ids=[1, 2, 3, 1])
+        empty = service.states_for_movies(connection, user_id=USER, movie_ids=[])
+    finally:
+        connection.close()
+
+    assert set(states) == {1, 2}
+    assert states[1].state_version == 2
+    assert states[1].watchlisted_at is None
+    assert states[1].watched_at is None
+    assert states[2].watchlisted_at is not None
+    assert states[2].state_version == 1
+    assert all(state.tenant_id == TENANT for state in states.values())
+    assert empty == {}
+
+
+def test_states_for_movies_is_scoped_to_the_requested_user() -> None:
+    connection = _connection()
+    service = FeedbackService()
+    try:
+        _mutate(service, connection, movie_id=1, action="watchlist_set", minute=0)
+        other = service.states_for_movies(connection, user_id=900000102, movie_ids=[1])
+    finally:
+        connection.close()
+
+    assert other == {}
