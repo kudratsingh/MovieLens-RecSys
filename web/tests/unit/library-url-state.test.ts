@@ -201,6 +201,21 @@ describe("library URL state", () => {
     }
   });
 
+  it("keeps two views apart when a filter value contains the field separator", () => {
+    // `q` is free text and the endpoint takes any genre through a deep link,
+    // so a key joined on a separator that can appear inside a field lets these
+    // two different views share one. The collision is silent and reads as data
+    // corruption: nothing looks moved, the fetch is skipped, and the previous
+    // query's rows stay on screen under the new query's URL.
+    expect(
+      libraryViewKey(state({ query: "The", genre: "(no genres listed)" })),
+    ).not.toBe(libraryViewKey(state({ query: "The (no", genre: "genres listed)" })));
+    // The same shape one field over, where a year bound meets a genre.
+    expect(libraryViewKey(state({ genre: "Drama 1990" }))).not.toBe(
+      libraryViewKey(state({ genre: "Drama", yearFrom: 1990 })),
+    );
+  });
+
   it("knows when the collection has been narrowed", () => {
     expect(hasLibraryFilters(state())).toBe(false);
     expect(hasLibraryFilters(state({ query: "blade" }))).toBe(true);

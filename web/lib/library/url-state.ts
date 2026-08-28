@@ -242,16 +242,26 @@ export function nextLibraryUrlState(
 /**
  * Identifies the exact request a loaded page came from, so the component can
  * tell "already loaded" from "the view moved and needs a fresh first page".
+ *
+ * Serialized rather than joined on a separator. Two of these fields are free
+ * text a viewer controls, so any separator that can appear inside one lets two
+ * different views share a key: `q="The"` with `genre="(no genres listed)"`
+ * joined on a space is indistinguishable from `q="The (no"` with
+ * `genre="genres listed)"`. That is not hypothetical — `BROWSE_GENRES` is a
+ * curated subset and the endpoint takes any genre through a deep link. A
+ * collision here is silent and reads as data corruption: the key says nothing
+ * moved, so the fetch is skipped and the previous query's rows stay on screen
+ * under the new query's URL.
  */
 export function libraryViewKey(state: LibraryUrlState): string {
-  return [
+  return JSON.stringify([
     state.userId,
     state.tab,
     state.sort,
     state.query,
-    state.genre ?? "",
-    state.yearFrom ?? "",
-    state.yearTo ?? "",
-    state.cursor ?? "",
-  ].join(" ");
+    state.genre,
+    state.yearFrom,
+    state.yearTo,
+    state.cursor,
+  ]);
 }
