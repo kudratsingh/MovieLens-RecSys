@@ -570,13 +570,90 @@ export interface components {
             /** User Id */
             user_id: number;
         };
+        /** MovieCastMember */
+        MovieCastMember: {
+            /** Character */
+            character: string | null;
+            /** Name */
+            name: string;
+            /** Profile Url */
+            profile_url: string | null;
+        };
+        /**
+         * MovieDetailItem
+         * @description A catalog item plus the detail-only payload.
+         *
+         *     Detail is its own model rather than a field on ``CatalogItem`` so the list
+         *     endpoint cannot grow it by accident: a Browse page of 24 titles carrying 24
+         *     cast lists and backdrops is a page-size regression that no caller asked
+         *     for, and the type system is a cheaper place to say so than a review comment
+         *     (``docs/frontend/catalog-contract.md``).
+         */
+        MovieDetailItem: {
+            details: components["schemas"]["MovieDetails"] | null;
+            /** Genres */
+            genres: string[];
+            /** Interaction Count */
+            interaction_count: number;
+            /**
+             * Metadata Source
+             * @enum {string}
+             */
+            metadata_source: "reviewed-fixture" | "tmdb-snapshot" | "movielens";
+            /** Movie Id */
+            movie_id: number;
+            /** Overview */
+            overview: string | null;
+            /** Poster Url */
+            poster_url: string | null;
+            /** Release Year */
+            release_year: number | null;
+            /**
+             * Source Status
+             * @enum {string}
+             */
+            source_status: "complete" | "partial" | "unavailable";
+            state: components["schemas"]["MovieStateResponse"] | null;
+            /** Title */
+            title: string;
+            /** Tmdb Id */
+            tmdb_id: string | null;
+        };
         /** MovieDetailResponse */
         MovieDetailResponse: {
-            item: components["schemas"]["CatalogItem"];
+            item: components["schemas"]["MovieDetailItem"];
             /** Tenant Id */
             tenant_id: string;
             /** User Id */
             user_id: number;
+        };
+        /**
+         * MovieDetails
+         * @description The offline TMDB detail payload for one title.
+         *
+         *     Dates stay strings on purpose: ``release_date`` is a calendar date the page
+         *     prints, ``fetched_at`` says how old the snapshot is, and neither is
+         *     arithmetic anyone does here. Parsing them into date objects would buy a
+         *     stricter schema at the price of dropping an otherwise good payload — cast,
+         *     trailer and all — over a field the page only renders.
+         */
+        MovieDetails: {
+            /** Backdrop Url */
+            backdrop_url: string | null;
+            /** Cast */
+            cast: components["schemas"]["MovieCastMember"][];
+            /** Directors */
+            directors: string[];
+            /** Fetched At */
+            fetched_at: string;
+            /** Release Date */
+            release_date: string | null;
+            /** Runtime Minutes */
+            runtime_minutes: number | null;
+            /** Tagline */
+            tagline: string | null;
+            tmdb_rating: components["schemas"]["TmdbRating"] | null;
+            trailer: components["schemas"]["MovieTrailer"] | null;
         };
         /** MovieStateResponse */
         MovieStateResponse: {
@@ -603,6 +680,23 @@ export interface components {
             watched_at: string | null;
             /** Watchlisted At */
             watchlisted_at: string | null;
+        };
+        /**
+         * MovieTrailer
+         * @description One playable trailer. ``key`` is a YouTube id, validated where it was
+         *     written (``synthetic/personas/enrich_details.py``) rather than trusted
+         *     here, because the client interpolates it into an embed URL.
+         */
+        MovieTrailer: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "youtube";
         };
         /** OnlineUserFeaturesResponse */
         OnlineUserFeaturesResponse: {
@@ -869,6 +963,19 @@ export interface components {
             top_genres: components["schemas"]["TasteGenreResponse"][];
             /** User Id */
             user_id: number;
+        };
+        /**
+         * TmdbRating
+         * @description The crowd score TMDB reports, or absent when nobody has voted.
+         *
+         *     ``count`` travels with ``average`` because an 8.4 from nine people and an
+         *     8.4 from nine thousand are not the same claim, and the page says which.
+         */
+        TmdbRating: {
+            /** Average */
+            average: number;
+            /** Count */
+            count: number;
         };
         /** ValidationError */
         ValidationError: {

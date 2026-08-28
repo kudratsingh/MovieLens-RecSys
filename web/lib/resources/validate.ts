@@ -17,6 +17,7 @@ import type {
   FeedbackMutationResponse,
   HistoryResponse,
   LibraryResponse,
+  MovieDetailItem,
   MovieDetailResponse,
   MovieState,
   OnlineUserFeatures,
@@ -166,6 +167,54 @@ export function isHistoryResponse(value: unknown): value is HistoryResponse {
   );
 }
 
+function isTmdbRating(value: unknown): boolean {
+  return isRecord(value) && isNumber(value.average) && isNumber(value.count);
+}
+
+function isCastMember(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isString(value.name) &&
+    nullable(isString)(value.character) &&
+    nullable(isString)(value.profile_url)
+  );
+}
+
+function isTrailer(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    // The only provider the page knows how to embed. Anything else is a record
+    // this UI cannot render, so it fails the boundary rather than building a
+    // URL against a host it has never heard of.
+    value.provider === "youtube" &&
+    isString(value.key) &&
+    isString(value.name)
+  );
+}
+
+/**
+ * The enriched TMDB block on a detail record.
+ *
+ * Every field is optional in meaning but present in shape: the endpoint sends
+ * explicit nulls rather than omitting keys, so a missing key is drift worth
+ * catching. The page degrades on `details: null` — it does not need a guard
+ * that tolerates half a details object.
+ */
+function isMovieDetails(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    nullable(isString)(value.tagline) &&
+    nullable(isNumber)(value.runtime_minutes) &&
+    nullable(isString)(value.release_date) &&
+    nullable(isString)(value.backdrop_url) &&
+    (value.tmdb_rating === null || isTmdbRating(value.tmdb_rating)) &&
+    arrayOf(isString)(value.directors) &&
+    everyItem(isCastMember)(value.cast) &&
+    (value.trailer === null || isTrailer(value.trailer)) &&
+    isString(value.fetched_at)
+  );
+}
+
 export function isCatalogItem(value: unknown): value is CatalogItem {
   return (
     isRecord(value) &&
@@ -180,6 +229,25 @@ export function isCatalogItem(value: unknown): value is CatalogItem {
     nullable(isString)(value.poster_url) &&
     nullable(isString)(value.tmdb_id) &&
     nullable(isMovieState)(value.state)
+  );
+}
+
+/**
+ * Detail's own item type: a catalog item that also carries the enriched block.
+ *
+ * `details` is required and nullable rather than optional, matching the API — a
+ * detail record that omits the key entirely is drift, and the page would render
+ * a degraded movie without anything having reported a problem.
+ */
+function isMovieDetailItem(value: unknown): value is MovieDetailItem {
+  if (!isRecord(value)) return false;
+  // Read before `isCatalogItem` narrows the value to the list type, which has
+  // no `details` to reach for.
+  const details = value.details;
+  return (
+    isCatalogItem(value) &&
+    details !== undefined &&
+    (details === null || isMovieDetails(details))
   );
 }
 
@@ -201,7 +269,7 @@ export function isCatalogResponse(value: unknown): value is CatalogResponse {
 export function isMovieDetailResponse(
   value: unknown,
 ): value is MovieDetailResponse {
-  return isRecord(value) && hasTenantScope(value) && isCatalogItem(value.item);
+  return isRecord(value) && hasTenantScope(value) && isMovieDetailItem(value.item);
 }
 
 function isLibraryMovie(value: unknown): boolean {

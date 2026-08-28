@@ -66,6 +66,10 @@ function stubBff(options: {
           movie_id: MOVIE_ID,
           title: "Memories of Murder",
           state: options.detailState === undefined ? movieState : options.detailState,
+          // Detail's item type carries the enriched TMDB block, required and
+          // nullable. Quick Picks reads this response only for the committed
+          // state and the seed title, but the guard checks the whole record.
+          details: null,
         },
       });
     }

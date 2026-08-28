@@ -53,7 +53,7 @@ from uuid import UUID, uuid4
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import Connection, Engine, create_engine, text
 from starlette.concurrency import run_in_threadpool
 
@@ -287,6 +287,54 @@ class CatalogItem(BaseModel):
     interaction_count: int
 
 
+class TmdbRating(BaseModel):
+    """The crowd score TMDB reports, or absent when nobody has voted.
+
+    ``count`` travels with ``average`` because an 8.4 from nine people and an
+    8.4 from nine thousand are not the same claim, and the page says which.
+    """
+
+    average: float
+    count: int
+
+
+class MovieCastMember(BaseModel):
+    name: str
+    character: str | None
+    profile_url: str | None
+
+
+class MovieTrailer(BaseModel):
+    """One playable trailer. ``key`` is a YouTube id, validated where it was
+    written (``synthetic/personas/enrich_details.py``) rather than trusted
+    here, because the client interpolates it into an embed URL."""
+
+    provider: Literal["youtube"]
+    key: str
+    name: str
+
+
+class MovieDetails(BaseModel):
+    """The offline TMDB detail payload for one title.
+
+    Dates stay strings on purpose: ``release_date`` is a calendar date the page
+    prints, ``fetched_at`` says how old the snapshot is, and neither is
+    arithmetic anyone does here. Parsing them into date objects would buy a
+    stricter schema at the price of dropping an otherwise good payload — cast,
+    trailer and all — over a field the page only renders.
+    """
+
+    tagline: str | None
+    runtime_minutes: int | None
+    release_date: str | None
+    backdrop_url: str | None
+    tmdb_rating: TmdbRating | None
+    directors: list[str]
+    cast: list[MovieCastMember]
+    trailer: MovieTrailer | None
+    fetched_at: str
+
+
 class CatalogPageInfo(BaseModel):
     next_cursor: str | None
     has_more: bool
@@ -299,10 +347,23 @@ class CatalogResponse(BaseModel):
     page: CatalogPageInfo
 
 
+class MovieDetailItem(CatalogItem):
+    """A catalog item plus the detail-only payload.
+
+    Detail is its own model rather than a field on ``CatalogItem`` so the list
+    endpoint cannot grow it by accident: a Browse page of 24 titles carrying 24
+    cast lists and backdrops is a page-size regression that no caller asked
+    for, and the type system is a cheaper place to say so than a review comment
+    (``docs/frontend/catalog-contract.md``).
+    """
+
+    details: MovieDetails | None
+
+
 class MovieDetailResponse(BaseModel):
     tenant_id: str
     user_id: int
-    item: CatalogItem
+    item: MovieDetailItem
 
 
 class RatingRequest(BaseModel):
@@ -966,7 +1027,7 @@ async def movie_detail(
     return MovieDetailResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
-        item=_catalog_item_response(item),
+        item=_movie_detail_item_response(item),
     )
 
 
@@ -1489,6 +1550,34 @@ def _catalog_item_response(item: CatalogMovie) -> CatalogItem:
         state=_movie_state_response(item.state) if item.state is not None else None,
         interaction_count=item.interaction_count,
     )
+
+
+def _movie_detail_item_response(item: CatalogMovie) -> MovieDetailItem:
+    return MovieDetailItem(
+        **_catalog_item_response(item).model_dump(),
+        details=_movie_details_response(item),
+    )
+
+
+def _movie_details_response(item: CatalogMovie) -> MovieDetails | None:
+    """Validate the stored payload, degrading to ``None`` rather than failing.
+
+    The snapshot is fixture-owned and shape-checked offline, so a payload that
+    does not validate means the row predates the current contract or was
+    written by hand. That is worth a log line, not a 500: the detail page
+    renders without the extra module exactly as it did before the column
+    existed, which is the same way it treats a title TMDB knows nothing about.
+    """
+    if item.details is None:
+        return None
+    try:
+        return MovieDetails.model_validate(item.details)
+    except ValidationError:
+        logger.warning(
+            "catalog detail payload failed validation",
+            extra={"movie_id": item.movie_id},
+        )
+        return None
 
 
 def _mutation_response(result: MutationResult) -> FeedbackMutationResponse:

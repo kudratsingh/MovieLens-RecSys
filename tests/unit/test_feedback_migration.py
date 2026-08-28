@@ -46,3 +46,24 @@ def test_migration_pins_constraints_rls_least_privilege_and_indexes() -> None:
         "idx_user_feedback_events_tenant_user_created",
     ):
         assert required in source
+
+
+def test_details_migration_is_the_linear_head_and_adds_one_nullable_column() -> None:
+    """0013 is additive: one nullable JSONB column on the shared snapshot.
+
+    Nullable is the whole compatibility story — a database that has not been
+    re-seeded since the enrichment ran serves detail pages exactly as it did
+    before, and no existing row has to be rewritten for the migration to apply.
+    """
+    source = Path("alembic/versions/0013_catalog_details.py").read_text()
+
+    assert 'revision: str = "0013_catalog_details"' in source
+    assert 'down_revision: str | None = "0012_audit_serving_inputs"' in source
+    assert 'op.add_column(\n        "movie_catalog_metadata",' in source
+    assert "postgresql.JSONB(astext_type=sa.Text()), nullable=True" in source
+    assert 'op.drop_column("movie_catalog_metadata", "details")' in source
+    # The shared snapshot stays read-only for the application role.
+    assert "GRANT SELECT ON movie_catalog_metadata TO app_user;" in source
+    normalized = " ".join(source.upper().split())
+    assert "ENABLE ROW LEVEL SECURITY" not in normalized, "0011 is shared by design"
+    assert "UPDATE MOVIE_CATALOG_METADATA" not in normalized
