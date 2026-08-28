@@ -280,6 +280,126 @@ validity rule beside the steal rule, or means taking the runner's disk out of
 the measurement, is decided from the first instrumented runner failure rather
 than from a laptop.
 
+### 2026-08-28 — the runner's disk is not the service
+
+The note above ended on an open question: whether a tail that lives outside the
+handler earns a storage-stall validity rule beside the steal rule, or means
+taking the runner's disk out of the measurement — to be decided from the first
+instrumented runner failure rather than from a laptop. That failure has now
+happened, on a PR whose entire diff is CSS and TSX, and it answers the question
+without much room left for interpretation.
+
+Both windows below are the 60-second smoke profile on `ubuntu-latest`, same
+image, same workload, same code range, one failing and one passing:
+
+| | failing window | passing window |
+|---|---|---|
+| k6 p50 / p95 / p99 (its own summary) | 9.94 / 90.59 / 230.74 ms | 11.46 / 16.11 / 24.41 ms |
+| requests over the 100 ms SLO | 147 of 3,290 (4.47%) | 0 of 3,300 |
+| dropped iterations | 11 | 0 |
+| request errors / silent learned fallbacks | 0 / 0 | 0 / 0 |
+| CPU steal, peak across the window | 0.0% | 0.0% |
+| run-queue depth, ten slowest seconds | 1–9 | 1–2 |
+| server handler p50 / p95 / p99 | 6.55 / 9.22 / 35.05 ms | 7.66 / 12.20 / 57.58 ms |
+| implied outside the handler, p95 / p99 | 81.56 / 196.49 ms | 3.90 / −33.18 ms |
+| cold p99 (popularity, no sidecar) | 228.99 ms | 12.61 ms |
+| warm p99 (item-item + LightGBM) | 231.55 ms | 25.48 ms |
+| WAL sync time / syncs | 9,703 ms / 3,085 = **3.15 ms per commit** | 723 ms / 3,385 = **0.21 ms** |
+| `fdatasync` baseline burst, p99 / max | 0.59 / 59.70 ms | 0.14 / 0.54 ms |
+
+Read down the failing column and the tail has nowhere left to hide. It is not
+preemption: steal is flat zero, which is what made the low-steal rule call the
+window final. It is not the ranker or the feature store: the handler's own p99
+is 35 ms, and in nine of the ten slowest seconds the server-side p99 sits
+between 8.4 and 11.6 ms while k6 reports 198–468 ms for the same second. It is
+not a serving regression in any stage, because the cold path — popularity only,
+never touching the model server or the feature server — breaches by the same
+margin as the warm path, 229 ms against 232 ms. What cold and warm share is
+auth, the pooled request transaction, the audit insert, and the synchronous
+commit that non-negotiable #8 and ADR 0012 require to land *before* the response
+goes out. That commit costs one `fdatasync`, and the failing runner's device
+charged 3.15 ms for it against 0.21 ms on the passing one: a 15× difference in
+the one operation every single request pays for, with the pre-window probe
+already showing the same device capable of a 59.7 ms outlier before any traffic
+had been generated. The runner's block device is the variable, and it is not
+ours.
+
+**The decision: the CI load job runs Postgres's data directory on tmpfs.**
+`docker-compose.ci-load.yml` replaces the `postgres` service's data volume with
+a 2 GiB tmpfs mount (sized against a measured 263 MB seeded data directory, with
+headroom for `max_wal_size`'s 1 GB default), and the `synthetic-load-smoke` job
+alone applies it by setting `DEMO_COMPOSE_EXTRA` so every `demo-*` target in
+that job — `demo-up` and `demo-seed` included, since a tmpfs starts empty —
+sees the same Postgres. This is the same move the job already makes twice over:
+it quiesces the containers it does not measure and promotes the ones it does,
+because a measurement should contain the thing under test and as little else as
+the environment allows. Storage was simply the last piece of the runner still
+inside the number.
+
+**What this does not change.** Durability semantics are untouched:
+`synchronous_commit` stays on, the commit still precedes the response, the audit
+row is still written and still read back by the gate's own checks and by
+`reliability.py`'s request-id traceability proof. Only the medium under CI's WAL
+becomes the runner's memory instead of its disk. No threshold, arrival rate,
+workload, traffic mix, or run length moves, and the steal re-measure rule is
+untouched — a breached window is still re-measured exactly once, and only when
+at least three of its ten slowest seconds recorded 10% or more CPU steal. The
+accepted baseline is not re-based here either; what the first tmpfs run measures
+gets recorded as an observation, not promoted into a new bar.
+
+Commit cost does not stop mattering — it stops being *this gate's* to measure.
+On a real deployment it is a property of that deployment's storage, and it is
+observed there: `make prod-verify` prints the `recommendation_audits` latency
+percentiles as an SLI and the production canary runs that every thirty minutes.
+A slow disk in production surfaces there, on the box that has it, rather than in
+a CI job that would only be reporting a rented VM's luck.
+
+The gate also says more about what it measured. `summarize.py` now prints the
+medium Postgres's data directory was mounted from — `run_gate.sh` reads it back
+off the container with `docker inspect` rather than trusting the caller's
+intent — plus what one WAL sync cost, and an informational `storage_stall`
+classification: true when the window's WAL sync time per sync exceeds four times
+a 0.5 ms baseline, over at least 100 syncs. The baseline is observed rather than
+picked (0.21 ms on the passing runner, 0.43 ms on a quiet laptop) and the 4×
+multiple leaves a wide margin on both sides of the two populations rather than
+splitting the difference between them. It classifies and nothing more:
+`remeasure` remains the steal rule's alone, and the two windows above replay
+through the new code with every existing decision field byte-identical. The
+rejected alternative was a rule on outside-the-handler p99 as a multiple of
+handler p99; those two percentiles come from different populations, so their
+difference is not a duration and can be negative — the passing window reports
+−33.18 ms for it — while WAL sync time over sync count is one server's counters
+over one window and is a per-commit cost in milliseconds.
+
+**How we'd know we're wrong.**
+
+- **A tmpfs window still breaches with its handler p99 near the k6 p99.** Then
+  the tail is inside the service after all and this note removed a variable
+  without removing the cause. The evidence to read is the same one: the
+  server-side comparison, per traffic class and per policy. The fix would be in
+  the service, and the gate would have been right to keep failing.
+- **The production audit SLI drifts while CI stays green.** That is the cost of
+  this decision and it is a deliberate one: CI no longer sees commit cost, so
+  only the canary can. If that drift ever shows up first as a user-visible
+  regression rather than in `prod-verify`, the SLI is not being watched closely
+  enough and the answer is an alert on it — not putting the runner's disk back
+  into a gate that was never able to tell the two apart.
+- **`storage_stall` fires on windows that pass comfortably.** Then the 0.5 ms
+  baseline or the 4× multiple is wrong for the current fleet, and the artifact
+  carries `wal_syncs` and `wal_sync_ms` on every run so both can be re-derived
+  from real data rather than re-guessed. Nothing depends on the classification,
+  so getting it wrong costs a misleading log line and no verdict.
+- **The tmpfs runs out.** 2 GiB against 263 MB is a wide margin, but a longer
+  profile or a much larger fixture could reach it. Postgres would fail loudly
+  with ENOSPC rather than quietly slow down, which is the failure mode to
+  prefer; the fix is a bigger `size`, and the number is in one place.
+- **A gate passes on tmpfs that a disk-backed run would have caught.** Only if
+  the regression *is* commit cost — a change that starts committing several
+  times per request, say. That would show up as WAL syncs per request rather
+  than as latency, and both counters are in the artifact; if that class of
+  regression starts happening, the honest response is a threshold on syncs per
+  request, not a slower disk.
+
 ### 2026-08-21 — page-shaped workloads and browser timing
 
 The recommendation gate measures one endpoint. It is the SLO and it does not
