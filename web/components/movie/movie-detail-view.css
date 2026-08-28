@@ -1,9 +1,78 @@
+/*
+ * Movie detail: a backdrop-led hero, then the enrichment.
+ *
+ * The hero is the only place in the product that puts type over an image, and
+ * the reason it stays readable is that the veil over the backdrop ends on
+ * `--surface-canvas` itself — the bottom of the gradient *is* the page, so the
+ * title, the tagline, and the controls sit on the same ground they would have
+ * sat on with no backdrop at all. Nothing below the hero is aware of it, which
+ * is what lets the whole treatment disappear cleanly for a record that has no
+ * backdrop to show.
+ */
+
 .movie-detail {
+  padding-block: clamp(1.5rem, 4vw, 3rem);
+}
+
+.movie-detail-hero {
   align-items: start;
   display: grid;
   gap: clamp(1.5rem, 5vw, 4.5rem);
   grid-template-columns: minmax(0, 1fr);
-  padding-block: clamp(1.5rem, 4vw, 3rem);
+  position: relative;
+}
+
+.movie-detail-backdrop {
+  border-radius: var(--radius-lg);
+  /* Sized to the hero's own box rather than bled to the viewport: a negative
+     inline margin here would be one more source of horizontal overflow on a
+     page that already has a grid, a scroller, and a drawer to keep in line. */
+  height: min(62vh, 30rem);
+  inset-inline: 0;
+  overflow: hidden;
+  position: absolute;
+  top: calc(clamp(1.5rem, 4vw, 3rem) * -1);
+  z-index: 0;
+}
+
+.movie-detail-backdrop img {
+  filter: saturate(0.85);
+  object-fit: cover;
+  opacity: 0.5;
+}
+
+/*
+ * The veil is darkest where the words are.
+ *
+ * The horizontal ramp runs the opposite way to the obvious one on purpose: the
+ * copy column is on the right, so that is the side that has to be nearly ground
+ * for the eyebrow and the tagline to hold their contrast, and the still is left
+ * legible around the poster instead. The vertical ramp then ends on
+ * `--surface-canvas` itself, which is why the controls further down sit on the
+ * same ground they would have without a backdrop at all.
+ */
+.movie-detail-backdrop-veil {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-canvas) 40%, transparent) 0%,
+      color-mix(in srgb, var(--surface-canvas) 74%, transparent) 55%,
+      var(--surface-canvas) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--surface-canvas) 18%, transparent) 0%,
+      color-mix(in srgb, var(--surface-canvas) 34%, transparent) 42%,
+      color-mix(in srgb, var(--surface-canvas) 78%, transparent) 100%
+    );
+  inset: 0;
+  position: absolute;
+}
+
+.movie-detail-poster,
+.movie-detail-copy {
+  position: relative;
+  z-index: 1;
 }
 
 .movie-detail-poster {
@@ -13,6 +82,7 @@
 .detail-poster {
   /* `.poster-frame` already reserves the 2:3 box, so a poster that fails to
      load swaps to the fallback without moving the copy beside it. */
+  box-shadow: var(--shadow-raised);
   width: 100%;
 }
 
@@ -30,6 +100,22 @@
   margin-top: var(--space-4);
 }
 
+/*
+ * The tagline is the studio's own sentence about the film, so it is set in the
+ * display face rather than the body one — it belongs with the title, not with
+ * the synopsis. Italic and a size below the meta line keeps it subordinate.
+ */
+.movie-detail-tagline {
+  color: var(--accent-strong);
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.05rem, 2.2vw, 1.55rem);
+  font-style: italic;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin: var(--space-4) 0 0;
+  max-width: 34rem;
+}
+
 .movie-detail-meta {
   color: var(--accent-strong);
   font-size: 0.8rem;
@@ -37,6 +123,28 @@
   letter-spacing: 0.08em;
   margin: var(--space-6) 0 0;
   text-transform: uppercase;
+}
+
+/*
+ * TMDB's aggregate score, in the same gold as the viewer's own stars. That is
+ * the one visual claim this page makes about ratings: the colour means "a
+ * score exists", and whose score it is comes from the words beside it.
+ */
+.movie-detail-score {
+  align-items: center;
+  color: var(--text-secondary);
+  display: flex;
+  font-size: 0.9rem;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.movie-detail-score-star {
+  color: var(--rating-star);
+  fill: currentColor;
+  flex: none;
+  height: 18px;
+  width: 18px;
 }
 
 .movie-overview {
@@ -64,18 +172,42 @@
   margin: var(--space-2) 0 0;
 }
 
+.movie-detail-extras {
+  display: grid;
+  gap: clamp(2rem, 5vw, 3.25rem);
+  margin-top: clamp(1.75rem, 4vw, 2.75rem);
+  max-width: 62rem;
+  min-width: 0;
+}
+
 .movie-detail-disclosure {
   align-items: center;
   border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin-top: var(--space-8);
   padding-top: var(--space-6);
 }
 
 .movie-detail-disclosure .button-quiet {
   gap: var(--space-1);
+}
+
+.movie-detail-attribution {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  gap: var(--space-3);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 44rem;
+}
+
+.movie-detail-attribution img {
+  display: block;
+  height: auto;
 }
 
 .record-details {
@@ -110,13 +242,223 @@
   margin-top: var(--space-5);
 }
 
+/* ------------------------------------------------------------------ trailer */
+
+.movie-trailer h2,
+.movie-credits h2 {
+  margin: 0 0 var(--space-4);
+}
+
+/*
+ * The plate is a poster frame turned landscape: the same border, the same
+ * radius, artwork this page already loaded, and a badge that reads as a play
+ * control without pretending to be YouTube's own.
+ */
+.movie-trailer-plate {
+  align-items: flex-end;
+  aspect-ratio: 16 / 9;
+  background: var(--poster-fallback);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  display: flex;
+  max-width: 48rem;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+  width: 100%;
+}
+
+.movie-trailer-still {
+  object-fit: cover;
+  opacity: 0.62;
+  transition: transform var(--motion-standard) var(--ease-out);
+}
+
+.movie-trailer-plate:hover .movie-trailer-still {
+  transform: scale(1.02);
+}
+
+.movie-trailer-scrim {
+  background: linear-gradient(
+    180deg,
+    transparent 35%,
+    color-mix(in srgb, var(--surface-canvas) 82%, transparent) 100%
+  );
+  inset: 0;
+  position: absolute;
+}
+
+.movie-trailer-cue {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: clamp(0.9rem, 3vw, 1.5rem);
+  position: relative;
+  text-align: left;
+}
+
+.movie-trailer-badge {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 999px;
+  color: #160c09;
+  display: flex;
+  height: 3rem;
+  justify-content: center;
+  /* The glyph is a triangle, so it needs a nudge to look centred in a circle. */
+  padding-left: 0.15rem;
+  transition: transform var(--motion-fast) var(--ease-out);
+  width: 3rem;
+}
+
+.movie-trailer-plate:hover .movie-trailer-badge {
+  transform: scale(1.06);
+}
+
+.movie-trailer-label {
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 780;
+}
+
+.movie-trailer-name {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.movie-trailer-frame {
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  max-width: 48rem;
+  overflow: hidden;
+  width: 100%;
+}
+
+.movie-trailer-frame iframe {
+  border: 0;
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.movie-trailer-note {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin: var(--space-3) 0 0;
+}
+
+.movie-trailer-note .button-quiet {
+  font-size: 0.8rem;
+  padding-inline: 0;
+}
+
+/* ------------------------------------------------------------------ credits */
+
+.movie-credits {
+  min-width: 0;
+}
+
+.movie-credits-directors {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  margin: 0 0 var(--space-5);
+}
+
+.movie-credits-role {
+  color: var(--text-muted);
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  margin-right: var(--space-3);
+  text-transform: uppercase;
+}
+
+/*
+ * A scroller rather than a wrap: six portraits wrapped into rows would push the
+ * decision this route exists for off a 390px screen, and the cast is reference
+ * material beside it. Focusable and named, following the rail's rule — a
+ * scrollable region no key can reach is a section a keyboard viewer cannot
+ * read at all.
+ */
+.movie-cast-row {
+  display: grid;
+  gap: var(--space-4);
+  grid-auto-columns: 7.5rem;
+  grid-auto-flow: column;
+  list-style: none;
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 0 0 var(--space-3);
+  scroll-snap-type: inline proximity;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.movie-cast-member {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+.movie-cast-portrait {
+  align-items: center;
+  aspect-ratio: 1;
+  background: var(--poster-fallback);
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  display: flex;
+  font-size: 1.1rem;
+  font-weight: 750;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  width: 4.5rem;
+}
+
+.movie-cast-portrait img {
+  object-fit: cover;
+}
+
+.movie-cast-name {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 720;
+  line-height: 1.3;
+}
+
+.movie-cast-character {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
 @media (min-width: 700px) {
-  .movie-detail {
+  .movie-detail-hero {
     grid-template-columns: minmax(14rem, 21rem) minmax(0, 1fr);
   }
 
   .movie-detail-poster {
     max-width: none;
+  }
+}
+
+@media (max-width: 699px) {
+  /* The backdrop carries the visual weight on a narrow screen, so the poster
+     can be smaller and the decision controls start higher up the page. */
+  .movie-detail-poster {
+    max-width: 11rem;
+  }
+
+  .movie-detail-hero {
+    gap: var(--space-5);
   }
 }
 

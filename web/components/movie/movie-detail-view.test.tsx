@@ -4,7 +4,7 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MovieDetailView } from "@/components/movie/movie-detail-view";
-import type { CatalogItem, MovieState } from "@/lib/api";
+import type { MovieDetailItem, MovieDetails, MovieState } from "@/lib/api";
 
 const USER_ID = 900000101;
 
@@ -21,7 +21,7 @@ const movieState: MovieState = {
   updated_at: "2026-08-20T12:00:00Z",
 };
 
-function item(overrides: Partial<CatalogItem> = {}): CatalogItem {
+function item(overrides: Partial<MovieDetailItem> = {}): MovieDetailItem {
   return {
     movie_id: 101,
     title: "The Handmaiden",
@@ -34,6 +34,27 @@ function item(overrides: Partial<CatalogItem> = {}): CatalogItem {
     source_status: "complete",
     state: null,
     interaction_count: 42,
+    // The base case is the record with no enriched block, because that is what
+    // most of the catalog holds and what the layout has to survive.
+    details: null,
+    ...overrides,
+  };
+}
+
+function details(overrides: Partial<MovieDetails> = {}): MovieDetails {
+  return {
+    tagline: "Two women. Two cons. One estate.",
+    runtime_minutes: 145,
+    release_date: "2016-06-01",
+    backdrop_url: "/backdrops/handmaiden.svg",
+    tmdb_rating: { average: 8.1, count: 4812 },
+    directors: ["Park Chan-wook"],
+    cast: [
+      { name: "Kim Min-hee", character: "Lady Hideko", profile_url: "/profiles/cast-a.svg" },
+      { name: "Ha Jung-woo", character: "Count Fujiwara", profile_url: null },
+    ],
+    trailer: { provider: "youtube", key: "T7kfW4trvUM", name: "Official Trailer" },
+    fetched_at: "2026-08-24T09:00:00Z",
     ...overrides,
   };
 }
@@ -67,7 +88,7 @@ function stubFetch(...queued: (Response | Promise<Response>)[]) {
   return { calls };
 }
 
-function renderDetail(overrides: Partial<CatalogItem> = {}) {
+function renderDetail(overrides: Partial<MovieDetailItem> = {}) {
   return render(
     <MovieDetailView
       backHref="/browse?q=burning"
@@ -204,6 +225,97 @@ describe("movie detail content", () => {
   });
 });
 
+describe("enriched TMDB details", () => {
+  it("renders the whole record and names where it came from", async () => {
+    const { container } = renderDetail({ details: details() });
+
+    expect(screen.getByText("Two women. Two cons. One estate.")).toBeVisible();
+    // Runtime joins the line the year already lives on rather than taking a
+    // row of its own.
+    expect(screen.getByText("2016 · 2h 25m · Thriller · Drama")).toBeVisible();
+    expect(screen.getByText("8.1 / 10 · 4,812 ratings")).toBeVisible();
+    expect(screen.getByText(/Details from TMDB/)).toBeVisible();
+    expect(screen.getByText("Park Chan-wook")).toBeVisible();
+
+    const cast = screen.getByRole("list", { name: "Top-billed cast" });
+    expect(cast).toHaveTextContent("Kim Min-hee");
+    expect(cast).toHaveTextContent("Lady Hideko");
+    // A missing portrait is a monogram, not a silhouette.
+    expect(cast).toHaveTextContent("HJ");
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("renders exactly today's page when the record carries no details", async () => {
+    const { container } = renderDetail({ details: null });
+
+    expect(screen.getByRole("heading", { level: 1, name: "The Handmaiden" })).toBeVisible();
+    expect(screen.getByText("2016 · Thriller · Drama")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Play trailer/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Top-billed cast" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Details from TMDB/)).not.toBeInTheDocument();
+    // No empty frame stands in for the backdrop that is not there.
+    expect(container.querySelector(".movie-detail-backdrop")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("keeps the enriched fields it has when the optional ones are missing", async () => {
+    const { container } = renderDetail({
+      details: details({
+        tagline: null,
+        runtime_minutes: null,
+        backdrop_url: null,
+        tmdb_rating: null,
+        trailer: null,
+      }),
+    });
+
+    // Each gap is silent rather than labelled: "Runtime unavailable" beside a
+    // movie is noise, unlike a missing synopsis, which the route does name.
+    expect(screen.getByText("2016 · Thriller · Drama")).toBeVisible();
+    expect(screen.queryByText(/ \/ 10 · /)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Play trailer/ })).not.toBeInTheDocument();
+    expect(container.querySelector(".movie-detail-backdrop")).toBeNull();
+    // What survives still renders, and the attribution goes with it.
+    expect(screen.getByRole("list", { name: "Top-billed cast" })).toBeVisible();
+    expect(screen.getByText(/Details from TMDB/)).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("loads nothing from YouTube until the trailer is pressed", async () => {
+    const { container } = renderDetail({ details: details() });
+
+    // The promise the plate makes, asserted rather than described: no frame,
+    // and nothing anywhere on the page pointing at the embed host.
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.innerHTML).not.toContain("youtube-nocookie.com");
+
+    await userEvent.click(screen.getByRole("button", { name: /Play trailer/ }));
+
+    const frame = container.querySelector("iframe");
+    expect(frame).not.toBeNull();
+    expect(frame?.getAttribute("src")).toBe(
+      "https://www.youtube-nocookie.com/embed/T7kfW4trvUM?autoplay=1&rel=0",
+    );
+    expect(frame?.getAttribute("title")).toBe("Official Trailer — The Handmaiden");
+
+    // And it can be put away again, with focus back where it started.
+    await userEvent.click(screen.getByRole("button", { name: "Close trailer" }));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(document.activeElement).toHaveAccessibleName(/Play trailer/);
+  });
+
+  it("closes the trailer on Escape", async () => {
+    const { container } = renderDetail({ details: details() });
+
+    await userEvent.click(screen.getByRole("button", { name: /Play trailer/ }));
+    expect(container.querySelector("iframe")).not.toBeNull();
+
+    await userEvent.keyboard("{Escape}");
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+});
+
 describe("canonical state controls", () => {
   it("reconciles from the committed response and reuses its revision", async () => {
     const { calls } = stubFetch(
@@ -282,7 +394,7 @@ describe("canonical state controls", () => {
     // hidden behind "Mark watched" — but it must say what it will record.
     const panel = screen.getByRole("group", { name: "Your rating" });
     expect(panel).toBeVisible();
-    expect(panel).toHaveTextContent("Rating this records it as watched history");
+    expect(panel).toHaveTextContent("Rating this records a watch");
     expect(await axe(container)).toHaveNoViolations();
 
     // The star names are the ones the service-backed journeys address.
@@ -296,6 +408,13 @@ describe("canonical state controls", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "star magnitude is not a graded model signal",
     );
+
+    // And the control clears the area it no longer needs: the five stars become
+    // the value and one way back into them.
+    expect(await screen.findByText("You rated 4/5", {}, { timeout: 3_000 })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "4 stars for The Handmaiden" }),
+    ).not.toBeInTheDocument();
   });
 
   it("narrows the rating note once the movie is already watched", () => {
@@ -305,9 +424,9 @@ describe("canonical state controls", () => {
 
     const panel = screen.getByRole("group", { name: "Your rating" });
     expect(panel).toHaveTextContent(
-      "Star magnitude is display feedback today, not a graded training signal.",
+      "The star value is display feedback today, not a graded training signal.",
     );
-    expect(panel).not.toHaveTextContent("records it as watched history");
+    expect(panel).not.toHaveTextContent("records a watch");
   });
 
   it("keeps removing a rating distinct from removing watched history", async () => {
@@ -321,6 +440,12 @@ describe("canonical state controls", () => {
       },
     });
 
+    // An already-rated movie opens collapsed, so clearing starts by reopening
+    // the stars — which is also where `Clear rating` deliberately lives, one
+    // step away from a value somebody already recorded.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Change rating for The Handmaiden" }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Clear rating" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
