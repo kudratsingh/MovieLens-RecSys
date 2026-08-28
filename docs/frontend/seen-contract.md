@@ -580,7 +580,7 @@ walk, and the taste summary are all as they are today.
 | Collection title | `Everything you have watched` |
 | Collection meaning | `Watched titles are the positive interactions candidate lookup reads from, and serving already excludes them from Discover's featured slot and ranked rail. A star value is display feedback and never a training signal.` |
 | Spotlight label | `Seen spotlight` |
-| Position readout, visible | `4 of 42` — `{index + 1} of {page.matched}`, falling back to `{index + 1} of {items.length}` if `matched` is not a number |
+| Position readout, visible | `4 of 42` — `{index + 1} of {page.matched}`. `matched` is `required` in the published schema, so the loaded window is a fallback only for the moment before the first page arrives, never for a response that omitted it |
 | Position readout, announced | `Psycho, 1960. 4 of 42 in Seen.` |
 | Previous / Next | `Previous` / `Next`, with `aria-label` `Previous seen title` / `Next seen title` |
 | Seen-on line | `Seen on 12 Mar 2024`, or `Seen on an unknown date` — same UTC formatter `formatLibraryDate` already pins, so a screenshot and a runner agree |
@@ -672,6 +672,34 @@ walk, and the taste summary are all as they are today.
   `persona-hygiene.spec.ts` keeps asserting it.
 - **Perf**: `/library` keeps the reserved-box structural claim — every image in
   the spotlight declares `width`/`height` or sits in an aspect-reserved box.
+
+## Notes from integration
+
+Three things the two halves only settled once they were built against each
+other and run on the seeded stack.
+
+**`matched` sits on `CursorPageResponse`, and that is safe.** The name reads
+shared, and widening a schema the catalog also used would have handed the
+catalog exactly the total its own contract refuses to invent. It does not: the
+catalog carries `CatalogPageInfo`, and `CursorPageResponse` has one consumer —
+`LibraryResponse`. Worth stating because the next person to add a field there
+gets no warning from the name.
+
+**The Library types are the generated ones.** The five additions were widened by
+hand in `web/lib/api.ts` while the endpoint was ahead of `docs/api/openapi.json`,
+each optional so an older API would degrade rather than break. The published
+schema now marks all five `required`, and ADR 0013 deploys every image at one
+commit SHA, so the two halves cannot be different ages: the widening is gone and
+the validators assert what the schema promises. A missing key is a broken API,
+and failing the region beats rendering `3 of undefined`.
+
+**A removed watched date cannot be restored.** `PUT /users/{id}/movies/{id}/watched`
+carries no body and stamps `watched_at = now()`, so `Remove from history`
+followed by re-marking watched returns the title with today's date, not the one
+it had. The confirmation copy is already honest about deleting the interaction;
+the consequence for *tests* is the sharper one, and it is why the QA walk
+exercises removal on a title the persona has never seen rather than on a seeded
+row whose 2023 date it could not put back.
 
 ## Open questions
 

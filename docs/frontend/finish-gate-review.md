@@ -1090,3 +1090,86 @@ make catalog-verify
 # Evidence
 cd web && MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:sweep
 ```
+
+## 12. Seen re-run (2026-08-28)
+
+**Reviewed:** 2026-08-28 · **Branch:** `feat/seen-history` · **Base:** `b4cf076`
+(`main` plus the featured-skip work), with the backend half merged from
+`feat/seen-history-api`
+
+**The verdict does not move: still HOLD, and still only on the moderated
+sessions.** No criterion in [§5](#5-ui-finish-gate-criteria) reopens. What this
+section records is that the Library's third tab became the Seen experience — a
+spotlight over search, filters and five rankings — and what was run against it.
+
+**It changes what a participant sees, so it changes which build the sessions
+must use.** [§10.8](#108-what-the-owner-must-run-to-convert-this-verdict) still
+names the tasks, but task 6 ("find something you watched") now has a search
+field, a genre filter, a year range and five orderings behind it, and the tab it
+lands on is labelled **Seen** rather than History. Freeze *this* build.
+
+### 12.1 What this unit changed
+
+| Change | Where |
+|---|---|
+| The History tab becomes **Seen** — visible label only; the URL value, the API value and every mutation path are untouched | `web/components/library/library-tabs.tsx` |
+| A **spotlight** above the list: backdrop, poster, runtime, TMDB score, cast, `Seen on <date>`, the shared `RatingStars`, the existing confirmed `Remove from history`, Previous/Next with a position readout, and ArrowLeft/ArrowRight when it holds focus. It walks the same filtered, sorted list the rows show, and extends through the cursor | `web/components/library/library-spotlight.tsx`, `web/lib/library/spotlight.ts` |
+| **Search, one genre, a year range and five sorts** (`recent`, `title`, `rating`, `release`, `tmdb`), each with a total order ending in `movie_id`, cursors bound to the query fingerprint | `src/serving/feedback.py`, `web/lib/library/url-state.ts` |
+| `page.matched` — the exact count for the tab and filters, so the readout says `3 of 42` truthfully rather than counting the window it loaded | `src/serving/feedback.py`, `src/serving/app.py` |
+| `tmdb_rating` on Library rows, so the ranking is visible next to the row it ordered | same |
+
+### 12.2 Two defects found and fixed during integration
+
+1. **Two different filtered views could share one identity.** `libraryViewKey`
+   joined its fields on a space, and two of those fields are text the viewer
+   controls — `q` is free text, and the endpoint takes any genre through a deep
+   link. `q="The"` with `genre="(no genres listed)"` produced the same key as
+   `q="The (no"` with `genre="genres listed)"`. The consequence is silent and
+   reads as data corruption rather than a stale cache: the key says the view has
+   not moved, so the fetch is skipped and the previous query's rows stay on
+   screen under the new query's URL. Fixed by serializing the fields, which is
+   injective by construction. Held by `web/tests/unit/library-url-state.test.ts`.
+
+2. **The Seen tab had no timing coverage.** The perf suite's Library
+   measurement visits `?tab=rated`, which has no spotlight — so the one block on
+   the product that fills in *after* paint (backdrop, runtime, score and cast,
+   from a detail read issued once the row is already on screen) was unmeasured,
+   and that is the classic shape of a late layout shift. Added as its own
+   `library-seen` route, with the backdrop asserted structurally as well as
+   through CLS, on the same reasoning the poster boxes are: a run that served
+   the image from cache would report CLS 0 while the markup was still capable of
+   pushing every row down.
+
+### 12.3 Verified
+
+| Command | Result |
+|---|---|
+| `ruff check` / `black --check` / `mypy src/ synthetic/` | pass; 139 files unchanged; no issues in 76 source files |
+| `npm run lint` / `npx tsc --noEmit` | clean |
+| `npx vitest run` | 60 files, **690 passed** |
+| `pytest tests/unit` | **762 passed, 6 skipped** — including `test_baked_serving_bundle.py` and `test_twotower.py`, which ran here without the segfault seen on other hosts |
+| `make api-contract-check && make web-api-types-check` | pass, both byte-identical on regeneration |
+| `make demo-up && make demo-seed && make demo-smoke` | stack rebuilt from this branch; 120 titles, 120 posters, 4 personas |
+| `make web-e2e` | **16 passed** — the serialized service-backed journeys, including the new `seen-journey.spec.ts` |
+| `MOVIELENS_UI_PORT=3121 playwright --config playwright.ui.config.ts` | **332 passed, 16 skipped** at 390/768/1440 plus the 320px sweep |
+| `npm run test:perf` | **6 passed**; `library-seen` LCP 92 ms, **CLS 0.0000**, ack 14.9 ms, 3/3 structural — every route CLS 0.0000 |
+| `make demo-load-smoke` (the pinned SLO gate) | **pass** — p50 6.99 ms, p95 10.67 ms, **p99 27.47 ms** against the 100 ms SLO; no threshold moved |
+| `make demo-load-pages` | **pass**, all budgets met; the Library step p50 5.27 / p95 24.05 / p99 32.64 ms, so the extra bounded `COUNT` costs nothing measurable |
+| `make demo-reliability-check` | 10/10 pass |
+| `pytest tests/tenant_isolation` | 23 passed, 1 failed — the environmental positive control in §11.3(3), issue #75, unchanged and not touched here. Both new Seen cases pass |
+| Persona hygiene | Action Fan back to 8 rated / 0 watchlist / 8 history with all eight seeded 2023 dates and ratings intact; **Cold Start 0/0/0** |
+
+Evidence: [`docs/frontend/evidence/seen-2026-08-28/`](evidence/seen-2026-08-28/) —
+15 frames at 1440/768/390 with their provenance, and the note on why the removal
+frames are captured on a title the persona has never seen rather than on a
+seeded row.
+
+### 12.4 One limit worth writing down
+
+`PUT /users/{id}/movies/{movieId}/watched` carries no body, so it stamps
+`watched_at = now()`. `Remove from history` is therefore not reversible in the
+sense a reader might assume: re-marking a title watched returns it with today's
+date, not the one it had. The confirmation copy is already honest about deleting
+the interaction, so this is not a UI defect — but it is the reason the QA walk
+exercises removal on a title Action Fan has never seen, and it is the thing to
+know before writing any test that removes a seeded row.
