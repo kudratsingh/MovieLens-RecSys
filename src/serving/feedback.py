@@ -9,6 +9,8 @@ ADR 0012.  Imported MovieLens ``ratings`` are intentionally never mutated here.
 from __future__ import annotations
 
 import base64
+import binascii
+import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
@@ -32,7 +34,7 @@ FeedbackAction = Literal[
     "dismissal_deleted",
 ]
 LibraryTab = Literal["rated", "watchlist", "history"]
-LibrarySort = Literal["recent", "title", "rating"]
+LibrarySort = Literal["recent", "title", "rating", "release", "tmdb"]
 
 
 class StateRevisionConflictError(ValueError):
@@ -74,6 +76,26 @@ class MutationResult:
 
 
 @dataclass(frozen=True)
+class LibraryQuery:
+    """One Library view: which rows, in what order, and where the page starts.
+
+    ``limit`` and ``cursor`` are deliberately not part of what identifies the
+    view — paging deeper into the same collection, or asking for a different
+    page size, is the same query — which is why the fingerprint a cursor is
+    bound to is built from the other six fields alone.
+    """
+
+    tab: LibraryTab = "rated"
+    sort: LibrarySort = "recent"
+    q: str | None = None
+    genre: str | None = None
+    year_from: int | None = None
+    year_to: int | None = None
+    limit: int = 24
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
 class LibraryMovie:
     movie_id: int
     title: str
@@ -84,6 +106,12 @@ class LibraryMovie:
     # per row. Both are None for a title the snapshot has never covered.
     release_year: int | None
     poster_url: str | None
+    # The TMDB crowd average, from the same snapshot and the same SQL the
+    # ``tmdb`` sort orders by, so a row's mark and its position cannot disagree
+    # about which titles have a score. The vote count stays off the row: a
+    # compact list mark has no room for it, and an average shown without its
+    # count is the one thing the detail view's score copy refuses to do.
+    tmdb_rating: float | None
     state: MovieState
 
 
@@ -96,8 +124,17 @@ class LibraryCounts:
 
 @dataclass(frozen=True)
 class LibraryPage:
+    # The normalized query this page answers. The response echoes it rather
+    # than the raw parameters, so what a client is told it asked for is exactly
+    # what the fingerprint — and therefore the cursor — was built from.
+    query: LibraryQuery
     items: list[LibraryMovie]
     counts: LibraryCounts
+    # Rows matching the tab condition and the filters, ignoring cursor and
+    # limit. Exact, never an estimate: this counts one viewer's own bounded
+    # rows rather than claiming breadth about the shared catalog, and it is the
+    # number the Seen spotlight's position readout would otherwise invent.
+    matched: int
     next_cursor: str | None
     has_more: bool
 
@@ -170,6 +207,61 @@ _RECENT_COLUMN: dict[LibraryTab, str] = {
     "watchlist": "s.watchlisted_at",
     "history": "s.watched_at",
 }
+
+_LIBRARY_FROM = """
+    FROM user_movie_state AS s
+    JOIN movies AS m ON m."movieId" = s.movie_id
+    LEFT JOIN movie_catalog_metadata AS cm ON cm.movie_id = s.movie_id
+"""
+
+# The TMDB score, chosen by dialect the way ``FOR UPDATE`` and the advisory
+# lock already are. Both spellings answer NULL for a title with no snapshot
+# row, no details, no ``tmdb_rating``, a non-numeric payload, or no votes: an
+# average nobody voted for is not a score, and saying so once in SQL is what
+# stops the row's mark, the ``tmdb`` ordering and the detail view from
+# disagreeing about which titles have one.
+_TMDB_SCORE_POSTGRESQL = """
+    CASE
+      WHEN jsonb_typeof(cm.details -> 'tmdb_rating' -> 'average') = 'number'
+       AND jsonb_typeof(cm.details -> 'tmdb_rating' -> 'count') = 'number'
+      THEN CASE
+             WHEN (cm.details -> 'tmdb_rating' -> 'count')::text::numeric > 0
+             THEN (cm.details -> 'tmdb_rating' -> 'average')::text::numeric
+           END
+    END
+"""
+# The two ``jsonb_typeof`` guards cannot raise and the casts only run beneath
+# them, so a hand-written row that put a string where a number belongs reads as
+# "no score" instead of erroring the whole page — the same tolerance
+# ``CatalogService`` applies in Python, for the same reason. ``json_valid`` is
+# SQLite's half of that bargain.
+_TMDB_SCORE_SQLITE = """
+    CASE
+      WHEN cm.details IS NOT NULL
+       AND json_valid(cm.details)
+       AND json_type(cm.details, '$.tmdb_rating.average') IN ('integer', 'real')
+       AND json_type(cm.details, '$.tmdb_rating.count') IN ('integer', 'real')
+       AND json_extract(cm.details, '$.tmdb_rating.count') > 0
+      THEN json_extract(cm.details, '$.tmdb_rating.average')
+    END
+"""
+
+_KeyKind = Literal["text", "number"]
+
+
+@dataclass(frozen=True)
+class _SortKey:
+    """One term of a sort's key vector, ahead of the ``movie_id`` tie-break.
+
+    ``expression`` is always a non-null scalar: nulls are mapped to a sentinel
+    below every real value rather than spelled as ``NULLS LAST``, which is what
+    keeps the keyset predicate a two- or three-term comparison instead of a
+    per-dialect null dance.
+    """
+
+    expression: str
+    descending: bool
+    kind: _KeyKind
 
 
 def require_demo_persona(connection: Connection, *, user_id: int) -> None:
@@ -344,72 +436,63 @@ class FeedbackService:
         connection: Connection,
         *,
         user_id: int,
-        tab: LibraryTab,
-        sort: LibrarySort,
-        limit: int,
-        cursor: str | None,
-        query: str | None,
+        query: LibraryQuery,
     ) -> LibraryPage:
         self._require_demo_persona(connection, user_id=user_id)
-        if sort == "rating" and tab != "rated":
-            raise InvalidLibraryCursorError("rating sort is available only on the Rated tab")
-        decoded = _decode_cursor(cursor, tab=tab, sort=sort, query=query) if cursor else None
-        where = ["s.user_id = :user_id", _TAB_CONDITION[tab]]
-        parameters: dict[str, object] = {"user_id": user_id, "limit": limit + 1}
-        normalized_query = query.strip().lower() if query else ""
-        if normalized_query:
-            where.append("lower(m.title) LIKE :query")
-            parameters["query"] = f"%{normalized_query}%"
+        normalized = _normalize_library_query(query)
+        if normalized.sort == "rating" and normalized.tab == "watchlist":
+            # A watchlisted title cannot carry a star value — a rating implies
+            # watched, and watched clears the watchlist — so this is refused
+            # for a product reason rather than by the enum.
+            raise InvalidLibraryCursorError(
+                "rating sort is available only on the Rated and Seen tabs"
+            )
+        dialect = connection.dialect.name
+        fingerprint = _query_fingerprint(normalized)
+        keys = _sort_keys(tab=normalized.tab, sort=normalized.sort, dialect=dialect)
+        cursor = (
+            _decode_cursor(normalized.cursor, fingerprint=fingerprint, keys=keys)
+            if normalized.cursor
+            else None
+        )
 
-        if sort == "recent":
-            sort_expression = _RECENT_COLUMN[tab]
-            order = f"{sort_expression} DESC, s.movie_id ASC"
-            if decoded is not None:
-                where.append(
-                    f"({sort_expression} < :cursor_value OR "
-                    f"({sort_expression} = :cursor_value AND s.movie_id > :cursor_movie_id))"
-                )
-                parameters["cursor_value"] = decoded[0]
-                parameters["cursor_movie_id"] = decoded[1]
-        elif sort == "title":
-            sort_expression = "lower(m.title)"
-            order = f"{sort_expression} ASC, s.movie_id ASC"
-            if decoded is not None:
-                where.append(
-                    f"({sort_expression} > :cursor_value OR "
-                    f"({sort_expression} = :cursor_value AND s.movie_id > :cursor_movie_id))"
-                )
-                parameters["cursor_value"] = decoded[0]
-                parameters["cursor_movie_id"] = decoded[1]
-        else:
-            sort_expression = "s.rating"
-            order = "s.rating DESC, s.movie_id ASC"
-            if decoded is not None:
-                where.append(
-                    "(s.rating < :cursor_value OR "
-                    "(s.rating = :cursor_value AND s.movie_id > :cursor_movie_id))"
-                )
-                parameters["cursor_value"] = float(decoded[0])
-                parameters["cursor_movie_id"] = decoded[1]
+        where, filters = _row_set(user_id=user_id, query=normalized)
+        score = _tmdb_score_sql(dialect)
+        projection = ", ".join(
+            f"{key.expression} AS cursor_key_{index}" for index, key in enumerate(keys)
+        )
+        order = ", ".join(
+            f"cursor_key_{index} {'DESC' if key.descending else 'ASC'}"
+            for index, key in enumerate(keys)
+        )
+        keyset = "" if cursor is None else f"WHERE {_keyset_condition(keys)}"
+        page_parameters: dict[str, object] = {**filters, "limit": normalized.limit + 1}
+        if cursor is not None:
+            page_parameters.update(_cursor_parameters(cursor))
 
+        # The row set is computed once in a derived table so the sort keys —
+        # the TMDB score in particular — are spelled once instead of repeated
+        # across the projection, the keyset predicate and the ordering.
         rows = list(
             connection.execute(
                 text(f"""
-                    SELECT {_ALIASED_STATE_COLUMNS}, m.title, m.genres,
-                           cm.release_year, cm.poster_url,
-                           {sort_expression} AS cursor_value
-                    FROM user_movie_state AS s
-                    JOIN movies AS m ON m."movieId" = s.movie_id
-                    LEFT JOIN movie_catalog_metadata AS cm ON cm.movie_id = s.movie_id
-                    WHERE {' AND '.join(where)}
-                    ORDER BY {order}
+                    SELECT * FROM (
+                        SELECT {_ALIASED_STATE_COLUMNS}, m.title, m.genres,
+                               cm.release_year, cm.poster_url,
+                               {score} AS tmdb_rating,
+                               {projection}
+                        {_LIBRARY_FROM}
+                        WHERE {where}
+                    ) AS matches
+                    {keyset}
+                    ORDER BY {order}, movie_id ASC
                     LIMIT :limit
                     """),
-                parameters,
+                page_parameters,
             )
         )
-        has_more = len(rows) > limit
-        page_rows = rows[:limit]
+        has_more = len(rows) > normalized.limit
+        page_rows = rows[: normalized.limit]
         items = [
             LibraryMovie(
                 movie_id=int(row.movie_id),
@@ -417,6 +500,7 @@ class FeedbackService:
                 genres=_split_genres(str(row.genres)),
                 release_year=(int(row.release_year) if row.release_year is not None else None),
                 poster_url=(str(row.poster_url) if row.poster_url is not None else None),
+                tmdb_rating=(float(row.tmdb_rating) if row.tmdb_rating is not None else None),
                 state=_row_to_state(row),
             )
             for row in page_rows
@@ -425,15 +509,18 @@ class FeedbackService:
         if has_more and page_rows:
             last = page_rows[-1]
             next_cursor = _encode_cursor(
-                tab=tab,
-                sort=sort,
-                query=normalized_query,
-                value=_cursor_value(last.cursor_value),
+                fingerprint=fingerprint,
+                values=[
+                    _cursor_key(getattr(last, f"cursor_key_{index}"), kind=key.kind)
+                    for index, key in enumerate(keys)
+                ],
                 movie_id=int(last.movie_id),
             )
         return LibraryPage(
+            query=normalized,
             items=items,
             counts=self._library_counts(connection, user_id=user_id),
+            matched=self._library_matched(connection, where=where, filters=filters),
             next_cursor=next_cursor,
             has_more=has_more,
         )
@@ -600,6 +687,26 @@ class FeedbackService:
             history=int(row.history or 0),
         )
 
+    def _library_matched(
+        self,
+        connection: Connection,
+        *,
+        where: str,
+        filters: dict[str, object],
+    ) -> int:
+        """Count the filtered rows, on every page rather than only the first.
+
+        The counts above are the three whole-tab totals the tabs print and stay
+        unfiltered; this is the filtered set the page is a window onto, so a
+        position readout stays true after the window has been extended.
+        """
+        return int(
+            connection.execute(
+                text(f"SELECT COUNT(*) AS matched {_LIBRARY_FROM} WHERE {where}"),
+                filters,
+            ).scalar_one()
+        )
+
     @staticmethod
     def _require_demo_persona(connection: Connection, *, user_id: int) -> None:
         require_demo_persona(connection, user_id=user_id)
@@ -737,16 +844,20 @@ def _cursor_value(value: object) -> str | float:
     return float(value) if isinstance(value, (int, float)) else str(value)
 
 
-def _encode_cursor(
-    *,
-    tab: LibraryTab,
-    sort: LibrarySort,
-    query: str,
-    value: str | float,
-    movie_id: int,
-) -> str:
+def _cursor_key(value: object, *, kind: _KeyKind) -> str | float:
+    """Encode one key so it survives the decoder's own type check.
+
+    The decoder validates a cursor's key vector against the types the sort
+    declares, so a driver handing back an int where a timestamp was expected
+    would otherwise mint a cursor this endpoint immediately rejects.
+    """
+    encoded = _cursor_value(value)
+    return str(encoded) if kind == "text" else float(encoded)
+
+
+def _encode_cursor(*, fingerprint: str, values: list[str | float], movie_id: int) -> str:
     raw = json.dumps(
-        {"v": 1, "tab": tab, "sort": sort, "q": query, "value": value, "movie_id": movie_id},
+        {"v": 2, "f": fingerprint, "k": values, "id": movie_id},
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
@@ -756,24 +867,171 @@ def _encode_cursor(
 def _decode_cursor(
     cursor: str,
     *,
-    tab: LibraryTab,
-    sort: LibrarySort,
-    query: str | None,
-) -> tuple[str | float, int]:
+    fingerprint: str,
+    keys: tuple[_SortKey, ...],
+) -> tuple[list[str | float], int]:
+    """Read a cursor, or refuse it.
+
+    Version 1 cursors are rejected rather than translated: their key was a
+    single value under a different sort vocabulary, and a link somebody kept
+    from before this view existed is exactly as stale as one from another
+    query. Both come back as the same 400, and the client restarts from the top.
+    """
     try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
-        payload = json.loads(raw)
-        expected_query = query.strip().lower() if query else ""
-        if (
-            not isinstance(payload, dict)
-            or payload.get("v") != 1
-            or payload.get("tab") != tab
-            or payload.get("sort") != sort
-            or payload.get("q") != expected_query
-            or not isinstance(payload.get("movie_id"), int)
-            or not isinstance(payload.get("value"), (str, int, float))
-        ):
+        payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if not isinstance(payload, dict) or payload.get("v") != 2:
             raise ValueError
-        return payload["value"], int(payload["movie_id"])
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise InvalidLibraryCursorError("invalid or query-mismatched library cursor") from exc
+        # The reuse rejection, and the whole point of the fingerprint.
+        if payload.get("f") != fingerprint:
+            raise ValueError
+        movie_id = payload.get("id")
+        if isinstance(movie_id, bool) or not isinstance(movie_id, int) or movie_id < 1:
+            raise ValueError
+        values = payload.get("k")
+        if not isinstance(values, list) or len(values) != len(keys):
+            raise ValueError
+        decoded = [
+            _decoded_key(value, kind=key.kind) for key, value in zip(keys, values, strict=True)
+        ]
+        return decoded, movie_id
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+        raise InvalidLibraryCursorError("library cursor is invalid for this query") from exc
+
+
+def _decoded_key(value: object, *, kind: _KeyKind) -> str | float:
+    if isinstance(value, bool):
+        raise ValueError("a boolean is not a sort key")
+    if kind == "text":
+        if not isinstance(value, str):
+            raise ValueError("expected a text sort key")
+        return value
+    if not isinstance(value, (int, float)):
+        raise ValueError("expected a numeric sort key")
+    return float(value)
+
+
+def _normalize_library_query(query: LibraryQuery) -> LibraryQuery:
+    """Normalize once, before anything else touches the parameters.
+
+    Whitespace runs in ``q`` collapse, so "  the   thing " and "the thing" are
+    the same query, the same fingerprint and therefore the same cursor. The
+    genre is compared against the fixed MovieLens vocabulary and so keeps its
+    case.
+    """
+    text_query = " ".join(query.q.split()) if query.q else None
+    genre = query.genre.strip() if query.genre else None
+    if query.year_from is not None and query.year_to is not None:
+        if query.year_from > query.year_to:
+            raise ValueError("year_from must be less than or equal to year_to")
+    return replace(query, q=text_query or None, genre=genre or None)
+
+
+def _query_fingerprint(query: LibraryQuery) -> str:
+    payload = json.dumps(
+        {
+            "tab": query.tab,
+            "sort": query.sort,
+            "q": query.q.lower() if query.q else None,
+            "genre": query.genre,
+            "year_from": query.year_from,
+            "year_to": query.year_to,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _row_set(*, user_id: int, query: LibraryQuery) -> tuple[str, dict[str, object]]:
+    """The tab condition and the filters, as SQL and its parameters.
+
+    A year bound is the one filter that can hide a row the tab contains: the
+    release year comes from the left-joined snapshot, so a title it has never
+    covered has none and cannot satisfy "between 1990 and 1999". Unfiltered,
+    that row is still listed with a null year and no poster.
+    """
+    where = ["s.user_id = :user_id", _TAB_CONDITION[query.tab]]
+    parameters: dict[str, object] = {"user_id": user_id}
+    if query.q:
+        where.append("lower(m.title) LIKE :query ESCAPE '\\'")
+        parameters["query"] = f"%{_escape_like(query.q.lower())}%"
+    if query.genre:
+        where.append("('|' || m.genres || '|') LIKE :genre ESCAPE '\\'")
+        parameters["genre"] = f"%|{_escape_like(query.genre)}|%"
+    if query.year_from is not None:
+        where.append("cm.release_year >= :year_from")
+        parameters["year_from"] = query.year_from
+    if query.year_to is not None:
+        where.append("cm.release_year <= :year_to")
+        parameters["year_to"] = query.year_to
+    return " AND ".join(where), parameters
+
+
+def _tmdb_score_sql(dialect: str) -> str:
+    return _TMDB_SCORE_POSTGRESQL if dialect == "postgresql" else _TMDB_SCORE_SQLITE
+
+
+def _sort_keys(*, tab: LibraryTab, sort: LibrarySort, dialect: str) -> tuple[_SortKey, ...]:
+    if sort == "recent":
+        # The tab condition guarantees the column, so no sentinel is reachable.
+        return (_SortKey(_RECENT_COLUMN[tab], descending=True, kind="text"),)
+    if sort == "title":
+        return (_SortKey("lower(m.title)", descending=False, kind="text"),)
+    if sort == "rating":
+        # Watched date breaks ties, so equally-rated titles have one order
+        # rather than an arbitrary one by id. Both tabs this sort is offered on
+        # guarantee one of the two timestamps.
+        return (
+            _SortKey("COALESCE(s.rating, -1)", descending=True, kind="number"),
+            _SortKey("COALESCE(s.watched_at, s.rating_updated_at)", descending=True, kind="text"),
+        )
+    if sort == "release":
+        return (_SortKey("COALESCE(cm.release_year, -1)", descending=True, kind="number"),)
+    return (_SortKey(f"COALESCE({_tmdb_score_sql(dialect)}, -1)", descending=True, kind="number"),)
+
+
+def _keyset_condition(keys: tuple[_SortKey, ...]) -> str:
+    """The keyset predicate for a page that starts after the cursor's row.
+
+    Read it as a lexicographic "strictly after": each term fixes the keys
+    before it and advances the next one, and the last term falls through to the
+    ``movie_id`` tie-break that makes every one of these sorts total.
+    """
+    terms = []
+    for index, key in enumerate(keys):
+        comparison = "<" if key.descending else ">"
+        terms.append(
+            " AND ".join(
+                [
+                    *(f"cursor_key_{before} = :cursor_key_{before}" for before in range(index)),
+                    f"cursor_key_{index} {comparison} :cursor_key_{index}",
+                ]
+            )
+        )
+    terms.append(
+        " AND ".join(
+            [
+                *(f"cursor_key_{index} = :cursor_key_{index}" for index in range(len(keys))),
+                "movie_id > :cursor_movie_id",
+            ]
+        )
+    )
+    return "(" + " OR ".join(f"({term})" for term in terms) + ")"
+
+
+def _cursor_parameters(cursor: tuple[list[str | float], int]) -> dict[str, object]:
+    values, movie_id = cursor
+    parameters: dict[str, object] = {"cursor_movie_id": movie_id}
+    for index, value in enumerate(values):
+        parameters[f"cursor_key_{index}"] = value
+    return parameters
+
+
+def _escape_like(value: str) -> str:
+    """Escape a viewer's text so ``%`` and ``_`` match themselves.
+
+    Same rule ``src/serving/catalog.py`` applies to its own search. It is
+    spelled again here rather than imported because that module already imports
+    this one, and the dependency runs in exactly one direction.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

@@ -100,6 +100,55 @@ def test_library_contract_bounds_pages_and_exposes_opaque_cursor() -> None:
     assert parameters["limit"]["schema"]["maximum"] == 50
     assert parameters["cursor"]["schema"]["anyOf"][0]["maxLength"] == 1024
     assert operation["operationId"] == "listLibrary"
+    assert operation["responses"]["400"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
+
+
+def test_library_filters_and_rankings_are_declared_with_their_bounds() -> None:
+    """The Seen tab's search, filters and sorts, as the contract a client reads.
+
+    Every bound here is the difference between a refusal the caller can act on
+    and an unbounded scan: the enum answers an unknown sort, the year range
+    answers a typo, and ``max_length`` answers a pasted essay — all before the
+    request reaches a query.
+    """
+    schema = _schema()
+    operation = schema["paths"]["/users/{user_id}/library"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert parameters["sort"]["schema"]["enum"] == [
+        "recent",
+        "title",
+        "rating",
+        "release",
+        "tmdb",
+    ]
+    assert parameters["q"]["schema"]["anyOf"][0]["maxLength"] == 120
+    assert parameters["genre"]["schema"]["anyOf"][0]["maxLength"] == 40
+    for bound in ("year_from", "year_to"):
+        assert parameters[bound]["schema"]["anyOf"][0]["minimum"] == 1878
+        assert parameters[bound]["schema"]["anyOf"][0]["maximum"] == 2100
+
+    response = schema["components"]["schemas"]["LibraryResponse"]
+    assert {"genre", "year_from", "year_to"} <= set(response["required"])
+
+
+def test_a_library_page_reports_an_exact_match_count_and_the_crowd_average() -> None:
+    """``matched`` is a count of one viewer's own bounded rows, so it is exact
+    and always present — the spotlight's position readout is its only reader
+    and the alternative is inventing the number. ``tmdb_rating`` carries the
+    average alone; the vote count that qualifies it lives on the detail
+    payload, which a list response still does not carry."""
+    schemas = _schema()["components"]["schemas"]
+    page = schemas["CursorPageResponse"]
+    row = schemas["LibraryMovieResponse"]
+
+    assert set(page["required"]) == {"next_cursor", "has_more", "matched"}
+    assert page["properties"]["matched"]["type"] == "integer"
+    assert "tmdb_rating" in row["required"]
+    assert row["properties"]["tmdb_rating"]["anyOf"] == [{"type": "number"}, {"type": "null"}]
+    assert "details" not in row["properties"]
 
 
 def test_feedback_mutations_accept_idempotency_and_revision_contracts() -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -11,7 +14,10 @@ from src.serving.feedback import (
     IdempotencyConflictError,
     InvalidLibraryCursorError,
     InvalidStateTransitionError,
+    LibraryQuery,
     StateRevisionConflictError,
+    _normalize_library_query,
+    _query_fingerprint,
 )
 from src.serving.recommendations import RecommendationService, UnknownDemoPersonaError
 from tests.unit.test_serving_recommendations import _connection
@@ -20,6 +26,15 @@ TENANT = "demo"
 ACTOR = "oidc-actor"
 USER = 900000101
 START = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
+
+def _b64(payload: dict[str, object]) -> str:
+    """Mint a cursor by hand, the way a stale link or a forgery would arrive."""
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+
+def _decoded(cursor: str) -> dict[str, object]:
+    return dict(json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))))
 
 
 def _mutate(
@@ -248,11 +263,7 @@ def test_non_persona_cannot_read_or_mutate_same_tenant_library() -> None:
             service.library(
                 connection,
                 user_id=10,
-                tab="history",
-                sort="recent",
-                limit=20,
-                cursor=None,
-                query=None,
+                query=LibraryQuery(tab="history", limit=20),
             )
         with pytest.raises(UnknownDemoPersonaError):
             service.mutate(
@@ -284,30 +295,18 @@ def test_library_uses_stable_filter_bound_cursor_and_counts() -> None:
         first = service.library(
             connection,
             user_id=USER,
-            tab="rated",
-            sort="recent",
-            limit=2,
-            cursor=None,
-            query=None,
+            query=LibraryQuery(tab="rated", limit=2),
         )
         second = service.library(
             connection,
             user_id=USER,
-            tab="rated",
-            sort="recent",
-            limit=2,
-            cursor=first.next_cursor,
-            query=None,
+            query=LibraryQuery(tab="rated", limit=2, cursor=first.next_cursor),
         )
         with pytest.raises(InvalidLibraryCursorError):
             service.library(
                 connection,
                 user_id=USER,
-                tab="history",
-                sort="recent",
-                limit=2,
-                cursor=first.next_cursor,
-                query=None,
+                query=LibraryQuery(tab="history", limit=2, cursor=first.next_cursor),
             )
     finally:
         connection.close()
@@ -330,11 +329,7 @@ def test_library_title_search_and_live_rating_taste_copy_are_truthful() -> None:
         page = service.library(
             connection,
             user_id=USER,
-            tab="rated",
-            sort="title",
-            limit=10,
-            cursor=None,
-            query="ACTION",
+            query=LibraryQuery(tab="rated", sort="title", limit=10, q="ACTION"),
         )
         summary = service.taste_summary(connection, user_id=USER)
     finally:
@@ -361,11 +356,7 @@ def test_library_rows_carry_local_artwork_and_a_structured_year() -> None:
         page = service.library(
             connection,
             user_id=USER,
-            tab="history",
-            sort="recent",
-            limit=10,
-            cursor=None,
-            query=None,
+            query=LibraryQuery(tab="history", limit=10),
         )
     finally:
         connection.close()
@@ -414,3 +405,384 @@ def test_states_for_movies_is_scoped_to_the_requested_user() -> None:
         connection.close()
 
     assert other == {}
+
+
+# --- The Seen tab: search, filters and rankings over one persona's own rows ---
+
+
+def _seen_connection():
+    """The shared fixture plus the titles the Seen views need to be distinct.
+
+    Deliberate shape: a tie in every sort key so the ``movie_id`` tie-break is
+    exercised rather than assumed, one title the catalog snapshot has never
+    covered (3), and one row per way a TMDB score can be absent — no snapshot
+    row, details with no ``tmdb_rating``, unparseable details, a zero vote
+    count, and a non-numeric average.
+    """
+    connection = _connection()
+    connection.execute(
+        text(
+            "INSERT INTO movies VALUES "
+            "(4, 'Sci Fi Four (1994)', 'Sci-Fi|Drama'), "
+            "(5, 'Noir Five (1974)', 'Film-Noir|Drama'), "
+            "(6, 'Broken Six (2010)', 'Drama'), "
+            "(7, 'Percent %Seven (2015)', 'Drama'), "
+            "(8, 'Plain Eight (2015)', 'Drama')"
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO movie_catalog_metadata VALUES "
+            "(4, 'sci fi four', 1994, NULL, NULL, 'movielens', 'partial', TRUE, "
+            """'{"tmdb_rating": {"average": 7.0, "count": 10}}'), """
+            "(5, 'noir five', 1974, NULL, NULL, 'movielens', 'partial', TRUE, "
+            """'{"tmdb_rating": {"average": 9.1, "count": 3}}'), """
+            "(6, 'broken six', 2010, NULL, NULL, 'movielens', 'partial', TRUE, "
+            "'not json at all'), "
+            "(7, 'percent seven', 2015, NULL, NULL, 'movielens', 'partial', TRUE, "
+            """'{"tmdb_rating": {"average": 6.0, "count": 0}}'), """
+            "(8, 'plain eight', 2015, NULL, NULL, 'movielens', 'partial', TRUE, "
+            """'{"tmdb_rating": {"average": "high", "count": 4}}')"""
+        )
+    )
+    connection.execute(
+        text("""UPDATE movie_catalog_metadata SET details = '{"tagline": "no score here"}'
+                WHERE movie_id = 2""")
+    )
+    service = FeedbackService()
+    for movie_id, minute, rating in (
+        (1, 10, 4.0),
+        (2, 20, 4.0),
+        (3, 30, None),
+        (4, 40, 2.5),
+        (5, 50, None),
+        (6, 60, 4.0),
+        (7, 70, None),
+        (8, 70, None),
+    ):
+        action = "watched_set" if rating is None else "rating_set"
+        _mutate(service, connection, movie_id=movie_id, action=action, minute=minute, rating=rating)
+    return connection
+
+
+def _seen(service: FeedbackService, connection: object, **overrides: object):
+    return service.library(
+        connection,  # type: ignore[arg-type]
+        user_id=USER,
+        query=LibraryQuery(tab="history", **overrides),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("sort", "expected"),
+    [
+        ("recent", [7, 8, 6, 5, 4, 3, 2, 1]),
+        ("title", [1, 6, 2, 3, 5, 7, 8, 4]),
+        ("rating", [6, 2, 1, 4, 7, 8, 5, 3]),
+        ("release", [7, 8, 6, 2, 1, 4, 5, 3]),
+        ("tmdb", [5, 1, 4, 2, 3, 6, 7, 8]),
+    ],
+)
+def test_every_seen_sort_is_a_total_order_with_unknowns_last(
+    sort: str, expected: list[int]
+) -> None:
+    """Each sort's ties resolve by movie id and each one's unknowns land last.
+
+    ``rating`` is the interesting row: 1, 2 and 6 all hold four stars, so the
+    watched-date tie-break is what orders them 6, 2, 1 rather than 1, 2, 6.
+    """
+    connection = _seen_connection()
+    try:
+        page = _seen(FeedbackService(), connection, sort=sort, limit=50)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in page.items] == expected
+
+
+@pytest.mark.parametrize("sort", ["recent", "title", "rating", "release", "tmdb"])
+def test_paging_one_row_at_a_time_reproduces_the_whole_order(sort: str) -> None:
+    """A cursor walk over ties must neither repeat a row nor skip one."""
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        whole = _seen(service, connection, sort=sort, limit=50)
+        walked: list[int] = []
+        cursor: str | None = None
+        while True:
+            page = _seen(service, connection, sort=sort, limit=1, cursor=cursor)
+            walked.extend(item.movie_id for item in page.items)
+            cursor = page.next_cursor
+            if not page.has_more:
+                break
+    finally:
+        connection.close()
+
+    assert walked == [item.movie_id for item in whole.items]
+
+
+def test_a_cursor_is_refused_by_every_other_view() -> None:
+    """The fingerprint covers tab, sort and all four filters, and nothing else.
+
+    Paging deeper, or asking for a different page size, is the same view — so
+    the same cursor has to survive a changed ``limit`` and be refused by a
+    changed anything-else.
+    """
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        issued = _seen(service, connection, sort="release", limit=2, genre="Drama").next_cursor
+        assert issued is not None
+        resized = _seen(service, connection, sort="release", limit=5, genre="Drama", cursor=issued)
+        for changed in (
+            {"sort": "tmdb", "genre": "Drama"},
+            {"sort": "release"},
+            {"sort": "release", "genre": "Sci-Fi"},
+            {"sort": "release", "genre": "Drama", "q": "plain"},
+            {"sort": "release", "genre": "Drama", "year_from": 1990},
+            {"sort": "release", "genre": "Drama", "year_to": 2020},
+        ):
+            with pytest.raises(InvalidLibraryCursorError):
+                _seen(service, connection, limit=2, cursor=issued, **changed)
+        with pytest.raises(InvalidLibraryCursorError):
+            service.library(
+                connection,
+                user_id=USER,
+                query=LibraryQuery(tab="rated", sort="release", genre="Drama", cursor=issued),
+            )
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in resized.items] == [6, 2, 4, 5]
+
+
+def test_whitespace_and_case_variants_of_a_query_are_one_view() -> None:
+    """Normalization happens once, before anything else touches the query, so a
+    cursor minted under one spelling of a search term is still this view's."""
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        issued = _seen(service, connection, sort="title", q="  E  ", limit=2)
+        reused = _seen(service, connection, sort="title", q="e", limit=2, cursor=issued.next_cursor)
+    finally:
+        connection.close()
+
+    assert issued.query.q == "E"
+    assert [item.movie_id for item in issued.items] == [1, 6]
+    assert [item.movie_id for item in reused.items] == [3, 5]
+
+
+def test_the_fingerprint_covers_the_view_and_nothing_about_the_page() -> None:
+    """What a cursor is bound to, stated directly.
+
+    Every field that changes which rows come back, or in what order, has to
+    change it; page size and page position must not, or paging deeper would
+    invalidate the cursor that got you there.
+    """
+    base = LibraryQuery(tab="history", sort="tmdb", q="blade", genre="Drama", year_from=1990)
+    fingerprint = _query_fingerprint(_normalize_library_query(base))
+
+    for changed in (
+        replace(base, tab="rated"),
+        replace(base, sort="release"),
+        replace(base, q="blad"),
+        replace(base, genre="Sci-Fi"),
+        replace(base, year_from=1991),
+        replace(base, year_to=2001),
+    ):
+        assert _query_fingerprint(_normalize_library_query(changed)) != fingerprint
+
+    for equivalent in (
+        replace(base, limit=50),
+        replace(base, cursor="anything at all"),
+        replace(base, q="  blade "),
+        replace(base, genre=" Drama "),
+    ):
+        assert _query_fingerprint(_normalize_library_query(equivalent)) == fingerprint
+
+    # Case survives into the echo but not into the identity of the view: the
+    # title match is case-insensitive, so "Blade" and "blade" are one query.
+    cased = _normalize_library_query(replace(base, q="BLADE"))
+    assert cased.q == "BLADE"
+    assert _query_fingerprint(cased) == fingerprint
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not base64 at all!!",
+        _b64({"v": 1, "tab": "history", "sort": "recent", "q": "", "value": 1, "movie_id": 8}),
+        _b64({"v": 2, "f": "0" * 16, "k": ["2026-08-21T13:10:00+00:00"], "id": 8}),
+        _b64({"v": 2, "k": ["2026-08-21T13:10:00+00:00"], "id": 8}),
+    ],
+)
+def test_a_cursor_that_is_not_this_views_own_is_refused(payload: str) -> None:
+    """A stale link, a version-1 cursor and a forged fingerprint are one case."""
+    connection = _seen_connection()
+    try:
+        with pytest.raises(InvalidLibraryCursorError):
+            _seen(FeedbackService(), connection, limit=2, cursor=payload)
+    finally:
+        connection.close()
+
+
+def test_a_cursor_whose_keys_do_not_match_the_sort_is_refused() -> None:
+    """Arity and element type are part of what a cursor has to prove.
+
+    Without the check a key vector from a one-key sort would silently bind to
+    the first term of a two-key predicate, and a bool would compare as 0 or 1.
+    """
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        rating_cursor = _seen(service, connection, sort="rating", limit=2).next_cursor
+        assert rating_cursor is not None
+        fingerprint = _decoded(rating_cursor)["f"]
+        for keys in ([4.0], [4.0, "x", 1.0], [4.0, True], ["4.0", "x"], [4.0, 1.0]):
+            forged = _b64({"v": 2, "f": fingerprint, "k": keys, "id": 4})
+            with pytest.raises(InvalidLibraryCursorError):
+                _seen(service, connection, sort="rating", limit=2, cursor=forged)
+        for movie_id in (0, True, "8"):
+            forged = _b64({"v": 2, "f": fingerprint, "k": [4.0, "x"], "id": movie_id})
+            with pytest.raises(InvalidLibraryCursorError):
+                _seen(service, connection, sort="rating", limit=2, cursor=forged)
+    finally:
+        connection.close()
+
+
+def test_rating_sort_is_refused_on_the_watchlist_tab() -> None:
+    """A watchlisted title cannot hold a star value, so the order has no meaning
+    there. Rated and Seen both can, and both offer it."""
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        with pytest.raises(InvalidLibraryCursorError) as refused:
+            service.library(
+                connection,
+                user_id=USER,
+                query=LibraryQuery(tab="watchlist", sort="rating"),
+            )
+    finally:
+        connection.close()
+
+    assert "Rated and Seen" in str(refused.value)
+
+
+def test_an_inverted_year_range_is_a_bad_request_not_an_empty_page() -> None:
+    connection = _seen_connection()
+    try:
+        with pytest.raises(ValueError) as refused:
+            _seen(FeedbackService(), connection, year_from=2001, year_to=1990)
+    finally:
+        connection.close()
+
+    assert not isinstance(refused.value, InvalidLibraryCursorError)
+
+
+def test_a_genre_filter_matches_whole_tokens_only() -> None:
+    """``Film-Noir`` contains ``Noir``; the pipe-delimited match must not."""
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        drama = _seen(service, connection, sort="title", genre="Drama", limit=50)
+        noir = _seen(service, connection, genre="Noir", limit=50)
+        unknown = _seen(service, connection, genre="Documentary", limit=50)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in drama.items] == [6, 2, 5, 7, 8, 4]
+    assert noir.items == []
+    assert noir.matched == 0
+    assert unknown.items == []
+
+
+def test_a_search_term_is_escaped_so_a_wildcard_matches_itself() -> None:
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        wildcard = _seen(service, connection, q="%", limit=50)
+        underscore = _seen(service, connection, q="_", limit=50)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in wildcard.items] == [7]
+    assert underscore.items == []
+
+
+def test_a_year_bound_drops_the_rows_the_snapshot_has_never_covered() -> None:
+    """The one filter that can hide a row the tab contains.
+
+    An unknown release year cannot satisfy "between 1990 and 2001", so movie 3
+    drops out — but only while the filter is on. Unfiltered it is still listed,
+    with a null year, because the row is about the viewer and not about how
+    well enriched the title is.
+    """
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        bounded = _seen(service, connection, sort="release", year_from=1990, year_to=2001)
+        open_ended = _seen(service, connection, sort="release", year_from=1990)
+        unfiltered = _seen(service, connection, sort="release", limit=50)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in bounded.items] == [2, 1, 4]
+    assert [item.movie_id for item in open_ended.items] == [7, 8, 6, 2, 1, 4]
+    assert unfiltered.items[-1].movie_id == 3
+    assert unfiltered.items[-1].release_year is None
+
+
+def test_matched_counts_the_filtered_set_on_every_page() -> None:
+    """``matched`` is what the spotlight's "3 of 42" reads, so it has to be
+    exact, stable across an appended page, and independent of the page size.
+    ``counts`` stays unfiltered: the two agree only when no filter is on."""
+    connection = _seen_connection()
+    service = FeedbackService()
+    try:
+        unfiltered = _seen(service, connection, limit=3)
+        first = _seen(service, connection, sort="title", genre="Drama", limit=4)
+        second = _seen(
+            service, connection, sort="title", genre="Drama", limit=4, cursor=first.next_cursor
+        )
+        wider = _seen(service, connection, sort="title", genre="Drama", limit=50)
+        narrow = _seen(service, connection, genre="Drama", year_from=2010, limit=50)
+    finally:
+        connection.close()
+
+    assert unfiltered.matched == 8
+    assert unfiltered.matched == unfiltered.counts.history
+    assert first.matched == second.matched == wider.matched == 6
+    assert first.counts.history == 8
+    assert narrow.matched == 3
+    assert len(second.items) == 2
+
+
+@pytest.mark.parametrize(
+    ("movie_id", "expected"),
+    [
+        (1, 8.4),
+        (4, 7.0),
+        (5, 9.1),
+        (2, None),
+        (3, None),
+        (6, None),
+        (7, None),
+        (8, None),
+    ],
+)
+def test_a_row_carries_the_crowd_average_or_nothing(movie_id: int, expected: float | None) -> None:
+    """One SQL expression answers both the row's mark and the ``tmdb`` order.
+
+    A score is absent for a title with no snapshot row (3), details carrying no
+    ``tmdb_rating`` (2), details that do not parse (6), an average nobody voted
+    for (7), and a non-numeric average (8) — an average with no votes behind it
+    is not a score, and that rule is spelled in SQL rather than in a caller.
+    """
+    connection = _seen_connection()
+    try:
+        page = _seen(FeedbackService(), connection, limit=50)
+    finally:
+        connection.close()
+
+    rows = {item.movie_id: item for item in page.items}
+    assert rows[movie_id].tmdb_rating == expected
