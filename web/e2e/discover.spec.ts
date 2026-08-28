@@ -431,3 +431,97 @@ test("the rating confirmation clears itself instead of going stale", async ({ pa
   await expect(status).toHaveText(/^Recorded feedback updates/, { timeout: 8_000 });
   await expect(page.getByRole("link", { name: "Manage in Library" })).toHaveCount(0);
 });
+
+test("a watchlisted featured title says so and offers a way past it", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=watchlisted");
+
+  const featured = page.getByRole("region", { name: HANDMAIDEN });
+  await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+  await expect(featured.getByText("On your watchlist")).toBeVisible();
+  await expect(featured.getByRole("button", { name: "Skip" })).toBeVisible();
+  // The setting the skip leads to is permanently reachable, not only through
+  // the one-time question.
+  await expect(
+    page.getByRole("button", { name: "Feature watchlisted titles" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("skipping moves on, keeps the title in the rail, and records nothing", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=watchlisted");
+
+  // Nothing may leave the browser: a skip is not a decision (ADR 0012).
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET") requests.push(request.url());
+  });
+
+  await page.getByRole("button", { name: "Skip" }).first().click();
+
+  await expect(
+    page.getByText("Skipped The Handmaiden — still on your watchlist."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "In the Mood for Love" }),
+  ).toBeVisible();
+  const rail = page.getByRole("region", { name: "Next in this ranked set" });
+  await expect(rail.getByRole("link", { name: new RegExp(HANDMAIDEN) })).toBeVisible();
+  expect(requests).toEqual([]);
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("the third skip offers the setting once, with a keyboard path to both answers", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=watchlisted");
+
+  const question = "Stop featuring titles on your watchlist?";
+  for (const step of [1, 2]) {
+    await page.getByRole("button", { name: "Skip" }).first().click();
+    await expect(page.getByText(question), `after skip ${step}`).toHaveCount(0);
+  }
+  // The third skip is driven from the keyboard, because the offer it raises has
+  // to be reachable by whoever earned it.
+  await page.getByRole("button", { name: "Skip" }).first().focus();
+  await page.keyboard.press("Enter");
+
+  const nudge = page.getByRole("group", { name: question });
+  await expect(nudge).toBeVisible();
+  await expect(nudge.getByRole("button", { name: "Stop featuring them" })).toBeVisible();
+  await expect(nudge.getByRole("button", { name: "Keep featuring them" })).toBeVisible();
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("with featuring off, a saved title keeps its rail card and loses the slot", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=watchlist-held-back");
+
+  // 101–104 are on the watchlist; 105 is the first title with no state at all.
+  await expect(page.getByRole("heading", { level: 1, name: "Perfect Blue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Skip" })).toHaveCount(0);
+  const rail = page.getByRole("region", { name: "Next in this ranked set" });
+  await expect(rail.getByRole("link", { name: new RegExp(HANDMAIDEN) })).toBeVisible();
+  await expect(rail.getByRole("button", { name: "In watchlist" }).first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Feature watchlisted titles" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("`Why this?` says what never comes back and what still can", async ({ page }) => {
+  await page.goto("/discover?demo=watchlist-held-back");
+
+  await page.getByRole("button", { name: "Why this?" }).click();
+  const drawer = page.getByRole("dialog");
+  await expect(
+    drawer.getByText(/never come back to Discover/),
+  ).toBeVisible();
+  await expect(
+    drawer.getByText(/you have turned off featuring them/),
+  ).toBeVisible();
+});

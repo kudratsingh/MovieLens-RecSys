@@ -109,6 +109,7 @@ export default async function DiscoverPage({
 
           <DiscoverExperience
             browseHref={browseHref}
+            initialPreferences={resources.preferences}
             initialRecommendations={resources.recommendations}
             limit={DISCOVER_RECOMMENDATION_LIMIT}
             movieHrefBase="/movies"

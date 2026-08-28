@@ -15,7 +15,8 @@ export type LiveResourceName =
   | "library"
   | "taste-profile"
   | "audits"
-  | "features";
+  | "features"
+  | "preferences";
 
 /**
  * `live` is the only value a production fetch can produce. Recorded fixtures

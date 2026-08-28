@@ -11,7 +11,8 @@ state it overlays), ``/users/{id}/history``, ``/users/{id}/audits``,
 ``/personas``, ``/users/{id}/features``, ``/users/{id}/catalog``,
 ``/users/{id}/library`` (including the shared artwork its rows now carry),
 ``/users/{id}/movies/{id}`` (including the TMDB detail payload it now carries),
-the rating write path, and ``DELETE /users/{id}/ratings``. Not yet covered:
+the rating write path, ``DELETE /users/{id}/ratings``, and
+``GET|PUT /users/{id}/preferences``. Not yet covered:
 ``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
 the test's job is to be the tenant-isolation gate every serving PR passes
 through in CI.
@@ -651,3 +652,99 @@ def _item_state(items: list[dict[str, object]], movie_id: int) -> dict[str, obje
             assert state is None or isinstance(state, dict)
             return state
     raise AssertionError(f"movie {movie_id} left the ranked set between reads")
+
+
+def test_preferences_are_owned_by_one_persona_in_one_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """A presentation preference is tenant-owned state like any other.
+
+    It is not feedback and it reaches no model, but it is still a row that says
+    what one persona in one tenant is shown — so the same three properties have
+    to hold: no token, no answer; the wrong tenant's token, no answer; and a
+    write from one tenant leaves the other tenant's row exactly as it was.
+
+    The pair of user ids matters here. `987654323` is a default-tenant persona
+    and `987654324` a demo-tenant one, so each write below is addressed to a
+    persona the other caller cannot reach at all.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get("/users/987654324/preferences")
+    cross_tenant_read = client.get("/users/987654324/preferences", headers=default_headers)
+    cross_tenant_write = client.put(
+        "/users/987654324/preferences",
+        json={"feature_watchlisted_titles": False},
+        headers=default_headers,
+    )
+
+    assert unauthenticated.status_code == 401
+    assert cross_tenant_read.status_code == 404
+    assert cross_tenant_write.status_code == 404
+
+    # Each tenant's own persona starts from the documented default.
+    demo_before = client.get("/users/987654324/preferences", headers=demo_headers)
+    default_before = client.get("/users/987654323/preferences", headers=default_headers)
+
+    assert demo_before.status_code == 200
+    assert default_before.status_code == 200
+    assert demo_before.json()["tenant_id"] == "demo"
+    assert default_before.json()["tenant_id"] == "default"
+    for response in (demo_before, default_before):
+        assert response.json()["feature_watchlisted_titles"] is True
+        assert response.json()["revision"] == 0
+
+    written = client.put(
+        "/users/987654324/preferences?expected_revision=0",
+        json={"feature_watchlisted_titles": False},
+        headers=demo_headers,
+    )
+    try:
+        assert written.status_code == 200
+        assert written.json()["outcome"] == "changed"
+        assert written.json()["preferences"]["tenant_id"] == "demo"
+        assert written.json()["preferences"]["feature_watchlisted_titles"] is False
+        assert written.json()["preferences"]["revision"] == 1
+
+        demo_after = client.get("/users/987654324/preferences", headers=demo_headers)
+        default_after = client.get("/users/987654323/preferences", headers=default_headers)
+
+        assert demo_after.json()["feature_watchlisted_titles"] is False
+        # The probe that matters: with a demo row standing, the other tenant's
+        # persona still reads its own untouched default rather than this one.
+        assert default_after.json()["feature_watchlisted_titles"] is True
+        assert default_after.json()["revision"] == 0
+        assert '"tenant_id":"demo"' not in default_after.text
+
+        # A stale assertion is refused rather than silently overwriting.
+        stale = client.put(
+            "/users/987654324/preferences?expected_revision=0",
+            json={"feature_watchlisted_titles": True},
+            headers=demo_headers,
+        )
+        assert stale.status_code == 409
+        assert (
+            client.get("/users/987654324/preferences", headers=demo_headers).json()[
+                "feature_watchlisted_titles"
+            ]
+            is False
+        )
+    finally:
+        restored = client.put(
+            "/users/987654324/preferences",
+            json={"feature_watchlisted_titles": True},
+            headers=demo_headers,
+        )
+        assert restored.status_code == 200
+
+    settled = client.get("/users/987654324/preferences", headers=demo_headers)
+    assert settled.json()["feature_watchlisted_titles"] is True
+    # A repeat of the settled value is reported as a repeat, not applied again.
+    repeat = client.put(
+        "/users/987654324/preferences",
+        json={"feature_watchlisted_titles": True},
+        headers=demo_headers,
+    )
+    assert repeat.json()["outcome"] == "no_change"
+    assert repeat.json()["preferences"]["revision"] == settled.json()["revision"]

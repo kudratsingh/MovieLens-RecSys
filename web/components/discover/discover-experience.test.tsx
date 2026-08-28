@@ -8,11 +8,15 @@ import type {
   FeedbackMutationResponse,
   MovieDetailResponse,
   RecommendationResponse,
+  UserPreferences,
 } from "@/lib/api";
 import {
   fallbackRecommendations,
+  featuredPreferencesOff,
+  featuredPreferencesOn,
   learnedRecommendations,
   posterFailureRecommendations,
+  watchlistedRecommendations,
 } from "@/lib/fixtures/discover-fixtures";
 import { recordCommittedState } from "@/lib/movie-state/committed-store";
 import {
@@ -69,11 +73,15 @@ const detailWithWatchlist: MovieDetailResponse = {
   },
 };
 
-function renderDiscover(state: ResourceState<RecommendationResponse>) {
+function renderDiscover(
+  state: ResourceState<RecommendationResponse>,
+  preferences?: ResourceState<UserPreferences>,
+) {
   return render(
     <main>
       <DiscoverExperience
         browseHref="/browse?user=900000101"
+        initialPreferences={preferences}
         initialRecommendations={state}
         limit={10}
         movieHrefBase="/movies"
@@ -1042,5 +1050,241 @@ describe("a rating from the follow-up panel finishes the decision", () => {
 
     await screen.findByText(CONFIRMATION);
     expect(scrolls).toEqual([{ id: "featured-movie", behavior: "auto" }]);
+  });
+});
+
+describe("the featured slot can pass over a title already on the watchlist", () => {
+  const watchlisted = () =>
+    readyState("recommendations", watchlistedRecommendations, REQUEST_ID);
+
+  /**
+   * Every call the page makes, so a test can assert on what was *not* sent. A
+   * skip's whole contract is that it writes nothing, and the only way to check
+   * that is to look at the requests.
+   */
+  function recordFetches(preference: UserPreferences = featuredPreferencesOff) {
+    const calls: { url: string; method: string }[] = [];
+    const fetchImpl = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? "GET" });
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/preferences")) {
+          return Response.json({ outcome: "changed", preferences: preference });
+        }
+        return Response.json(watchlistedRecommendations);
+      },
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    return calls;
+  }
+
+  function skipButton(movieId: number) {
+    return document.getElementById(`featured-${movieId}-skip`) as HTMLElement;
+  }
+
+  it("offers Skip only where the route knows the title is watchlisted", async () => {
+    const { container } = renderDiscover(watchlisted());
+
+    expect(featuredRegion().getByText("On your watchlist")).toBeVisible();
+    expect(featuredRegion().getByRole("button", { name: "Skip" })).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not offer Skip on a title whose state is unknown", () => {
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+
+    // The same fixture without per-item state: "unknown" is not "not
+    // watchlisted", and a Skip here would be a control with nothing behind it.
+    expect(featuredRegion().queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(screen.queryByText("On your watchlist")).not.toBeInTheDocument();
+  });
+
+  it("advances the queue, keeps the title in the rail, and writes nothing", async () => {
+    const user = userEvent.setup();
+    const calls = recordFetches();
+
+    renderDiscover(watchlisted());
+    await user.click(featuredRegion().getByRole("button", { name: "Skip" }));
+
+    expect(
+      await screen.findByText(
+        "Skipped The Handmaiden — still on your watchlist. Next: In the Mood for Love.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "In the Mood for Love" }),
+    ).toBeVisible();
+    // The skipped title is still a recommendation: it keeps its rail card and
+    // its committed state, which is what makes the skip reversible by looking.
+    const rail = within(screen.getByRole("region", { name: "Next in this ranked set" }));
+    expect(rail.getByRole("link", { name: /The Handmaiden/ })).toBeVisible();
+    // The whole contract, asserted the only way it can be: no request at all.
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps the run of skips under one finger", async () => {
+    const user = userEvent.setup();
+    recordFetches();
+
+    renderDiscover(watchlisted());
+    await user.click(featuredRegion().getByRole("button", { name: "Skip" }));
+
+    await waitFor(() => expect(skipButton(102)).toHaveFocus());
+  });
+
+  it("asks about the setting once, on the third skip, and not before", async () => {
+    const user = userEvent.setup();
+    recordFetches();
+
+    renderDiscover(watchlisted());
+    await user.click(skipButton(101));
+    await user.click(skipButton(102));
+    expect(
+      screen.queryByText("Stop featuring titles on your watchlist?"),
+    ).not.toBeInTheDocument();
+
+    await user.click(skipButton(103));
+    const nudge = within(
+      screen.getByRole("group", { name: "Stop featuring titles on your watchlist?" }),
+    );
+    expect(nudge.getByRole("button", { name: "Stop featuring them" })).toBeVisible();
+    expect(nudge.getByRole("button", { name: "Keep featuring them" })).toBeVisible();
+  });
+
+  it("writes the preference from the nudge and reports what is now stored", async () => {
+    const user = userEvent.setup();
+    const calls = recordFetches();
+
+    const { container } = renderDiscover(watchlisted(), {
+      ...readyState("preferences", featuredPreferencesOn, REQUEST_ID),
+    });
+    await user.click(skipButton(101));
+    await user.click(skipButton(102));
+    await user.click(skipButton(103));
+    await user.click(screen.getByRole("button", { name: "Stop featuring them" }));
+
+    expect(
+      await screen.findByText(
+        "Watchlisted titles will not be featured. They stay in the ranked list below.",
+      ),
+    ).toBeVisible();
+    // The revision the toggle rendered is asserted, exactly as a movie-state
+    // write asserts the one its control rendered.
+    expect(calls.filter((call) => call.url.includes("/preferences"))).toEqual([
+      {
+        url: "/api/users/900000101/preferences?expected_revision=0",
+        method: "PUT",
+      },
+    ]);
+    // The remaining watchlisted title loses the slot the moment it commits.
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Perfect Blue" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Stop featuring titles on your watchlist?"),
+    ).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not ask again in this session once the viewer has answered", async () => {
+    const user = userEvent.setup();
+    recordFetches(featuredPreferencesOn);
+
+    const { unmount } = renderDiscover(watchlisted());
+    await user.click(skipButton(101));
+    await user.click(skipButton(102));
+    await user.click(skipButton(103));
+    await user.click(screen.getByRole("button", { name: "Keep featuring them" }));
+    await screen.findByText("Watchlisted titles can be featured again.");
+    unmount();
+
+    // A reload lands on the same session storage, and the count is already
+    // past the threshold — so the question does not come back either way.
+    renderDiscover(watchlisted());
+    await user.click(featuredRegion().getByRole("button", { name: "Skip" }));
+    expect(
+      screen.queryByText("Stop featuring titles on your watchlist?"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("passes watchlisted titles over when the preference is off", async () => {
+    const { container } = renderDiscover(
+      watchlisted(),
+      readyState("preferences", featuredPreferencesOff, REQUEST_ID),
+    );
+
+    // 101–104 are watchlisted; 105 is the first title with no state at all.
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Perfect Blue" }),
+    ).toBeVisible();
+    const rail = within(screen.getByRole("region", { name: "Next in this ranked set" }));
+    expect(rail.getByRole("link", { name: /The Handmaiden/ })).toBeVisible();
+    // Held back from the slot, not removed from the set: the rail card still
+    // reports the state the API committed.
+    expect(rail.getAllByRole("button", { name: "In watchlist" }).length).toBe(4);
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("turns featuring back on from the permanent setting", async () => {
+    const user = userEvent.setup();
+    const calls = recordFetches(featuredPreferencesOn);
+
+    renderDiscover(
+      watchlisted(),
+      readyState("preferences", featuredPreferencesOff, REQUEST_ID),
+    );
+    const toggle = screen.getByRole("button", { name: "Feature watchlisted titles" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(toggle);
+
+    await screen.findByText("Watchlisted titles can be featured again.");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
+    expect(calls.filter((call) => call.url.includes("/preferences"))).toEqual([
+      {
+        url: "/api/users/900000101/preferences?expected_revision=1",
+        method: "PUT",
+      },
+    ]);
+  });
+
+  it("leaves the setting as it was when the write fails, and says so", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        return Response.json({ detail: "the API is down" }, { status: 502 });
+      }),
+    );
+
+    renderDiscover(watchlisted());
+    await user.click(screen.getByRole("button", { name: "Feature watchlisted titles" }));
+
+    await screen.findByText(
+      "The Featured picks setting could not be saved, so nothing changed.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Feature watchlisted titles" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
+  });
+
+  it("says in Why this? what never comes back and what still can", async () => {
+    const user = userEvent.setup();
+    renderDiscover(watchlisted());
+
+    await user.click(featuredRegion().getByRole("button", { name: "Why this?" }));
+    const drawer = within(screen.getByRole("dialog"));
+    expect(
+      drawer.getByText(/never come back to Discover — they are excluded before the ranking runs/),
+    ).toBeVisible();
+    expect(drawer.getByText(/Titles on your watchlist do come back/)).toBeVisible();
   });
 });

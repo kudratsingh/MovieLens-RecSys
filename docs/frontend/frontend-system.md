@@ -234,6 +234,29 @@ which has to read as caution on a status line), `--rating-star-idle`, and
 hero, so one colour on that page means "a score exists" and the words beside it
 say whose.
 
+**`Skip` is not a control-set member, deliberately.** Discover's featured card
+offers it beside the family when — and only when — the route knows the title is
+watchlisted, and it is rendered by the route rather than declared in the set
+because every member of that set produces a `MovieStateAction` and this produces
+nothing. It advances the queue cursor and writes no request at all: not a
+watched, not a dismissal, not a rating, and never a training negative (ADR
+0012). Admitting it to the control set would mean widening the write
+vocabulary to carry an action that never writes, which is exactly the drift the
+one family exists to prevent. `web/lib/discover/featured-preference.ts` holds
+the rule and the copy in one assertable place, `queue.ts` holds the pass-over
+mechanism, and the unit test asserts the guarantee the only way it can be
+asserted — that the press produces no request.
+
+The `Featured picks` setting behind it is per persona and lives at
+`GET|PUT /users/{id}/preferences`. It is presentation state, written through
+`lib/discover/preference-client.ts` on the same terms as a movie-state
+mutation — absolute full-object PUT, `expected_revision`, one conflict re-read
+and replay, the committed answer adopted outright — and deliberately without an
+idempotency key, because repeating a full-object write *is* the same request and
+the API reports it as `no_change`.
+
+Three further properties are load-bearing:
+
 Three further properties of the control family are load-bearing:
 
 - **Copy is shared, voice is declared.** Announcements come from

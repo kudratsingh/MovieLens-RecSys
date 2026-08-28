@@ -24,6 +24,7 @@ import {
   HISTORY,
   LIBRARY,
   MOVIE_DETAIL,
+  PREFERENCES,
   RECOMMENDATIONS,
   TASTE_PROFILE,
   type ResourceDefinition,
@@ -232,4 +233,11 @@ export function loadRecommendationAudits(
 export function loadOnlineFeatures(userId: number, options: ResourceRequestOptions) {
   if (!isAddressableId(userId)) return Promise.resolve(unaddressable(FEATURES, options.requestId));
   return fetchResource(FEATURES, `/users/${userId}/features`, options);
+}
+
+export function loadUserPreferences(userId: number, options: ResourceRequestOptions) {
+  if (!isAddressableId(userId)) {
+    return Promise.resolve(unaddressable(PREFERENCES, options.requestId));
+  }
+  return fetchResource(PREFERENCES, `/users/${userId}/preferences`, options);
 }

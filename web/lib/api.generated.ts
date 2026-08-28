@@ -280,6 +280,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users/{user_id}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * User Preferences
+         * @description Return one persona's presentation preferences, or its untouched defaults.
+         */
+        get: operations["getUserPreferences"];
+        /**
+         * Set User Preferences
+         * @description Replace the whole preference object, asserting the revision it replaces.
+         *
+         *     The write lands on the RLS-bound request connection and the middleware
+         *     commits that transaction before this 200 is returned, so an acknowledged
+         *     preference is a durable one — the same rule every other mutation on this
+         *     surface follows.
+         */
+        put: operations["setUserPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/{user_id}/ratings": {
         parameters: {
             query?: never;
@@ -976,6 +1005,49 @@ export interface components {
             average: number;
             /** Count */
             count: number;
+        };
+        /** UserPreferencesMutationResponse */
+        UserPreferencesMutationResponse: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "changed" | "no_change";
+            preferences: components["schemas"]["UserPreferencesResponse"];
+        };
+        /**
+         * UserPreferencesRequest
+         * @description The full object, always. A partial write has no revision to assert.
+         */
+        UserPreferencesRequest: {
+            /** Feature Watchlisted Titles */
+            feature_watchlisted_titles: boolean;
+        };
+        /**
+         * UserPreferencesResponse
+         * @description One persona's presentation preferences, or the defaults it has not left.
+         *
+         *     Presentation only. Nothing here reaches candidate retrieval, the ranker, or
+         *     the exclusion set — a preference decides what the client shows, and the
+         *     audit for a request is unchanged by it (ADR 0012, 2026-08-28 note).
+         *     ``revision`` is the same optimistic-locking token movie state uses; a
+         *     persona that has never written one sits at revision 0 with a null
+         *     ``updated_at``, because a default is not an edit.
+         */
+        UserPreferencesResponse: {
+            /**
+             * Feature Watchlisted Titles
+             * @default true
+             */
+            feature_watchlisted_titles: boolean;
+            /** Revision */
+            revision: number;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** User Id */
+            user_id: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -2600,6 +2672,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedbackMutationResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded for this tenant and subject */
+            429: {
+                headers: {
+                    "Retry-After": components["headers"]["Retry-After"];
+                    "X-RateLimit-Limit": components["headers"]["X-RateLimit-Limit"];
+                    "X-RateLimit-Remaining": components["headers"]["X-RateLimit-Remaining"];
+                    "X-RateLimit-Reset": components["headers"]["X-RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getUserPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPreferencesResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded for this tenant and subject */
+            429: {
+                headers: {
+                    "Retry-After": components["headers"]["Retry-After"];
+                    "X-RateLimit-Limit": components["headers"]["X-RateLimit-Limit"];
+                    "X-RateLimit-Remaining": components["headers"]["X-RateLimit-Remaining"];
+                    "X-RateLimit-Reset": components["headers"]["X-RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setUserPreferences: {
+        parameters: {
+            query?: {
+                expected_revision?: number | null;
+            };
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPreferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPreferencesMutationResponse"];
                 };
             };
             /** @description Request parameters are invalid or cursor does not match query */

@@ -24,6 +24,8 @@ import type {
   RecommendationAuditResponse,
   RecommendationResponse,
   TasteSummaryResponse,
+  UserPreferences,
+  UserPreferencesMutation,
 } from "@/lib/api";
 
 type Guard<T> = (value: unknown) => value is T;
@@ -383,6 +385,31 @@ export function isOnlineUserFeatures(
     nullable(isNumber)(value.user_interaction_count) &&
     nullable(isNumber)(value.user_days_active) &&
     nullable(isNumber)(value.user_days_since_last_interaction)
+  );
+}
+
+/**
+ * The preference envelope. `revision` is checked because it is what the next
+ * write asserts: a payload without one cannot be edited safely, so it fails the
+ * boundary rather than being written against an invented `0`.
+ */
+export function isUserPreferences(value: unknown): value is UserPreferences {
+  return (
+    isRecord(value) &&
+    hasTenantScope(value) &&
+    isBoolean(value.feature_watchlisted_titles) &&
+    isNumber(value.revision) &&
+    nullable(isString)(value.updated_at)
+  );
+}
+
+export function isUserPreferencesMutation(
+  value: unknown,
+): value is UserPreferencesMutation {
+  return (
+    isRecord(value) &&
+    oneOf(["changed", "no_change"] as const)(value.outcome) &&
+    isUserPreferences(value.preferences)
   );
 }
 
