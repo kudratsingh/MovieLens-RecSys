@@ -13,15 +13,23 @@ describes catalog breadth as recommendation coverage.
 The reviewed demo snapshot contains:
 
 - **120 visible titles** in `synthetic/personas/catalog.json`;
-- **24 poster-backed, overview-backed titles** with complete reviewed metadata;
-- **96 partial-metadata titles** that deliberately exercise poster and synopsis
-  fallbacks; and
+- **120 poster-backed titles**, filled offline from TMDB by
+  `synthetic/personas/enrich_posters.py`;
+- **24 overview-backed titles** with complete reviewed metadata; the other 96
+  are `source_status = 'partial'` and exercise the synopsis fallback; and
 - **120 titles with deterministic background interactions**, so the current
   fixture's popularity and item-item artifact inputs cover 100% of visible
   titles after artifacts are regenerated.
 
 Those are separate assertions. Future fixture changes must continue to report
 visible, poster-backed, and recommendation-eligible counts independently.
+
+Poster coverage used to be 24, and the 96 gaps were described as deliberate
+fallback coverage. They were not: because this table is the only poster source
+on the request path, a gap here is a permanent placeholder in the product
+rather than a state a viewer passes through. The poster-absent and
+metadata-unavailable states keep their own coverage in the fixture-mode preview
+(`/ui-preview/movies/109` and `/ui-preview/movies/130`), where they belong.
 
 ## Persisted metadata read model
 

@@ -83,7 +83,17 @@ def test_demo_catalog_is_stable_and_covers_every_history_movie() -> None:
     assert len(background_user_ids) == 5
     assert history_ids <= catalog_ids
     assert all(movie.tmdb_id is None or movie.tmdb_id.isdigit() for movie in movies)
-    assert sum(movie.poster_url is not None for movie in movies) == 24
+    # Every visible title carries a poster. Browse renders straight from this
+    # fixture and never calls TMDB at request time, so a title without a poster
+    # URL here is a permanent placeholder in the product.
+    assert sum(movie.poster_url is not None for movie in movies) == 120
+    assert all(
+        movie.poster_url is None or movie.poster_url.startswith("https://image.tmdb.org/t/p/w500/")
+        for movie in movies
+    )
+    # Overviews are still the hand-written subset; the synopsis fallback is a
+    # real path and stays exercised by the fixture.
+    assert sum(movie.overview is not None for movie in movies) == 24
 
 
 def test_seed_is_idempotent_and_preserves_cold_start() -> None:
@@ -119,7 +129,7 @@ def test_seed_is_idempotent_and_preserves_cold_start() -> None:
     assert event_count == rating_count
     assert first.visible_movie_count == 120
     assert first.recommendable_movie_count == 120
-    assert first.poster_movie_count == 24
+    assert first.poster_movie_count == 120
     assert first.background_rating_count == 480
     engine.dispose()
 
@@ -145,6 +155,43 @@ def test_seed_does_not_overwrite_existing_full_catalog_rows() -> None:
     engine.dispose()
 
 
+def test_reseeding_refreshes_fixture_owned_catalog_metadata() -> None:
+    """A database seeded before the fixture was enriched must pick the new URLs up."""
+    engine = _fixture_engine()
+    seed_demo_personas(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE movie_catalog_metadata "
+                "SET poster_url = NULL, overview = NULL, source_status = 'partial' "
+                "WHERE movie_id = 1"
+            )
+        )
+        # The shape an older seed left behind: a links row that exists but has
+        # never carried a TMDB id.
+        connection.execute(text('UPDATE links SET "tmdbId" = NULL WHERE "movieId" = 1'))
+
+    seed_demo_personas(engine)
+
+    with engine.connect() as connection:
+        poster_url = connection.scalar(
+            text("SELECT poster_url FROM movie_catalog_metadata WHERE movie_id = 1")
+        )
+        overview = connection.scalar(
+            text("SELECT overview FROM movie_catalog_metadata WHERE movie_id = 1")
+        )
+        status = connection.scalar(
+            text("SELECT source_status FROM movie_catalog_metadata WHERE movie_id = 1")
+        )
+        tmdb_id = connection.scalar(text('SELECT "tmdbId" FROM links WHERE "movieId" = 1'))
+
+    assert poster_url is not None and poster_url.startswith("https://image.tmdb.org/t/p/w500/")
+    assert overview is not None
+    assert status == "complete"
+    assert tmdb_id == "862"
+    engine.dispose()
+
+
 def test_seed_persists_reviewed_metadata_without_live_enrichment() -> None:
     engine = _fixture_engine()
     seed_demo_personas(engine)
@@ -156,11 +203,17 @@ def test_seed_persists_reviewed_metadata_without_live_enrichment() -> None:
         complete = connection.scalar(
             text("SELECT COUNT(*) FROM movie_catalog_metadata " "WHERE source_status = 'complete'")
         )
+        with_poster = connection.scalar(
+            text("SELECT COUNT(*) FROM movie_catalog_metadata WHERE poster_url IS NOT NULL")
+        )
         source = connection.scalar(
             text("SELECT metadata_source FROM movie_catalog_metadata WHERE movie_id = 1")
         )
 
     assert visible == 120
+    assert with_poster == 120
+    # 'complete' still means poster *and* overview, so it tracks the reviewed
+    # overview subset rather than poster coverage.
     assert complete == 24
     assert source == "reviewed-fixture"
     engine.dispose()
