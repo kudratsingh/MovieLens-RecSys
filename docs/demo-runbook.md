@@ -219,6 +219,32 @@ traffic class and per serving policy, with a per-second `srv_p99` column, an
 `fdatasync` baseline for Postgres's volume, and the WAL/IO counter deltas across
 the window.
 
+That instrumentation found it. On the first failing run it captured, the tail
+was outside the handler on every traffic class, steal was zero, and the window
+spent 9,703 ms on 3,085 WAL syncs — 3.15 ms to commit one audit row, against
+0.21 ms on a passing run of the same code. **The CI load job therefore runs
+Postgres's data directory on tmpfs**, via `docker-compose.ci-load.yml`, which
+that job alone layers on by setting `DEMO_COMPOSE_EXTRA`. Nothing about
+durability changes — `synchronous_commit` stays on and the commit still lands
+before the response — only the medium under CI's WAL. **A local run is not on
+tmpfs**: on Docker Desktop the data directory is a normal volume unless you pass
+the file yourself, so a laptop's numbers still include its own disk. To
+reproduce CI's shape locally, put the same override in front of every demo
+target:
+
+```bash
+export DEMO_COMPOSE_EXTRA="-f docker-compose.ci-load.yml"
+make demo-reset            # the tmpfs starts empty, so it has to be seeded on it
+make demo-load-quiesce && make demo-load-smoke
+```
+
+Unset it afterwards. A stack started this way loses its whole database the
+moment the Postgres container stops — `make demo-down`, a restart, a laptop
+reboot — which is exactly right for a CI job that reseeds every time and rarely
+what you want locally. `make demo-load-quiesce` is safe: it stops `web`, `api`
+and the setup containers, never `postgres`. ADR 0010's 2026-08-28 note has the
+full evidence table and what the decision deliberately stops measuring.
+
 Everything the run produced lands under `artifacts/load-smoke/`, which CI
 uploads on pass and fail alike:
 
@@ -226,6 +252,7 @@ uploads on pass and fail alike:
 artifacts/load-smoke/
 ├── docker-stats-{before,after}.txt   # CPU/memory and the effective CFS weights
 ├── cpu-stat-{before,after}.txt       # cgroup throttling counters per service
+├── postgres-storage.txt              # yes/no/unknown: was the data directory on tmpfs
 └── window-1/
     ├── summary.json                  # the JSON printed above
     ├── per-second.txt / .json        # p50/p95/p99/max per second, with steal
@@ -246,6 +273,26 @@ the commit's `fdatasync`. `disk-fsync.jsonl` holds a burst before the window by
 default; `LOAD_FSYNC_PROBE=on` samples during it as well, which is diagnostic
 only — an `fdatasync` flushes the device, and the probe measurably slows the
 service it is watching.
+
+The breakdown closes with a **storage** block, which is where to look when the
+handler is fast and the request is not:
+
+```
+[load-summary] storage under the measured window:
+  Postgres data directory: tmpfs — the host's block device is out of this measurement
+  commit cost: 0.214 ms per WAL sync across 3,385 syncs (baseline 0.50 ms, flagged above 2.00 ms)
+  storage_stall: no — informational: WAL sync time per sync > 4x the 0.50 ms baseline ...
+```
+
+The first line says what the window actually measured, read off the running
+container rather than assumed from the job — `tmpfs` in CI, `not tmpfs` on a
+laptop, `not recorded` on an evidence directory captured before this existed.
+The second is what one commit cost, from Postgres's own WAL counters.
+`storage_stall: yes` means that cost is more than four times the 0.5 ms baseline
+over at least 100 syncs, which on past runs has meant the device rather than the
+service — but it is **informational and changes nothing**: the gate's verdict is
+k6's, and the only thing that can buy a re-measurement is the CPU-steal rule
+below.
 
 The per-second table is the thing to read first when the gate fails. A slow
 opening second is a cold cache; a tail smeared across the middle is contention;
@@ -411,9 +458,11 @@ permanently delete the isolated demo Postgres and Keycloak data.
   host, confirm `make demo-load-quiesce` ran, and verify the model-server native
   thread limits above. Then compare `srv_p99` with the k6 p99 in the slowest
   seconds: a fast handler under a slow request puts the time in auth, pooling,
-  or the commit's `fdatasync` — read the `fdatasync` baseline and the WAL sync
-  time in the same breakdown before blaming the ranker — while a slow handler
-  is the service. Then inspect
+  or the commit's `fdatasync` — read the storage block and the `fdatasync`
+  baseline in the same breakdown before blaming the ranker, and note that
+  `storage_stall: yes` on a run whose data directory reports `not tmpfs` is the
+  laptop's disk rather than a regression — while a slow handler is the service.
+  Then inspect
   `api-load`, `model-server`, `feature-server`, `pgbouncer`, and `postgres`
   with `make demo-logs`.
 - **Posters are missing:** this is expected without a TMDB token. If a token is
