@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,6 +102,40 @@ describe("movie detail content", () => {
       "/browse?q=burning",
     );
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("prints the release year once, on the metadata line", () => {
+    // MovieLens titles carry their own year. "Toy Story (1995)" over a "1995 ·
+    // Children" line is the duplication this route used to render.
+    renderDetail({ title: "Toy Story (1995)", release_year: 1995, genres: ["Children"] });
+
+    expect(screen.getByRole("heading", { level: 1, name: "Toy Story" })).toBeVisible();
+    expect(screen.getByText("1995 · Children")).toBeVisible();
+  });
+
+  it("keeps a parenthetical that is not the structured year", () => {
+    renderDetail({ title: "Se7en (1995)", release_year: 1997 });
+
+    expect(screen.getByRole("heading", { level: 1, name: "Se7en (1995)" })).toBeVisible();
+  });
+
+  it("marks a missing poster with the initials of the displayed title", () => {
+    renderDetail({ title: "Sense and Sensibility (1995)", release_year: 1995, poster_url: null });
+
+    const fallback = screen.getByTestId("poster-fallback");
+    expect(fallback).toHaveTextContent("SS");
+    expect(fallback).toHaveTextContent("Artwork unavailable");
+  });
+
+  it("falls back to the mark when the poster fails to load", () => {
+    const { container } = renderDetail();
+    const poster = container.querySelector("img");
+    if (!poster) throw new Error("The detail poster is missing");
+
+    fireEvent.error(poster);
+
+    expect(screen.getByTestId("poster-fallback")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "The Handmaiden" })).toBeVisible();
   });
 
   it("names a partial record and substitutes a source-aware synopsis", () => {

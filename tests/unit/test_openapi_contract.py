@@ -134,6 +134,32 @@ def test_catalog_contract_is_bounded_and_exposes_opaque_page_state() -> None:
     assert "rating" not in item["properties"]
 
 
+def test_recommendation_items_publish_the_callers_own_movie_state() -> None:
+    """Without this a client has no revision to write against and its first
+    press is rejected as stale. Required-and-nullable, exactly as CatalogItem
+    declares the same overlay, so ``state: null`` means "no row" rather than
+    "this response did not look"."""
+    schemas = _schema()["components"]["schemas"]
+    item = schemas["RecommendationItem"]
+
+    assert "state" in item["required"]
+    assert item["properties"]["state"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MovieStateResponse"},
+        {"type": "null"},
+    ]
+    assert item["properties"]["state"] == schemas["CatalogItem"]["properties"]["state"]
+
+
+def test_library_and_history_rows_publish_local_artwork() -> None:
+    schemas = _schema()["components"]["schemas"]
+
+    for name in ("LibraryMovieResponse", "HistoryItem"):
+        properties = schemas[name]["properties"]
+        assert {"release_year", "poster_url"} <= set(schemas[name]["required"])
+        assert properties["release_year"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
+        assert properties["poster_url"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
 @pytest.mark.parametrize("rating", [0.5, 1.0, 4.5, 5.0])
 def test_rating_request_accepts_half_star_values(rating: float) -> None:
     assert RatingRequest(rating=rating).rating == rating

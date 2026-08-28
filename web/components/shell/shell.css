@@ -3,6 +3,7 @@
   background: color-mix(in srgb, var(--surface-canvas) 91%, transparent);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
+  gap: var(--space-3);
   height: 5rem;
   justify-content: space-between;
   padding: 0 clamp(1rem, 4vw, 4rem);
@@ -15,6 +16,7 @@
 .wordmark {
   align-items: center;
   display: inline-flex;
+  flex-shrink: 0;
   gap: 0.75rem;
   text-decoration: none;
 }
@@ -25,6 +27,7 @@
   border-radius: 50%;
   color: #160c09;
   display: flex;
+  flex-shrink: 0;
   font-size: 0.67rem;
   font-weight: 850;
   height: 2.25rem;
@@ -54,24 +57,81 @@
   text-transform: uppercase;
 }
 
+/*
+ * The identity block: who is signed in, and whose data is on screen.
+ *
+ * Below 1050px both lines used to be `display: none`, which took them out of
+ * the accessibility tree as well as off the screen and left the `aria-hidden`
+ * initials as the only identity signal on a phone. They are both here at every
+ * width now; what changes is the arrangement. Narrow screens stack the two
+ * lines to the right of the initials and truncate the values, which costs no
+ * header height — the two-line stack is shorter than the dot it sits beside.
+ */
 .shell-session {
   align-items: center;
+  column-gap: 0.6rem;
+  display: grid;
+  grid-template-areas:
+    "dot actor  action"
+    "dot persona action";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  row-gap: 0.1rem;
+}
+
+.persona-dot {
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--accent-strong);
   display: flex;
-  gap: 0.65rem;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  font-weight: 800;
+  grid-area: dot;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
 }
 
 .actor-copy {
-  display: none;
-  text-align: right;
+  grid-area: actor;
 }
 
-.actor-copy strong {
-  display: block;
-  font-size: 0.76rem;
-  max-width: 10rem;
+.persona-cluster {
+  grid-area: persona;
+}
+
+.actor-copy,
+.persona-cluster {
+  display: grid;
+  min-width: 0;
+}
+
+/*
+ * Truncation rather than removal. A long actor email or a long persona name
+ * has to give ground on a phone, but it gives it as an ellipsis the reader can
+ * still resolve from the accessible name, not as a missing identity.
+ */
+.actor-copy small,
+.actor-copy strong,
+.persona-cluster small,
+.persona-cluster strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.actor-copy strong,
+.persona-cluster strong {
+  display: block;
+  font-size: 0.78rem;
+}
+
+.shell-session-action {
+  align-items: center;
+  display: inline-flex;
+  grid-area: action;
 }
 
 .shell-exit {
@@ -104,34 +164,6 @@
 .top-navigation a[aria-current="page"] {
   background: var(--surface-raised);
   color: var(--text-primary);
-}
-
-.persona-cluster {
-  align-items: center;
-  display: flex;
-  gap: 0.65rem;
-}
-
-.persona-cluster > span:last-child {
-  display: none;
-}
-
-.persona-cluster strong {
-  display: block;
-  font-size: 0.78rem;
-}
-
-.persona-dot {
-  align-items: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--accent-strong);
-  display: flex;
-  font-size: 0.65rem;
-  font-weight: 800;
-  height: 2.25rem;
-  justify-content: center;
-  width: 2.25rem;
 }
 
 .bottom-navigation {
@@ -168,6 +200,24 @@
   color: var(--accent-strong);
 }
 
+/*
+ * The wordmark's copy is the one thing in the header that is pure branding —
+ * the `ML` mark stays, and the link keeps its own accessible name — so it is
+ * what yields the width the identity lines need below the desktop breakpoint.
+ *
+ * 1049px rather than a phone width because 768px is where the top navigation
+ * arrives: the wordmark, three nav pills, two identity lines and the session
+ * control do not fit a tablet together, and at 768 the version that tried
+ * truncated all four identity strings to an ellipsis and wrapped "For you"
+ * onto two lines. The compact header ends exactly where the full identity
+ * arrangement begins.
+ */
+@media (max-width: 1049px) {
+  .wordmark-copy {
+    display: none;
+  }
+}
+
 @media (min-width: 768px) {
   .bottom-navigation {
     display: none;
@@ -179,13 +229,28 @@
 
 }
 
+/*
+ * Wide enough for the original arrangement: the actor to the left of the
+ * initials, the persona to their right, both label-over-value.
+ */
 @media (min-width: 1050px) {
-  .persona-cluster > span:last-child {
-    display: block;
+  .shell-session {
+    align-items: center;
+    display: flex;
+    gap: 0.65rem;
   }
 
   .actor-copy {
-    display: block;
+    order: -1;
+    text-align: right;
+  }
+
+  .actor-copy strong {
+    max-width: 12rem;
+  }
+
+  .persona-cluster strong {
+    max-width: 12rem;
   }
 }
 

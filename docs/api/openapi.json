@@ -379,6 +379,17 @@
             "title": "Movie Id",
             "type": "integer"
           },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
           "rating": {
             "anyOf": [
               {
@@ -389,6 +400,17 @@
               }
             ],
             "title": "Rating"
+          },
+          "release_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Year"
           },
           "timestamp": {
             "title": "Timestamp",
@@ -403,6 +425,8 @@
           "movie_id",
           "title",
           "genres",
+          "release_year",
+          "poster_url",
           "rating",
           "timestamp"
         ],
@@ -471,6 +495,28 @@
             "title": "Movie Id",
             "type": "integer"
           },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
+          "release_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Year"
+          },
           "state": {
             "$ref": "#/components/schemas/MovieStateResponse"
           },
@@ -483,6 +529,8 @@
           "movie_id",
           "title",
           "genres",
+          "release_year",
+          "poster_url",
           "state"
         ],
         "title": "LibraryMovieResponse",
@@ -1150,6 +1198,16 @@
             "title": "Score",
             "type": "number"
           },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovieStateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -1176,7 +1234,8 @@
           "poster_url",
           "overview",
           "release_year",
-          "metadata_source"
+          "metadata_source",
+          "state"
         ],
         "title": "RecommendationItem",
         "type": "object"

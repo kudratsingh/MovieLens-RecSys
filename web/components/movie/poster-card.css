@@ -2,6 +2,16 @@
   min-width: 0;
 }
 
+/*
+ * The card's single link wraps the artwork and the caption, so the whole card
+ * is one target and one tab stop. Only the reason line, which belongs to the
+ * recommendation rather than to the movie, sits outside it.
+ */
+.poster-card-link {
+  display: block;
+  text-decoration: none;
+}
+
 .poster-frame {
   aspect-ratio: 2 / 3;
   background: var(--poster-fallback);
@@ -28,13 +38,13 @@
   transition: transform var(--motion-standard) var(--ease-out);
 }
 
-.poster-frame:hover img,
-.poster-frame:focus-visible img {
+.poster-card-link:hover .poster-frame img,
+.poster-card-link:focus-visible .poster-frame img {
   transform: scale(1.025);
 }
 
-.poster-frame:hover::after,
-.poster-frame:focus-visible::after {
+.poster-card-link:hover .poster-frame::after,
+.poster-card-link:focus-visible .poster-frame::after {
   opacity: 1;
 }
 
@@ -77,8 +87,8 @@
   width: 1rem;
 }
 
-.poster-frame:hover .poster-open-cue,
-.poster-frame:focus-visible .poster-open-cue {
+.poster-card-link:hover .poster-open-cue,
+.poster-card-link:focus-visible .poster-open-cue {
   opacity: 1;
   transform: translateY(0);
 }
@@ -132,7 +142,7 @@
   -webkit-line-clamp: 2;
 }
 
-.poster-title:hover {
+.poster-card-link:hover .poster-title {
   color: var(--accent-strong);
 }
 

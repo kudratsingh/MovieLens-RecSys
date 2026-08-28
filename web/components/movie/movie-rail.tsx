@@ -56,14 +56,23 @@ export function MovieRail({
           </button>
         </div>
       </header>
+      {/*
+        A focusable scroll container needs a role, or a screen reader lands on
+        an unnamed generic. `group` is what it is: a labelled set of cards.
+        The arrow keys also cancel the browser's own scroll — without that, one
+        press moved the track roughly twice as far as the buttons do, because
+        the native scroll and `move()` both ran.
+      */}
       <div
         aria-label={`${title} movies`}
         className="rail-track"
         onKeyDown={(event) => {
-          if (event.key === "ArrowRight") move(1);
-          if (event.key === "ArrowLeft") move(-1);
+          if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+          event.preventDefault();
+          move(event.key === "ArrowRight" ? 1 : -1);
         }}
         ref={railRef}
+        role="group"
         tabIndex={0}
       >
         {movies.map((movie) => (

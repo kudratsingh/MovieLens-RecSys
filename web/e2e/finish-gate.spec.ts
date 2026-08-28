@@ -81,7 +81,9 @@ const MATRIX: MatrixState[] = [
     path: "/discover?demo=recommendations-error",
     headless: true,
     settle: async (page) => {
-      await expect(page.getByRole("alert", { name: /Recommendations upstream-error/ })).toBeVisible();
+      await expect(
+        page.getByRole("alert", { name: /Recommendations could not be loaded/ }),
+      ).toBeVisible();
     },
   },
   {
@@ -297,7 +299,7 @@ test("state is carried by text and semantics, not only by colour", async ({ page
 
   // A failure region says what happened in words, not with a red border.
   await page.goto("/ui-preview/browse?fail=catalog");
-  const alert = page.getByRole("alert", { name: "Catalog upstream-error" });
+  const alert = page.getByRole("alert", { name: "Catalog could not be loaded" });
   await expect(alert).toContainText("Catalog could not be loaded");
   await expect(alert).toContainText("The recommendation API returned an error.");
 });

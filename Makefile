@@ -109,7 +109,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
 	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -242,6 +242,18 @@ dvc-pull:
 dvc-push:
 	dvc push
 
+# --- Reviewed catalog fixture -----------------------------------------------
+# HEAD every poster URL the fixture carries. Deliberately not a CI job: it
+# asks a third party whether its CDN is up, and that must never be the reason
+# a pull request cannot merge. The offline half — that every entry has a URL in
+# the pinned image.tmdb.org/t/p/w500 shape — rides along in tests/unit and does
+# gate CI. Run this by hand before committing a fixture change, and on the
+# cadence a portfolio demo deserves (a poster path that 404s upstream is
+# invisible until someone opens Browse).
+# Needs no TMDB token; refilling the fixture does (see enrich_posters.py).
+catalog-verify:
+	python -m synthetic.personas.enrich_posters --verify
+
 # --- Alembic migrations -----------------------------------------------------
 # The Phase 3 tenant scaffolding (public.tenants, tenant_id columns, RLS
 # policies, DB roles) is applied by Alembic. Run `db-migrate` after
@@ -268,8 +280,14 @@ demo-up:
 	fi
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --readiness-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
 
+# `--build` because the fixture is baked into the image (`COPY synthetic`) and
+# the seeder reads it from there: without it a refreshed catalog.json seeds an
+# image-old snapshot, agrees with itself, and the demo keeps serving the posters
+# and synopses it had yesterday. The layer is cached below the pip install, so
+# the rebuild costs a few seconds and buys the guarantee that `make demo-seed`
+# means what it says.
 demo-seed:
-	$(DEMO_COMPOSE) run --rm demo-setup python -c "from synthetic.personas.seed import main; main()"
+	$(DEMO_COMPOSE) run --rm --build demo-setup python -c "from synthetic.personas.seed import main; main()"
 	$(MAKE) demo-materialize
 
 demo-materialize:

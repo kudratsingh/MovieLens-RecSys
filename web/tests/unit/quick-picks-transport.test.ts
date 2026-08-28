@@ -172,6 +172,78 @@ describe("the live write path", () => {
     expect(calls.at(-1)?.url).toContain("expected_revision=4");
   });
 
+  it("commits the first press of a card whose title already has state", async () => {
+    // The queue carries no revision, so the first write asserts 0; anything
+    // written and reverted earlier sits higher. Without the replay the whole
+    // decision — the card advance included — is silently discarded.
+    const { calls, fetchImpl } = stubBff({
+      mutation: ({ url }) =>
+        url.includes("expected_revision=9")
+          ? jsonResponse({
+              outcome: "changed",
+              replayed: false,
+              request_id: "11111111-2222-4333-8444-555555555555",
+              state: { ...movieState, movie_id: MOVIE_ID, revision: 10 },
+            })
+          : jsonResponse({ detail: "state revision 0 is stale" }, 409),
+      detailState: { ...movieState, movie_id: MOVIE_ID, revision: 9 },
+    });
+
+    const outcome = await transportWith(fetchImpl).transport.commit(dismiss);
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(outcome.ok && outcome.state.revision).toBe(10);
+    const writes = calls.filter((call) => call.url.includes("/dismissal"));
+    expect(writes.map((call) => call.url)).toEqual([
+      `/api/users/${USER_ID}/movies/${MOVIE_ID}/dismissal?expected_revision=0`,
+      `/api/users/${USER_ID}/movies/${MOVIE_ID}/dismissal?expected_revision=9`,
+    ]);
+  });
+
+  it("keeps one idempotency key across the re-press of a failed decision", async () => {
+    const { calls, fetchImpl } = stubBff({
+      mutation: () => jsonResponse({ detail: "the API is down" }, 502),
+    });
+    const { transport } = transportWith(fetchImpl);
+
+    await transport.commit(dismiss);
+    await transport.commit(dismiss);
+
+    const keys = calls
+      .filter((call) => call.url.includes("/dismissal"))
+      .map((call) => new Headers(call.init?.headers).get("Idempotency-Key"));
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("treats a different decision on the same card as a different intent", async () => {
+    const { calls, fetchImpl } = stubBff({
+      mutation: () => jsonResponse({ detail: "the API is down" }, 502),
+    });
+    const { transport } = transportWith(fetchImpl);
+
+    await transport.commit(dismiss);
+    await transport.commit({ ...dismiss, action: "watchlist" });
+
+    const keys = calls
+      .filter((call) => /\/(dismissal|watchlist)\?/.test(call.url))
+      .map((call) => new Headers(call.init?.headers).get("Idempotency-Key"));
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it("mints a new key once a decision has committed", async () => {
+    const { calls, fetchImpl } = stubBff();
+    const { transport } = transportWith(fetchImpl);
+
+    await transport.commit(dismiss);
+    await transport.commit(dismiss);
+
+    const keys = calls
+      .filter((call) => call.url.includes("/dismissal"))
+      .map((call) => new Headers(call.init?.headers).get("Idempotency-Key"));
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
   it("turns a revision conflict into a correction the viewer can retry", async () => {
     const { calls, fetchImpl } = stubBff({
       mutation: () => jsonResponse({ detail: "state revision 0 is stale" }, 409),
@@ -186,6 +258,30 @@ describe("the live write path", () => {
     // The canonical record was re-read, so the retry asserts a real revision.
     expect(calls.some((call) => /\/movies\/\d+$/.test(call.url))).toBe(true);
     expect(readCommittedStates(sessionStore, USER_ID).get(MOVIE_ID)?.revision).toBe(9);
+  });
+
+  it("states the rule when the API refuses the transition itself", async () => {
+    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+    // It arrives on the same 409 as a stale revision, and this deck used to
+    // tell the viewer the title "changed somewhere else before this saved" and
+    // invite a retry that could never work.
+    const rule = "a watched movie cannot be added to the watchlist";
+    const { calls, fetchImpl } = stubBff({
+      mutation: () => jsonResponse({ detail: rule }, 409),
+    });
+    const { transport, sessionStore } = transportWith(fetchImpl);
+
+    const outcome = await transport.commit({ ...dismiss, action: "watchlist" });
+
+    expect(outcome).toMatchObject({ ok: false, refused: true });
+    expect(outcome.ok === false && outcome.conflict).toBeUndefined();
+    expect(outcome.ok === false && outcome.message).toBe(
+      `That decision was not recorded. ${rule}.`,
+    );
+    expect(outcome.ok === false && outcome.message).not.toContain("try again");
+    // Nothing was written, so nothing was re-read and nothing was relayed.
+    expect(calls.some((call) => /\/movies\/\d+$/.test(call.url))).toBe(false);
+    expect(readCommittedStates(sessionStore, USER_ID).get(MOVIE_ID)).toBeUndefined();
   });
 
   it("never lets a lost network turn into a claimed save", async () => {

@@ -27,16 +27,16 @@ export function ServingContractPanel({
       className="rounded-2xl border border-white/10 bg-white/[0.035] p-5"
       data-testid="serving-contract"
     >
-      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Serving contract</p>
+      <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">Serving contract</p>
       <dl className="mt-5 space-y-4 text-sm">
         <div className="flex justify-between gap-6">
-          <dt className="text-zinc-500">Serving policy</dt>
+          <dt className="text-zinc-400">Serving policy</dt>
           <dd data-testid="serving-contract-policy">
             {policy ? policy.name : "Not read yet"}
           </dd>
         </div>
         <div className="flex justify-between gap-6">
-          <dt className="text-zinc-500">Learned ranking</dt>
+          <dt className="text-zinc-400">Learned ranking</dt>
           <dd>
             {policy
               ? policy.learned
@@ -46,20 +46,24 @@ export function ServingContractPanel({
           </dd>
         </div>
         <div className="flex justify-between gap-6">
-          <dt className="text-zinc-500">Model version</dt>
-          <dd className="font-mono text-xs">{modelVersion ?? "Not read yet"}</dd>
+          <dt className="text-zinc-400">Model version</dt>
+          {/* A model version is one long unspaced token; without this it sets
+              the panel's minimum width and takes the phone viewport with it. */}
+          <dd className="min-w-0 break-words text-right font-mono text-xs">
+            {modelVersion ?? "Not read yet"}
+          </dd>
         </div>
         <div className="flex justify-between gap-6">
-          <dt className="text-zinc-500">Isolation</dt>
+          <dt className="text-zinc-400">Isolation</dt>
           <dd>Postgres RLS</dd>
         </div>
         <div className="flex justify-between gap-6">
-          <dt className="text-zinc-500">Latency target</dt>
+          <dt className="text-zinc-400">Latency target</dt>
           <dd className="font-mono text-amber-300">p99 &lt; 100 ms</dd>
         </div>
       </dl>
       {policy ? (
-        <p className="mt-5 text-xs leading-5 text-zinc-500">{policy.reason}</p>
+        <p className="mt-5 text-xs leading-5 text-zinc-400">{policy.reason}</p>
       ) : null}
     </aside>
   );

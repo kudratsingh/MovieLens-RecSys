@@ -20,12 +20,10 @@ export function FixtureQuickPicks({
   browseHref = "/browse",
   failCommits = false,
   initial,
-  personaLabel = "Action Fan",
 }: {
   browseHref?: string;
   failCommits?: boolean;
   initial: QuickPickQueuePayload;
-  personaLabel?: string;
 }) {
   const transport = useMemo(
     () =>
@@ -38,11 +36,6 @@ export function FixtureQuickPicks({
   );
 
   return (
-    <QuickPicksDeck
-      browseHref={browseHref}
-      initial={initial}
-      personaLabel={personaLabel}
-      transport={transport}
-    />
+    <QuickPicksDeck browseHref={browseHref} initial={initial} transport={transport} />
   );
 }

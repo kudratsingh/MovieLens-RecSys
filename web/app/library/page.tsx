@@ -13,7 +13,7 @@ import {
   parseLibraryUrlState,
   type LibrarySearchParams,
 } from "@/lib/library/url-state";
-import { productNavigationItems } from "@/lib/navigation";
+import { productNavigationItems, routeReturnHref, signInHref } from "@/lib/navigation";
 import { loadLibrary, loadTasteProfile } from "@/lib/resources/server";
 import "@/components/library/library.css";
 import "@/components/shell/shell.css";
@@ -30,9 +30,12 @@ export default async function LibraryPage({
   searchParams: Promise<LibrarySearchParams>;
 }) {
   const [params, session] = await Promise.all([searchParams, auth()]);
-  if (!session?.user || session.error) redirect("/");
+  // Built once: both doors below need it, and the tab, sort, filter, and
+  // cursor a viewer had open are exactly what a bare `/` used to throw away.
+  const door = signInHref(routeReturnHref("/library", params));
+  if (!session?.user || session.error) redirect(door);
   const accessToken = requireApiAccessToken(session);
-  if (!accessToken) redirect("/");
+  if (!accessToken) redirect(door);
 
   const urlState = parseLibraryUrlState(params);
 

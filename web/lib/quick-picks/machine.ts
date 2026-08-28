@@ -21,6 +21,7 @@ import {
   type QuickPickActionKind,
   type QuickPickCard,
   type QuickPickCommitRequest,
+  type QuickPickProgress,
 } from "@/lib/quick-picks/contract";
 
 /**
@@ -191,6 +192,29 @@ function requestRefresh(
   };
 }
 
+/**
+ * What the live region says about progress after a committed watched signal.
+ *
+ * A persona whose count is already past the threshold has to be described, not
+ * counted: the visual meter clamps its fill, and the announcement used to read
+ * the raw ratio out loud — "29 of 5 watched signals recorded" — to the one
+ * audience that cannot see the clamped bar. Past the threshold the honest
+ * statement is what it means, and it stays careful about the difference between
+ * *enough signals recorded* and *serving has switched*, which only a returned
+ * policy can say.
+ */
+export function progressAnnouncement(progress: QuickPickProgress): string {
+  if (!progress.thresholdReached) {
+    return (
+      `${progress.count} of ${progress.threshold} watched signals recorded; ` +
+      `${progress.remaining} to go.`
+    );
+  }
+  return progress.learned
+    ? "This persona is already being served by the learned path."
+    : "Enough watched signals are recorded; the next ranked set can attempt learned serving.";
+}
+
 function commitAnnouncement(
   action: QuickPickActionKind,
   title: string,
@@ -241,11 +265,7 @@ function applySuccess(
 
   const before = quickPickProgress(state.policy, state.committedPositiveSignals);
   const after = quickPickProgress(state.policy, committedPositiveSignals);
-  const progressCopy = earnedPositive
-    ? after.thresholdReached
-      ? `${after.count} of ${after.threshold} watched signals recorded.`
-      : `${after.count} of ${after.threshold} watched signals recorded; ${after.remaining} to go.`
-    : null;
+  const progressCopy = earnedPositive ? progressAnnouncement(after) : null;
 
   const queue = state.queue.slice(1);
   const next: QuickPickState = {
@@ -390,16 +410,31 @@ const KEYBOARD_ACTIONS: Record<string, QuickPickActionKind> = {
   u: "undo-dismiss",
 };
 
-/** `null` for anything modified, typed into a field, or simply unbound. */
+/**
+ * `null` for anything modified, typed into a field, or simply unbound.
+ *
+ * Shift counts as a modifier, and it has to be caught even when the listener
+ * does not forward `shiftKey`: `Shift+J` is a shortcut for something else in
+ * plenty of tools, and lower-casing the key turned it into a dismissal. The
+ * bindings are therefore matched case-sensitively — a shifted letter arrives as
+ * an uppercase `key` — and an uppercase letter is only accepted when a caller
+ * has explicitly said Shift is *not* down, which is the Caps Lock case.
+ */
 export function resolveKeyboardAction(event: {
   key: string;
   altKey?: boolean;
   ctrlKey?: boolean;
   metaKey?: boolean;
+  shiftKey?: boolean;
   inField?: boolean;
 }): QuickPickActionKind | null {
   if (event.inField || event.altKey || event.ctrlKey || event.metaKey) return null;
-  return KEYBOARD_ACTIONS[event.key.toLowerCase()] ?? null;
+  if (event.shiftKey) return null;
+  const bound = KEYBOARD_ACTIONS[event.key];
+  if (bound) return bound;
+  return event.shiftKey === false
+    ? (KEYBOARD_ACTIONS[event.key.toLowerCase()] ?? null)
+    : null;
 }
 
 export const KEYBOARD_HINTS: Record<QuickPickActionKind, string> = {

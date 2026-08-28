@@ -1,10 +1,12 @@
 /*
  * Library route layout.
  *
- * The collection is a list rather than a poster grid: the payload carries no
- * poster or release year, and a text-heavy grid of empty poster frames would
- * read as broken artwork rather than as a compact record. Rows stay dense on
- * wide screens and stack without turning into equal-weight cards on narrow
+ * The collection is a list rather than a poster grid, because this route is
+ * about reviewing and editing state rather than about choosing: the row wants
+ * its dates, its star value, and its controls on one line. The artwork is
+ * there at row density — the payload carries the poster now — so a title looks
+ * the same here as it does on the Discover rail it came from. Rows stay dense
+ * on wide screens and stack without turning into equal-weight cards on narrow
  * ones.
  */
 
@@ -154,18 +156,45 @@
   opacity: 0.72;
 }
 
+/*
+ * The row's poster frame. It reserves its 2:3 box before any artwork arrives,
+ * so a poster that 404s swaps to the shared mark inside space that is already
+ * allocated and the rows below it never move.
+ */
 .library-thumb {
-  align-items: center;
   aspect-ratio: 2 / 3;
   background: var(--poster-fallback);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  display: flex;
-  font-family: var(--font-display), Georgia, serif;
-  font-size: 0.95rem;
-  justify-content: center;
-  width: 3rem;
+  display: block;
+  flex: 0 0 auto;
+  overflow: hidden;
+  position: relative;
+  width: 3.5rem;
+}
+
+.library-thumb img {
+  object-fit: cover;
+}
+
+/*
+ * The shared fallback mark, at row density. Its type is sized for a full
+ * poster frame, and the caption it prints under the initials cannot be read at
+ * 56px — the row's own title is the name here, so the mark carries the frame
+ * and the caption is dropped rather than shrunk into illegibility.
+ */
+.library-thumb .poster-fallback {
+  gap: 0;
+  padding: var(--space-1);
+}
+
+.library-thumb .poster-fallback span:first-child {
+  font-size: 1.15rem;
+  letter-spacing: -0.04em;
+}
+
+.library-thumb .poster-fallback span:last-child {
+  display: none;
 }
 
 .library-row-main {

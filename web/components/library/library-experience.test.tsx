@@ -41,23 +41,37 @@ async function renderLibrary(
   client: LibraryClient = createRecordedLibraryClient(),
   state = urlState(),
 ) {
-  const [library, taste] = await Promise.all([
-    client.readLibrary({ ...state, limit: LIBRARY_PAGE_SIZE }),
-    client.readTasteProfile(state.userId),
-  ]);
+  const view = async (target: LibraryUrlState) => {
+    const [library, taste] = await Promise.all([
+      client.readLibrary({ ...target, limit: LIBRARY_PAGE_SIZE }),
+      client.readTasteProfile(target.userId),
+    ]);
+    return (
+      <LibraryExperience
+        actorName="demo@example.com"
+        client={client}
+        initialLibrary={library}
+        initialTaste={taste}
+        initialUrlState={target}
+        personaLabel={RECORDED_PERSONA}
+        personaResolved
+      />
+    );
+  };
 
-  const result = render(
-    <LibraryExperience
-      actorName="demo@example.com"
-      client={client}
-      initialLibrary={library}
-      initialTaste={taste}
-      initialUrlState={state}
-      personaLabel={RECORDED_PERSONA}
-      personaResolved
-    />,
-  );
-  return { ...result, user: userEvent.setup() };
+  const result = render(await view(state));
+  return {
+    ...result,
+    user: userEvent.setup(),
+    /**
+     * What a browser Back actually delivers: the server re-renders for the
+     * popped URL and hands the route a fresh parse and the page that goes with
+     * it. The route used to read both exactly once and ignore every later one.
+     */
+    async serverRenderFor(target: LibraryUrlState) {
+      result.rerender(await view(target));
+    },
+  };
 }
 
 function failingLibrary(base: LibraryClient, tab: LibraryTab): LibraryClient {
@@ -84,10 +98,17 @@ describe("the Library route names the persona it is showing", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "A record of what moved you." }),
     ).toBeVisible();
-    expect(screen.getByText(`Exploring as ${RECORDED_PERSONA}`)).toBeVisible();
+    // The route no longer repeats `Exploring as {persona}`: the shell header
+    // prints it, and this block would print it again 40px below. What stays
+    // here is the part the shell cannot say — that the actor and the persona
+    // are two identities.
+    expect(screen.queryByText(`Exploring as ${RECORDED_PERSONA}`)).not.toBeInTheDocument();
     expect(
       screen.getByText(/not the signed-in actor's private library/i),
     ).toHaveTextContent("demo@example.com");
+    expect(
+      screen.getByText(/not the signed-in actor's private library/i),
+    ).toHaveTextContent(RECORDED_PERSONA);
     expect(screen.queryByText(/your library/i)).not.toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -137,6 +158,59 @@ describe("collections load independently and own their URL state", () => {
     const list = await screen.findByRole("list", { name: "Rated movies" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(screen.queryByText(/of 12 results/)).not.toBeInTheDocument();
+  });
+
+  it("follows a browser Back to the collection the URL names", async () => {
+    const client = createRecordedLibraryClient();
+    const reads = vi.spyOn(client, "readLibrary");
+    const { user, serverRenderFor } = await renderLibrary(client);
+
+    await user.click(screen.getByRole("tab", { name: "Watchlist 4" }));
+    expect(await screen.findByRole("list", { name: "Watchlist movies" })).toBeVisible();
+    // `router.replace` re-runs the server component, which is the render this
+    // route used to discard.
+    await serverRenderFor(urlState({ tab: "watchlist" }));
+    const beforeBack = reads.mock.calls.length;
+
+    await serverRenderFor(urlState());
+
+    expect(screen.getByRole("list", { name: "Rated movies" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Rated 12" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("Titles with a star value")).toBeVisible();
+    // One read, and it is the harness resolving the payload the server would
+    // have carried. The route adopted it rather than asking again: a Back into
+    // a collection must not cost a second round trip.
+    expect(reads.mock.calls.length).toBe(beforeBack + 1);
+  });
+
+  it("keeps an accumulated window when the server re-renders for the same view", async () => {
+    // `Load more` writes its resume cursor to the URL, so the server re-renders
+    // with the *last* page rather than the accumulated window. Adopting that
+    // would silently throw away everything the reader had already paged in.
+    const { user, serverRenderFor } = await renderLibrary(
+      createRecordedLibraryClient(),
+      urlState({ tab: "history" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "History movies" })).getAllByRole(
+          "listitem",
+        ),
+      ).toHaveLength(15),
+    );
+
+    await serverRenderFor(urlState({ tab: "history", cursor: "recorded:12" }));
+
+    expect(
+      within(screen.getByRole("list", { name: "History movies" })).getAllByRole(
+        "listitem",
+      ),
+    ).toHaveLength(15);
   });
 
   it("drops the rating sort when it moves to a collection without ratings", async () => {
@@ -215,7 +289,10 @@ describe("each collection state stands on its own", () => {
     const base = createRecordedLibraryClient();
     const { user, container } = await renderLibrary(failingLibrary(base, "rated"));
 
-    const problem = screen.getByRole("alert", { name: "Rated collection upstream-error" });
+    const problem = screen.getByRole("alert", {
+      // Named by its headline rather than by the transport status enum.
+      name: "Rated collection could not be loaded",
+    });
     expect(problem).toHaveTextContent("The recommendation API returned an error.");
     expect(problem).toHaveTextContent("req-library-down");
     expect(await axe(container)).toHaveNoViolations();
@@ -250,7 +327,7 @@ describe("each collection state stands on its own", () => {
 
     expect(screen.getByRole("list", { name: "Rated movies" })).toBeVisible();
     expect(
-      screen.getByRole("alert", { name: "Live ratings summary upstream-error" }),
+      screen.getByRole("alert", { name: "Live ratings summary could not be loaded" }),
     ).toBeVisible();
   });
 });
@@ -310,6 +387,36 @@ describe("mutations reconcile canonical state", () => {
       screen.getByText(/Could not update Memories of Murder/),
     ).toHaveTextContent(`${RECORDED_PERSONA}'s saved state was restored.`);
     await waitFor(() => expect(rating).toHaveFocus());
+  });
+
+  it("states the rule, keeps the row, and drops the retry when a transition is refused", async () => {
+    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+    // It arrives on the same 409 as a stale revision; reported as a conflict it
+    // told the reader the row "changed elsewhere", which nothing had.
+    const rule = "a watched movie cannot be added to the watchlist";
+    const client = createRecordedLibraryClient();
+    const { user } = await renderLibrary({
+      ...client,
+      mutate: () =>
+        Promise.resolve({
+          status: "refused" as const,
+          requestId: "req-refused",
+          detail: rule,
+        }),
+      readState: () => {
+        throw new Error("a refused transition must not trigger a canonical read");
+      },
+    });
+
+    const rating = screen.getByLabelText("Rating for Memories of Murder");
+    await user.selectOptions(rating, "1");
+
+    expect(await screen.findByText(new RegExp(rule))).toHaveTextContent(
+      `Memories of Murder was left as it is in ${RECORDED_PERSONA}'s library.`,
+    );
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(rating).toHaveValue("4.5");
   });
 
   it("shows what is stored when the row was written from a stale revision", async () => {

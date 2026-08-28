@@ -15,22 +15,7 @@
 
 import type { MovieState, RecommendationItem } from "@/lib/api";
 import { displayState, type MovieDisplayState } from "@/lib/movie-state/actions";
-import type { MovieCard } from "@/lib/movie-types";
-
-const TRAILING_YEAR = /\s*\((\d{4})\)\s*$/;
-
-/**
- * MovieLens titles embed the release year. Showing "Heat (1995)" above a "1995"
- * metadata line reads like a bug, so the year is dropped from the title only
- * when it is also available as structured metadata.
- */
-export function displayTitle(title: string, releaseYear: number | null): string {
-  if (releaseYear === null) return title;
-  const match = TRAILING_YEAR.exec(title);
-  return match && Number(match[1]) === releaseYear
-    ? title.slice(0, match.index).trim()
-    : title;
-}
+import { displayTitle, type MovieCard } from "@/lib/movie-types";
 
 export function recommendationCard(
   item: RecommendationItem,
@@ -44,9 +29,11 @@ export function recommendationCard(
     year: item.release_year,
     genres: item.genres,
     posterSrc: item.poster_url,
-    // An empty alt would hide a real poster from assistive technology; a
-    // decorative one is never rendered here, so the title carries the meaning.
-    posterAlt: item.poster_url ? `Poster for ${title}` : "",
+    // A poster that loads sits directly beside the visible title and inside a
+    // link that already names the movie, so it is decorative and takes an empty
+    // alt. The same component on Browse always did this; "Poster for Heat"
+    // announced next to "Heat" is the duplication, not the accommodation.
+    posterAlt: "",
     overview: item.overview,
     reason: item.reason,
     rank,

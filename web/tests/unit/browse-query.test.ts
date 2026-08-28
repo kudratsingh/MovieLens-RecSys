@@ -5,6 +5,8 @@ import {
   browseHref,
   browseSearchParams,
   catalogRequestParams,
+  DEFAULT_BROWSE_QUERY,
+  DEFAULT_BROWSE_SORT,
   hasActiveBrowseFilters,
   parseBrowseQuery,
   withBrowseFilters,
@@ -20,9 +22,12 @@ describe("browse query parsing", () => {
       genre: null,
       yearFrom: null,
       yearTo: null,
-      sort: "title",
+      // Browse opens on what this tenant watches, not on the alphabet.
+      sort: "popular",
       cursor: null,
     });
+    expect(parse("")).toEqual(DEFAULT_BROWSE_QUERY);
+    expect(DEFAULT_BROWSE_SORT).toBe("popular");
   });
 
   it("normalizes a search so one query has one spelling", () => {
@@ -47,8 +52,10 @@ describe("browse query parsing", () => {
   });
 
   it("only accepts sorts the endpoint implements", () => {
-    expect(parse("sort=popular").sort).toBe("popular");
-    expect(parse("sort=whatever").sort).toBe("title");
+    expect(parse("sort=title").sort).toBe("title");
+    expect(parse("sort=newest").sort).toBe("newest");
+    // An unknown sort is the default cut, never a request the endpoint rejects.
+    expect(parse("sort=whatever").sort).toBe("popular");
   });
 
   it("ignores a cursor longer than the endpoint accepts", () => {
@@ -80,6 +87,16 @@ describe("browse query serialization", () => {
     );
   });
 
+  it("spells a non-default sort explicitly, including the old default", () => {
+    // `title` used to be the default and so used to be omitted; now it is a
+    // chosen ordering and the address has to carry it or a reload loses it.
+    expect(browseHref("/browse", parse("sort=title"))).toBe("/browse?sort=title");
+    expect(parse(browseSearchParams(parse("sort=title")).toString()).sort).toBe(
+      "title",
+    );
+    expect(browseHref("/browse", parse("sort=popular"))).toBe("/browse");
+  });
+
   it("keeps route parameters that are not filters, such as the persona", () => {
     const query = parse("q=burning");
     expect(browseHref("/browse", query, { user: "900000104" })).toBe(
@@ -101,11 +118,14 @@ describe("browse query serialization", () => {
     expect(browseFilterKey(parse("q=burning"))).not.toBe(browseFilterKey(first));
   });
 
-  it("reports an active cut for any non-default field", () => {
+  it("reports an active cut for a narrowed catalog, but never for a sort", () => {
     expect(hasActiveBrowseFilters(parse(""))).toBe(false);
     expect(hasActiveBrowseFilters(parse("cursor=opaque"))).toBe(false);
-    expect(hasActiveBrowseFilters(parse("sort=popular"))).toBe(true);
+    // A sort reorders the same result set; it is not something to remove.
+    expect(hasActiveBrowseFilters(parse("sort=title"))).toBe(false);
+    expect(hasActiveBrowseFilters(parse("sort=newest"))).toBe(false);
     expect(hasActiveBrowseFilters(parse("genre=Drama"))).toBe(true);
+    expect(hasActiveBrowseFilters(parse("q=burning&sort=title"))).toBe(true);
   });
 });
 
@@ -142,9 +162,19 @@ describe("catalog request parameters", () => {
     const params = catalogRequestParams(parse("q=burning&genre=Drama"));
     expect(params.get("q")).toBe("burning");
     expect(params.get("genre")).toBe("Drama");
-    expect(params.get("sort")).toBe("title");
+    expect(params.get("sort")).toBe("popular");
     expect(params.get("limit")).toBe("24");
     expect(params.get("cursor")).toBeNull();
+  });
+
+  it("names the sort on every request, so a cursor fingerprint cannot shift", () => {
+    // The default moved from `title` to `popular`. Nothing about cursor
+    // continuation changes with it, because the request has always spelled the
+    // sort out rather than letting the endpoint apply its own default.
+    for (const search of ["", "sort=popular", "sort=title", "sort=newest"]) {
+      const sent = catalogRequestParams(parse(search));
+      expect(sent.get("sort")).toBe(parse(search).sort);
+    }
   });
 
   it("never asks for more than the endpoint's hard page cap", () => {

@@ -189,11 +189,15 @@ describe("Discover renders the state the response reported", () => {
   });
 
   it("keeps the movie identity when its artwork fails to load", () => {
-    renderDiscover(
+    const { container } = renderDiscover(
       readyState("recommendations", posterFailureRecommendations, REQUEST_ID),
     );
 
-    fireEvent.error(featuredRegion().getByAltText("Poster for The Handmaiden"));
+    // The poster carries an empty alt — it sits inside a link that already
+    // names the movie — so it is reached as an element rather than by name.
+    const poster = container.querySelector(".featured-poster img");
+    expect(poster).not.toBeNull();
+    fireEvent.error(poster as HTMLElement);
 
     expect(
       screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
@@ -250,10 +254,12 @@ describe("a committed action refreshes recommendations before it says so", () =>
 
     await screen.findByText(/could not be refreshed/);
     expect(screen.queryByText(/Recommendations refreshed/)).not.toBeInTheDocument();
-    // The committed action is still reported, and the previous list is intact.
+    // The committed action is still reported, and the queue still advanced:
+    // the advance follows the commit, not the refetch, so a dead refresh
+    // cannot strand the viewer on a movie they have already decided about.
     expect(screen.getByText(/saved to watchlist/)).toBeVisible();
     expect(
-      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+      screen.getByRole("heading", { level: 1, name: "In the Mood for Love" }),
     ).toBeVisible();
   });
 
@@ -281,7 +287,7 @@ describe("a committed action refreshes recommendations before it says so", () =>
     expect(screen.queryByText(/Recommendations refreshed/)).not.toBeInTheDocument();
   });
 
-  it("turns a revision conflict into a correction rather than a dead end", async () => {
+  it("commits the first press of a control on a title with existing state", async () => {
     const user = userEvent.setup();
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -290,10 +296,48 @@ describe("a committed action refreshes recommendations before it says so", () =>
       if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
       if (url.includes("/watchlist")) {
         // A recommendation carries no state, so the first write can only
-        // assert revision 0 — which is stale for an already-saved title.
+        // assert revision 0 — which is stale for any title that has ever been
+        // written and reverted.
         return url.includes("expected_revision=0")
           ? Response.json({ detail: "state revision 5 is stale" }, { status: 409 })
           : Response.json(committed({ revision: 6 }));
+      }
+      if (url.includes("/movies/101")) return Response.json(detailWithWatchlist);
+      return Response.json({
+        ...learnedRecommendations,
+        items: learnedRecommendations.items.slice(1),
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    // One press, one committed decision. The write path re-read the canonical
+    // record and replayed the same intent against it.
+    await screen.findByText(/saved to watchlist/);
+    expect(screen.queryByText(/changed somewhere else/)).not.toBeInTheDocument();
+    expect(calls.filter((url) => url.includes("/watchlist"))).toEqual([
+      "/api/users/900000101/movies/101/watchlist?expected_revision=0",
+      "/api/users/900000101/movies/101/watchlist?expected_revision=5",
+    ]);
+  });
+
+  it("reports a conflict it could not resolve, and corrects the control", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) {
+        // Quoted from `IdempotencyConflictError` in `src/serving/feedback.py`:
+        // the client tells a race apart from a refused transition by this
+        // body, so an invented sentence would not exercise the split.
+        return Response.json(
+          { detail: "idempotency key was already used for another mutation" },
+          { status: 409 },
+        );
       }
       if (url.includes("/movies/101")) return Response.json(detailWithWatchlist);
       return Response.json(learnedRecommendations);
@@ -304,16 +348,174 @@ describe("a committed action refreshes recommendations before it says so", () =>
     await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
 
     await screen.findByText(/changed somewhere else before this saved/);
-    // The canonical read corrected the control instead of leaving it wrong.
+    // The canonical record came back on the result, so the control shows the
+    // truth instead of an inviting button that would fail again.
     const corrected = await featuredRegion().findByRole("button", {
       name: "In watchlist",
     });
     expect(corrected).toHaveAttribute("aria-pressed", "true");
+    // Exactly one replay: two attempts, never a loop.
+    expect(calls.filter((url) => url.includes("/watchlist"))).toHaveLength(2);
+  });
 
-    // The retry now asserts the revision the server issued, and succeeds.
-    await user.click(corrected);
-    await screen.findByText(/Recommendations refreshed/);
-    expect(calls.some((url) => url.includes("expected_revision=5"))).toBe(true);
+  it("states the rule when the API refuses the transition, and offers no retry", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+    // It shares the 409 with a stale revision, and this route used to report it
+    // as "changed somewhere else before this saved" — untrue, since nothing
+    // changed anywhere — and spend a re-read plus a replay proving it.
+    const rule = "a watched movie cannot be added to the watchlist";
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) {
+        return Response.json({ detail: rule }, { status: 409 });
+      }
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(new RegExp(rule));
+    expect(screen.queryByText(/changed somewhere else/)).not.toBeInTheDocument();
+    // One attempt, no replay, and no canonical read behind it.
+    expect(calls.filter((url) => url.includes("/watchlist"))).toHaveLength(1);
+    expect(calls.some((url) => /\/movies\/\d+$/.test(url))).toBe(false);
+    // The queue did not move and the control fell back to its committed value.
+    const control = featuredRegion().getByRole("button", { name: "Watchlist" });
+    expect(control).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("re-pressing a failed control replays one decision under one key", async () => {
+    const user = userEvent.setup();
+    const keys: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) {
+        keys.push(new Headers(init?.headers).get("Idempotency-Key"));
+        return Response.json({ detail: "the API is down" }, { status: 502 });
+      }
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const control = () => featuredRegion().getByRole("button", { name: "Watchlist" });
+    await user.click(control());
+    await screen.findByText(/was not saved/);
+    await user.click(control());
+    await waitFor(() => expect(keys).toHaveLength(2));
+
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("does not claim a refresh the viewer cannot see", async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) return Response.json(committed());
+      // Watchlist is organizational, so the ranked set legitimately comes back
+      // exactly as it was.
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(/The ranked list is unchanged/);
+    expect(screen.queryByText(/Recommendations refreshed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/saved to watchlist/)).toBeVisible();
+  });
+
+  it("keeps a second press out of the way while the first is in flight", async () => {
+    const user = userEvent.setup();
+    let releaseWrite = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writes: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist") || url.includes("/dismissal")) {
+        writes.push(url);
+        await held;
+        return Response.json(committed());
+      }
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+    await screen.findByText(/Saving The Handmaiden/);
+    await user.click(featuredRegion().getByRole("button", { name: "Not for me" }));
+
+    // Two writes in flight would both assert the revision they started from,
+    // and the later response would land on top of the earlier one.
+    expect(writes).toHaveLength(1);
+    releaseWrite();
+    await screen.findByText(/saved to watchlist/);
+  });
+
+  it("lands focus on the movie that arrived, never on the status line", async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) return Response.json(committed());
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(/saved to watchlist/);
+    // The same control on the card that arrived, so a run of decisions stays
+    // under one finger rather than restarting at the top of the document.
+    await waitFor(() =>
+      expect(document.getElementById("featured-102-watchlist")).toHaveFocus(),
+    );
+  });
+
+  it("offers the rating prompt for the watched action, not for a watched state", async () => {
+    const user = userEvent.setup();
+    // The title is already watched, so every committed response carries a
+    // `watched_at` — including this watchlist press.
+    recordCommittedState(window.sessionStorage, 900000101, {
+      ...committed().state,
+      revision: 5,
+      watched_at: "2026-08-20T09:00:00Z",
+      watchlisted_at: null,
+    });
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/watchlist")) {
+        return Response.json(
+          committed({ revision: 6, watched_at: "2026-08-20T09:00:00Z" }),
+        );
+      }
+      return Response.json(learnedRecommendations);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(await featuredRegion().findByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(/saved to watchlist/);
+    expect(
+      screen.queryByRole("region", { name: "Rate The Handmaiden" }),
+    ).not.toBeInTheDocument();
   });
 
   it("offers the rating control after a watched action and keeps its claim narrow", async () => {
@@ -396,5 +598,232 @@ describe("cards start from the state other routes already committed", () => {
     await waitFor(() =>
       expect(calls.some((url) => url.includes("expected_revision=5"))).toBe(true),
     );
+  });
+});
+
+describe("the featured slot is a queue position, not a projection", () => {
+  /** Answers the CSRF read, one mutation, and every refetch from one list. */
+  function stubStack(options: {
+    mutation?: (url: string) => Response;
+    ranked?: RecommendationResponse | (() => RecommendationResponse);
+  } = {}) {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+      if (url.includes("/movies/")) {
+        return options.mutation?.(url) ?? Response.json(committed());
+      }
+      const ranked = options.ranked ?? learnedRecommendations;
+      return Response.json(typeof ranked === "function" ? ranked() : ranked);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    return calls;
+  }
+
+  const decisions = [
+    { control: "Watchlist", label: "watchlist" },
+    { control: "Mark watched", label: "watched" },
+    { control: "Not for me", label: "dismissal" },
+  ] as const;
+
+  it.each(decisions)(
+    "advances the featured movie after a committed $label decision",
+    async ({ control }) => {
+      const user = userEvent.setup();
+      stubStack();
+
+      renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+      await user.click(featuredRegion().getByRole("button", { name: control }));
+
+      // Watchlist is the one that used to change nothing at all: it excludes
+      // no titles, so the backend returned the same first item and the movie
+      // sat there. On Discover, `Watchlist` means "save it, next".
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" }),
+      ).toBeVisible();
+    },
+  );
+
+  it("stays on the movie when the commit fails", async () => {
+    const user = userEvent.setup();
+    stubStack({
+      mutation: () => Response.json({ detail: "the API is down" }, { status: 502 }),
+    });
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(/was not saved/);
+    expect(
+      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
+  });
+
+  it("never offers a decided title again, even when the API keeps returning it", async () => {
+    const user = userEvent.setup();
+    // The identical ranked set comes back, which is exactly what a watchlist
+    // press produces: it excludes nothing server-side.
+    stubStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" });
+    await waitFor(() =>
+      expect(screen.queryByText("The Handmaiden")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("starts the rail at the movie after the featured one", async () => {
+    const user = userEvent.setup();
+    stubStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const rail = () => within(screen.getByRole("region", { name: /ranked set/ }));
+    // No title is both the decision and part of what is still ahead of it.
+    expect(rail().queryByText("The Handmaiden")).not.toBeInTheDocument();
+    expect(rail().getByText("In the Mood for Love")).toBeVisible();
+
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+    await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" });
+    await waitFor(() =>
+      expect(rail().queryByText("In the Mood for Love")).not.toBeInTheDocument(),
+    );
+    expect(rail().getByText("Memories of Murder")).toBeVisible();
+  });
+
+  it("announces what was recorded and what is now featured", async () => {
+    const user = userEvent.setup();
+    stubStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Not for me" }));
+
+    // One sentence for a reader who cannot see the card move: the decision,
+    // then the movie it moved to.
+    await screen.findByText(
+      /The Handmaiden will be excluded from recommendations\. Next: In the Mood for Love\./,
+    );
+  });
+
+  it("offers Undo for a watchlist decision and puts both halves back", async () => {
+    const user = userEvent.setup();
+    const calls = stubStack();
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+    await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" });
+
+    await user.click(await screen.findByRole("button", { name: /Undo saving/ }));
+
+    // The reversal asserts the revision the commit returned…
+    await waitFor(() =>
+      expect(
+        calls.some((url) => url.includes("/movies/101/watchlist?expected_revision=3")),
+      ).toBe(true),
+    );
+    // …and the cursor comes back with it, because undoing the write while
+    // leaving the viewer past the card is only half an undo.
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
+  });
+
+  it("offers no bare Undo after a watched decision", async () => {
+    const user = userEvent.setup();
+    stubStack({
+      mutation: () =>
+        Response.json(committed({ watched_at: "2026-08-21T09:00:00Z", watchlisted_at: null })),
+    });
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Mark watched" }));
+
+    // Reversing watched history is a confirmed destructive edit; the honest
+    // affordances here are the rating prompt and a named way to the Library.
+    const panel = within(await screen.findByRole("region", { name: /^Rate / }));
+    expect(panel.getByRole("link", { name: "Manage in Library" })).toHaveAttribute(
+      "href",
+      "/library?userId=900000101",
+    );
+    expect(screen.queryByRole("button", { name: /^Undo/ })).not.toBeInTheDocument();
+  });
+
+  it("swaps instantly under reduced motion and says exactly the same thing", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubStack();
+
+    const { container } = renderDiscover(
+      readyState("recommendations", learnedRecommendations, REQUEST_ID),
+    );
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" });
+    // The announcement is the authoritative channel and is unchanged; the
+    // arrival simply carries no direction to animate along.
+    expect(screen.getByText(/Next: In the Mood for Love/)).toBeVisible();
+    expect(container.querySelector("[data-enter-from]")).toBeNull();
+  });
+
+  it("marks the arrival with the direction the decision travelled", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubStack();
+
+    const { container } = renderDiscover(
+      readyState("recommendations", learnedRecommendations, REQUEST_ID),
+    );
+    await user.click(featuredRegion().getByRole("button", { name: "Not for me" }));
+
+    await screen.findByRole("heading", { level: 1, name: "In the Mood for Love" });
+    // Left for a dismissal, the same direction the Quick Picks swipe uses.
+    expect(container.querySelector(".featured-movie")).toHaveAttribute(
+      "data-enter-from",
+      "left",
+    );
+  });
+
+  it("names both ways forward once the queue is spent", async () => {
+    const user = userEvent.setup();
+    const single = { ...learnedRecommendations, items: learnedRecommendations.items.slice(0, 1) };
+    stubStack({ ranked: single });
+
+    renderDiscover(readyState("recommendations", single, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    expect(await screen.findByText(/through this ranked set/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Browse the catalog" })).toBeVisible();
+    expect(screen.getByRole("link", { name: /Quick picks/ })).toBeVisible();
+  });
+
+  it("extends in the background without disturbing the movie being read", async () => {
+    const short = { ...learnedRecommendations, items: learnedRecommendations.items.slice(0, 3) };
+    stubStack({ ranked: learnedRecommendations });
+
+    renderDiscover(readyState("recommendations", short, REQUEST_ID));
+
+    // Three titles is inside the extension trigger, so the queue tops itself
+    // up; the featured movie is untouched by it.
+    expect(await screen.findByText("Portrait of a Lady on Fire")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
   });
 });

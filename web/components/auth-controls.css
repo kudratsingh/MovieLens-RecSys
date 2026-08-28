@@ -1,0 +1,54 @@
+/*
+ * Sign out lives in the product shell and on the retained legacy dashboard, so
+ * it carries the same token classes the rest of the shell uses rather than the
+ * utility classes it used to.
+ *
+ * That was not only a consistency point. `globals.css` declares
+ * `button { color: inherit; font: inherit }` outside any cascade layer, and an
+ * unlayered element selector outranks every Tailwind utility — so `text-zinc-300
+ * text-xs` on this button rendered as `--text-primary` at 16px, a control
+ * heavier than the header it sits in. A class beats an element selector, which
+ * is why the token classes fix it and the utilities could not. The real repair
+ * is `@layer base` around those rules, which changes the cascade under every
+ * route and belongs in its own PR (finding N7).
+ */
+
+.sign-out {
+  align-items: center;
+  display: inline-flex;
+  position: relative;
+}
+
+.sign-out .sign-out-button {
+  border-color: var(--border-strong);
+  font-size: 0.78rem;
+  padding: 0.5rem 0.9rem;
+}
+
+.sign-out .sign-out-button:hover {
+  border-color: var(--text-muted);
+}
+
+/*
+ * A failed sign-out is the one outcome a viewer must not be left to assume
+ * went the other way: the session is still live. The message is an `alert`
+ * because nothing else on screen changed to say so, and it floats out of the
+ * header row so a sticky 5rem header does not have to grow to hold it.
+ */
+.sign-out-failure {
+  background: var(--surface-overlay);
+  border: 1px solid var(--destructive);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.4;
+  max-width: 15rem;
+  padding: 0.5rem 0.65rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.45rem);
+  width: max-content;
+  z-index: 60;
+}

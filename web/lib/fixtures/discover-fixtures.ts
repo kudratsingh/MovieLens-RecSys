@@ -174,6 +174,9 @@ function item(seed: ItemSeed, reason: string): RecommendationItem {
     overview: seed.overview,
     release_year: seed.release_year,
     metadata_source: "reviewed-fixture",
+    // A ranked title is never watched or dismissed — serving excludes both
+    // before ranking — so the recorded queue carries no prior state.
+    state: null,
   };
 }
 
@@ -233,28 +236,38 @@ export const discoverHistory: HistoryResponse = {
     {
       movie_id: 6,
       title: "Heat (1995)",
+      release_year: 1995,
       genres: ["Action", "Crime", "Thriller"],
+      poster_url: "/posters/burning.svg",
       rating: 4.5,
       timestamp: 1_767_312_000,
     },
     {
       movie_id: 2571,
       title: "Matrix, The (1999)",
+      release_year: 1999,
       genres: ["Action", "Sci-Fi", "Thriller"],
+      poster_url: "/posters/perfect-blue.svg",
       rating: 5,
       timestamp: 1_767_225_600,
     },
     {
       movie_id: 2028,
       title: "Saving Private Ryan (1998)",
+      release_year: 1998,
       genres: ["Action", "Drama", "War"],
+      // Deliberately without artwork, so the recorded matrix carries a history
+      // row falling back to the shared mark next to rows that have a poster.
+      poster_url: null,
       rating: null,
       timestamp: 1_767_139_200,
     },
     {
       movie_id: 110,
       title: "Braveheart (1995)",
+      release_year: 1995,
       genres: ["Action", "Drama", "War"],
+      poster_url: "/posters/moonlight.svg",
       rating: 3.5,
       timestamp: 1_767_052_800,
     },

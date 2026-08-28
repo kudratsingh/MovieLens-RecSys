@@ -5,9 +5,9 @@ import {
   affectsTasteSummary,
   appendLibraryPage,
   movieMatchesTab,
+  movieMetaLine,
   replaceMovieState,
   stateSummary,
-  titleInitials,
 } from "@/lib/library/collection";
 import type { MovieStateAction } from "@/lib/movie-state/actions";
 
@@ -34,6 +34,8 @@ function movie(movieId: number, overrides: Partial<MovieState> = {}): LibraryMov
   return {
     genres: ["Crime"],
     movie_id: movieId,
+    poster_url: null,
+    release_year: 2003,
     state: state({ movie_id: movieId, ...overrides }),
     title: `Movie ${movieId}`,
   };
@@ -139,10 +141,10 @@ describe("reconciliation and row copy", () => {
     ).toEqual(["Saved Aug 16, 2026", "Excluded from recommendations"]);
   });
 
-  it("derives a stable initial pair because the payload carries no poster", () => {
-    expect(titleInitials("The Handmaiden")).toBe("H");
-    expect(titleInitials("Memories of Murder")).toBe("MM");
-    expect(titleInitials("Action Fan")).toBe("AF");
-    expect(titleInitials("")).toBe("?");
+  it("prints the year the title no longer carries, and names a missing genre", () => {
+    expect(movieMetaLine(2003, ["Crime", "Mystery"])).toBe("2003 · Crime · Mystery");
+    expect(movieMetaLine(null, ["Drama"])).toBe("Drama");
+    expect(movieMetaLine(1995, [])).toBe("1995 · Genres unavailable");
+    expect(movieMetaLine(null, [])).toBe("Genres unavailable");
   });
 });

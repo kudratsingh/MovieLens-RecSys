@@ -163,12 +163,13 @@ export function BrowseControls({
                 <span className="visually-hidden">Remove the decade filter</span>
               </button>
             ) : null}
-            {query.sort !== "title" ? (
-              <button onClick={() => onChange({ sort: "title" })} type="button">
-                {BROWSE_SORT_LABELS[query.sort]} <span aria-hidden="true">×</span>
-                <span className="visually-hidden">Return to the default sort</span>
-              </button>
-            ) : null}
+            {/*
+              The sort is not a chip. Every chip in this row is a removable
+              narrowing of the result set, and a sort removes nothing — it
+              reorders. Offering `Most watched here ×` read as a filter the
+              viewer had somehow applied, and the select below already shows
+              which ordering is active.
+            */}
           </div>
         ) : null}
 

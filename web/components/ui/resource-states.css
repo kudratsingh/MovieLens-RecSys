@@ -11,9 +11,16 @@
   padding: clamp(1rem, 3vw, 1.75rem);
 }
 
-.resource-state .button-secondary {
-  grid-column: 1 / -1;
-  justify-self: start;
+/*
+ * A phone gets the mark, the copy, and the actions in one column. Two columns
+ * on a 390 screen left the copy about 250px wide beside a 44px mark, and any
+ * state with two ways out had its first action auto-placed underneath the mark
+ * — narrow, and ahead of the wider one, so the primary action read second.
+ */
+@media (max-width: 480px) {
+  .resource-state {
+    grid-template-columns: 1fr;
+  }
 }
 
 .resource-state-icon {
@@ -27,6 +34,11 @@
   height: 2.75rem;
   justify-content: center;
   width: 2.75rem;
+}
+
+/* Long request ids and untruncated titles must wrap, not widen the block. */
+.resource-state > div {
+  min-width: 0;
 }
 
 .resource-state-title {
@@ -104,6 +116,13 @@
 
 .resource-state-actions:empty {
   display: none;
+}
+
+/* The row owns the spacing between its actions. A block that carries a margin
+   of its own — the Quick Picks entry does — would otherwise sit lower than
+   the button beside it. */
+.resource-state-actions > * {
+  margin-block: 0;
 }
 
 .resource-state-meta {

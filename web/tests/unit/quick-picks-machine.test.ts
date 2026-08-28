@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { MovieState, ServingPolicy } from "@/lib/api";
+import { decisionDirection } from "@/lib/movie-state/actions";
 import { toQuickPickQueue, type QuickPickActionKind } from "@/lib/quick-picks/contract";
 import {
   fixtureFallbackPolicy,
+  fixtureLearnedPolicy,
   fixtureQuickPickResponse,
 } from "@/lib/quick-picks/fixtures";
 import {
@@ -102,19 +104,41 @@ describe("input parity", () => {
 
   it("maps keys and swipes onto the same four decisions", () => {
     expect(resolveKeyboardAction({ key: "j" })).toBe("dismiss");
-    expect(resolveKeyboardAction({ key: "K" })).toBe("watchlist");
+    expect(resolveKeyboardAction({ key: "k" })).toBe("watchlist");
     expect(resolveKeyboardAction({ key: "l" })).toBe("watched");
     expect(resolveKeyboardAction({ key: "u" })).toBe("undo-dismiss");
+    // Caps Lock is not a modifier, so an uppercase key still decides — but
+    // only where the caller can say Shift is genuinely up.
+    expect(resolveKeyboardAction({ key: "K", shiftKey: false })).toBe("watchlist");
 
     expect(resolveSwipe({ dx: -SWIPE_DISTANCE_PX, dy: 4, elapsedMs: 220 })).toBe("dismiss");
     expect(resolveSwipe({ dx: SWIPE_DISTANCE_PX, dy: -4, elapsedMs: 220 })).toBe("watchlist");
     expect(resolveSwipe({ dx: 2, dy: -SWIPE_DISTANCE_PX, elapsedMs: 220 })).toBe("watched");
   });
 
+  it("teaches the same direction Discover's advance travels in", () => {
+    // One gesture language across two surfaces: the swipe that dismisses here
+    // and the card that leaves the Discover featured slot when it is dismissed
+    // both read from `DECISION_DIRECTION`. Two maps that happen to agree today
+    // is how they stop agreeing later.
+    expect(decisionDirection({ resource: "dismissal", method: "PUT" })).toBe("left");
+    expect(decisionDirection({ resource: "watchlist", method: "PUT" })).toBe("right");
+    expect(decisionDirection({ resource: "watched", method: "PUT" })).toBe("up");
+
+    expect(resolveSwipe({ dx: -SWIPE_DISTANCE_PX, dy: 0, elapsedMs: 200 })).toBe("dismiss");
+    expect(resolveSwipe({ dx: SWIPE_DISTANCE_PX, dy: 0, elapsedMs: 200 })).toBe("watchlist");
+    expect(resolveSwipe({ dx: 0, dy: -SWIPE_DISTANCE_PX, elapsedMs: 200 })).toBe("watched");
+  });
+
   it("ignores keys that belong to the page and swipes that are not deliberate", () => {
     expect(resolveKeyboardAction({ key: "l", metaKey: true })).toBeNull();
     expect(resolveKeyboardAction({ key: "j", inField: true })).toBeNull();
     expect(resolveKeyboardAction({ key: "Enter" })).toBeNull();
+    // `Shift+J` is a shortcut elsewhere and must never dismiss a movie — both
+    // when the listener forwards the flag and when it only forwards the key,
+    // which already carries the shift state as an uppercase letter.
+    expect(resolveKeyboardAction({ key: "J", shiftKey: true })).toBeNull();
+    expect(resolveKeyboardAction({ key: "J" })).toBeNull();
 
     expect(resolveSwipe({ dx: -20, dy: 0, elapsedMs: 100 })).toBeNull();
     expect(resolveSwipe({ dx: 0, dy: SWIPE_DISTANCE_PX, elapsedMs: 100 })).toBeNull();
@@ -165,6 +189,44 @@ describe("committing a decision", () => {
     expect(progressOf(after).count).toBe(fixtureFallbackPolicy.positive_signal_count + 1);
     expect(after.announcement).toContain("3 of 5 watched signals recorded");
     expect(after.focusRequest).toBe(actionFocusId("watched"));
+  });
+
+  it("describes progress past the threshold instead of reading out a ratio", () => {
+    // The visual meter clamps its fill at the threshold; the live region used
+    // to announce the raw numbers, so a warm persona was told it had "29 of
+    // the 5" watched signals.
+    const policy: ServingPolicy = {
+      ...fixtureFallbackPolicy,
+      positive_signal_count: 28,
+    };
+    const after = decideAll(start({ policy }), [
+      { action: "watched", state: watched(cards[0].movieId) },
+    ]);
+
+    expect(progressOf(after).count).toBe(29);
+    expect(after.announcement).not.toContain("29 of 5");
+    expect(after.announcement).toContain("Enough watched signals are recorded");
+  });
+
+  it("says the persona is already on the learned path when the policy reports it", () => {
+    const policy: ServingPolicy = {
+      ...fixtureLearnedPolicy,
+      positive_signal_count: 11,
+    };
+    const after = decideAll(start({ policy }), [
+      { action: "watched", state: watched(cards[0].movieId) },
+    ]);
+
+    expect(after.announcement).toContain("already being served by the learned path");
+    expect(after.announcement).not.toMatch(/\d+ of \d+/);
+  });
+
+  it("still counts toward the threshold while it is out of reach", () => {
+    const after = decideAll(start(), [
+      { action: "watched", state: watched(cards[0].movieId) },
+    ]);
+
+    expect(after.announcement).toContain("3 of 5 watched signals recorded; 2 to go.");
   });
 
   it("restores the card, the controls, and focus when the write fails", () => {

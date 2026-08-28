@@ -40,7 +40,6 @@ export default async function QuickPicksPreviewPage({
     <FixtureQuickPicks
       failCommits={params.fail === "commit"}
       initial={{ queue, evidence: fixtureQuickPickEvidence(learned) }}
-      personaLabel="Action Fan"
     />
   );
 }

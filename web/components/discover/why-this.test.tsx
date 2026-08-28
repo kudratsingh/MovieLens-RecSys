@@ -155,3 +155,122 @@ describe("Why this? shows only evidence that exists", () => {
     expect(await drawer().findByText("feast-online-redis")).toBeVisible();
   });
 });
+
+describe("Why this? answers in a sentence before it answers in a table", () => {
+  it("opens with plain language and keeps every identifier below it", async () => {
+    const user = userEvent.setup();
+    renderWhyThis(learnedRecommendations);
+
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+
+    const opening = drawer().getByText(/^Picked from/);
+    expect(opening).toBeVisible();
+    expect(opening.textContent).not.toMatch(/lightgbm|item-item|sha256/i);
+    // The evidence is unchanged and one heading further down, not one action.
+    expect(drawer().getByRole("heading", { name: "Model evidence" })).toBeVisible();
+    expect(drawer().getByText("item-item-lightgbm")).toBeVisible();
+  });
+
+  it("gives a fallback response its own sentence rather than a borrowed one", async () => {
+    const user = userEvent.setup();
+    renderWhyThis(fallbackRecommendations);
+
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+
+    expect(drawer().getByText(/watched most across this tenant/)).toBeVisible();
+    expect(drawer().queryByText(/^Picked from/)).not.toBeInTheDocument();
+  });
+
+  it("never tells a warm persona it has N of the 5 signals", async () => {
+    const user = userEvent.setup();
+    const warm: RecommendationResponse = {
+      ...fallbackRecommendations,
+      serving_policy: {
+        ...fallbackRecommendations.serving_policy,
+        positive_signal_count: 28,
+      },
+    };
+    renderWhyThis(warm, null);
+
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+
+    // The opening paragraph, which is where a viewer reads it first; the same
+    // sentence also stands as the policy note below.
+    const opening = drawer().getByText(/^These are the titles watched most/);
+    expect(opening).toHaveTextContent("enough watched signals");
+    expect(drawer().queryByText(/28 of the 5/)).not.toBeInTheDocument();
+    // …and it is not labelled as cold start either.
+    expect(drawer().queryByText(/Popular while we learn/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the technical evidence exactly two deliberate actions away", async () => {
+    const user = userEvent.setup();
+    renderWhyThis(learnedRecommendations);
+
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+    expect(screen.queryByTestId("technical-evidence")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show prediction audit" }));
+    expect(screen.getByTestId("technical-evidence")).toBeVisible();
+  });
+
+  it("retries the online-features read once before reporting it failed", async () => {
+    const user = userEvent.setup();
+    const featureCalls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/audits")) return Response.json(discoverAudits);
+      featureCalls.push(url);
+      // The dependency answered once during review with a 503 on a request
+      // that succeeded immediately afterwards; nobody is waiting on it.
+      return featureCalls.length === 1
+        ? Response.json({ detail: "feature server unavailable" }, { status: 503 })
+        : Response.json(discoverFeatures);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderWhyThis(learnedRecommendations, null);
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+    await user.click(screen.getByRole("button", { name: "Show prediction audit" }));
+
+    expect(await drawer().findByText("feast-online-redis")).toBeVisible();
+    expect(featureCalls).toHaveLength(2);
+    expect(drawer().queryByRole("alert", { name: /Online features/ })).not.toBeInTheDocument();
+  });
+
+  it("reports a failure that a second attempt could not fix", async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) =>
+      String(input).includes("/audits")
+        ? Response.json(discoverAudits)
+        : Response.json({ detail: "feature server unavailable" }, { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderWhyThis(learnedRecommendations, null);
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+    await user.click(screen.getByRole("button", { name: "Show prediction audit" }));
+
+    expect(
+      await drawer().findByRole("alert", { name: /Online features/ }),
+    ).toBeVisible();
+  });
+
+  it("does not retry a failure asking again cannot change", async () => {
+    const user = userEvent.setup();
+    const featureCalls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/audits")) return Response.json(discoverAudits);
+      featureCalls.push(url);
+      return Response.json({ detail: "not allowed" }, { status: 403 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderWhyThis(learnedRecommendations, null);
+    await user.click(screen.getByRole("button", { name: "Why this?" }));
+    await user.click(screen.getByRole("button", { name: "Show prediction audit" }));
+
+    expect(await drawer().findByRole("alert", { name: /Online features/ })).toBeVisible();
+    expect(featureCalls).toHaveLength(1);
+  });
+});

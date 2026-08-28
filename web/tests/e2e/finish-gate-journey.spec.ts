@@ -73,12 +73,15 @@ type RecommendationRead = {
 };
 
 /** Reads a persona's ranked set straight from the BFF, in the page's session. */
-async function readRecommendations(page: Page, userId: number): Promise<RecommendationRead> {
+async function readRecommendations(
+  page: Page,
+  userId: number,
+): Promise<RecommendationRead> {
   return page.evaluate(
     async (id) =>
-      (await fetch(`/api/users/${id}/recommendations?limit=10`, { cache: "no-store" }).then(
-        (response) => response.json(),
-      )) as RecommendationRead,
+      (await fetch(`/api/users/${id}/recommendations?limit=10`, {
+        cache: "no-store",
+      }).then((response) => response.json())) as RecommendationRead,
     userId,
   );
 }
@@ -97,7 +100,10 @@ async function removeWatched(page: Page, userId: number, movieId: number) {
         .then((body: { csrfToken: string }) => body.csrfToken);
       await fetch(`/api/users/${user}/movies/${movie}/watched`, {
         method: "DELETE",
-        headers: { "x-csrf-token": token, "Idempotency-Key": crypto.randomUUID() },
+        headers: {
+          "x-csrf-token": token,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
       });
     },
     { user: userId, movie: movieId },
@@ -107,9 +113,9 @@ async function removeWatched(page: Page, userId: number, movieId: number) {
 async function movieState(page: Page, userId: number, movieId: number) {
   return page.evaluate(
     async ({ user, movie }) =>
-      (await fetch(`/api/users/${user}/movies/${movie}`, { cache: "no-store" }).then(
-        (response) => response.json(),
-      )) as {
+      (await fetch(`/api/users/${user}/movies/${movie}`, {
+        cache: "no-store",
+      }).then((response) => response.json())) as {
         item?: {
           title?: string;
           state?: {
@@ -124,7 +130,9 @@ async function movieState(page: Page, userId: number, movieId: number) {
   );
 }
 
-test("the ten-step finish-gate journey holds against the seeded stack", async ({ page }) => {
+test("the ten-step finish-gate journey holds against the seeded stack", async ({
+  page,
+}) => {
   // Ten steps, one Keycloak round trip, and several full-page loads against a
   // stack that is also serving a model. The default 30s is a per-test budget,
   // not a per-step one.
@@ -146,18 +154,15 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // Discover — and through it Quick Picks, whose only entry point Discover is
   // — can be reached by clicking rather than by typing a URL.
   const primaryNav = page.getByRole("navigation", { name: "Primary" });
-  await expect(primaryNav.getByRole("link", { name: "For you" })).toHaveAttribute(
-    "href",
-    /^\/discover\?/,
-  );
-  await expect(primaryNav.getByRole("link", { name: "Browse" })).toHaveAttribute(
-    "href",
-    /^\/browse\?/,
-  );
-  await expect(primaryNav.getByRole("link", { name: "Library" })).toHaveAttribute(
-    "href",
-    /^\/library\?/,
-  );
+  await expect(
+    primaryNav.getByRole("link", { name: "For you" }),
+  ).toHaveAttribute("href", /^\/discover\?/);
+  await expect(
+    primaryNav.getByRole("link", { name: "Browse" }),
+  ).toHaveAttribute("href", /^\/browse\?/);
+  await expect(
+    primaryNav.getByRole("link", { name: "Library" }),
+  ).toHaveAttribute("href", /^\/library\?/);
 
   // The named personas are still offered, on the retained legacy dashboard.
   // The product selects a persona by URL and has no picker of its own; the
@@ -166,7 +171,12 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   await page.getByRole("link", { name: "Legacy dashboard" }).click();
   await expect(page).toHaveURL(/\/legacy$/);
   await expect(page.getByText(/This is the legacy dashboard/)).toBeVisible();
-  for (const persona of ["Action Fan", "Drama Fan", "Eclectic Viewer", "Cold Start"]) {
+  for (const persona of [
+    "Action Fan",
+    "Drama Fan",
+    "Eclectic Viewer",
+    "Cold Start",
+  ]) {
     await expect(page.getByRole("button", { name: persona })).toBeVisible();
   }
   await page.getByRole("button", { name: "Drama Fan" }).click();
@@ -175,13 +185,16 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // constant while the router served something else. It now reports what the
   // response carried, which is checked against that response rather than
   // against a string this test also invented.
-  const dashboardPolicy = (await readRecommendations(page, DRAMA_FAN)).serving_policy?.name;
+  const dashboardPolicy = (await readRecommendations(page, DRAMA_FAN))
+    .serving_policy?.name;
   expect(dashboardPolicy, "the API reported no serving policy").toBeTruthy();
   await expect(page.getByTestId("serving-contract-policy")).toHaveText(
     String(dashboardPolicy),
   );
 
-  await page.getByRole("link", { name: "Open the movie-discovery product" }).click();
+  await page
+    .getByRole("link", { name: "Open the movie-discovery product" })
+    .click();
   await expect(page).toHaveURL(/\/discover\?userId=\d+$/);
 
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
@@ -198,7 +211,13 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   const warmResponse = await readRecommendations(page, DRAMA_FAN);
   const warmLearned = warmResponse.serving_policy?.learned ?? false;
   const learnedLabel = page.getByText("Ranked by the learned model");
-  const fallbackLabel = page.getByText("Popular while we learn");
+  // A warm persona routed to the fallback is labelled "Popularity fallback",
+  // not "Popular while we learn" — the latter reads as cold start, and Drama
+  // Fan has eight signals. Both are fallback copy; neither may share a page
+  // with the learned label.
+  const fallbackLabel = page.getByText(
+    /Popular while we learn|Popularity fallback/,
+  );
   if (warmLearned) {
     await expect(learnedLabel.first()).toBeVisible();
     await expect(fallbackLabel).toHaveCount(0);
@@ -240,7 +259,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   await expect(drawer.getByText(/%\s*match/i)).toHaveCount(0);
   await drawer.getByRole("button", { name: "Show prediction audit" }).click();
   await expect(page.getByTestId("technical-evidence")).toBeVisible();
-  await expect(drawer.getByRole("heading", { name: "Prediction audit" })).toBeVisible();
+  await expect(
+    drawer.getByRole("heading", { name: "Prediction audit" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(featured).toBeVisible();
@@ -262,7 +283,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   await expect(catalogShell).toContainText("Eclectic Viewer");
   await expect(catalogShell).not.toContainText(String(ECLECTIC));
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("navigation", { name: "Primary mobile" })).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Primary mobile" }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.getByRole("searchbox").fill("the");
@@ -284,15 +307,21 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   await expect(filters).toBeFocused();
   await expect(page.getByText(/Loading the catalog/)).toHaveCount(0);
 
-  const firstPage = await page.locator(".catalog-cell .poster-title").allInnerTexts();
+  const firstPage = await page
+    .locator(".catalog-cell .poster-title")
+    .allInnerTexts();
   expect(firstPage.length).toBeGreaterThan(0);
   const loadMore = page.getByRole("button", { name: "Load more movies" });
   if (await loadMore.count()) {
     await loadMore.click();
     await expect(page).toHaveURL(/cursor=/);
-    const combined = await page.locator(".catalog-cell .poster-title").allInnerTexts();
+    const combined = await page
+      .locator(".catalog-cell .poster-title")
+      .allInnerTexts();
     expect(combined.length).toBeGreaterThan(firstPage.length);
-    expect(new Set(combined).size, "the cursor repeated a title").toBe(combined.length);
+    expect(new Set(combined).size, "the cursor repeated a title").toBe(
+      combined.length,
+    );
     expect(combined.slice(0, firstPage.length)).toEqual(firstPage);
   }
 
@@ -304,7 +333,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   expect(scrolledTo).toBeGreaterThan(0);
   const openedTitle = await card.locator(".poster-title").innerText();
   await card.getByRole("link").first().click();
-  await expect(page.getByRole("heading", { level: 1, name: openedTitle })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: openedTitle }),
+  ).toBeVisible();
 
   await page.goBack();
   await expect(page).toHaveURL(browseUrl);
@@ -320,24 +351,32 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   const subject = 1;
   await removeWatched(page, ACTION_FAN, subject);
   await page.goto(`/movies/${subject}?user=${ACTION_FAN}`);
-  const subjectTitle = (await page.getByRole("heading", { level: 1 }).innerText()).trim();
+  const subjectTitle = (
+    await page.getByRole("heading", { level: 1 }).innerText()
+  ).trim();
 
   // The other half of B3: movie detail ran the same second header as Browse.
   const detailShell = page.locator(".shell-header");
   await expect(detailShell).toContainText("Action Fan");
   await expect(detailShell).not.toContainText(String(ACTION_FAN));
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("navigation", { name: "Primary mobile" })).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Primary mobile" }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
 
   const statePanel = page.locator(".movie-state-panel");
 
   if (await statePanel.getByRole("button", { name: "In watchlist" }).count()) {
     await statePanel.getByRole("button", { name: "In watchlist" }).click();
-    await expect(statePanel.getByRole("button", { name: "Watchlist" })).toBeVisible();
+    await expect(
+      statePanel.getByRole("button", { name: "Watchlist" }),
+    ).toBeVisible();
   }
   await statePanel.getByRole("button", { name: "Watchlist" }).click();
-  await expect(statePanel.getByRole("button", { name: "In watchlist" })).toBeVisible();
+  await expect(
+    statePanel.getByRole("button", { name: "In watchlist" }),
+  ).toBeVisible();
   // Saving is organizational: the route says so rather than implying a model
   // effect it does not have.
   await expect(page.getByRole("status").first()).toContainText(
@@ -352,13 +391,17 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // of the discovery tasks, and a watchlist nobody can open is not a watchlist.
   await page.goto(`/library?userId=${ACTION_FAN}&tab=watchlist`);
   await expect(
-    page.getByRole("listitem").filter({ has: page.locator(`#library-movie-${subject}`) }),
+    page
+      .getByRole("listitem")
+      .filter({ has: page.locator(`#library-movie-${subject}`) }),
   ).toHaveCount(1);
   await page.goBack();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   await statePanel.getByRole("button", { name: "Mark watched" }).click();
-  await expect(statePanel.getByRole("button", { name: "Watched · remove" })).toBeVisible();
+  await expect(
+    statePanel.getByRole("button", { name: "Watched · remove" }),
+  ).toBeVisible();
 
   await statePanel.getByRole("button", { name: /^4 stars/ }).click();
   await expect(page.getByText("Rating saved.")).toBeVisible();
@@ -417,7 +460,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
 
   await row.getByRole("button", { name: "Remove from history" }).click();
   const confirm = row.getByRole("group", { name: /^Confirm removing/ });
-  await expect(confirm).toContainText("deletes the watched interaction and its rating");
+  await expect(confirm).toContainText(
+    "deletes the watched interaction and its rating",
+  );
   await confirm.getByRole("button", { name: "Remove from history" }).click();
   await expect(row.getByText(/No longer watched/)).toBeVisible();
   // The row renders the removal optimistically. Reloading on that render
@@ -462,7 +507,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   });
 
   try {
-    const markWatched = page.getByRole("button", { name: "Mark watched" }).first();
+    const markWatched = page
+      .getByRole("button", { name: "Mark watched" })
+      .first();
     const flowStatus = page.locator("#discover-status");
     await markWatched.click();
     // A recommendation carries no revision, so a first write can only assert
@@ -473,7 +520,11 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     await expect
       .poll(async () => (await flowStatus.textContent()) ?? "")
       .toMatch(/Refreshing recommendations|changed somewhere else/);
-    if (((await flowStatus.textContent()) ?? "").includes("changed somewhere else")) {
+    if (
+      ((await flowStatus.textContent()) ?? "").includes(
+        "changed somewhere else",
+      )
+    ) {
       await markWatched.click();
     }
     await expect(page.getByText(/Refreshing recommendations/)).toBeVisible();
@@ -493,8 +544,12 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     // The documented immediate effect: the title is excluded from the next
     // ranked set. Nothing claims the model retrained.
     const refreshed = await readRecommendations(page, DRAMA_FAN);
-    expect(refreshed.items.map((item) => item.movie_id)).not.toContain(featuredId);
-    await expect(page.getByText(/retrained|learned your taste|model updated/i)).toHaveCount(0);
+    expect(refreshed.items.map((item) => item.movie_id)).not.toContain(
+      featuredId,
+    );
+    await expect(
+      page.getByText(/retrained|learned your taste|model updated/i),
+    ).toHaveCount(0);
   } finally {
     await page.unroute("**/api/users/*/recommendations*").catch(() => {});
     await removeWatched(page, DRAMA_FAN, featuredId);
@@ -506,15 +561,29 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // moves the positive signal count, which is what leaves Cold Start where the
   // ownership table expects it.
   await page.goto(`/quick-picks?user=${COLD_START}`);
-  await expect(page.locator(".quick-picks-page")).toHaveAttribute("data-interactive", "true");
-  const pickId = Number(await page.locator(".quick-pick-card").getAttribute("data-movie-id"));
-  const pickTitle = (await page.getByRole("heading", { level: 1 }).innerText()).trim();
+  await expect(page.locator(".quick-picks-page")).toHaveAttribute(
+    "data-interactive",
+    "true",
+  );
+  const pickId = Number(
+    await page.locator(".quick-pick-card").getAttribute("data-movie-id"),
+  );
+  const pickTitle = (
+    await page.getByRole("heading", { level: 1 }).innerText()
+  ).trim();
   expect(pickId).toBeGreaterThan(0);
-  expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
-    .toContain(pickId);
+  expect(
+    (await readRecommendations(page, COLD_START)).items.map(
+      (item) => item.movie_id,
+    ),
+  ).toContain(pickId);
 
   const signalCount = async () =>
-    Number(((await page.locator(".quick-pick-progress-count").textContent()) ?? "").trim().split(" ")[0]);
+    Number(
+      ((await page.locator(".quick-pick-progress-count").textContent()) ?? "")
+        .trim()
+        .split(" ")[0],
+    );
   const signalsBefore = await signalCount();
 
   try {
@@ -525,21 +594,34 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     // A recommendation carries no revision, so a first write can only assert
     // zero; if another journey already wrote this row the deck re-reads the
     // canonical record and the retry asserts a revision the server issued.
-    if (!((await status.textContent()) ?? "").includes(`${pickTitle}: not for me saved.`)) {
-      await expect(page.locator(".quick-picks-error")).toContainText("try again");
+    if (
+      !((await status.textContent()) ?? "").includes(
+        `${pickTitle}: not for me saved.`,
+      )
+    ) {
+      await expect(page.locator(".quick-picks-error")).toContainText(
+        "try again",
+      );
       await notForMe.click();
     }
     await expect(status).toContainText(`${pickTitle}: not for me saved.`);
-    expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
-      .not.toContain(pickId);
-    expect(await signalCount(), "a dismissal moved the positive signal count").toBe(
-      signalsBefore,
-    );
+    expect(
+      (await readRecommendations(page, COLD_START)).items.map(
+        (item) => item.movie_id,
+      ),
+    ).not.toContain(pickId);
+    expect(
+      await signalCount(),
+      "a dismissal moved the positive signal count",
+    ).toBe(signalsBefore);
 
     await page.locator("button.quick-picks-undo").click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(pickTitle);
-    expect((await readRecommendations(page, COLD_START)).items.map((item) => item.movie_id))
-      .toContain(pickId);
+    expect(
+      (await readRecommendations(page, COLD_START)).items.map(
+        (item) => item.movie_id,
+      ),
+    ).toContain(pickId);
     expect(await signalCount()).toBe(signalsBefore);
   } finally {
     // Nothing above is meant to leave a positive signal, and on the happy path
@@ -568,14 +650,20 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     }),
   );
   await page.goto(`/browse?user=${ECLECTIC}`);
-  const catalogAlert = page.getByRole("alert", { name: "Catalog upstream-error" });
+  const catalogAlert = page.getByRole("alert", {
+    name: "Catalog could not be loaded",
+  });
   await expect(catalogAlert).toContainText("Catalog could not be loaded");
   await expect(page.getByRole("searchbox")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: /Primary/ }).first()).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: /Primary/ }).first(),
+  ).toBeVisible();
 
   await page.unroute("**/api/users/*/catalog*");
   await catalogAlert.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByRole("list", { name: "Browse results" })).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Browse results" }),
+  ).toBeVisible();
 
   // (b) The same read answers 401. That is an expired session rather than an
   //     outage, and the region says so and offers reauthentication instead of
@@ -603,7 +691,10 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   const sessionCookies = (await page.context().cookies()).filter((cookie) =>
     cookie.name.includes("session-token"),
   );
-  expect(sessionCookies.length, "no Auth.js session cookie to expire").toBeGreaterThan(0);
+  expect(
+    sessionCookies.length,
+    "no Auth.js session cookie to expire",
+  ).toBeGreaterThan(0);
   // Everything, not only the session token. Dropping Keycloak's SSO cookie too
   // makes the recovery below a full authorization-code round trip rather than
   // a silent re-issue, which is the stronger of the two proofs — and it leaves
@@ -611,8 +702,12 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // nondeterministic.
   await page.context().clearCookies();
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
+  // The door carries the destination it interrupted, so the recovery below
+  // lands where the viewer was going rather than on the front door.
+  await expect(page).toHaveURL(/\/\?next=%2Fdiscover/);
+  await expect(
+    page.getByRole("button", { name: "Continue with Keycloak" }),
+  ).toBeVisible();
 
   await signInThroughKeycloak(page);
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
@@ -625,7 +720,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // exercising the fallback.
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  const optimizedPosters = await page.locator('img[src*="/_next/image"]').count();
+  const optimizedPosters = await page
+    .locator('img[src*="/_next/image"]')
+    .count();
   expect(optimizedPosters, "no optimized poster to fail").toBeGreaterThan(0);
 
   await page.route("**/_next/image*", (route) => route.abort());
@@ -636,7 +733,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // all still there next to the fallback mark.
   await expect(page.getByRole("link", { name: /Open movie/ })).toBeVisible();
   const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
   );
   expect(overflow, "a failed poster moved the layout").toBeLessThanOrEqual(1);
 
@@ -648,7 +747,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // Log out and prove the protected product is gone — not merely hidden.
   await page.goto("/");
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue with Keycloak" }),
+  ).toBeVisible();
 
   for (const route of [
     `/discover?userId=${DRAMA_FAN}`,
@@ -661,14 +762,21 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     "/legacy",
   ]) {
     await page.goto(route);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
+    // The door, at `/`, carrying the destination it interrupted: a protected
+    // route is gone for a signed-out viewer, and the deep link is not (S10).
+    // Polled rather than read once — the redirect settles after `goto` returns.
+    await expect(page, route).toHaveURL(`/?next=${encodeURIComponent(route)}`);
+    await expect(
+      page.getByRole("button", { name: "Continue with Keycloak" }),
+    ).toBeVisible();
   }
 
   // The data path is closed too, not just the routes: the BFF holds the token,
   // and without a session there is nothing for it to hold.
   const afterLogout = await page.evaluate(
-    async (id) => (await fetch(`/api/users/${id}/recommendations`, { cache: "no-store" })).status,
+    async (id) =>
+      (await fetch(`/api/users/${id}/recommendations`, { cache: "no-store" }))
+        .status,
     DRAMA_FAN,
   );
   expect(afterLogout).toBe(401);

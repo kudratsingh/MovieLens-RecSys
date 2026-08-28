@@ -331,6 +331,50 @@ describe("query state in the URL", () => {
   });
 });
 
+describe("the sort is an ordering, not a filter", () => {
+  it("opens on the most-watched cut and asks the endpoint for it by name", async () => {
+    const { calls } = scriptFetch(jsonResponse(response([item({ movie_id: 1 })])));
+    renderBrowse();
+
+    await screen.findByRole("list", { name: "Browse results" });
+    expect(calls[0]).toContain("sort=popular");
+    expect(screen.getByLabelText("Sort")).toHaveValue("popular");
+    // The default cut is still the canonical address, with nothing in it.
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps the active-filter row for filters only", async () => {
+    nav.search = new URLSearchParams("sort=title");
+    scriptFetch(jsonResponse(response([item({ movie_id: 1 })])));
+    renderBrowse();
+
+    await screen.findByRole("list", { name: "Browse results" });
+    expect(screen.queryByLabelText("Active filters")).not.toBeInTheDocument();
+    expect(screen.queryByText("Title A–Z", { selector: "button" })).not.toBeInTheDocument();
+  });
+
+  it("shows a chip for the genre beside a chosen sort, and only for the genre", async () => {
+    nav.search = new URLSearchParams("genre=Drama&sort=newest");
+    scriptFetch(jsonResponse(response([item({ movie_id: 1 })])));
+    renderBrowse();
+
+    await screen.findByRole("list", { name: "Browse results" });
+    const chips = within(screen.getByLabelText("Active filters")).getAllByRole("button");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveAccessibleName(/Remove the genre filter/);
+  });
+
+  it("still offers the alphabetical cut, spelled out in the address", async () => {
+    scriptFetch(jsonResponse(response([item({ movie_id: 1 })])));
+    renderBrowse();
+
+    await screen.findByRole("list", { name: "Browse results" });
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "title");
+
+    expect(nav.replace).toHaveBeenCalledWith("/browse?sort=title", { scroll: false });
+  });
+});
+
 describe("returning from a movie", () => {
   it("restores the loaded window and the scroll position without refetching", async () => {
     const restored = appendCatalogPage(startWindow(""), response([
@@ -424,14 +468,115 @@ describe("card state changes", () => {
       screen.getAllByRole("listitem").map((cell) => within(cell).getAllByRole("link")[0].textContent);
     const before = order();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add Second Movie to watchlist" }),
-    );
+    // The control family names the action, not the movie, so the card's own
+    // group is what says which movie is being acted on.
+    const second = screen.getByRole("group", { name: "Actions for Second Movie" });
+    await userEvent.click(within(second).getByRole("button", { name: "Watchlist" }));
 
     expect(
-      await screen.findByRole("button", { name: "Remove Second Movie from watchlist" }),
+      await within(second).findByRole("button", { name: "In watchlist" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(order()).toEqual(before);
+  });
+
+  it("offers watched beside watchlist, as a statement rather than a toggle", async () => {
+    // The catalog grid used to offer `Watchlist` and nothing else, so the one
+    // thing a viewer could record from Browse was the one thing that changes no
+    // recommendation. Removing a watched interaction is destructive and stays
+    // on movie detail and in the Library.
+    scriptFetch(
+      jsonResponse(
+        response([
+          item({ movie_id: 1, title: "Unseen Movie" }),
+          item({
+            movie_id: 2,
+            title: "Seen Movie",
+            state: {
+              tenant_id: "demo",
+              user_id: USER_ID,
+              movie_id: 2,
+              rating: null,
+              rating_updated_at: null,
+              watched_at: "2026-08-20T10:00:00Z",
+              watchlisted_at: null,
+              dismissed_at: null,
+              revision: 3,
+              updated_at: "2026-08-20T10:00:00Z",
+            },
+          }),
+        ]),
+      ),
+    );
+    renderBrowse();
+    await screen.findByRole("list", { name: "Browse results" });
+
+    const unseen = screen.getByRole("group", { name: "Actions for Unseen Movie" });
+    expect(within(unseen).getByRole("button", { name: "Mark watched" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    const seen = screen.getByRole("group", { name: "Actions for Seen Movie" });
+    const watched = within(seen).getByRole("button", { name: "Watched" });
+    expect(watched).toHaveAttribute("aria-pressed", "true");
+    expect(watched).toHaveAttribute("aria-disabled", "true");
+    expect(within(seen).queryByRole("button", { name: "Mark watched" })).toBeNull();
+  });
+
+  it("commits a watched mark through the shared write path", async () => {
+    const committed = jsonResponse({
+      request_id: "0f9d1c22-6a1a-4a26-9d1a-2b0f77e3f002",
+      replayed: false,
+      outcome: "changed",
+      state: {
+        tenant_id: "demo",
+        user_id: USER_ID,
+        movie_id: 1,
+        rating: null,
+        rating_updated_at: null,
+        watched_at: "2026-08-21T10:00:00Z",
+        watchlisted_at: null,
+        dismissed_at: null,
+        revision: 1,
+        updated_at: "2026-08-21T10:00:00Z",
+      },
+    });
+    const requests: { url: string; method: string }[] = [];
+    const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/catalog")) {
+        return jsonResponse(response([item({ movie_id: 1, title: "First Movie" })]));
+      }
+      if (url.includes("/api/auth/csrf")) return jsonResponse({ csrfToken: "token" });
+      requests.push({ url, method: String(init?.method ?? "GET") });
+      return committed;
+    });
+    globalThis.fetch = impl as unknown as typeof fetch;
+    renderBrowse();
+    await screen.findByRole("list", { name: "Browse results" });
+
+    const actions = screen.getByRole("group", { name: "Actions for First Movie" });
+    await userEvent.click(within(actions).getByRole("button", { name: "Mark watched" }));
+
+    expect(await within(actions).findByRole("button", { name: "Watched" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The same endpoint and revision contract every other surface writes
+    // through — the grid did not grow a second mutation client.
+    expect(requests).toEqual([
+      {
+        url: `/api/users/${USER_ID}/movies/1/watched?expected_revision=0`,
+        method: "PUT",
+      },
+    ]);
+
+    // `Watched` is a pressed, disabled statement once it commits, so a reader
+    // who cannot see it change gets the shared sentence instead.
+    const [live] = screen.getAllByText(/marked/i, { selector: "[aria-live]" });
+    expect(live).toHaveTextContent(
+      "Marked First Movie as watched. It now counts in live history and unseen filtering.",
+    );
   });
 });
 
@@ -448,15 +593,20 @@ describe("keyboard reach", () => {
     renderBrowse();
 
     await screen.findByRole("list", { name: "Browse results" });
+    // One link per card: the poster and the title used to be two anchors to the
+    // same href, which cost a keyboard viewer a stop per card and announced the
+    // same destination twice.
+    expect(screen.getAllByRole("link")).toHaveLength(2);
     screen.getByRole("link", { name: "Open First Movie" }).focus();
 
     await userEvent.tab();
-    expect(document.activeElement).toHaveTextContent("First Movie");
+    expect(document.activeElement).toHaveAccessibleName("Watchlist");
+    expect(document.activeElement?.closest("[role='group']")).toHaveAccessibleName(
+      "Actions for First Movie",
+    );
 
     await userEvent.tab();
-    expect(document.activeElement).toHaveAccessibleName(
-      "Add First Movie to watchlist",
-    );
+    expect(document.activeElement).toHaveAccessibleName("Mark watched");
 
     await userEvent.tab();
     expect(document.activeElement).toHaveAccessibleName("Open Second Movie");

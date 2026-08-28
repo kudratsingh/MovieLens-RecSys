@@ -9,6 +9,12 @@ grant. Every default is the local demo stack's value, so an argument-free run --
 which is what CI and every ``make demo-*`` target does -- behaves exactly as it
 did before the flags existed.
 
+The full run also compares the catalog metadata the API serves with the reviewed
+fixture the database is seeded from, because a snapshot that predates a fixture
+refresh is invisible to every other check and very visible to a viewer: it is
+posters that never load. ``--skip-catalog-coverage`` turns that off for a
+restored dump that legitimately predates the fixture.
+
 Against a deployment, where the confidential client issues no tokens and the
 verification account carries the persona role instead::
 
@@ -26,6 +32,7 @@ import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -42,6 +49,31 @@ class SmokeSummary:
     action_recommendation_count: int
     cold_history_count: int
     cold_recommendation_count: int
+
+
+@dataclass(frozen=True)
+class CatalogCoverage:
+    """How much of the reviewed fixture's metadata the stack is actually serving."""
+
+    fixture_movie_count: int
+    served_movie_count: int
+    served_poster_count: int
+    served_overview_count: int
+
+
+# The fixture the demo database is seeded from. Read as plain JSON rather than
+# through ``synthetic.personas.seed``: this module deliberately depends on
+# nothing but httpx so it can be pointed at any deployment, and the seeder pulls
+# in SQLAlchemy and application settings it has no use for here.
+FIXTURE_CATALOG_PATH = Path(__file__).resolve().parents[1] / "personas" / "catalog.json"
+
+# One page short of the endpoint's maximum, times enough pages to walk the whole
+# reviewed fixture. A deployment with a real MovieLens ingest behind the same
+# endpoint stops after these pages and reports what it checked, rather than
+# paging tens of thousands of rows to answer a smoke-test question.
+CATALOG_PAGE_LIMIT = 48
+CATALOG_MAX_PAGES = 8
+COVERAGE_PERSONA_USER_ID = 900000101
 
 
 SUPPORTED_GRANT_TYPES = ("client_credentials", "password")
@@ -272,6 +304,107 @@ def _require_list(payload: dict[str, Any], key: str, source: str) -> list[dict[s
     return value
 
 
+def check_catalog_coverage(
+    client: httpx.Client,
+    *,
+    api_url: str,
+    headers: dict[str, str],
+    user_id: int = COVERAGE_PERSONA_USER_ID,
+    catalog_path: Path = FIXTURE_CATALOG_PATH,
+    page_limit: int = CATALOG_PAGE_LIMIT,
+    max_pages: int = CATALOG_MAX_PAGES,
+) -> CatalogCoverage:
+    """Fail when the stack serves less metadata than the fixture it was seeded from.
+
+    The database is the product's only poster source on the request path, so a
+    snapshot taken before the fixture was enriched shows placeholders on every
+    surface — which is how the demo spent a day serving 24 posters out of 120
+    with every test still green. Comparing what the catalog endpoint returns
+    against the committed fixture makes that a smoke failure instead of a
+    viewer's first impression.
+
+    Only titles the fixture actually has metadata for are counted, so a
+    deployment whose catalog is larger than the fixture is measured on the rows
+    the fixture owns rather than being asked to explain the rest.
+    """
+    fixture = _load_fixture_catalog(catalog_path)
+    served = 0
+    posters = 0
+    overviews = 0
+    poster_gaps: list[int] = []
+    overview_gaps: list[int] = []
+
+    cursor: str | None = None
+    for _ in range(max_pages):
+        # The cursor is unpadded base64url (src/serving/catalog.py:286), so it
+        # carries nothing a query string would need escaped.
+        query = f"limit={page_limit}" + (f"&cursor={cursor}" if cursor else "")
+        payload = _get_json(
+            client,
+            f"{api_url.rstrip('/')}/users/{user_id}/catalog?{query}",
+            f"catalog user {user_id}",
+            headers=headers,
+        )
+        for item in _require_list(payload, "items", "catalog"):
+            expected = fixture.get(int(item["movie_id"]))
+            if expected is None:
+                continue
+            served += 1
+            expected_poster, expected_overview = expected
+            if item.get("poster_url"):
+                posters += 1
+            elif expected_poster:
+                poster_gaps.append(int(item["movie_id"]))
+            if item.get("overview"):
+                overviews += 1
+            elif expected_overview:
+                overview_gaps.append(int(item["movie_id"]))
+        page = payload.get("page")
+        cursor = page.get("next_cursor") if isinstance(page, dict) else None
+        if not isinstance(page, dict) or not page.get("has_more") or not cursor:
+            break
+
+    gaps = [
+        f"{len(ids)} titles are served without {field} the fixture has ({_format_ids(ids)})"
+        for field, ids in (("a poster", poster_gaps), ("an overview", overview_gaps))
+        if ids
+    ]
+    if gaps:
+        raise DemoSmokeError(
+            "the served catalog is behind the reviewed fixture, so run "
+            f"`make demo-seed`: {'; '.join(gaps)}"
+        )
+
+    return CatalogCoverage(
+        fixture_movie_count=len(fixture),
+        served_movie_count=served,
+        served_poster_count=posters,
+        served_overview_count=overviews,
+    )
+
+
+def _load_fixture_catalog(path: Path) -> dict[int, tuple[bool, bool]]:
+    """Read which fixture titles claim a poster and an overview."""
+    try:
+        with path.open(encoding="utf-8") as fixture_file:
+            payload = json.load(fixture_file)
+        movies = payload["movies"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise DemoSmokeError(f"could not read the catalog fixture at {path}") from exc
+    return {
+        int(movie["movie_id"]): (
+            bool(movie.get("poster_url")),
+            bool(movie.get("overview")),
+        )
+        for movie in movies
+    }
+
+
+def _format_ids(movie_ids: Sequence[int], limit: int = 8) -> str:
+    head = ", ".join(str(movie_id) for movie_id in movie_ids[:limit])
+    return head if len(movie_ids) <= limit else f"{head}, … (+{len(movie_ids) - limit})"
+
+
 def service_access_token(
     client: httpx.Client,
     keycloak_url: str,
@@ -334,6 +467,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--keycloak-url", default="http://localhost:8080")
     parser.add_argument("--readiness-only", action="store_true")
     parser.add_argument("--audits-only", action="store_true")
+    parser.add_argument(
+        "--skip-catalog-coverage",
+        action="store_true",
+        help=(
+            "do not compare served catalog metadata with the committed fixture "
+            "(for a restored snapshot that legitimately predates it)"
+        ),
+    )
     parser.add_argument("--realm", default=DEFAULT_AUTH.realm)
     parser.add_argument("--client-id", default=DEFAULT_AUTH.client_id)
     parser.add_argument("--client-secret", default=DEFAULT_AUTH.client_secret)
@@ -382,7 +523,19 @@ def main(argv: Sequence[str] | None = None) -> None:
             keycloak_url=args.keycloak_url,
             auth=auth,
         )
-    print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
+        report: dict[str, Any] = dict(summary.__dict__)
+        if not args.skip_catalog_coverage:
+            coverage = check_catalog_coverage(
+                client,
+                api_url=args.api_url,
+                headers={
+                    "Authorization": (
+                        f"Bearer {service_access_token(client, args.keycloak_url, auth)}"
+                    )
+                },
+            )
+            report.update(coverage.__dict__)
+    print(json.dumps(report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

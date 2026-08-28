@@ -96,6 +96,30 @@ export function ratingAction(value: number | null): MovieStateAction {
     : { resource: "rating", method: "PUT", rating: value };
 }
 
+/**
+ * Which way a decision travels.
+ *
+ * Quick Picks taught this vocabulary first — a swipe right saves, a swipe up
+ * marks watched, a swipe left dismisses — and Discover's featured slot now
+ * moves the same way when it advances. Keeping the map here rather than in
+ * either surface is what makes that one gesture language instead of two that
+ * happen to agree today: `resolveSwipe` classifies gestures against it and the
+ * Discover advance animates along it.
+ */
+export type DecisionDirection = "left" | "right" | "up";
+
+export const DECISION_DIRECTION: Record<MovieStateResource, DecisionDirection> = {
+  watchlist: "right",
+  // A rating implies watched, so it travels the way watched does.
+  watched: "up",
+  rating: "up",
+  dismissal: "left",
+};
+
+export function decisionDirection(action: MovieStateAction): DecisionDirection {
+  return DECISION_DIRECTION[action.resource];
+}
+
 /** Two actions are the same intent when they would produce the same request. */
 export function sameAction(left: MovieStateAction, right: MovieStateAction): boolean {
   if (left.resource !== right.resource || left.method !== right.method) return false;

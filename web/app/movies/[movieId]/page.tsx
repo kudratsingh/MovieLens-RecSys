@@ -14,7 +14,9 @@ import { personaDisplayName } from "@/lib/discover/persona";
 import {
   productNavigationItems,
   returnHrefLabel,
+  routeReturnHref,
   safeReturnHref,
+  signInHref,
 } from "@/lib/navigation";
 import { loadMovieDetail } from "@/lib/resources/server";
 import { hasResourceData } from "@/lib/resources/state";
@@ -89,7 +91,14 @@ export default async function MovieDetailPage({ params, searchParams }: DetailPr
     searchParams,
     auth(),
   ]);
-  if (!session?.user || session.error) redirect("/");
+  if (!session?.user || session.error) {
+    // A shared link to a movie is the deep link most likely to be followed by
+    // someone with no session, so it is the one that most needs to survive the
+    // door. An unparseable id is not offered back: it would only redirect a
+    // signed-in viewer into a 404.
+    const path = /^\d{1,15}$/.test(movieId) ? `/movies/${movieId}` : "/";
+    redirect(signInHref(routeReturnHref(path, query)));
+  }
 
   const userId = resolveDemoPersonaId(query.user);
   const actorName = session.user.name ?? session.user.email ?? "Signed-in actor";

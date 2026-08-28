@@ -76,6 +76,52 @@ describe("the authenticated product shell", () => {
     expect(screen.getByText("demo")).toBeVisible();
   });
 
+  /**
+   * Both identity lines used to be `display: none` below 1050px, which removed
+   * the labelled spans from the accessibility tree as well as from the screen
+   * and left an `aria-hidden` two-letter dot as the only answer to "whose data
+   * is this" on a phone. The markup is now width-independent — only the layout
+   * moves — so this is the assertion that keeps it that way; the browser matrix
+   * in `e2e/shell-identity.spec.ts` checks the rendered result at each width.
+   */
+  it("renders each identity once, in its own labelled node", () => {
+    renderShell();
+
+    const actorLabel = screen.getByText("Signed in as");
+    const personaLabel = screen.getByText("Exploring as");
+    const actorName = screen.getByText("demo");
+    const personaName = screen.getByText("Eclectic Viewer");
+
+    // Exactly one of each: a second copy for a second breakpoint would read as
+    // two identities to anyone using the accessibility tree.
+    expect(screen.queryAllByText("Signed in as")).toHaveLength(1);
+    expect(screen.queryAllByText("Exploring as")).toHaveLength(1);
+
+    expect(actorName).not.toBe(personaName);
+    expect(actorLabel.parentElement).toBe(actorName.parentElement);
+    expect(personaLabel.parentElement).toBe(personaName.parentElement);
+    // The actor block never contains the persona, and the reverse — which is
+    // the one thing the design contract forbids outright.
+    expect(actorName.parentElement).not.toContainElement(personaName);
+    expect(personaName.parentElement).not.toContainElement(actorName);
+  });
+
+  it("leaves the initials out of the accessibility tree, because the name is beside them", () => {
+    const { container } = renderShell();
+    const dot = container.querySelector(".persona-dot");
+
+    expect(dot).toHaveTextContent("EV");
+    expect(dot).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("labels the fixture harness as isolated rather than as a signed-in session", () => {
+    renderShell({ actorName: "Fixture reviewer", fixtureMode: true, legacyHref: undefined });
+
+    expect(screen.getByText("Isolated mode")).toBeVisible();
+    expect(screen.queryByText("Signed in as")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Exit preview" })).toBeVisible();
+  });
+
   it("offers the legacy dashboard as a footer utility link, not a nav slot", () => {
     renderShell();
 
@@ -94,5 +140,16 @@ describe("the authenticated product shell", () => {
     renderShell({ fixtureMode: true, legacyHref: undefined });
 
     expect(screen.queryByRole("link", { name: "Legacy dashboard" })).not.toBeInTheDocument();
+  });
+
+  it("gives every route one main landmark and a skip link into it", () => {
+    // Quick Picks rendered outside this shell until the sweep, so it had
+    // neither. Asserting them here is what makes them a property of the
+    // product rather than of four routes out of five.
+    renderShell();
+
+    const skip = screen.getByRole("link", { name: "Skip to content" });
+    expect(skip).toHaveAttribute("href", "#main-content");
+    expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
   });
 });

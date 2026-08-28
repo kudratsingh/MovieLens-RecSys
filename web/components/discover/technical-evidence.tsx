@@ -15,7 +15,12 @@ import {
   rankScoreCaveat,
 } from "@/lib/discover/evidence";
 import { readBffResource } from "@/lib/resources/browser";
-import { loadingState, type ResourceState } from "@/lib/resources/state";
+import {
+  isResourceFailure,
+  loadingState,
+  retryState,
+  type ResourceState,
+} from "@/lib/resources/state";
 
 export type PreloadedTechnicalEvidence = {
   audits: ResourceState<RecommendationAuditResponse>;
@@ -62,11 +67,27 @@ export function TechnicalEvidence({
     );
   }, [requestId, userId]);
 
+  /**
+   * The online-features read gets one automatic second attempt.
+   *
+   * It is the flakiest dependency in the drawer — a `503` from the feature
+   * server was observed once during review on a request that succeeded
+   * immediately afterwards — and it is also the one nobody is waiting on: the
+   * movie, its reason, and its serving policy are already on screen, so a
+   * retry costs a reader nothing and spares them a failure state that was
+   * about to resolve itself. Exactly one retry, and only for a failure that
+   * asking again could plausibly answer differently.
+   */
   const loadFeatures = useCallback(async () => {
     setFeatures(loadingState("features"));
-    setFeatures(
-      await readBffResource(FEATURES, `/api/users/${userId}/features`, { requestId }),
-    );
+    const url = `/api/users/${userId}/features`;
+    const first = await readBffResource(FEATURES, url, { requestId });
+    if (!isResourceFailure(first) || !first.retryable) {
+      setFeatures(first);
+      return;
+    }
+    setFeatures(retryState(first));
+    setFeatures(await readBffResource(FEATURES, url, { requestId }));
   }, [requestId, userId]);
 
   function reveal() {

@@ -117,18 +117,28 @@ export function formatRating(rating: number | null): string {
 }
 
 /**
- * The Library payload carries no poster or release year, so a row identifies a
- * movie with a deterministic initial pair rather than a live metadata request.
+ * The metadata line under a row's title.
+ *
+ * The year moved here when the payload started carrying it: the title itself is
+ * run through `displayTitle`, so printing "Babe (1995)" above a line that also
+ * says 1995 is exactly what that rule exists to prevent. A row with neither
+ * still says something rather than collapsing to an empty line.
  */
-export function titleInitials(title: string): string {
-  const skipped = new Set(["the", "a", "an", "of", "in", "to", "and"]);
-  const initials = title
-    .split(/\s+/)
-    .filter((word) => word && !skipped.has(word.toLowerCase()))
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? "")
-    .join("");
-  return initials || title.slice(0, 2).toUpperCase() || "?";
+export function movieMetaLine(
+  releaseYear: number | null,
+  genres: readonly string[],
+): string {
+  const parts = [
+    // Tested for a number rather than against `null`: the API and the web app
+    // are separate images, so a backend that predates the field sends no key at
+    // all, and `String(undefined)` would print the word "undefined" at the top
+    // of every row.
+    typeof releaseYear === "number" && Number.isFinite(releaseYear)
+      ? String(releaseYear)
+      : null,
+    genres.length ? genres.join(" · ") : "Genres unavailable",
+  ];
+  return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
 /**

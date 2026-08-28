@@ -16,15 +16,46 @@ import { NextResponse, type NextRequest } from "next/server";
  * carrying the viewer's persona. Either answer cached in a shared cache would
  * be served to the wrong visitor. `/legacy` renders a persona's dashboard for
  * the same reason.
+ *
+ * `/library`, `/movies/*` and `/quick-picks` were left off the original list
+ * even though they meet the same criterion — each one renders a named
+ * persona's saved state, and detail and Quick Picks both render that persona's
+ * feedback controls in their committed positions. The rule is the document's
+ * content, not how personalized the route feels.
  */
-const PERSONALIZED_ROUTES = ["/", "/discover", "/legacy"];
+const PERSONALIZED_ROUTES = [
+  "/",
+  "/discover",
+  "/legacy",
+  "/library",
+  "/quick-picks",
+];
+
+/** Movie detail is `/movies/{id}`, so it is matched by prefix rather than exactly. */
+const PERSONALIZED_PREFIXES = ["/movies/"];
+
+export function isPersonalizedDocument(pathname: string): boolean {
+  return (
+    PERSONALIZED_ROUTES.includes(pathname) ||
+    PERSONALIZED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  );
+}
 
 export function middleware(request: NextRequest) {
   const response = NextResponse.next();
-  if (PERSONALIZED_ROUTES.includes(request.nextUrl.pathname)) {
+  if (isPersonalizedDocument(request.nextUrl.pathname)) {
     response.headers.set("Cache-Control", "private, no-store");
   }
   return response;
 }
 
-export const config = { matcher: ["/", "/discover", "/legacy"] };
+export const config = {
+  matcher: [
+    "/",
+    "/discover",
+    "/legacy",
+    "/library",
+    "/quick-picks",
+    "/movies/:path*",
+  ],
+};

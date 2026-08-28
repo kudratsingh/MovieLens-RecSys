@@ -7,14 +7,24 @@ import {
 import { Drawer } from "@/components/ui/drawer";
 import type { RecommendationItem, RecommendationResponse } from "@/lib/api";
 import { rankScoreCaveat, recommendationEvidence } from "@/lib/discover/evidence";
-import { displayTitle } from "@/lib/discover/movie-card";
+import { displayTitle } from "@/lib/movie-types";
+import { plainServingExplanation } from "@/lib/discover/policy";
 
 /**
  * `Why this?` — the first of at most two deliberate actions to reach evidence.
  *
- * Everything in the drawer comes from the recommendation response that is
- * already on screen, so opening it costs nothing and cannot fail. The heavier
- * audit and feature reads sit one further click in, inside `TechnicalEvidence`.
+ * Everything above the `Model evidence` heading comes from the recommendation
+ * response that is already on screen, so opening it costs nothing and cannot
+ * fail. The heavier audit and feature reads sit one further click in, inside
+ * `TechnicalEvidence`.
+ *
+ * The reading order is the point of this component. The evidence itself was
+ * always right — the policy string, the model versions, the counts, the request
+ * id — and the route contract asks for exactly those. But the product's primary
+ * viewer is someone choosing a film, and for them "why this?" was being answered
+ * with `item-item-cosine+lightgbm`. So the drawer opens with one plain sentence
+ * built only from values the response carries, and the tables follow it
+ * unchanged, under a heading, in the same number of actions as before.
  *
  * What is deliberately absent matters as much as what is here. There is no
  * match percentage, and no "because you liked" line: the response names no
@@ -44,9 +54,11 @@ export function WhyThis({
       title={`Why ${title}?`}
     >
       <div className="evidence-details">
+        <p className="evidence-plain">{plainServingExplanation(response)}</p>
         <p className="evidence-reason">
           {evidence.reason ?? "The recommendation API sent no item-level reason for this title."}
         </p>
+        <h3 className="evidence-heading">Model evidence</h3>
         <p className="evidence-policy">
           <strong>{evidence.policy.label}.</strong> {evidence.policy.summary}
         </p>

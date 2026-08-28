@@ -5,10 +5,14 @@ thing standing between this document and PASS.** Every criterion a reviewer can
 settle is settled and passing after the 7d cutover; see
 [§10](#10-re-run-after-cutover-7d), which supersedes the verdict below.
 
-This document is written in two dated passes. Sections 1–9 are the **7A**
+This document is written in three dated passes. Sections 1–9 are the **7A**
 pass and are left as the record of what was true then, including its HOLD and
 its three blocking items. [Section 10](#10-re-run-after-cutover-7d) is the
 **7D** re-run after the cutover that cleared them, and is the current verdict.
+[Section 11](#11-sweep-re-run-2026-08-27) is the **2026-08-27 frontend sweep**:
+it does not move that verdict, and it records which of this document's findings
+the sweep closed, which remain, and — the part that matters for the sessions —
+that they must now be run against the swept build.
 
 **Reviewed:** 2026-08-21 · **Bundle:** 7A · **Base:** `876fd36` (7b merged)
 
@@ -957,3 +961,132 @@ cd web && MOVIELENS_UI_PORT=3113 npm run test:e2e:ui
 In CI: the `frontend` job runs the visual and accessibility gate, and
 `browser-auth-e2e` runs the service-backed journey and then the browser timing
 against the bypass-disabled Compose stack.
+
+---
+
+## 11. Sweep re-run (2026-08-27)
+
+**Reviewed:** 2026-08-27 · **Branch:** `feat/frontend-sweep` · **Base:** `099ac3d`
+(`main` at `9fd6b2b` plus the poster backfill)
+
+**The verdict does not move: still HOLD, and still only on the moderated
+sessions.** Nothing here reopens a criterion. What this pass records is that a
+QA sweep, a code audit, and UX research were run against the cutover build, that
+ten P0/P1 defects and six features came out of them, and that the findings this
+document was already carrying are now either closed or explicitly not.
+
+**It does change which build the sessions must be run against.** [§10.8](#108-what-the-owner-must-run-to-convert-this-verdict)
+names the tasks; F1–F5 below change what a participant would see doing them —
+what a `Watchlist` press does, whether a poster exists, how Browse opens, what a
+Library row shows. Running the sessions against the pre-sweep build would
+produce observed data about a product that no longer exists. Freeze this build,
+then run them.
+
+### 11.1 What the sweep closed
+
+| Finding | State after this sweep | What holds it |
+|---|---|---|
+| **N1** — the first learned recommendation has no poster | **Closed**, all three halves. Coverage: the running stack served a pre-backfill snapshot (24 of 120 posters) and is re-seeded to **120/120 posters and 120/120 overviews**. Rot: three fixture URLs were dead upstream (`17` Sense and Sensibility, `21` Get Shorty, `1247` The Graduate) and are re-resolved — `make catalog-verify` reports checked 120, failures 0. Stickiness: a poster that failed once no longer poisons every movie that lands in the same slot | `synthetic/smoke/demo.py` now fails if the served catalog is behind the reviewed fixture; `make catalog-verify`; `web/e2e/poster-fallback.spec.ts` at 390/768/1440 |
+| **N3** — the Discover empty state stacks awkwardly at 390px | **Closed.** The shared empty and error blocks collapse to one column at ≤480px with their actions in one full-span row, in the offered order | `web/e2e/resource-states.spec.ts`, `web/e2e/discover.spec.ts` (`/discover?demo=empty`), both with a document-overflow assertion |
+| **N7** — Tailwind colour utilities lose to the unlayered base rule | **Interim only, as planned.** The shell's `Sign out` is on the token classes rather than inheriting 16px `#f4ede3`, and `/legacy`'s two remaining 4.12:1 nodes are on `text-zinc-400`. The `@layer base` fix stays its own PR with a full visual-gate re-run | `web/components/auth-controls.css`; the axe pass in `web/e2e/finish-gate.spec.ts` |
+| **P0 — the first press of any Discover or Quick Picks control was silently discarded** (a `409` on `expected_revision=0`, armed permanently the first time a title was written and reverted, which the product's own undo affordances do routinely) | **Closed, and proven against the live stack.** The shared write path replays once against the canonical revision instead of reporting a conflict | `web/tests/e2e/discover-journey.spec.ts` — "the first press on a title that already carries state still commits", service-backed, real Keycloak, real revisions |
+| A poster that failed once kept failing for every movie in that slot | Closed | `web/e2e/poster-fallback.spec.ts` |
+| Quick Picks rendered a broken image with no fallback | Closed — one `PosterFallbackMark` over one `posterInitials` rule, on Discover, Browse, detail and Quick Picks | same |
+| `/quick-picks` ran outside the product shell — no `<main>`, no skip link, neither navigation, no sign-out, a `Demo persona 900000101` placeholder | Closed. This was finish-gate item **B3**, cleared for Browse and detail in the cutover and never applied here | `web/tests/e2e/shell-and-doors.spec.ts`, `web/e2e/shell-identity.spec.ts` |
+| Discover and Quick Picks minted a fresh idempotency key per HTTP attempt | Closed — a re-press of a failed decision is one intent and carries its original key | `web/tests/unit/{movie-state-client,quick-picks-transport}.test.ts` |
+| "Recommendations refreshed." was claimed when the ranked set had not moved | Closed | `web/components/discover/discover-experience.test.tsx` |
+| Below 1050px the shell named neither the actor nor the persona, in any modality | Closed — both identities stay labelled, visible and in separate nodes at every width down to 320px | `web/e2e/shell-identity.spec.ts` |
+| Every signed-out deep link lost its destination through sign-in | Closed — the door carries `?next=`, refuses a return address that is not ours, and both journeys now assert the destination rather than a bare `/` | `web/tests/e2e/shell-and-doors.spec.ts`, `discover-journey.spec.ts`, `finish-gate-journey.spec.ts` |
+
+### 11.2 What remains open
+
+| Finding | Why it is still open |
+|---|---|
+| **N4** — Library spends the first mobile viewport on identity copy | The **precondition** is delivered: the persona is named in the shell header at every width, so the route no longer has to carry that job in its hero. The layout change itself is deferred as U13. Still visible in [`evidence/sweep-2026-08-27/library-mobile-390.png`](evidence/sweep-2026-08-27/library-mobile-390.png) |
+| **N5** — Browse restores a stored window instead of re-reading | Deliberate; unchanged |
+| **N6** — the product has no persona picker | Owner decision, deliberately out of this sweep. The design contract asks for a *labelled* persona, which S9 now delivers at every width; a picker is its own PR gated behind the `demo-impersonator` role (ADR 0012) |
+| **N7** — the unlayered base rules | Only the interim landed. `app/globals.css`'s `button, input, select { color: inherit }` still sits outside any cascade layer and still out-ranks every Tailwind colour utility app-wide |
+| The moderated sessions ([§10.8](#108-what-the-owner-must-run-to-convert-this-verdict)) | Unchanged, and now must run against this build |
+
+### 11.3 New findings this pass produced
+
+None of these blocks the gate; all three were found by running the suites
+against a stack rebuilt from the branch, which is the first time that happened.
+The first two were closed on the same branch before it opened as a PR, in a
+follow-up pass that also delivered P2-3 (the Discover watch history is a list of
+linked rows with thumbnails again, on the `poster_url` and `release_year` the
+read model now carries) and P3-5 (`Not for me` no longer sits 43px to the right
+of the two buttons above it at 390 — the quiet control was a stretched grid item
+centring only its label). The third stays open.
+
+1. **A `409` from a business rule was reported as a concurrency conflict — closed.**
+   `PUT /users/{id}/movies/{id}/watchlist` on an already-watched title answers
+   `409 {"detail":"a watched movie cannot be added to the watchlist"}`, and the
+   API's own OpenAPI description calls `409` "Idempotency, state revision, or
+   transition conflict" — three different things on one status. The browser
+   collapses all three into *"… changed somewhere else before this saved"*,
+   which was untrue and unactionable for the transition case: nothing changed
+   anywhere, and trying again would not help. `lib/movie-state/mutate.ts` now
+   splits a `409` by its body — the two recoverable shapes the API sends
+   (revision conflict, idempotency reuse) are matched by prefix and everything
+   else is a *refusal* carrying the API's own sentence, rendered verbatim as a
+   polite note with no retry and no re-read, in every consumer of the result.
+   The split is by prose because the API documents one status for three
+   conditions; a distinct status or a machine-readable code on the API side is
+   the cleaner contract and is owed as a backend follow-up.
+2. **The persona was stated twice on two routes — closed.** The shell is the
+   single source now: the Quick Picks deck's repeated line and its
+   `personaLabel` prop are gone through every call site, and Library's page
+   eyebrow is gone (its lede and announcements still name the persona). Dropping
+   the eyebrow also reclaims two lines of Library's first mobile viewport, which
+   moves N4/U13 in the right direction without settling it.
+3. **One cross-tenant canary only holds on an empty database.**
+   `test_user_endpoints_never_cross_tenant_boundary[recommendations]` asserts
+   the demo canary title appears in the demo tenant's own recommendations. That
+   is the *positive control* — it is what stops the four "not in" assertions
+   being vacuous — and it is satisfied only while the canary movie can reach a
+   top-50 popularity list. CI runs this suite against base tables plus
+   migrations, where it does; locally, against the seeded demo database, the
+   canary sits below 120 real titles and the assertion fails. Every isolation
+   assertion in the file passes in both environments. The suite is honest in CI
+   and misleading anywhere else, which is worth fixing before it is ever pointed
+   at a deployment.
+
+### 11.4 What was run
+
+| Gate | Result |
+|---|---|
+| `npm run lint`, `npm run typecheck` | pass, clean tree-wide |
+| `npm test` (Vitest) | 53 files, 581 tests, pass (565 before the follow-up pass) |
+| `npx playwright test --config playwright.ui.config.ts` | 266 passed, 16 skipped (viewport-gated), 0 failed — 390/768/1440 plus the 320px sweep |
+| `make demo-up && make demo-seed && make demo-smoke` | pass; images rebuilt from the branch, catalog re-seeded to 120/120/120 |
+| `make web-e2e` | 14 passed — the serialized service-backed journeys, all four personas, every write reverted |
+| `npm run test:perf` | 5 passed; LCP 64–396 ms, CLS 0.0000 on every route, all 16 structural claims ok |
+| `make api-contract-check && make web-api-types-check` | pass |
+| `pytest tests/unit` (minus `test_twotower.py`) | 672 passed, 6 skipped |
+| `pytest tests/integration tests/tenant_isolation` | 18 passed, 1 failed — the environmental positive control in §11.3(3) |
+| Poster census | 120 rows, 120 posters, 120 overviews; served URLs byte-identical to the verified fixture; `make catalog-verify` checked 120, failures 0 |
+| Persona hygiene | Action Fan 8/0/0, Drama Fan 8/0/0, Eclectic Viewer 11/0/0, **Cold Start 0/0/0** — back to the seeded baseline after the whole run |
+
+### 11.5 Re-running this section
+
+```bash
+# Static and unit
+cd web && npm run lint && npm run typecheck && npm test
+
+# Fixture-mode matrix, 390/768/1440 plus the 320px sweep
+cd web && npm run test:e2e:ui
+
+# Rebuild the stack from the branch, then the service-backed suites
+make demo-up && make demo-seed && make demo-smoke
+cd web && npm run test:e2e && npm run test:perf
+
+# Contracts, Python, and the catalog census
+make api-contract-check && make web-api-types-check
+pytest tests/unit --ignore=tests/unit/test_twotower.py
+REQUIRE_TENANT_ISOLATION_STACK=1 pytest tests/tenant_isolation
+make catalog-verify
+
+# Evidence
+cd web && MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:sweep
+```

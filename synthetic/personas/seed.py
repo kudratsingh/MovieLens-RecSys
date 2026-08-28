@@ -187,7 +187,14 @@ def seed_demo_personas(
 
 
 def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> None:
-    """Insert missing snapshot rows without overwriting a full MovieLens ingest."""
+    """Add the snapshot's rows without overwriting a full MovieLens ingest.
+
+    MovieLens-owned rows (``movies``, ``links``) are only ever filled in, never
+    replaced: a real ingest is the better source and must win. The catalog read
+    model is the other way round — it is fixture-owned, carries no user data,
+    and is regenerated offline (``synthetic/personas/enrich_posters.py``), so a
+    re-seed is how a refreshed poster or synopsis reaches an existing database.
+    """
     connection.execute(
         text("""
             INSERT INTO movies ("movieId", title, genres)
@@ -199,11 +206,15 @@ def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> 
             for movie in movies
         ],
     )
+    # A TMDB id the fixture has learned since the database was first seeded is
+    # worth filling in, but an id that is already there came from an ingest we
+    # do not get to second-guess.
     connection.execute(
         text("""
             INSERT INTO links ("movieId", "tmdbId")
             VALUES (:movie_id, :tmdb_id)
-            ON CONFLICT ("movieId") DO NOTHING
+            ON CONFLICT ("movieId") DO UPDATE SET "tmdbId" = EXCLUDED."tmdbId"
+            WHERE links."tmdbId" IS NULL AND EXCLUDED."tmdbId" IS NOT NULL
             """),
         [{"movie_id": movie.movie_id, "tmdb_id": movie.tmdb_id} for movie in movies],
     )

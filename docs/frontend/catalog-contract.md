@@ -2,7 +2,7 @@
 
 **Status:** Bundle 3 implemented
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-27
 
 ## Product boundary
 
@@ -13,15 +13,50 @@ describes catalog breadth as recommendation coverage.
 The reviewed demo snapshot contains:
 
 - **120 visible titles** in `synthetic/personas/catalog.json`;
-- **24 poster-backed, overview-backed titles** with complete reviewed metadata;
-- **96 partial-metadata titles** that deliberately exercise poster and synopsis
-  fallbacks; and
+- **120 poster-backed titles**, filled offline from TMDB by
+  `synthetic/personas/enrich_posters.py`;
+- **120 overview-backed titles**, so every seeded row is
+  `source_status = 'complete'`. Twenty-four of those synopses are hand-written
+  and reviewed; the other 96 came from the same offline TMDB pass and are only
+  ever *filled*, never overwritten — an automated run does not get to replace
+  editorial copy; and
 - **120 titles with deterministic background interactions**, so the current
   fixture's popularity and item-item artifact inputs cover 100% of visible
   titles after artifacts are regenerated.
 
 Those are separate assertions. Future fixture changes must continue to report
 visible, poster-backed, and recommendation-eligible counts independently.
+
+Poster coverage used to be 24, and the 96 gaps were described as deliberate
+fallback coverage. They were not: because this table is the only poster source
+on the request path, a gap here is a permanent placeholder in the product
+rather than a state a viewer passes through. Overview coverage was the same
+argument one layer down — a `partial` eyebrow on almost every Browse card is
+not a fallback being exercised, it is a snapshot that was never finished. The
+poster-absent and metadata-unavailable states keep their own coverage in the
+fixture-mode preview (`/ui-preview/movies/109` and `/ui-preview/movies/130`),
+where they belong.
+
+## Keeping the fixture from rotting
+
+A reviewed snapshot is only reviewed for as long as somebody checks it. Three
+committed poster paths were 404ing upstream while every test in the repository
+passed, because nothing had ever asked the image host a question. Three checks
+now cover the three distinct ways this fails:
+
+| Check | Where it runs | What it proves |
+|---|---|---|
+| URL shape (`poster_url_shape_error`) | `tests/unit/test_enrich_posters.py`, so CI | Every entry carries a URL on the pinned `image.tmdb.org/t/p/w500/` host and size — the shape `web/next.config.ts` will actually load |
+| Liveness (`make catalog-verify`) | By hand, and on whatever nightly cadence the demo earns | Every stored URL still HEADs 200 |
+| Served coverage (`synthetic/smoke/demo.py`) | `make demo-smoke` | The database is not behind the fixture — the state that put 24 posters on a 120-poster snapshot for a day |
+
+Liveness deliberately does **not** gate a pull request: it asks a third party
+whether its CDN is up, and that must never decide whether a change can merge.
+Enrichment stays offline, human-run, reviewed as a diff, keyed by `movie_id`
+and idempotent — `--verify` needs no credentials, refilling needs a
+`TMDB_READ_ACCESS_TOKEN` that lives only in the operator's environment. A poster
+URL is HEADed *before* it is written, so a run cannot introduce the very rot the
+verifier looks for.
 
 ## Persisted metadata read model
 

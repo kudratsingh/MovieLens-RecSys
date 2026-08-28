@@ -36,6 +36,7 @@ function renderRoute(
       />
       <WatchHistory
         browseHref="/browse?user=900000101"
+        movieHref={(movieId) => `/movies/${movieId}?user=900000101`}
         personaName="Action Fan"
         state={history}
       />
@@ -60,7 +61,7 @@ describe("Discover regions fail independently", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Why this?" })).toBeVisible();
     expect(
-      screen.getByRole("alert", { name: /Watch history upstream-error/ }),
+      screen.getByRole("alert", { name: /Watch history could not be loaded/ }),
     ).toHaveTextContent("Watch history could not be loaded");
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -77,11 +78,37 @@ describe("Discover regions fail independently", () => {
     );
 
     expect(
-      screen.getByRole("alert", { name: /Recommendations upstream-error/ }),
+      screen.getByRole("alert", { name: /Recommendations could not be loaded/ }),
     ).toBeVisible();
-    expect(screen.getByText("Heat (1995)")).toBeVisible();
+    // The row prints the display title and moves the year onto the metadata
+    // line, and it is a link: history was four dead lines before the read model
+    // carried a poster and a structured year.
+    const heat = screen.getByRole("link", { name: /Heat/ });
+    expect(heat).toHaveAttribute("href", "/movies/6?user=900000101");
+    expect(heat).toHaveTextContent("Heat");
+    expect(heat).toHaveTextContent("1995 · Action · Crime · Thriller · rated 4.5");
+    expect(screen.queryByText("Heat (1995)")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: /has watched/ })).toBeVisible();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("gives a history row without artwork the shared fallback mark", () => {
+    renderRoute(
+      readyState("recommendations", learnedRecommendations, REQUEST_ID),
+      readyState("history", discoverHistory, REQUEST_ID),
+    );
+
+    // `Saving Private Ryan` is the fixture row with `poster_url: null`. The
+    // mark is decorative — the row's own title is the accessible name — so it
+    // is found structurally rather than by an announcement no reader wants
+    // four times down a list.
+    const ryan = screen.getByRole("link", { name: /Saving Private Ryan/ });
+    expect(ryan.querySelector("[data-testid='poster-fallback']")).not.toBeNull();
+    expect(ryan.querySelector("img")).toBeNull();
+
+    const heat = screen.getByRole("link", { name: /Heat/ });
+    expect(heat.querySelector("[data-testid='poster-fallback']")).toBeNull();
+    expect(heat.querySelector("img")).not.toBeNull();
   });
 
   it("treats an empty history as a state rather than an error", async () => {

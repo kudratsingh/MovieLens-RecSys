@@ -23,7 +23,7 @@
  * of risking a second feedback event for one decision.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { MovieState } from "@/lib/api";
 import {
@@ -42,7 +42,13 @@ import { bffMovieStateClient, type MovieStateClient } from "@/lib/movie-state/cl
 import { restoreFocus, type FocusTarget } from "@/lib/movie-state/focus";
 import { newIdempotencyKey } from "@/lib/movie-state/mutate";
 
-export type MovieStateMessage = { tone: "ok" | "error"; text: string };
+/**
+ * `note` is the third tone because a refused transition is neither of the other
+ * two: nothing broke, and nothing was saved. It is announced politely and
+ * rendered as a note rather than as a failure, which is also why it does not
+ * offer a retry.
+ */
+export type MovieStateMessage = { tone: "ok" | "note" | "error"; text: string };
 
 export type MovieStateOptions = {
   userId: number;
@@ -78,6 +84,41 @@ export function useMovieState(options: MovieStateOptions) {
   const inFlight = useRef(false);
   // The intent currently being attempted, with the key it was minted under.
   const intent = useRef<{ action: MovieStateAction; key: string } | null>(null);
+  // Which movie the state above belongs to.
+  const boundTo = useRef(movieId);
+  const incoming = options.initialState;
+
+  /*
+   * Two things this hook used to ignore for the lifetime of an instance: the
+   * movie it is pointed at, and a fresher server render of the same movie.
+   *
+   * Every caller keys its control by movie id today, so the rebind never fires
+   * in the product as it stands. It is here because the failure if one ever
+   * stops doing that is silent and expensive — the hook would assert movie A's
+   * revision against movie B, and the viewer would get a conflict on a movie
+   * they never touched.
+   */
+  useEffect(() => {
+    if (boundTo.current !== movieId) {
+      boundTo.current = movieId;
+      stateRef.current = incoming;
+      intent.current = null;
+      inFlight.current = false;
+      setState(incoming);
+      setOptimistic(null);
+      setPending(null);
+      setMessage(null);
+      return;
+    }
+    // A strictly newer render of the same movie — another surface committed and
+    // the route re-read — keeps the next `expected_revision` current. A lower
+    // revision is a stale render and is ignored, because what this hook holds
+    // was committed by the API and is the fresher of the two.
+    if (incoming && incoming.revision > (stateRef.current?.revision ?? -1)) {
+      stateRef.current = incoming;
+      setState(incoming);
+    }
+  }, [incoming, movieId]);
 
   const adopt = useCallback(
     (committed: MovieState) => {
@@ -125,6 +166,11 @@ export function useMovieState(options: MovieStateOptions) {
         idempotencyKey: key,
       });
 
+      // Repointed at another movie mid-write. The reset above already cleared
+      // the pending frame; adopting this response would put one movie's
+      // committed state, revision and all, onto a different movie.
+      if (boundTo.current !== movieId) return;
+
       setOptimistic(null);
       setPending(null);
       inFlight.current = false;
@@ -154,6 +200,19 @@ export function useMovieState(options: MovieStateOptions) {
         setMessage({
           tone: "error",
           text: movieStateAnnouncement({ kind: "conflict" }, { title, voice, persona }),
+        });
+      } else if (result.status === "refused") {
+        // A rule, not a race. Nothing changed, so there is nothing to re-read:
+        // dropping the pending patch above has already put the control back on
+        // its committed value, and the API's sentence says why it stayed
+        // there. The intent keeps its key — no feedback event was written, so
+        // pressing again is still the same decision.
+        setMessage({
+          tone: "note",
+          text: movieStateAnnouncement(
+            { kind: "refused", detail: result.detail },
+            { title, voice, persona },
+          ),
         });
       } else {
         setMessage({

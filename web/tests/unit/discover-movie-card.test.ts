@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  displayTitle,
-  recommendationCard,
-  recommendationCards,
-} from "@/lib/discover/movie-card";
+import { recommendationCard, recommendationCards } from "@/lib/discover/movie-card";
 import { learnedRecommendations } from "@/lib/fixtures/discover-fixtures";
 import { UNKNOWN_MOVIE_STATE } from "@/lib/movie-state/actions";
+import { displayTitle } from "@/lib/movie-types";
 
 describe("recommendation cards", () => {
   it("drops the MovieLens year from the title only when it is also structured", () => {
@@ -24,14 +21,17 @@ describe("recommendation cards", () => {
     expect(card.reason).toBe(learnedRecommendations.items[0].reason);
   });
 
-  it("leaves the poster alt empty only when there is no poster to describe", () => {
+  it("treats the poster as decorative, the way the catalog mapper always has", () => {
+    // The card renders the title next to the poster and inside a link that
+    // names the movie, so "Poster for Heat" announced beside "Heat" is
+    // duplication. Browse settled this; Discover now matches it.
     const withArt = recommendationCard(learnedRecommendations.items[0], 1);
     const withoutArt = recommendationCard(
       { ...learnedRecommendations.items[0], poster_url: null },
       1,
     );
 
-    expect(withArt.posterAlt).toBe(`Poster for ${withArt.title}`);
+    expect(withArt.posterAlt).toBe("");
     expect(withoutArt.posterAlt).toBe("");
   });
 

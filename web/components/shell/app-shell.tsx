@@ -17,6 +17,15 @@ import type { NavigationItem } from "@/lib/navigation";
  * contract requires on small screens and printed the persona as a raw numeric
  * ID; retiring it is what makes the mobile navigation and the resolved persona
  * name properties of the product rather than of two routes out of five.
+ *
+ * Both identity lines are always rendered. They used to be `display: none`
+ * below 1050px, which took the labelled spans out of the accessibility tree as
+ * well as off the screen and left an `aria-hidden` two-letter dot as the only
+ * answer to "whose data is this" on a phone — on Browse and movie detail, the
+ * two routes that restate the persona nowhere else. The layout moves at
+ * `shell.css`; the markup does not, because there is no width at which the
+ * contract's "authenticated actor plus an explicitly labeled selected demo
+ * persona" stops applying.
  */
 export function AppShell({
   actorName,
@@ -77,22 +86,31 @@ export function AppShell({
         <ProductNavigation items={navigationItems} location="desktop" />
 
         <div className="shell-session">
+          {/* The initials repeat the persona name beside them, so they are
+              decoration for a reader rather than a second identity claim. */}
+          <span aria-hidden="true" className="persona-dot">
+            {initials}
+          </span>
           <span className="actor-copy">
             <small>{fixtureMode ? "Isolated mode" : "Signed in as"}</small>
             <strong>{actorName}</strong>
           </span>
+          {/* `persona-cluster` also anchors the service-backed finish-gate
+              journey's persona assertion, so the name stays even though the
+              dot moved out of it. */}
           <span className="persona-cluster">
-            <span className="persona-dot" aria-hidden="true">{initials}</span>
-            <span>
-              <small>{personaLabel}</small>
-              <strong>{personaName}</strong>
-            </span>
+            <small>{personaLabel}</small>
+            <strong>{personaName}</strong>
           </span>
-          {fixtureMode ? (
-            <Link className="shell-exit" href="/">Exit preview</Link>
-          ) : (
-            <SignOutButton />
-          )}
+          <span className="shell-session-action">
+            {fixtureMode ? (
+              <Link className="shell-exit" href="/">
+                Exit preview
+              </Link>
+            ) : (
+              <SignOutButton />
+            )}
+          </span>
         </div>
       </header>
 
