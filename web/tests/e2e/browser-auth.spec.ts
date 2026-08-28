@@ -314,6 +314,9 @@ test("search, cursor continuation, detail, and watchlist survive a round trip", 
   const scrolledTo = await page.evaluate(() => window.scrollY);
   expect(scrolledTo).toBeGreaterThan(0);
   const title = await card.locator(".poster-title").innerText();
+  const cardHref = (await card.getByRole("link").first().getAttribute("href")) ?? "";
+  const movieId = Number(/\/movies\/(\d+)/.exec(cardHref)?.[1]);
+  expect(movieId, `expected a movie link, got ${cardHref}`).toBeGreaterThan(0);
   await card.getByRole("link").first().click();
 
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
@@ -334,17 +337,41 @@ test("search, cursor continuation, detail, and watchlist survive a round trip", 
   await expect
     .poll(async () => page.evaluate(() => window.scrollY))
     .toBeGreaterThan(scrolledTo - 200);
-  // The state committed on detail is reflected on the restored card.
+  // The state committed on detail is reflected on the restored card. Since
+  // P2-9 the card's controls are the shared movie-state family, so the button
+  // names the action and the surrounding group names the movie — which is what
+  // binds the assertion to this title rather than to whatever is last.
   const restoredCard = page.getByRole("listitem").last();
-  const savedToggle = restoredCard.getByRole("button", {
-    name: `Remove ${title} from watchlist`,
-  });
+  const actions = restoredCard.getByRole("group", { name: `Actions for ${title}` });
+  const savedToggle = actions.getByRole("button", { name: "In watchlist" });
   await expect(savedToggle).toBeVisible();
+  await expect(savedToggle).toHaveAttribute("aria-pressed", "true");
 
   await savedToggle.click();
-  await expect(
-    restoredCard.getByRole("button", { name: `Add ${title} to watchlist` }),
-  ).toBeVisible();
+  const emptyToggle = actions.getByRole("button", { name: "Watchlist", exact: true });
+  await expect(emptyToggle).toBeVisible();
+  await expect(emptyToggle).toHaveAttribute("aria-pressed", "false");
+
+  // The relabelled control is the optimistic frame, and the context closing on
+  // it is how this journey left a watchlist row on Eclectic Viewer after
+  // reporting the removal. The persona's exit state is a committed one, so it
+  // is read back from the API rather than inferred from the button.
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        async ({ user, movie }) => {
+          const response = await fetch(`/api/users/${user}/movies/${movie}`, {
+            cache: "no-store",
+          });
+          const body = (await response.json()) as {
+            item?: { state?: { watchlisted_at?: string | null } | null };
+          };
+          return body.item?.state?.watchlisted_at ?? null;
+        },
+        { user: userId, movie: movieId },
+      ),
+    )
+    .toBeNull();
 });
 
 /**

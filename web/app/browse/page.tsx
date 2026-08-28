@@ -9,7 +9,7 @@ import { ResourceLoading } from "@/components/ui/resource-region";
 import { requireApiAccessToken } from "@/lib/bff-auth";
 import { resolveDemoPersonaId } from "@/lib/demo-persona";
 import { personaDisplayName } from "@/lib/discover/persona";
-import { productNavigationItems } from "@/lib/navigation";
+import { productNavigationItems, routeReturnHref, signInHref } from "@/lib/navigation";
 import "@/components/shell/shell.css";
 
 export const metadata: Metadata = {
@@ -31,7 +31,9 @@ export default async function BrowsePage({
   searchParams: Promise<{ user?: string | string[] }>;
 }) {
   const [params, session] = await Promise.all([searchParams, auth()]);
-  if (!session?.user || session.error) redirect("/");
+  if (!session?.user || session.error) {
+    redirect(signInHref(routeReturnHref("/browse", params)));
+  }
 
   const userId = resolveDemoPersonaId(params.user);
   const actorName = session.user.name ?? session.user.email ?? "Signed-in actor";

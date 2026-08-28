@@ -568,7 +568,7 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     }),
   );
   await page.goto(`/browse?user=${ECLECTIC}`);
-  const catalogAlert = page.getByRole("alert", { name: "Catalog upstream-error" });
+  const catalogAlert = page.getByRole("alert", { name: "Catalog could not be loaded" });
   await expect(catalogAlert).toContainText("Catalog could not be loaded");
   await expect(page.getByRole("searchbox")).toBeVisible();
   await expect(page.getByRole("navigation", { name: /Primary/ }).first()).toBeVisible();
@@ -611,7 +611,9 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
   // nondeterministic.
   await page.context().clearCookies();
   await page.goto(`/discover?userId=${DRAMA_FAN}`);
-  await expect(page).toHaveURL(/\/$/);
+  // The door carries the destination it interrupted, so the recovery below
+  // lands where the viewer was going rather than on the front door.
+  await expect(page).toHaveURL(/\/\?next=%2Fdiscover/);
   await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
 
   await signInThroughKeycloak(page);
@@ -661,7 +663,10 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     "/legacy",
   ]) {
     await page.goto(route);
-    await expect(page).toHaveURL(/\/$/);
+    // The door, at `/`, carrying the destination it interrupted: a protected
+    // route is gone for a signed-out viewer, and the deep link is not (S10).
+    // Polled rather than read once — the redirect settles after `goto` returns.
+    await expect(page, route).toHaveURL(`/?next=${encodeURIComponent(route)}`);
     await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
   }
 

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { SignOutButton } from "@/components/auth-controls";
 import { RecommendationDemo } from "@/components/legacy/recommendation-demo";
-import { frontDoorHref } from "@/lib/navigation";
+import { frontDoorHref, signInHref } from "@/lib/navigation";
 
 export const metadata: Metadata = {
   title: "Legacy dashboard",
@@ -29,8 +29,9 @@ export const metadata: Metadata = {
 export default async function LegacyDashboard() {
   const session = await auth();
   // Same door as every other authenticated route, rather than a second
-  // sign-in surface that would drift from the real one.
-  if (!session?.user || session.error) redirect("/");
+  // sign-in surface that would drift from the real one — and it carries the
+  // rollback's own address back, since every product footer links here.
+  if (!session?.user || session.error) redirect(signInHref("/legacy"));
 
   const productHref = frontDoorHref({});
 
@@ -44,7 +45,9 @@ export default async function LegacyDashboard() {
             </div>
             <div>
               <p className="text-sm font-semibold tracking-wide">MovieLens</p>
-              <p className="text-xs text-zinc-500">Legacy dashboard</p>
+              {/* zinc-400, not zinc-500: #71717b on this page ground is 4.12:1, which
+                  is the last colour-contrast node the rollback surface fails on. */}
+              <p className="text-xs text-zinc-400">Legacy dashboard</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -52,7 +55,7 @@ export default async function LegacyDashboard() {
               <p className="text-xs font-medium text-zinc-200">
                 {session.user.name ?? session.user.email ?? "Signed-in actor"}
               </p>
-              <p className="text-[11px] text-zinc-500">Demo persona access</p>
+              <p className="text-[11px] text-zinc-400">Demo persona access</p>
             </div>
             <SignOutButton />
           </div>
