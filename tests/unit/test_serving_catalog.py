@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import Connection, create_engine, text
 
 from src.serving.catalog import CatalogQuery, CatalogService, InvalidCatalogCursorError
 from src.serving.recommendations import UnknownMovieError
+
+_ALPHA_DETAILS = {
+    "tagline": "One line",
+    "runtime_minutes": 101,
+    "release_date": "1990-04-01",
+    "backdrop_url": "https://image.tmdb.org/t/p/w1280/alpha.jpg",
+    "tmdb_rating": {"average": 7.4, "count": 12},
+    "directors": ["A Director"],
+    "cast": [{"name": "A Star", "character": "Alpha", "profile_url": None}],
+    "trailer": {"provider": "youtube", "key": "abc123", "name": "Official Trailer"},
+    "fetched_at": "2026-08-28T00:00:00+00:00",
+}
+_ALPHA_DETAILS_JSON = json.dumps(_ALPHA_DETAILS)
 
 
 def _connection() -> Connection:
@@ -34,7 +49,7 @@ def _connection() -> Connection:
             "CREATE TABLE movie_catalog_metadata ("
             "movie_id INTEGER PRIMARY KEY, sort_title TEXT, release_year INTEGER, "
             "poster_url TEXT, overview TEXT, metadata_source TEXT, source_status TEXT, "
-            "visible BOOLEAN)"
+            "visible BOOLEAN, details TEXT)"
         )
     )
     connection.execute(text("INSERT INTO demo_personas VALUES (9001, TRUE)"))
@@ -55,11 +70,12 @@ def _connection() -> Connection:
         text(
             "INSERT INTO movie_catalog_metadata VALUES "
             "(1, 'alpha', 1990, '/alpha.jpg', 'Alpha overview', "
-            "'reviewed-fixture', 'complete', TRUE), "
-            "(2, 'beta', 2001, NULL, NULL, 'movielens', 'partial', TRUE), "
-            "(3, 'beta again', 2001, NULL, 'Three', 'movielens', 'partial', TRUE), "
-            "(4, 'delta', 1980, NULL, NULL, 'movielens', 'unavailable', TRUE), "
-            "(5, 'hidden', 2020, NULL, NULL, 'movielens', 'partial', FALSE)"
+            f"'reviewed-fixture', 'complete', TRUE, '{_ALPHA_DETAILS_JSON}'), "
+            "(2, 'beta', 2001, NULL, NULL, 'movielens', 'partial', TRUE, NULL), "
+            "(3, 'beta again', 2001, NULL, 'Three', 'movielens', 'partial', TRUE, "
+            "'not json at all'), "
+            "(4, 'delta', 1980, NULL, NULL, 'movielens', 'unavailable', TRUE, NULL), "
+            "(5, 'hidden', 2020, NULL, NULL, 'movielens', 'partial', FALSE, NULL)"
         )
     )
     connection.execute(
@@ -176,6 +192,7 @@ def test_movie_detail_and_batch_metadata_never_call_an_upstream() -> None:
         connection.close()
 
     assert item.overview == "Alpha overview"
+    assert item.details == _ALPHA_DETAILS
     assert item.state is None
     assert rated_item.state is not None
     assert rated_item.state.rating == 4.5
@@ -202,3 +219,45 @@ def test_cursor_rejects_malformed_and_year_range_rejects_inversion() -> None:
             )
     finally:
         connection.close()
+
+
+def test_the_detail_payload_is_a_detail_read_and_never_a_page_of_them() -> None:
+    """The list query must not select ``details``.
+
+    Not a style preference: the payload carries a backdrop, six cast members
+    and a trailer per title, and a 48-row Browse page would ship 48 of them to
+    render a grid of posters (``docs/frontend/catalog-contract.md``).
+    """
+    connection = _connection()
+    service = CatalogService()
+    try:
+        page = service.list_for_user(connection, user_id=9001, query=CatalogQuery(limit=48))
+        detail = service.get_for_user(connection, user_id=9001, movie_id=1)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in page.items] == [1, 2, 3, 4]
+    assert all(item.details is None for item in page.items)
+    assert detail.details is not None
+    assert detail.details["trailer"] == _ALPHA_DETAILS["trailer"]
+
+
+def test_a_title_with_no_details_and_one_with_a_broken_payload_both_read_as_none() -> None:
+    """A detail page without its extra module is still a detail page.
+
+    The snapshot is fixture-owned and shape-checked offline, so a row that does
+    not parse predates the contract or was written by hand. Reading it as "no
+    details" keeps the poster, the synopsis and the rating panel on the page;
+    raising would take the whole page down over the module that was added last.
+    """
+    connection = _connection()
+    service = CatalogService()
+    try:
+        missing = service.get_for_user(connection, user_id=9001, movie_id=2)
+        broken = service.get_for_user(connection, user_id=9001, movie_id=3)
+    finally:
+        connection.close()
+
+    assert missing.details is None
+    assert broken.details is None
+    assert broken.overview == "Three"

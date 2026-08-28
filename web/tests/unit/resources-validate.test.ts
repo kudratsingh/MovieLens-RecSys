@@ -82,6 +82,52 @@ describe("runtime validators accept the published contract", () => {
     ).toBe(true);
   });
 
+  it("accepts a detail record carrying the enriched TMDB block", () => {
+    expect(
+      isMovieDetailResponse({
+        ...movieDetailResponse,
+        item: {
+          ...movieDetailResponse.item,
+          details: {
+            tagline: "Two women. Two cons.",
+            runtime_minutes: 145,
+            release_date: "2016-06-01",
+            backdrop_url: "https://image.tmdb.org/t/p/w1280/backdrop.jpg",
+            tmdb_rating: { average: 8.1, count: 4812 },
+            directors: ["Park Chan-wook"],
+            cast: [
+              { name: "Kim Min-hee", character: "Lady Hideko", profile_url: null },
+            ],
+            trailer: { provider: "youtube", key: "T7kfW4trvUM", name: "Trailer" },
+            fetched_at: "2026-08-24T09:00:00Z",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts an enriched block whose optional fields are all absent", () => {
+    expect(
+      isMovieDetailResponse({
+        ...movieDetailResponse,
+        item: {
+          ...movieDetailResponse.item,
+          details: {
+            tagline: null,
+            runtime_minutes: null,
+            release_date: null,
+            backdrop_url: null,
+            tmdb_rating: null,
+            directors: [],
+            cast: [],
+            trailer: null,
+            fetched_at: "2026-08-24T09:00:00Z",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a history payload", () => {
     expect(
       isHistoryResponse({
@@ -121,6 +167,58 @@ describe("runtime validators reject payloads the UI cannot render", () => {
         ...catalogResponse,
         items: [{ ...catalogResponse.items[0], source_status: "degraded" }],
       }),
+    ).toBe(false);
+  });
+
+  it("rejects a detail record that omits the enriched block entirely", () => {
+    // `details` is required and nullable. An omitted key is drift, and the page
+    // would otherwise render the degraded movie with nothing having reported a
+    // problem — the quiet failure the boundary exists to make loud.
+    expect(
+      isMovieDetailResponse({
+        ...movieDetailResponse,
+        item: without(movieDetailResponse.item, "details"),
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an enriched block the page could not render", () => {
+    const enriched = {
+      tagline: null,
+      runtime_minutes: 145,
+      release_date: null,
+      backdrop_url: null,
+      tmdb_rating: null,
+      directors: [],
+      cast: [],
+      trailer: null,
+      fetched_at: "2026-08-24T09:00:00Z",
+    };
+    const withDetails = (details: unknown) => ({
+      ...movieDetailResponse,
+      item: { ...movieDetailResponse.item, details },
+    });
+
+    // A provider this UI has no embed for: the key would be interpolated into a
+    // URL against a host the client has never heard of.
+    expect(
+      isMovieDetailResponse(
+        withDetails({
+          ...enriched,
+          trailer: { provider: "vimeo", key: "123", name: "Trailer" },
+        }),
+      ),
+    ).toBe(false);
+    // A score with no vote count is half a claim.
+    expect(
+      isMovieDetailResponse(withDetails({ ...enriched, tmdb_rating: { average: 8.1 } })),
+    ).toBe(false);
+    // A runtime that arrived as a string would format as "NaNh NaNm".
+    expect(
+      isMovieDetailResponse(withDetails({ ...enriched, runtime_minutes: "145" })),
+    ).toBe(false);
+    expect(
+      isMovieDetailResponse(withDetails({ ...enriched, cast: [{ character: "Hideko" }] })),
     ).toBe(false);
   });
 

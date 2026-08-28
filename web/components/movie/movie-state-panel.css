@@ -9,17 +9,20 @@
   gap: var(--space-3);
 }
 
+/*
+ * The rating box sits on its own ground rather than on the hero's, because the
+ * backdrop behind the hero runs out roughly here and a bordered box floating on
+ * a gradient reads as a seam. Its legend styling belongs to `rating-stars.css`,
+ * which owns the control; this only places it.
+ */
 .movie-state-panel-rating {
+  background: var(--surface-base);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
-}
-
-.movie-state-panel-rating legend {
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  padding: 0 var(--space-2);
-  text-transform: uppercase;
+  /* Sized to its own contents rather than to the copy column: five stars and
+     one sentence stranded across 50rem read as an empty panel. */
+  max-width: 40rem;
+  padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
 .movie-state-panel-message {

@@ -25,7 +25,12 @@ def test_audit_migration_extends_the_single_linear_head() -> None:
             parents.add(down.group(1))
 
     heads = revisions - parents
-    assert heads == {"0012_audit_serving_inputs"}
+    # One head, whoever holds it. Alembic cannot `upgrade head` through a
+    # branched graph without an explicit merge, and this line has always been
+    # straight; pinning the name here instead would only mean editing this
+    # assertion every time a migration lands, which proves nothing.
+    assert len(heads) == 1, f"the migration graph has branched: {sorted(heads)}"
+    assert "0012_audit_serving_inputs" in revisions
 
 
 def test_audit_migration_adds_the_serving_input_evidence_columns() -> None:

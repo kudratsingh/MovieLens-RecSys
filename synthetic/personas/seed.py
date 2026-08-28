@@ -36,6 +36,11 @@ class CatalogMovie:
     release_year: int | None
     poster_url: str | None
     overview: str | None
+    # The offline detail payload (``synthetic/personas/enrich_details.py``):
+    # trailer, tagline, runtime, release date, backdrop, crowd score,
+    # directors, billed cast. Absent for a title the enrichment has not
+    # reached, which the detail page renders as the layout it had before.
+    details: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,7 @@ class SeedResult:
     visible_movie_count: int
     recommendable_movie_count: int
     poster_movie_count: int
+    detail_movie_count: int
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -103,6 +109,7 @@ def load_demo_catalog(
             ),
             poster_url=(str(item["poster_url"]) if item.get("poster_url") is not None else None),
             overview=(str(item["overview"]) if item.get("overview") is not None else None),
+            details=(dict(item["details"]) if isinstance(item.get("details"), dict) else None),
         )
         for item in payload["movies"]
     ]
@@ -183,6 +190,7 @@ def seed_demo_personas(
         visible_movie_count=len(catalog_movies),
         recommendable_movie_count=len({row["movie_id"] for row in background_ratings}),
         poster_movie_count=sum(movie.poster_url is not None for movie in catalog_movies),
+        detail_movie_count=sum(movie.details is not None for movie in catalog_movies),
     )
 
 
@@ -192,8 +200,9 @@ def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> 
     MovieLens-owned rows (``movies``, ``links``) are only ever filled in, never
     replaced: a real ingest is the better source and must win. The catalog read
     model is the other way round — it is fixture-owned, carries no user data,
-    and is regenerated offline (``synthetic/personas/enrich_posters.py``), so a
-    re-seed is how a refreshed poster or synopsis reaches an existing database.
+    and is regenerated offline (``synthetic/personas/enrich_posters.py`` and
+    ``enrich_details.py``), so a re-seed is how a refreshed poster, synopsis or
+    detail payload reaches an existing database.
     """
     connection.execute(
         text("""
@@ -218,24 +227,28 @@ def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> 
             """),
         [{"movie_id": movie.movie_id, "tmdb_id": movie.tmdb_id} for movie in movies],
     )
+    # ``details`` is bound as JSON rather than interpolated: the payload is a
+    # nested object, and the column is JSONB.
+    upsert_catalog = text("""
+        INSERT INTO movie_catalog_metadata
+            (movie_id, sort_title, release_year, poster_url, overview, details,
+             metadata_source, source_status, visible, source_updated_at)
+        VALUES
+            (:movie_id, :sort_title, :release_year, :poster_url, :overview, :details,
+             'reviewed-fixture', :source_status, TRUE, :source_updated_at)
+        ON CONFLICT (movie_id) DO UPDATE SET
+            sort_title = EXCLUDED.sort_title,
+            release_year = EXCLUDED.release_year,
+            poster_url = EXCLUDED.poster_url,
+            overview = EXCLUDED.overview,
+            details = EXCLUDED.details,
+            metadata_source = EXCLUDED.metadata_source,
+            source_status = EXCLUDED.source_status,
+            visible = EXCLUDED.visible,
+            source_updated_at = EXCLUDED.source_updated_at
+        """).bindparams(bindparam("details", type_=JSON))
     connection.execute(
-        text("""
-            INSERT INTO movie_catalog_metadata
-                (movie_id, sort_title, release_year, poster_url, overview,
-                 metadata_source, source_status, visible, source_updated_at)
-            VALUES
-                (:movie_id, :sort_title, :release_year, :poster_url, :overview,
-                 'reviewed-fixture', :source_status, TRUE, :source_updated_at)
-            ON CONFLICT (movie_id) DO UPDATE SET
-                sort_title = EXCLUDED.sort_title,
-                release_year = EXCLUDED.release_year,
-                poster_url = EXCLUDED.poster_url,
-                overview = EXCLUDED.overview,
-                metadata_source = EXCLUDED.metadata_source,
-                source_status = EXCLUDED.source_status,
-                visible = EXCLUDED.visible,
-                source_updated_at = EXCLUDED.source_updated_at
-            """),
+        upsert_catalog,
         [
             {
                 "movie_id": movie.movie_id,
@@ -243,6 +256,7 @@ def _ensure_demo_catalog(connection: Connection, movies: list[CatalogMovie]) -> 
                 "release_year": movie.release_year,
                 "poster_url": movie.poster_url,
                 "overview": movie.overview,
+                "details": movie.details,
                 "source_status": ("complete" if movie.poster_url and movie.overview else "partial"),
                 "source_updated_at": _CATALOG_SNAPSHOT_AT,
             }
@@ -373,6 +387,15 @@ def main() -> None:
     print(
         f"Seeded {result.persona_count} personas, {result.persona_rating_count} persona ratings, "
         f"and {result.background_rating_count} background ratings into tenant {result.tenant_id!r}."
+    )
+    # Coverage is reported rather than assumed: a database seeded from an image
+    # built before the last enrichment run agrees with itself and quietly serves
+    # yesterday's snapshot, which is exactly how 24 posters survived a
+    # 120-poster fixture for a day.
+    print(
+        f"Catalog snapshot: {result.visible_movie_count} visible, "
+        f"{result.poster_movie_count} with posters, "
+        f"{result.detail_movie_count} with detail payloads."
     )
 
 

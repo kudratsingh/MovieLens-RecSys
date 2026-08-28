@@ -20,7 +20,13 @@
  * keep it out of a production read.
  */
 
-import type { CatalogItem, CatalogResponse, MovieState } from "@/lib/api";
+import type {
+  CatalogItem,
+  CatalogResponse,
+  MovieDetailItem,
+  MovieDetails,
+  MovieState,
+} from "@/lib/api";
 
 type FixtureRow = readonly [
   movieId: number,
@@ -168,6 +174,75 @@ const STATE_OVERRIDES: Record<number, Partial<MovieState>> = {
   140: { dismissed_at: "2026-08-12T10:00:00Z", revision: 2 },
 };
 
+/**
+ * The enriched detail block, on the three titles that need to prove something.
+ *
+ * Only detail carries `details` in the contract, and only a handful of titles
+ * carry it here — which is the honest mix, since the reviewed snapshot is
+ * enriched for a minority of the catalog. The three are chosen to cover the
+ * branches the page has: the whole record with a trailer and a backdrop, a
+ * record with neither, and (by omission) the far more common `details`-less
+ * item that has to render exactly the page this route rendered before.
+ *
+ * Artwork is local on purpose. A fixture that pointed at `image.tmdb.org` would
+ * make the isolated preview reach a third party on every screenshot, which is
+ * the opposite of what the harness is for.
+ */
+const DETAILS: Record<number, MovieDetails> = {
+  // Everything present: backdrop, tagline, runtime, score, six cast, trailer.
+  101: {
+    tagline: "Two women. Two cons. One estate that keeps them both.",
+    runtime_minutes: 145,
+    release_date: "2016-06-01",
+    backdrop_url: "/backdrops/handmaiden.svg",
+    tmdb_rating: { average: 8.1, count: 4812 },
+    directors: ["Park Chan-wook"],
+    cast: [
+      { name: "Kim Min-hee", character: "Lady Hideko", profile_url: "/profiles/cast-a.svg" },
+      { name: "Kim Tae-ri", character: "Sook-hee", profile_url: "/profiles/cast-b.svg" },
+      { name: "Ha Jung-woo", character: "Count Fujiwara", profile_url: null },
+      { name: "Cho Jin-woong", character: "Uncle Kouzuki", profile_url: null },
+      { name: "Kim Hae-sook", character: "Mrs. Sasaki", profile_url: null },
+      { name: "Moon So-ri", character: "Aunt Hideko", profile_url: null },
+    ],
+    trailer: { provider: "youtube", key: "T7kfW4trvUM", name: "Official Trailer" },
+    fetched_at: "2026-08-24T09:00:00Z",
+  },
+  // Enriched but with no trailer and no backdrop: the hero degrades to the
+  // poster-left layout while the credits and the score still render.
+  103: {
+    tagline: "A pattern nobody can finish reading.",
+    runtime_minutes: 132,
+    release_date: "2003-05-02",
+    backdrop_url: null,
+    tmdb_rating: { average: 8.0, count: 1937 },
+    directors: ["Bong Joon-ho"],
+    cast: [
+      { name: "Song Kang-ho", character: "Detective Park", profile_url: "/profiles/cast-b.svg" },
+      { name: "Kim Sang-kyung", character: "Detective Seo", profile_url: null },
+      { name: "Kim Roi-ha", character: "Detective Cho", profile_url: null },
+    ],
+    trailer: null,
+    fetched_at: "2026-08-24T09:00:00Z",
+  },
+  // Enriched and already rated, which is the state the rating chip renders in.
+  104: {
+    tagline: "Look at me the way I am looking at you.",
+    runtime_minutes: 122,
+    release_date: "2019-09-18",
+    backdrop_url: "/backdrops/portrait.svg",
+    tmdb_rating: { average: 8.3, count: 2604 },
+    directors: ["Céline Sciamma"],
+    cast: [
+      { name: "Noémie Merlant", character: "Marianne", profile_url: "/profiles/cast-a.svg" },
+      { name: "Adèle Haenel", character: "Héloïse", profile_url: null },
+      { name: "Luàna Bajrami", character: "Sophie", profile_url: null },
+    ],
+    trailer: { provider: "youtube", key: "R-fQPTwma9o", name: "Official Trailer" },
+    fetched_at: "2026-08-24T09:00:00Z",
+  },
+};
+
 export const RECORDED_CATALOG: readonly CatalogItem[] = ROWS.map((row) => {
   const [movieId, title, releaseYear, genres, posterUrl, overview] = row;
   const override = STATE_OVERRIDES[movieId];
@@ -185,8 +260,15 @@ export const RECORDED_CATALOG: readonly CatalogItem[] = ROWS.map((row) => {
   };
 });
 
-export function recordedCatalogItem(movieId: number): CatalogItem | undefined {
-  return RECORDED_CATALOG.find((item) => item.movie_id === movieId);
+/**
+ * Detail returns the enriched block; the list endpoint never does. Keeping that
+ * split in the fixture is what makes the preview harness able to catch a Browse
+ * card that starts reading a field the grid response will not carry.
+ */
+export function recordedCatalogItem(movieId: number): MovieDetailItem | undefined {
+  const item = RECORDED_CATALOG.find((entry) => entry.movie_id === movieId);
+  if (!item) return undefined;
+  return { ...item, details: DETAILS[movieId] ?? null };
 }
 
 /** Mirrors the endpoint's normalized sort title: leading articles drop out. */

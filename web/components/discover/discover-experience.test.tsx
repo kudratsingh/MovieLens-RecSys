@@ -62,6 +62,10 @@ const detailWithWatchlist: MovieDetailResponse = {
     poster_url: null,
     tmdb_id: null,
     state: { ...committed().state, revision: 5 },
+    // Discover reads this response only for its committed state; the enriched
+    // block belongs to the detail route and is absent here, as it is for most
+    // of the catalog.
+    details: null,
   },
 };
 

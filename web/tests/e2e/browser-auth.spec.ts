@@ -201,8 +201,38 @@ test("a rating created on detail is findable, editable, and removable in Library
   await page.goto(`/movies/${movieId}?user=${userId}`);
   const fullTitle = (await page.getByRole("heading", { level: 1 }).innerText()).trim();
   const needle = fullTitle.split(" (")[0];
-  await page.getByRole("button", { name: "4 stars" }).click();
+  const ratingPanel = page.getByRole("group", { name: "Your rating" });
+
+  // The rating round trip on the movie's own page, against real Keycloak, real
+  // RLS, and a real committed revision. What the fixture harness cannot show is
+  // that the acknowledgement waits for the API: the row only collapses because
+  // a write landed, so the chip below *is* the evidence the record changed.
+  await ratingPanel.getByRole("button", { name: "4 stars" }).click();
   await expect(page.getByText("Rating saved.")).toBeVisible();
+  await expect(ratingPanel.getByText("You rated 4/5")).toBeVisible();
+  await expect(ratingPanel.getByRole("button", { name: "4 stars" })).toHaveCount(0);
+
+  // Changing it goes back through the same stars, pre-filled with what is
+  // stored — not with what was last pressed.
+  await ratingPanel.getByRole("button", { name: /^Change rating for / }).click();
+  await expect(ratingPanel.getByRole("button", { name: "4 stars" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await ratingPanel.getByRole("button", { name: "5 stars" }).click();
+  await expect(ratingPanel.getByText("You rated 5/5")).toBeVisible();
+
+  // And clearing it from the reopened row leaves the watched interaction
+  // behind, which is the ADR 0012 transition the two controls have to keep
+  // visibly distinct.
+  await ratingPanel.getByRole("button", { name: /^Change rating for / }).click();
+  await ratingPanel.getByRole("button", { name: "Clear rating" }).click();
+  await expect(page.getByText(/Rating removed\..* stays in watched history/)).toBeVisible();
+  await expect(ratingPanel.getByRole("button", { name: "4 stars" })).toBeVisible();
+
+  // Put the rating the rest of this journey asserts on back.
+  await ratingPanel.getByRole("button", { name: "4 stars" }).click();
+  await expect(ratingPanel.getByText("You rated 4/5")).toBeVisible();
 
   // Rated: the new rating is there and can be edited in place.
   await page.goto(`/library?userId=${userId}&tab=rated&q=${encodeURIComponent(needle)}`);
