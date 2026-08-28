@@ -340,3 +340,55 @@ Revisit this ADR if:
   pool fixes; or
 - offline evidence shows that star-aware ranker labels materially improve the
   accepted metric enough to justify the online-feature and freshness cost.
+
+---
+
+## Note — 2026-08-28: a skip is not a signal, and a preference is not a model input
+
+Appended rather than folded into the sections above: the decisions this ADR
+records have not changed, and this names where a new mechanism sits relative to
+them.
+
+Discover's featured slot may now show a title the viewer has already added to
+their watchlist, with a `Skip` control beside it, and after three skips in a
+session the viewer is offered a durable preference that stops watchlisted titles
+being featured at all. Two things about that need to be pinned here, because
+both of them are places where a presentation feature could quietly become a
+feedback feature.
+
+**A skip records nothing.** It advances the client's queue cursor and issues no
+request. It is not a dismissal (which is a durable exclusion and is written), not
+a watched signal, not a rating, and — as with dismissal in the section above —
+never a training negative. The state-transition table is unchanged: there is no
+transition for it, because it changes no state. The announcement says so in the
+viewer's terms (`still on your watchlist`), the skipped title keeps its place in
+the ranked rail, and its `user_movie_state` row is untouched, revision included.
+The unit test asserts the guarantee the only way it can be asserted: the press
+produces no HTTP request at all.
+
+**The preference is per-persona presentation state.** It lives in its own forced-
+RLS table, `user_preferences` (migration 0013), with one typed column and the
+same optimistic-revision write contract the movie-state resources use. No serving
+path reads it: `src/serving/orchestration.py` and `recommendations.py` do not
+import it, the candidate and exclusion inputs are computed exactly as before, and
+two responses for the same persona are byte-identical whether featuring is on or
+off. The re-ordering happens in the client, on the response the API already sent.
+
+That separation is deliberate and worth defending. Making the preference a
+serving filter would be the obvious "improvement" and it would break the audit:
+`recommendation_audits` records the exclusion digest and the excluded count for
+the set the API returned, and a title dropped by a viewer's display preference
+is not an exclusion in that sense. The prediction log would then describe a set
+nobody was served. Keeping the preference out of the serving path keeps the
+audit true, keeps the k6 gate measuring the same workload, and keeps the answer
+to "why this?" a statement about the model rather than about a settings row.
+
+The same rule bounds the copy. Neither the skip nor the setting may be described
+as teaching the recommender anything, and both surfaces say what they actually
+are: the setting's own note ends `This changes what you are shown, not what the
+recommender learns.`
+
+If a later ADR wants watchlist state to affect retrieval or ranking, that is a
+serving decision with an offline evaluation behind it, not an extension of this
+one — and it would need the audit vocabulary in `src/serving/policy.py` extended
+to name the new filter rather than reusing `watched-and-dismissed-excluded-v1`.

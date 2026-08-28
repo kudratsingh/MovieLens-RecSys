@@ -7,6 +7,7 @@ import {
 import { Drawer } from "@/components/ui/drawer";
 import type { RecommendationItem, RecommendationResponse } from "@/lib/api";
 import { rankScoreCaveat, recommendationEvidence } from "@/lib/discover/evidence";
+import { returningTitlesLine } from "@/lib/discover/featured-preference";
 import { displayTitle } from "@/lib/movie-types";
 import { plainServingExplanation } from "@/lib/discover/policy";
 
@@ -36,12 +37,15 @@ export function WhyThis({
   item,
   requestId,
   userId,
+  featureWatchlistedTitles = true,
   preloadedEvidence,
 }: {
   response: RecommendationResponse;
   item: RecommendationItem;
   requestId: string | null;
   userId: number;
+  /** Decides only the second half of the returning-titles line. */
+  featureWatchlistedTitles?: boolean;
   preloadedEvidence?: PreloadedTechnicalEvidence | null;
 }) {
   const evidence = recommendationEvidence(response, item, requestId);
@@ -55,6 +59,14 @@ export function WhyThis({
     >
       <div className="evidence-details">
         <p className="evidence-plain">{plainServingExplanation(response)}</p>
+        {/* True at the source since Bundle 6 and invisible until now: the
+            exclusion set drops watched and dismissed titles before retrieval,
+            which is the other half of "why this?" — what will never be here
+            again. Below the plain sentence rather than inside it, because it
+            answers a different question from the one the button asks. */}
+        <p className="evidence-returns">
+          {returningTitlesLine(featureWatchlistedTitles)}
+        </p>
         <p className="evidence-reason">
           {evidence.reason ?? "The recommendation API sent no item-level reason for this title."}
         </p>

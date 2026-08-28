@@ -94,8 +94,13 @@ def test_canary_addresses_mutations_so_a_broken_guard_still_fails_closed() -> No
         # is nobody's persona. Both fail closed on a 404 if the guard is gone.
         assert str(UNROUTABLE_MOVIE_ID) in path or str(UNROUTABLE_USER_ID) in path
 
+    # The routes that name no movie, so the unowned user id is the only thing
+    # standing between a broken guard and a real persona's state.
     bulk = [route for route in PERSONA_ROUTES if route.unscoped_mutation]
-    assert [route.template for route in bulk] == ["/users/{user_id}/ratings"]
+    assert [route.template for route in bulk] == [
+        "/users/{user_id}/ratings",
+        "/users/{user_id}/preferences",
+    ]
 
 
 def test_route_paths_resolve_ids_and_keep_query_strings() -> None:

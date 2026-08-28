@@ -16,6 +16,7 @@ import type {
   RecommendationAuditResponse,
   RecommendationResponse,
   TasteSummaryResponse,
+  UserPreferences,
 } from "@/lib/api";
 import type { LiveResourceName } from "@/lib/resources/state";
 import {
@@ -27,6 +28,7 @@ import {
   isRecommendationAuditResponse,
   isRecommendationResponse,
   isTasteSummaryResponse,
+  isUserPreferences,
 } from "@/lib/resources/validate";
 
 export type ResourceDefinition<T> = {
@@ -103,6 +105,19 @@ export const FEATURES: ResourceDefinition<OnlineUserFeatures> = {
   guard: isOnlineUserFeatures,
 };
 
+/**
+ * Presentation preferences. A short budget because it is read alongside the
+ * recommendation set that decides the first movie — but a failed read is never
+ * fatal: the route falls back to the documented default and says nothing about
+ * a preference it could not confirm.
+ */
+export const PREFERENCES: ResourceDefinition<UserPreferences> = {
+  name: "preferences",
+  label: "Featured picks setting",
+  timeoutMs: 3_000,
+  guard: isUserPreferences,
+};
+
 export const RESOURCE_LABELS: Record<LiveResourceName, string> = {
   recommendations: RECOMMENDATIONS.label,
   history: HISTORY.label,
@@ -112,4 +127,5 @@ export const RESOURCE_LABELS: Record<LiveResourceName, string> = {
   "taste-profile": TASTE_PROFILE.label,
   audits: AUDITS.label,
   features: FEATURES.label,
+  preferences: PREFERENCES.label,
 };
