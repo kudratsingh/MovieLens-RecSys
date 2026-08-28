@@ -38,8 +38,17 @@ import {
 import { loadHistory, loadRecommendations } from "@/lib/resources/server";
 import { loadingState, type ResourceState } from "@/lib/resources/state";
 
-/** How many ranked titles Discover asks for: one primary plus a scannable rail. */
-export const DISCOVER_RECOMMENDATION_LIMIT = 10;
+/**
+ * How deep the Discover queue is.
+ *
+ * The featured slot is a cursor into this set and every decision moves it, so
+ * the depth is a headroom question rather than a rail-length one: at ten, ten
+ * decisions empty the queue and the viewer hits the end state in a sitting. The
+ * endpoint accepts up to fifty; twenty-four is deep enough for a real session
+ * and shallow enough to stay inside the page-shaped latency budget 7b measured
+ * for `/discover`. The queue extends in the background well before it runs out.
+ */
+export const DISCOVER_RECOMMENDATION_LIMIT = 24;
 export const DISCOVER_HISTORY_LIMIT = 8;
 
 export type RecordedEvidence = {

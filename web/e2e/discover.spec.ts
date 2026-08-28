@@ -62,16 +62,24 @@ test("a failed history region leaves the movie decision usable", async ({ page }
 
   await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
   await expect(page.getByRole("button", { name: "Why this?" })).toBeVisible();
-  await expect(page.getByRole("alert", { name: /Watch history/ })).toBeVisible();
+  await expect(page.getByRole("alert", { name: /Watch history could not be loaded/ })).toBeVisible();
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
 
 test("a failed recommendation region leaves watch history readable", async ({ page }) => {
   await page.goto("/discover?demo=recommendations-error");
 
-  await expect(page.getByRole("alert", { name: /Recommendations/ })).toBeVisible();
+  await expect(page.getByRole("alert", { name: /Recommendations could not be loaded/ })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: /has watched/ })).toBeVisible();
-  await expect(page.getByText("Heat (1995)")).toBeVisible();
+
+  // A history row is a link with artwork, not a dead line of text: the read
+  // model carries `poster_url` and `release_year`, so the title prints once
+  // without its year and the row opens the movie.
+  const heat = page.getByRole("link", { name: /^Heat/ });
+  await expect(heat).toBeVisible();
+  await expect(heat).toHaveAttribute("href", /^\/movies\/6\?/);
+  await expect(heat.locator("img")).toBeVisible();
+  await expect(page.getByText("Heat (1995)")).toHaveCount(0);
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
 
@@ -99,7 +107,10 @@ test("an empty ranked set offers a way forward instead of an error", async ({ pa
 test("loading announces itself without claiming a failure", async ({ page }) => {
   await page.goto("/discover?demo=loading");
 
-  await expect(page.getByText("Loading movies")).toBeAttached();
+  // Two nodes can carry this during streaming: the route-level `loading.tsx`
+  // and the region skeleton underneath it. Either one is the announcement this
+  // test is about, so match the first rather than assert there is only one.
+  await expect(page.getByText("Loading movies").first()).toBeAttached();
   await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
@@ -107,7 +118,10 @@ test("loading announces itself without claiming a failure", async ({ page }) => 
 test("an expired session offers a reauthentication path", async ({ page }) => {
   await page.goto("/discover?demo=auth-expired");
 
-  await expect(page.getByRole("alert", { name: /Recommendations auth-expired/ })).toBeVisible();
+  // Both regions fail the same way, so the name is not unique on the page.
+  await expect(
+    page.getByRole("alert", { name: /Your session expired/ }).first(),
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign in again" }).first()).toBeVisible();
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
@@ -130,7 +144,12 @@ test("a live read with no API reachable fails visibly instead of showing recorde
   // No `demo` parameter, so the route reads live even inside the isolated mode.
   await page.goto("/discover");
 
-  await expect(page.getByRole("alert", { name: /Recommendations/ })).toBeVisible();
+  // The isolated harness carries no session, so a live read fails at the auth
+  // boundary — which is the point: it fails visibly rather than quietly
+  // answering with recorded data.
+  await expect(
+    page.getByRole("alert", { name: /Your session expired/ }).first(),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toHaveCount(0);
   await expect(page.getByText("Recorded contract fixtures")).toHaveCount(0);
 });
@@ -148,6 +167,60 @@ test("mobile keeps the primary decision and the bottom navigation reachable", as
     "/browse?user=900000101",
   );
   await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+});
+
+/**
+ * Where a control's label actually starts drawing.
+ *
+ * A stretched grid item's *box* always begins at its column edge, so a bounding
+ * box cannot see this defect at all: what was indented was the centred text
+ * inside a button with no visible border. The text node's own rectangle is what
+ * a reader sees.
+ */
+async function labelLeft(locator: import("@playwright/test").Locator) {
+  return locator.evaluate((element) => {
+    const label = Array.from(element.childNodes).find(
+      (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== "",
+    );
+    if (!label) return null;
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    return range.getBoundingClientRect().left;
+  });
+}
+
+test("the three decisions line up on the mobile action strip", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390", "Mobile layout assertion");
+  await page.goto("/discover?demo=learned");
+
+  const actions = page.locator(".featured-actions");
+  await expect(actions).toBeVisible();
+
+  const watchlist = actions.getByRole("button", { name: "Watchlist" });
+  const watched = actions.getByRole("button", { name: "Mark watched" });
+  const dismiss = actions.getByRole("button", { name: "Not for me" });
+
+  const [watchlistBox, watchedBox, dismissBox] = await Promise.all([
+    watchlist.boundingBox(),
+    watched.boundingBox(),
+    dismiss.boundingBox(),
+  ]);
+
+  // The two bordered buttons share a row; the quiet one starts the next.
+  expect(watchedBox?.y ?? 0).toBeCloseTo(watchlistBox?.y ?? 0, 0);
+  expect(dismissBox?.y ?? 0).toBeGreaterThan(watchlistBox?.y ?? 0);
+
+  // `Not for me` is the one quiet control in the strip, so it has no visible
+  // box to align to — only its label. Stretched across its grid column like the
+  // two bordered buttons above it, that centred label started ~52px right of
+  // their left edge (~43px right of their own labels) and read as an indent
+  // rather than as the third action. It now starts where their borders do,
+  // within a pixel or two of border width and sub-pixel rounding.
+  const dismissLabelLeft = await labelLeft(dismiss);
+  expect(dismissLabelLeft).not.toBeNull();
+  expect(Math.abs((dismissLabelLeft ?? 0) - (watchlistBox?.x ?? 0))).toBeLessThanOrEqual(2);
 });
 
 test("Quick Picks is reachable from Discover without a fourth navigation slot", async ({
@@ -173,4 +246,46 @@ test("the Quick Picks entry stays a thumb-sized target", async ({ page }, testIn
   const box = await page.getByRole("link", { name: /Quick picks/ }).boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
   expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+});
+
+test("the rail starts after the featured movie and never repeats it", async ({ page }) => {
+  await page.goto("/discover?demo=learned");
+
+  const featured = page.getByRole("heading", { level: 1 });
+  const title = (await featured.textContent()) ?? "";
+  expect(title.length).toBeGreaterThan(0);
+
+  // The featured slot is a queue position and the rail is what is still ahead
+  // of it, so no title is ever both the decision and part of what follows it.
+  const rail = page.getByRole("region", { name: /ranked set/ });
+  await expect(rail.getByText(title, { exact: true })).toHaveCount(0);
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("the evidence drawer answers in a sentence before it answers in a table", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=learned");
+  await page.getByRole("button", { name: "Why this?" }).click();
+
+  const drawer = page.getByRole("dialog");
+  const opening = drawer.getByText(/^Picked from/);
+  await expect(opening).toBeVisible();
+  // Plain language first; the identifiers keep their place under a heading.
+  await expect(opening).not.toContainText("lightgbm");
+  await expect(drawer.getByRole("heading", { name: "Model evidence" })).toBeVisible();
+  await expect(drawer.getByText("item-item-lightgbm")).toBeVisible();
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("a fallback drawer says what it is without borrowing learned phrasing", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=fallback");
+  await page.getByRole("button", { name: "Why this?" }).click();
+
+  const drawer = page.getByRole("dialog");
+  await expect(drawer.getByText(/watched most across this tenant/)).toBeVisible();
+  await expect(drawer.getByText(/^Picked from/)).toHaveCount(0);
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });

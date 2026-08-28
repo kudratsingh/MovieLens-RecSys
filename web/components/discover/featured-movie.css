@@ -1,9 +1,54 @@
+/* The block is sized by its own content rather than by a fixed floor. The
+   floor was 46rem, which at 1440 reserved more height than the two columns
+   ever used and left roughly a screen-third of dead space under both of them
+   before the rail began. `min-content` keeps the two columns aligned without
+   claiming space neither of them fills. */
 .featured-movie {
   align-items: center;
   display: grid;
   gap: clamp(1.75rem, 5vw, 5rem);
   grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
-  min-height: min(46rem, calc(100dvh - 8rem));
+  min-height: min-content;
+}
+
+/* The advance: the card arrives from the direction the decision travelled, so
+   watchlist, watched, and dismissal read as the same gesture language Quick
+   Picks teaches (`lib/movie-state/actions.ts` holds the map both use). It is
+   decorative — the card is interactive the moment it renders, the announcement
+   is the authoritative channel, and the route omits the attribute entirely
+   under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .featured-movie[data-enter-from] {
+    animation: featured-enter var(--motion-standard) var(--ease-out) both;
+  }
+
+  .featured-movie[data-enter-from="right"] {
+    --featured-enter-x: 2.5rem;
+  }
+
+  .featured-movie[data-enter-from="left"] {
+    --featured-enter-x: -2.5rem;
+  }
+
+  .featured-movie[data-enter-from="up"] {
+    --featured-enter-y: 2rem;
+  }
+}
+
+@keyframes featured-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(
+      var(--featured-enter-x, 0),
+      var(--featured-enter-y, 0),
+      0
+    );
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .featured-poster {
@@ -178,6 +223,19 @@
   .featured-actions button,
   .featured-actions a {
     min-width: 0;
+  }
+
+  /* `Not for me` is the one quiet control in the strip, so it has no visible
+     box to align to — only its label. Stretched across a grid column like its
+     two bordered neighbours, that centred label sat ~43px inside their labels
+     and read as an indent rather than as the third action. Hugging its own
+     content puts it on the column's left edge, where every other line on the
+     page starts. Scoped to this media query: above 767px the strip is a flex
+     row and the label already sits beside the buttons.
+     `e2e/discover.spec.ts` measures it at 390. */
+  .featured-actions .movie-state-row .button-quiet {
+    justify-self: start;
+    padding-inline: 0;
   }
 }
 

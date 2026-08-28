@@ -13,7 +13,7 @@ import {
   discoverScenario,
   loadDiscoverResources,
 } from "@/lib/discover/resources";
-import { productNavigationItems } from "@/lib/navigation";
+import { productNavigationItems, routeReturnHref, signInHref } from "@/lib/navigation";
 import { hasResourceData } from "@/lib/resources/state";
 import { isolatedUiPreviewMode } from "@/lib/ui-preview-access";
 import "@/components/discover/discover.css";
@@ -51,7 +51,11 @@ export default async function DiscoverPage({
   const params = await searchParams;
   const fixtureMode = isolatedUiPreviewMode();
   const session = fixtureMode ? null : await auth();
-  if (!fixtureMode && (!session?.user || session.error)) redirect("/");
+  // The door carries the address back, so a shared or bookmarked link survives
+  // an expired session instead of landing on the default persona.
+  if (!fixtureMode && (!session?.user || session.error)) {
+    redirect(signInHref(routeReturnHref("/discover", params)));
+  }
 
   const userId = personaId(params.userId);
   const scenario = discoverScenario(params.demo);
@@ -119,6 +123,11 @@ export default async function DiscoverPage({
 
           <WatchHistory
             browseHref={browseHref}
+            // Same return address the ranked cards carry, so opening a title
+            // from history comes back to the ranking rather than the catalog.
+            movieHref={(movieId) =>
+              `/movies/${movieId}?user=${userId}&returnTo=${encodeURIComponent(discoverHref)}`
+            }
             personaName={personaName}
             state={resources.history}
           />

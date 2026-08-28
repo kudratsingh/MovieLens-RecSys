@@ -7,6 +7,7 @@ import {
 } from "@/components/movie/movie-state-controls";
 import { Drawer } from "@/components/ui/drawer";
 import { Icon } from "@/components/ui/icons";
+import type { DecisionDirection } from "@/lib/movie-state/actions";
 import type { EvidenceRecord, MovieCard } from "@/lib/movie-types";
 import "./featured-movie.css";
 
@@ -25,6 +26,7 @@ export function FeaturedMovie({
   actions,
   aside,
   disclosure,
+  enterFrom = null,
 }: {
   movie: MovieCard;
   evidence?: EvidenceRecord;
@@ -34,10 +36,21 @@ export function FeaturedMovie({
   /** Rendered under the actions: rating, mutation status, honesty notes. */
   aside?: React.ReactNode;
   disclosure?: React.ReactNode;
+  /**
+   * Which way the decision that produced this card travelled, so the arrival
+   * reads as the consequence of the press rather than as a page change. The
+   * caller passes `null` under reduced motion; the stylesheet holds the same
+   * rule, so an animation can never sneak back in through a re-render.
+   */
+  enterFrom?: DecisionDirection | null;
 }) {
   const movieHref = href ?? `/ui-preview/movies/${movie.id}`;
   return (
-    <section className="featured-movie" aria-labelledby="featured-title">
+    <section
+      aria-labelledby="featured-title"
+      className="featured-movie"
+      data-enter-from={enterFrom ?? undefined}
+    >
       <div className="featured-poster">
         <PosterCard href={movieHref} movie={movie} priority />
       </div>

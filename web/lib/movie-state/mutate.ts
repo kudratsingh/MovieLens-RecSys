@@ -91,8 +91,70 @@ export type MovieStateMutationResult =
       replayed: boolean;
       requestId: string;
     }
-  | { status: "conflict"; requestId: string; detail: string | null }
+  | {
+      status: "conflict";
+      requestId: string;
+      detail: string | null;
+      /**
+       * What is actually stored, when the client managed to read it back while
+       * recovering. Carried on the result so a caller adopts the truth without
+       * issuing a second read of its own — three surfaces were each doing that
+       * read separately, and only one of them was adopting the answer.
+       */
+      canonical?: MovieState | null;
+    }
+  | {
+      status: "refused";
+      requestId: string;
+      /**
+       * The API's own sentence, verbatim. It names a product rule this write
+       * would break, and no copy written here could say it more precisely.
+       */
+      detail: string;
+    }
   | { status: "failed"; failure: ResourceFailure };
+
+/**
+ * A `409` that means "somebody committed first", as opposed to one that means
+ * "this transition is not allowed".
+ *
+ * The split is by body rather than by status because the API documents a single
+ * `409` for three different conditions (`src/serving/app.py`: "Idempotency,
+ * state revision, or transition conflict"). Two of them are races and are
+ * recoverable — re-read the canonical record, replay the intent, and the write
+ * lands. The third is a rule: `PUT .../watchlist` on a movie that is already
+ * watched answers `409 {"detail": "a watched movie cannot be added to the
+ * watchlist"}`, and nothing about retrying it can succeed. Reporting the rule
+ * as a race told the viewer something untrue ("<title> changed somewhere else
+ * before this saved") and spent a re-read plus a replay proving it.
+ *
+ * The two recoverable shapes are matched, and everything else is treated as a
+ * refusal, because that is the safer direction to be wrong in: an unrecognised
+ * `409` shown in the API's own words is honest and costs one retry the viewer
+ * can make themselves, while an unrecognised `409` shown as a race is a
+ * sentence the product invented about state nobody touched. A `409` with no
+ * readable body stays a conflict — with nothing to render, the generic
+ * recovery is all there is.
+ *
+ * The cleaner long-term fix is on the API side: a distinct status (`422`, or a
+ * machine-readable `code` in the body) for a transition refusal would let the
+ * client branch on the contract instead of on prose that a rewording could
+ * silently move. This function is what the frontend can do without it.
+ */
+const CONCURRENCY_CONFLICT_DETAILS: readonly RegExp[] = [
+  // `StateRevisionConflictError`: "state revision 3 is stale; current revision is 5"
+  /^state revision\b/i,
+  // `IdempotencyConflictError`: "idempotency key was already used for another
+  // mutation" / "… with a different rating"
+  /^idempotency key was already used\b/i,
+];
+
+export function isTransitionRefusal(detail: string | null): detail is string {
+  if (detail === null) return false;
+  const text = detail.trim();
+  if (text === "") return false;
+  return !CONCURRENCY_CONFLICT_DETAILS.some((pattern) => pattern.test(text));
+}
 
 /**
  * The API types the idempotency key as a UUID. `crypto.randomUUID` is absent
@@ -189,9 +251,14 @@ export async function mutateMovieState(
   const payload = await readResourcePayload(response);
   // A revision or idempotency conflict is not a broken request: somebody else
   // — another tab, another device — committed first, and the viewer needs to
-  // be told that rather than shown a generic failure.
+  // be told that rather than shown a generic failure. A transition refusal
+  // arrives on the same status and is a different event entirely; see
+  // `isTransitionRefusal` for why the two are told apart by body.
   if (response.status === 409) {
-    return { status: "conflict", requestId: correlationId, detail: upstreamDetail(payload) };
+    const detail = upstreamDetail(payload);
+    return isTransitionRefusal(detail)
+      ? { status: "refused", requestId: correlationId, detail }
+      : { status: "conflict", requestId: correlationId, detail };
   }
 
   const state = resourceStateFromPayload({

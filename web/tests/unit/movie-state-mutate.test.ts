@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isTransitionRefusal,
   mutateMovieState,
   newIdempotencyKey,
   movieStatePath,
@@ -143,6 +144,73 @@ describe("committing a movie-state mutation", () => {
     expect(result.status).toBe("failed");
     // The mutation itself was never attempted.
     expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+});
+
+/**
+ * The API documents one `409` for three conditions, so the client tells them
+ * apart by body. Every string below is quoted verbatim from the error it is
+ * raised with in `src/serving/feedback.py`; if one of them is reworded there
+ * without this list moving, this is the test that says so.
+ */
+describe("telling a transition refusal apart from a concurrency conflict", () => {
+  // `StateRevisionConflictError` and `IdempotencyConflictError`.
+  const CONCURRENCY = [
+    "state revision 3 is stale; current revision is 5",
+    "idempotency key was already used for another mutation",
+    "idempotency key was already used with a different rating",
+  ];
+
+  // `InvalidStateTransitionError`, the three product rules it states.
+  const REFUSALS = [
+    "a watched movie cannot be added to the watchlist",
+    "undo dismissal before adding this movie to watchlist",
+    "rating_set requires a rating",
+  ];
+
+  it.each(CONCURRENCY)("treats %j as a conflict the write path can recover", async (detail) => {
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
+    });
+
+    expect(result).toMatchObject({ status: "conflict", detail });
+    expect(isTransitionRefusal(detail)).toBe(false);
+  });
+
+  it.each(REFUSALS)("treats %j as a refusal that carries its own sentence", async (detail) => {
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
+    });
+
+    expect(result).toMatchObject({ status: "refused", detail });
+    expect(isTransitionRefusal(detail)).toBe(true);
+  });
+
+  it("keeps a 409 with nothing readable in it a conflict", async () => {
+    // With no sentence to show, the generic recovery is all there is.
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(new Response(null, { status: 409 })),
+    });
+
+    expect(result).toMatchObject({ status: "conflict", detail: null });
+    expect(isTransitionRefusal(null)).toBe(false);
+    expect(isTransitionRefusal("   ")).toBe(false);
+  });
+
+  it("reads an unrecognised 409 as a refusal rather than inventing a race", async () => {
+    // The safer direction to be wrong in: an unknown rule shown in the API's
+    // own words is honest, while an unknown rule shown as "changed somewhere
+    // else" is a claim about state nobody touched.
+    const detail = "this persona cannot be written to during a replay window";
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
+    });
+
+    expect(result).toMatchObject({ status: "refused", detail });
   });
 });
 

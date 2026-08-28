@@ -13,7 +13,7 @@
  */
 
 import type { RecommendationItem, RecommendationResponse, ServingPolicy } from "@/lib/api";
-import { displayTitle } from "@/lib/discover/movie-card";
+import { displayTitle } from "@/lib/movie-types";
 
 /**
  * Queue depth. Deep enough that a viewer can make several decisions without a

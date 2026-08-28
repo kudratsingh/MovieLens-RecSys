@@ -41,6 +41,9 @@ function fixtureItem(movieId: number, learned: boolean): RecommendationItem {
     score: FIXTURE_SCORES[movie.id] ?? 0.5,
     title: movie.title,
     tmdb_id: null,
+    // The queue only ever holds titles serving has not excluded, so the
+    // recorded cards carry no prior movie state.
+    state: null,
   };
 }
 

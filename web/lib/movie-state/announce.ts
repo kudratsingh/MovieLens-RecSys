@@ -26,6 +26,8 @@ export type MovieStateVoice = "detail" | "discover" | "library";
 export type MovieStateOutcome =
   | { kind: "committed"; action: MovieStateAction }
   | { kind: "conflict" }
+  /** The API declined the transition and said why; `detail` is its sentence. */
+  | { kind: "refused"; detail: string }
   | { kind: "failed"; failure: ResourceFailure };
 
 export type AnnouncementContext = {
@@ -33,6 +35,13 @@ export type AnnouncementContext = {
   voice: MovieStateVoice;
   /** Required by the Library voice, which names whose record changed. */
   persona?: string;
+  /**
+   * The title now in the featured slot, for the surfaces that move on after a
+   * decision. Only the Discover voice says it: there, the decision and the
+   * advance are one event, and a reader who cannot see the card move has no
+   * other way to learn it did.
+   */
+  next?: string | null;
 };
 
 export function movieStateAnnouncement(
@@ -45,37 +54,44 @@ export function movieStateAnnouncement(
   if (outcome.kind === "conflict") {
     return conflictLine(context);
   }
+  if (outcome.kind === "refused") {
+    return refusedLine(outcome.detail, context);
+  }
   return failureLine(outcome.failure, context);
 }
 
 function committedLine(
   action: MovieStateAction,
-  { title, voice, persona }: AnnouncementContext,
+  { title, voice, persona, next }: AnnouncementContext,
 ): string {
   const saved = action.method === "PUT";
   switch (voice) {
-    case "discover":
+    case "discover": {
+      // Said after the decision, so the sentence reads in the order the events
+      // happened: what was recorded, then what is now on screen.
+      const then = next ? ` Next: ${next}.` : "";
       switch (action.resource) {
         case "rating":
           // "Rating saved for …" leads on purpose: it is the phrase the
           // service-backed Discover journey waits on.
           return saved
-            ? `Rating saved for ${title}.`
-            : `Rating removed from ${title}; watched history was preserved.`;
+            ? `Rating saved for ${title}.${then}`
+            : `Rating removed from ${title}; watched history was preserved.${then}`;
         case "watched":
           return saved
-            ? `${title} marked watched.`
-            : `${title} removed from watched history.`;
+            ? `${title} marked watched.${then}`
+            : `${title} removed from watched history.${then}`;
         case "watchlist":
           return saved
-            ? `${title} saved to watchlist.`
-            : `${title} removed from watchlist.`;
+            ? `${title} saved to watchlist.${then}`
+            : `${title} removed from watchlist.${then}`;
         case "dismissal":
           return saved
-            ? `${title} will be excluded from recommendations.`
-            : `${title} is eligible again.`;
+            ? `${title} will be excluded from recommendations.${then}`
+            : `${title} is eligible again.${then}`;
       }
       break;
+    }
 
     case "library": {
       const owner = `${persona ?? "this persona"}'s`;
@@ -137,6 +153,28 @@ function conflictLine({ title, voice, persona }: AnnouncementContext): string {
     return `${title} changed elsewhere. ${persona ?? "This persona"}'s latest saved state is shown.`;
   }
   return `${title} changed somewhere else before this saved. Its current state has been loaded; try again.`;
+}
+
+/**
+ * A refusal is not a conflict and not a failure. Nothing changed anywhere, the
+ * request was understood, and the API named the rule it would have broken — so
+ * that sentence is repeated verbatim rather than translated. The lead-in says
+ * the one thing the API's sentence does not: which title this was about, and
+ * that it was left alone. No retry is offered, because there is nothing here
+ * that a second press would change.
+ */
+function refusedLine(detail: string, { title, voice, persona }: AnnouncementContext): string {
+  const reason = sentence(detail);
+  if (voice === "library") {
+    return `${title} was left as it is in ${persona ?? "this persona"}'s library. ${reason}`;
+  }
+  return `${title} was not changed. ${reason}`;
+}
+
+/** The API's details are lowercase fragments with no terminator of their own. */
+function sentence(detail: string): string {
+  const text = detail.trim();
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 function failureLine(

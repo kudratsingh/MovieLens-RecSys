@@ -106,6 +106,43 @@ describe("a conflict reads as a correction rather than a dead end", () => {
   });
 });
 
+describe("a refused transition states the rule instead of blaming a race", () => {
+  // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+  const RULE = "a watched movie cannot be added to the watchlist";
+
+  it("repeats the API's own sentence rather than translating it", () => {
+    for (const voice of ["discover", "detail"] as const) {
+      const line = movieStateAnnouncement(
+        { kind: "refused", detail: RULE },
+        { title: "Heat", voice },
+      );
+      expect(line).toBe(`Heat was not changed. ${RULE}.`);
+      // The conflict copy would have been untrue here: nothing changed
+      // anywhere, and a second press cannot succeed.
+      expect(line).not.toContain("changed somewhere else");
+      expect(line).not.toContain("try again");
+    }
+  });
+
+  it("names the persona whose record was left alone in the Library", () => {
+    expect(
+      movieStateAnnouncement(
+        { kind: "refused", detail: RULE },
+        { title: "Heat", voice: "library", persona: "Action Fan" },
+      ),
+    ).toBe(`Heat was left as it is in Action Fan's library. ${RULE}.`);
+  });
+
+  it("does not double the terminator on a detail that already has one", () => {
+    expect(
+      movieStateAnnouncement(
+        { kind: "refused", detail: "Undo the dismissal first." },
+        { title: "Heat", voice: "detail" },
+      ),
+    ).toBe("Heat was not changed. Undo the dismissal first.");
+  });
+});
+
 describe("a failed write says what was not saved", () => {
   const failure = failureState({
     status: "upstream-error",

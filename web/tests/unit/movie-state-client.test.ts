@@ -139,13 +139,16 @@ describe("one write path serves every surface", () => {
   });
 
   it("names a revision conflict as its own outcome rather than a bad request", async () => {
+    // Quoted from `StateRevisionConflictError` in `src/serving/feedback.py`:
+    // the client tells a race apart from a refused transition by this body,
+    // so an invented sentence here would not exercise the split.
     const fetchImpl = fetchStub(
-      jsonResponse({ detail: "Stale state revision" }, { status: 409 }),
+      jsonResponse({ detail: "state revision 7 is stale; current revision is 9" }, { status: 409 }),
     );
 
     const result = await createBffMovieStateClient(fetchImpl).mutate(MUTATION);
 
-    expect(result).toMatchObject({ status: "conflict", detail: "Stale state revision" });
+    expect(result).toMatchObject({ status: "conflict", detail: "state revision 7 is stale; current revision is 9" });
   });
 
   it("maps an expired session during a write the same way a read does", async () => {
@@ -182,6 +185,171 @@ describe("one write path serves every surface", () => {
       reason: "network",
       retryable: true,
     });
+  });
+});
+
+describe("a stale revision is corrected rather than discarded", () => {
+  /**
+   * The first press of a Discover or Quick Picks control can only assert
+   * revision 0, because a recommendation carries no state. Anything that has
+   * ever been written and reverted sits higher than that, so without the replay
+   * the viewer's press is silently thrown away and only the second one commits.
+   */
+  function conflictThenCommit(canonicalRevision: number) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url, init });
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      if (url.startsWith("/api/users/900000101/movies/103/rating")) {
+        return url.includes(`expected_revision=${canonicalRevision}`)
+          ? jsonResponse({
+              outcome: "changed",
+              replayed: false,
+              request_id: "0f9d1c22-6a1a-4a26-9d1a-2b0f77e3f001",
+              state: { ...movieState, revision: canonicalRevision + 1 },
+            })
+          : jsonResponse({ detail: "state revision is stale" }, { status: 409 });
+      }
+      return jsonResponse({
+        ...movieDetailResponse,
+        item: {
+          ...movieDetailResponse.item,
+          state: { ...movieState, revision: canonicalRevision },
+        },
+      });
+    }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  function mutationCalls(calls: { url: string; init: RequestInit }[]) {
+    return calls.filter(({ url }) => url.includes("/movies/103/rating"));
+  }
+
+  it("replays the same intent against the revision the API reports", async () => {
+    const { calls, fetchImpl } = conflictThenCommit(9);
+
+    const result = await createBffMovieStateClient(fetchImpl).mutate(MUTATION);
+
+    expect(result).toMatchObject({ status: "committed" });
+    expect(result.status === "committed" && result.state.revision).toBe(10);
+    const writes = mutationCalls(calls);
+    expect(writes.map(({ url }) => url)).toEqual([
+      "/api/users/900000101/movies/103/rating?expected_revision=7",
+      "/api/users/900000101/movies/103/rating?expected_revision=9",
+    ]);
+    // One decision, one key: the API replays a lost commit instead of writing
+    // a second feedback event for the same press.
+    const keys = writes.map(({ init }) =>
+      new Headers(init.headers).get("Idempotency-Key"),
+    );
+    expect(keys).toEqual([MUTATION.idempotencyKey, MUTATION.idempotencyKey]);
+  });
+
+  it("carries one key across both attempts even when the caller binds none", async () => {
+    const { calls, fetchImpl } = conflictThenCommit(9);
+
+    await createBffMovieStateClient(fetchImpl).mutate({
+      ...MUTATION,
+      idempotencyKey: undefined,
+    });
+
+    const keys = mutationCalls(calls).map(({ init }) =>
+      new Headers(init.headers).get("Idempotency-Key"),
+    );
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("replays exactly once and reports a second conflict as a conflict", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      if (url.includes("/rating")) {
+        return jsonResponse({ detail: "idempotency key was already used for another mutation" }, { status: 409 });
+      }
+      return jsonResponse(movieDetailResponse);
+    }) as unknown as typeof fetch;
+
+    const result = await createBffMovieStateClient(fetchImpl).mutate(MUTATION);
+
+    expect(result.status).toBe("conflict");
+    // The canonical record rides along, so the caller corrects its control
+    // without issuing a read of its own.
+    expect(result.status === "conflict" && result.canonical?.revision).toBe(
+      movieDetailResponse.item.state?.revision,
+    );
+    expect(calls.filter((url) => url.includes("/rating"))).toHaveLength(2);
+  });
+
+  it("does not replay a revision assertion the API has already answered", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      if (url.includes("/rating")) {
+        return jsonResponse({ detail: "state revision 7 is stale; current revision is 9" }, { status: 409 });
+      }
+      // The stored revision is the one the caller already sent, so replaying
+      // it would only produce the same answer.
+      return jsonResponse({
+        ...movieDetailResponse,
+        item: { ...movieDetailResponse.item, state: { ...movieState, revision: 7 } },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await createBffMovieStateClient(fetchImpl).mutate(MUTATION);
+
+    expect(result.status).toBe("conflict");
+    expect(calls.filter((url) => url.includes("/rating"))).toHaveLength(1);
+  });
+
+  it("stands the conflict up plainly when the canonical read answers nothing", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      if (url.includes("/rating")) {
+        return jsonResponse({ detail: "state revision 7 is stale; current revision is 9" }, { status: 409 });
+      }
+      return jsonResponse({ detail: "gone" }, { status: 502 });
+    }) as unknown as typeof fetch;
+
+    const result = await createBffMovieStateClient(fetchImpl).mutate(MUTATION);
+
+    expect(result).toMatchObject({ status: "conflict", canonical: null });
+    expect(calls.filter((url) => url.includes("/rating"))).toHaveLength(1);
+  });
+});
+
+describe("a transition the API refuses is not a race", () => {
+  it("reports the refusal without a canonical read or a replay", async () => {
+    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+    // The API answers this on the same 409 as a stale revision, and the older
+    // client mapped both to `conflict` — so a viewer who pressed `Watchlist`
+    // on a title they had already watched was told it "changed somewhere else
+    // before this saved", and the client spent a read plus a replay proving
+    // otherwise.
+    const detail = "a watched movie cannot be added to the watchlist";
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      seen.push(url);
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      return jsonResponse({ detail }, { status: 409 });
+    }) as unknown as typeof fetch;
+
+    const result = await createBffMovieStateClient(fetchImpl).mutate({
+      ...MUTATION,
+      resource: "watchlist",
+      method: "PUT",
+      rating: undefined,
+    });
+
+    expect(result).toMatchObject({ status: "refused", detail });
+    // One write attempt, and no canonical read behind it.
+    expect(seen.filter((url) => url.includes("/watchlist"))).toHaveLength(1);
+    expect(seen.some((url) => /\/movies\/\d+$/.test(url))).toBe(false);
   });
 });
 
