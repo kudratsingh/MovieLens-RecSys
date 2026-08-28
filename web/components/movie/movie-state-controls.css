@@ -18,8 +18,26 @@
   position: relative;
 }
 
+/*
+ * Compact density — a card in a collection rather than a page about a movie.
+ *
+ * Only the one-line promise the shortened compact labels make lives here. How
+ * wide a pill is, where it sits, and what a recorded one is painted in belong
+ * to the surface: the Browse grid states its own in `catalog-grid.css`, the
+ * Discover rail in `movie-rail.css`.
+ */
 .movie-state-row-compact button {
   min-width: 0;
+}
+
+.movie-state-row-compact .button-primary,
+.movie-state-row-compact .button-secondary,
+.movie-state-row-compact .button-quiet {
+  /* A label that somehow still outgrows its pill clips rather than wraps: the
+     one-line promise the shortened compact labels make is structural, not a
+     hope about the metrics of whatever font the machine resolved. */
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 /*
@@ -31,6 +49,16 @@
 .movie-rating-stars button[aria-disabled="true"] {
   cursor: progress;
   opacity: 0.65;
+}
+
+/*
+ * The one control whose `aria-disabled` is permanent rather than in-flight:
+ * beside a recommendation `Watched` is a statement, not a request that is still
+ * being processed. It should look recorded, not greyed out and waiting.
+ */
+.movie-state-row button.movie-state-recorded:not([aria-busy="true"]) {
+  cursor: default;
+  opacity: 1;
 }
 
 .movie-state-action-danger {

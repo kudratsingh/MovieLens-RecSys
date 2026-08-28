@@ -75,6 +75,26 @@
   --motion-collapse: 200ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /*
+   * Elevation. A cast shadow does very little work on a #0b0a09 ground — a
+   * dark poster on the canvas reads as a hole rather than as an object — so the
+   * scale is a pair: a shadow that says how far off the page something sits,
+   * and a hairline highlight along its top edge that says where the object
+   * starts. Consumers apply the highlight over their own content (the poster
+   * frame paints it on the scrim above the artwork), because an inset shadow
+   * on a frame that clips an image would be hidden behind the image.
+   *
+   * 1 is resting card, 2 is a raised control, 3 is the pointer lift.
+   */
+  --edge-highlight: rgba(255, 255, 255, 0.1);
+  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 18px -10px rgba(0, 0, 0, 0.7);
+  --elevation-2: 0 2px 4px rgba(0, 0, 0, 0.55), 0 16px 32px -14px rgba(0, 0, 0, 0.78);
+  --elevation-3: 0 4px 8px rgba(0, 0, 0, 0.6), 0 30px 60px -20px rgba(0, 0, 0, 0.85);
+  /* The warm spill a lifted poster casts, so hover is a change in temperature
+     and not only in size. Composed alongside an elevation step, never alone. */
+  --elevation-spill: 0 22px 46px -26px color-mix(in srgb, var(--accent) 70%, transparent);
+  /* Predates the scale and stays with the overlay surfaces (drawer, auth menu)
+     that need a soft, wide shadow rather than a card's tight one. */
   --shadow-raised: 0 18px 50px rgba(0, 0, 0, 0.28);
 }
 

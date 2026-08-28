@@ -294,6 +294,101 @@ test("a fallback drawer says what it is without borrowing learned phrasing", asy
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
 
+/**
+ * How many lines an element's own label actually occupies.
+ *
+ * A bounding box cannot answer this: a clamped title and a wrapped pill label
+ * both leave the element's box exactly where the layout put it. Only the text
+ * is measured, and only its distinct top edges count — a pill holds an icon
+ * beside its label, and two rectangles on one line are still one line.
+ */
+async function textLines(locator: import("@playwright/test").Locator) {
+  return locator.evaluate((element) => {
+    const text = [...element.childNodes].filter(
+      (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== "",
+    );
+    if (text.length === 0) return 0;
+    const range = document.createRange();
+    range.setStartBefore(text[0]);
+    range.setEndAfter(text[text.length - 1]);
+    return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+  });
+}
+
+test("every rail card's controls sit on one baseline, whatever the title does", async ({
+  page,
+}) => {
+  await page.goto("/discover?demo=learned");
+  await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+
+  const cards = page.locator(".rail-item");
+  const count = await cards.count();
+  expect(count).toBeGreaterThan(2);
+
+  const rows: { title: string; lines: number; y: number }[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const card = cards.nth(index);
+    const title = card.locator(".poster-title");
+    const box = await card.locator(".movie-state-row").boundingBox();
+    rows.push({
+      title: (await title.textContent()) ?? "",
+      lines: await textLines(title),
+      y: box?.y ?? -1,
+    });
+  }
+
+  // The test only means something if the rail is actually mixed: a set of
+  // uniformly short titles would pass a ragged layout too.
+  expect(rows.some((row) => row.lines === 1)).toBe(true);
+  expect(rows.some((row) => row.lines === 2)).toBe(true);
+
+  // Reserving two title lines and pinning the control row to the bottom of the
+  // card puts every card's controls on the same line, so `Toy Story` and
+  // `To Kill a Mockingbird` no longer offer their decisions at two heights.
+  const tops = rows.map((row) => Math.round(row.y));
+  expect(new Set(tops).size, JSON.stringify(rows)).toBe(1);
+});
+
+test("no rail control wraps its label onto a second line", async ({ page }) => {
+  await page.goto("/discover?demo=learned");
+  await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+
+  const controls = page.locator(".rail-item .movie-state-row button");
+  const count = await controls.count();
+  expect(count).toBeGreaterThan(0);
+
+  const wrapped: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const control = controls.nth(index);
+    // `Mark watched` wrapped inside its own pill at rail width, which is what
+    // pushed one card's third action a line below its neighbour's.
+    if ((await textLines(control)) > 1) {
+      wrapped.push((await control.getAttribute("aria-label")) ?? (await control.innerText()));
+    }
+    // A label kept on one line by clipping is not kept on one line.
+    const clipped = await control.evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(clipped, `${await control.innerText()} is clipped by ${clipped}px`).toBeLessThanOrEqual(0);
+  }
+  expect(wrapped.join(", ")).toBe("");
+});
+
+test("a rail card spends most of its height on the poster", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-1440", "Desktop density assertion");
+  await page.goto("/discover?demo=learned");
+  await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+
+  const card = page.locator(".rail-item").first();
+  const poster = await card.locator(".poster-frame").boundingBox();
+  const row = await card.locator(".movie-state-row").boundingBox();
+  const caption = (row?.y ?? 0) + (row?.height ?? 0) - ((poster?.y ?? 0) + (poster?.height ?? 0));
+
+  // The caption and its controls used to run to 69% of the poster's height —
+  // three full-width ovals, one of them two lines tall. The floor here is the
+  // regression guard, not the target: the target is the poster staying the
+  // thing a viewer is looking at.
+  expect(caption / (poster?.height ?? 1)).toBeLessThan(0.55);
+});
+
 const WATCHED_AT = "2026-08-21T09:00:00Z";
 
 function committedState(overrides: Record<string, unknown> = {}) {

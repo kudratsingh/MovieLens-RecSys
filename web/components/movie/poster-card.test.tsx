@@ -67,3 +67,37 @@ describe("PosterCard", () => {
     expect(within(links[0]).getByText(movies[0].title)).toBeVisible();
   });
 });
+
+describe("the rank is structure, not a sticker on the artwork", () => {
+  it("hangs the rank beside the caption instead of over the poster", () => {
+    const { container } = render(<PosterCard movie={{ ...movies[0], rank: 6 }} />);
+
+    const rank = container.querySelector(".poster-rank");
+    expect(rank).toHaveTextContent("6");
+    // The frame is artwork and nothing else: a badge pinned inside it covered
+    // whatever the poster's own designer put in that corner.
+    expect(container.querySelector(".poster-frame .poster-rank")).toBeNull();
+    expect(container.querySelector(".poster-card-copy .poster-rank")).not.toBeNull();
+    // The link already names the movie, so the numeral is not read out first.
+    expect(rank).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("shows no rank at all where the card is not part of a ranked set", () => {
+    // Browse, Library, and detail cards carry no rank, and the gutter the rail
+    // hangs its numeral in must not indent their captions.
+    const { rank, ...unranked } = movies[0];
+    const { container } = render(<PosterCard movie={unranked} />);
+    expect(rank).toBe(1);
+    expect(container.querySelector(".poster-rank")).toBeNull();
+  });
+
+  it("keeps the full title reachable when the caption clamps it", () => {
+    const long = "The Lord of the Rings: The Fellowship of the Ring";
+    render(<PosterCard density="compact" movie={{ ...movies[0], title: long }} />);
+
+    // Clamped to two reserved lines on screen; whole for a pointer viewer, and
+    // whole again in the link's accessible name.
+    expect(screen.getByText(long)).toHaveAttribute("title", long);
+    expect(screen.getByRole("link")).toHaveAccessibleName(`Open ${long}`);
+  });
+});
