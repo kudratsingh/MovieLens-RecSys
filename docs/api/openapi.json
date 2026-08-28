@@ -1715,24 +1715,6 @@
         "title": "TmdbRating",
         "type": "object"
       },
-      "ValidationError": {
-        "properties": {
-          "average": {
-            "title": "Average",
-            "type": "number"
-          },
-          "count": {
-            "title": "Count",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "average",
-          "count"
-        ],
-        "title": "TmdbRating",
-        "type": "object"
-      },
       "UserPreferencesMutationResponse": {
         "properties": {
           "outcome": {
