@@ -9,6 +9,16 @@ export type CatalogItem = components["schemas"]["CatalogItem"];
 export type CatalogResponse = components["schemas"]["CatalogResponse"];
 export type CatalogPageInfo = components["schemas"]["CatalogPageInfo"];
 export type MovieDetailResponse = components["schemas"]["MovieDetailResponse"];
+/**
+ * Detail returns its own item type: a `CatalogItem` plus the enriched TMDB
+ * block. The split is the API's, and it is the reason a Browse card cannot
+ * start reading a field the list response does not carry.
+ */
+export type MovieDetailItem = components["schemas"]["MovieDetailItem"];
+export type MovieDetails = components["schemas"]["MovieDetails"];
+export type MovieCastMember = components["schemas"]["MovieCastMember"];
+export type MovieTrailer = components["schemas"]["MovieTrailer"];
+export type TmdbRating = components["schemas"]["TmdbRating"];
 export type PersonaItem = components["schemas"]["PersonaItem"];
 export type PersonaResponse = components["schemas"]["PersonaResponse"];
 export type CurrentActorResponse = components["schemas"]["CurrentActorResponse"];

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -21,8 +22,9 @@ def _fixture_engine() -> Engine:
             text(
                 "CREATE TABLE movie_catalog_metadata ("
                 "movie_id INTEGER PRIMARY KEY, sort_title TEXT, release_year INTEGER, "
-                "poster_url TEXT, overview TEXT, metadata_source TEXT, source_status TEXT, "
-                "visible BOOLEAN, source_updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+                "poster_url TEXT, overview TEXT, details TEXT, metadata_source TEXT, "
+                "source_status TEXT, visible BOOLEAN, "
+                "source_updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
             )
         )
         connection.execute(
@@ -199,6 +201,39 @@ def test_reseeding_refreshes_fixture_owned_catalog_metadata() -> None:
     engine.dispose()
 
 
+def test_reseeding_refreshes_the_fixture_owned_detail_payload() -> None:
+    """The detail payload is fixture-owned, so a re-seed is how it lands.
+
+    A database seeded before ``enrich_details.py`` ran carries a NULL here and
+    would keep carrying one forever under an ``ON CONFLICT DO NOTHING``: the
+    demo would agree with itself and serve a detail page with no trailer.
+    """
+    engine = _fixture_engine()
+    seed_demo_personas(engine)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE movie_catalog_metadata SET details = NULL"))
+
+    result = seed_demo_personas(engine)
+
+    with engine.connect() as connection:
+        stored = connection.scalar(
+            text("SELECT details FROM movie_catalog_metadata WHERE movie_id = 1")
+        )
+        filled = connection.scalar(
+            text("SELECT COUNT(*) FROM movie_catalog_metadata WHERE details IS NOT NULL")
+        )
+
+    assert filled == 120
+    assert result.detail_movie_count == 120
+    payload = json.loads(str(stored))
+    assert payload["trailer"]["provider"] == "youtube"
+    assert payload["cast"] and payload["directors"]
+    # Nothing here is tenant-owned: movie facts are the same for every tenant,
+    # which is why this column lives on the shared snapshot (migration 0011).
+    assert "tenant" not in str(stored).lower()
+    engine.dispose()
+
+
 def test_seed_persists_reviewed_metadata_without_live_enrichment() -> None:
     engine = _fixture_engine()
     seed_demo_personas(engine)
@@ -255,6 +290,30 @@ def _served(movie_id: int, *, poster: bool = True, overview: bool = True) -> dic
     }
 
 
+def _detail_page(movie_id: int, *, details: bool = True) -> httpx.Response:
+    """The detail read the coverage probe makes, as the API answers it."""
+    return httpx.Response(
+        200,
+        json={
+            "tenant_id": "demo",
+            "user_id": 900000101,
+            "item": {
+                "movie_id": movie_id,
+                "poster_url": None,
+                "overview": None,
+                "details": ({"trailer": {"provider": "youtube"}} if details else None),
+            },
+        },
+    )
+
+
+def _route_detail_probe(request: httpx.Request) -> httpx.Response | None:
+    """Answer the detail probe; leave catalog pages to the caller's handler."""
+    if "/movies/" in request.url.path:
+        return _detail_page(int(request.url.path.rsplit("/", 1)[-1]))
+    return None
+
+
 def _coverage(handler: Any) -> Any:
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         return check_catalog_coverage(
@@ -274,6 +333,9 @@ def test_catalog_coverage_passes_on_a_snapshot_that_matches_the_fixture() -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer service-token"
+        probe = _route_detail_probe(request)
+        if probe is not None:
+            return probe
         assert request.url.path == "/users/900000101/catalog"
         requested.append(str(request.url.params))
         page_index = int(request.url.params.get("cursor", "0"))
@@ -286,8 +348,33 @@ def test_catalog_coverage_passes_on_a_snapshot_that_matches_the_fixture() -> Non
     assert coverage.served_movie_count == 120
     assert coverage.served_poster_count == 120
     assert coverage.served_overview_count == 120
+    # Every fixture title now carries a detail payload, so the probe picks the
+    # lowest movie id and proves the served row has one too.
+    assert coverage.detail_probe_movie_id == min(movie.movie_id for movie in movies)
     # The whole fixture is walked, and the walk stops when the cursor does.
     assert len(requested) == len(pages)
+
+
+def test_catalog_coverage_fails_when_the_detail_payload_is_missing() -> None:
+    """The staleness this release introduces: posters fine, detail page empty.
+
+    An API image built before the enrichment ran seeds a snapshot with no
+    ``details`` at all. Every poster is where it should be, so the catalog walk
+    is happy; the detail page is the one that is a year behind.
+    """
+    movies, _ = load_demo_catalog()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/movies/" in request.url.path:
+            return _detail_page(int(request.url.path.rsplit("/", 1)[-1]), details=False)
+        return _catalog_page([_served(movie.movie_id) for movie in movies[:48]])
+
+    with pytest.raises(DemoSmokeError) as failure:
+        _coverage(handler)
+
+    message = str(failure.value)
+    assert "make demo-seed" in message
+    assert "without the detail payload" in message
 
 
 def test_catalog_coverage_fails_on_the_pre_backfill_snapshot() -> None:
@@ -316,6 +403,9 @@ def test_catalog_coverage_only_judges_titles_the_fixture_owns() -> None:
     movies, _ = load_demo_catalog()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        probe = _route_detail_probe(request)
+        if probe is not None:
+            return probe
         return _catalog_page(
             [_served(movies[0].movie_id)] + [_served(10_000_001, poster=False, overview=False)]
         )

@@ -88,7 +88,21 @@ def _add_fsync(window: Path, per_second: dict[int, list[float]]) -> None:
     (window / "disk-fsync.jsonl").write_text("\n".join(lines) + "\n")
 
 
-def _add_server_side(window: Path, rows: list[dict[str, object]]) -> None:
+def _add_server_side(
+    window: Path,
+    rows: list[dict[str, object]],
+    *,
+    syncs: float = 300.0,
+    sync_ms: float = 60.0,
+) -> None:
+    """Write the pair of snapshots, with the window's WAL cost as a delta.
+
+    `syncs` and `sync_ms` are what the window itself cost, not cumulative
+    totals — which is the only shape the storage classification can read, since
+    Postgres's counters run from the last stats reset. The default is 0.2 ms per
+    sync, a healthy device, so a test that is not about storage does not quietly
+    carry a stalled one.
+    """
     (window / "server-side-before.json").write_text(
         json.dumps(
             {
@@ -108,7 +122,11 @@ def _add_server_side(window: Path, rows: list[dict[str, object]]) -> None:
                 "rows": rows,
                 "snapshot_only": False,
                 "stats": {
-                    "wal": {"wal_sync": 400.0, "wal_sync_time": 1500.0, "wal_records": 60.0},
+                    "wal": {
+                        "wal_sync": 100.0 + syncs,
+                        "wal_sync_time": 500.0 + sync_ms,
+                        "wal_records": 60.0,
+                    },
                     "bgwriter": {"checkpoints_req": 2.0},
                     "database": {"xact_commit": 305.0, "blk_write_time": 9.0},
                 },
@@ -274,6 +292,126 @@ def test_evidence_never_moves_the_remeasure_verdict(tmp_path: Path, capsys) -> N
     assert rich_decision["remeasure"] == bare_decision["remeasure"]
     assert rich_decision["label"] == bare_decision["label"]
     assert rich_decision["p99_ms"] == bare_decision["p99_ms"]
+
+
+def test_storage_stall_is_classified_from_the_windows_own_commit_cost(window: Path, capsys) -> None:
+    # The failing runner's shape: 3,085 syncs costing 9,703 ms, which is 3.15 ms
+    # to commit one audit row against 0.21 ms on a healthy one.
+    _add_server_side(
+        window,
+        [_audit_row(0.1, 20.0, "item-item-cosine+lightgbm")],
+        syncs=3085.0,
+        sync_ms=9703.43,
+    )
+    summarize.main([str(window), "--k6-exit", "0"])
+    printed = capsys.readouterr().out
+
+    decision = json.loads((window / "decision.json").read_text())
+    assert decision["storage_stall"] is True
+    assert decision["wal_syncs"] == 3085
+    assert decision["wal_sync_ms_per_sync"] == pytest.approx(3.145, abs=0.001)
+    assert "does not change `remeasure`" in decision["storage_stall_rule"]
+    assert "storage_stall: yes" in printed
+    assert "3.145 ms per WAL sync" in printed
+
+
+def test_a_healthy_device_is_not_classified_as_a_stall(window: Path, capsys) -> None:
+    # The passing runner's shape, and the reason the constants are a wide gap
+    # rather than a split difference.
+    _add_server_side(
+        window,
+        [_audit_row(0.1, 20.0, "item-item-cosine+lightgbm")],
+        syncs=3385.0,
+        sync_ms=722.94,
+    )
+    summarize.main([str(window), "--k6-exit", "0"])
+    printed = capsys.readouterr().out
+
+    decision = json.loads((window / "decision.json").read_text())
+    assert decision["storage_stall"] is False
+    assert decision["wal_sync_ms_per_sync"] == pytest.approx(0.214, abs=0.001)
+    assert "storage_stall: no" in printed
+
+
+def test_too_few_syncs_reports_no_ratio_rather_than_one_built_from_noise(
+    window: Path, capsys
+) -> None:
+    _add_server_side(window, [], syncs=12.0, sync_ms=900.0)
+    summarize.main([str(window), "--k6-exit", "0"])
+    printed = capsys.readouterr().out
+
+    decision = json.loads((window / "decision.json").read_text())
+    assert decision["storage_stall"] is None
+    assert decision["wal_sync_ms_per_sync"] is None
+    assert decision["wal_syncs"] == 12
+    assert "below the 100-sync minimum" in printed
+    assert "storage_stall: n/a" in printed
+
+
+def test_the_window_says_which_medium_it_measured(window: Path, capsys) -> None:
+    _add_server_side(window, [])
+    summarize.main([str(window), "--k6-exit", "0", "--postgres-data-on-tmpfs", "yes"])
+    printed = capsys.readouterr().out
+
+    decision = json.loads((window / "decision.json").read_text())
+    assert decision["postgres_data_on_tmpfs"] is True
+    assert "Postgres data directory: tmpfs" in printed
+    assert "out of this measurement" in printed
+
+
+def test_an_unreported_medium_stays_unknown_rather_than_assumed(window: Path, capsys) -> None:
+    # What an evidence directory captured before this existed summarizes to, and
+    # what any caller that does not pass the flag gets.
+    _add_server_side(window, [])
+    summarize.main([str(window), "--k6-exit", "0"])
+    printed = capsys.readouterr().out
+
+    decision = json.loads((window / "decision.json").read_text())
+    assert decision["postgres_data_on_tmpfs"] is None
+    assert "Postgres data directory: not recorded for this window" in printed
+
+
+def test_storage_evidence_never_moves_a_decision_field(tmp_path: Path, capsys) -> None:
+    # The point of the whole classification: it explains a verdict and is
+    # incapable of producing one. Two windows identical but for their commit
+    # cost must decide byte-identically.
+    storage_keys = {
+        "postgres_data_on_tmpfs",
+        "wal_syncs",
+        "wal_sync_ms",
+        "wal_sync_ms_per_sync",
+        "storage_stall",
+        "storage_stall_rule",
+    }
+
+    def build(directory: Path, *, sync_ms: float, tmpfs: str) -> dict[str, object]:
+        window = _write_window(
+            directory,
+            values={
+                0: [(150.0, "warm"), (150.0, "cold")],
+                1: [(150.0, "warm"), (150.0, "cold")],
+                2: [(150.0, "warm"), (150.0, "cold")],
+            },
+            p99=150.0,
+            steal_pct=25.0,
+        )
+        _add_server_side(
+            window, [_audit_row(0.1, 140.0, "popularity")], syncs=3000.0, sync_ms=sync_ms
+        )
+        summarize.main([str(window), "--k6-exit", "99", "--postgres-data-on-tmpfs", tmpfs])
+        capsys.readouterr()
+        return dict(json.loads((window / "decision.json").read_text()))
+
+    stalled = build(tmp_path / "stalled", sync_ms=9000.0, tmpfs="no")
+    healthy = build(tmp_path / "healthy", sync_ms=600.0, tmpfs="yes")
+
+    assert stalled["storage_stall"] is True
+    assert healthy["storage_stall"] is False
+    assert {key: value for key, value in stalled.items() if key not in storage_keys} == {
+        key: value for key, value in healthy.items() if key not in storage_keys
+    }
+    assert stalled["remeasure"] is True
+    assert healthy["remeasure"] is True
 
 
 def test_explicit_evidence_paths_override_the_window_defaults(

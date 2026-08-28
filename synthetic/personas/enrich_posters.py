@@ -99,6 +99,11 @@ CANONICAL_FIELD_ORDER = (
     "release_year",
     "poster_url",
     "overview",
+    # Written by ``enrich_details.py``, not by this script. It is named here so
+    # both passes agree on where the object sits, and a poster run over an
+    # already-enriched entry re-renders the line it found rather than moving a
+    # field it does not own.
+    "details",
 )
 
 
@@ -141,7 +146,7 @@ class CatalogEntry:
         value = self.data.get("overview")
         return str(value) if value is not None else None
 
-    def set_fields(self, **fields: str) -> None:
+    def set_fields(self, **fields: object) -> None:
         """Apply fields and restore the canonical key order."""
         merged = dict(self.data)
         merged.update(fields)
@@ -453,9 +458,20 @@ class TmdbCatalogClient:
         """Return why a poster URL is unusable, or ``None`` when it resolves."""
         return self._posters.check(url)
 
-    def movie(self, tmdb_id: str) -> dict[str, Any] | None:
-        """Return the movie payload, or ``None`` if TMDB does not have that id."""
-        response = self._get(f"/movie/{tmdb_id}", {"language": "en-US"})
+    def movie(
+        self, tmdb_id: str, *, append_to_response: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return the movie payload, or ``None`` if TMDB does not have that id.
+
+        ``append_to_response`` is what keeps the detail pass to one request per
+        title: TMDB returns credits and videos inside the same payload rather
+        than charging two more round trips for them. Omitted by default, so a
+        poster run sends the exact request it always has.
+        """
+        params = {"language": "en-US"}
+        if append_to_response is not None:
+            params["append_to_response"] = append_to_response
+        response = self._get(f"/movie/{tmdb_id}", params)
         if response.status_code == 404:
             return None
         return _json_object(response)

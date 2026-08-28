@@ -1,4 +1,13 @@
-DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml
+# Extra Compose files layered onto the demo stack. Empty everywhere by design;
+# the CI synthetic-load job is the one caller that sets it, to
+# `-f docker-compose.ci-load.yml`, which puts Postgres's data directory on tmpfs
+# so the runner's block device is not part of the latency measurement (ADR 0010,
+# 2026-08-28). It is a variable rather than a second DEMO_COMPOSE because the
+# override has to apply to *every* demo-* target in that job: a tmpfs data
+# directory starts empty, so a stack seeded without it and measured with it
+# would measure an empty database.
+DEMO_COMPOSE_EXTRA ?=
+DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml $(DEMO_COMPOSE_EXTRA)
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
 # --- Production-mode rehearsal stack ----------------------------------------

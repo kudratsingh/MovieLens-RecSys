@@ -302,6 +302,74 @@ content. A desktop side panel becomes a full page or bottom sheet on mobile.
 **Finish evidence:** Direct URL, opened-from-rail state, missing TMDB metadata,
 rating mutation, watchlist mutation, rejected state, and back-navigation.
 
+### The enriched record
+
+`MovieDetailResponse.item` carries a nullable `details` block — tagline,
+runtime, backdrop, TMDB score, directors, up to six billed cast, and one
+trailer. The **list** endpoint does not: a Browse page of forty titles dragging
+forty cast lists and backdrops through the response is a page-size regression
+nobody asked for, and the API keeps that split in the type system rather than in
+a review comment.
+
+Everything in the block is optional, so the page is written the other way round
+from the usual: **the degraded page is the base case** — poster left, identity
+right, exactly what this route rendered before enrichment existed — and each
+field that is present upgrades one region. A record with no `details` shows no
+empty frames where a backdrop or a cast row would have gone, and each individual
+gap is silent rather than labelled. That is a deliberate difference from the
+missing-synopsis rule: a missing synopsis is named because the reader is looking
+for one, while "Runtime unavailable" beside a movie is noise.
+
+| Field | Where it goes | When it is absent |
+|---|---|---|
+| `backdrop_url` | A wash behind the hero, under a veil that ends on `--surface-canvas` and is darkest on the copy side | The hero is the poster-left layout it always was |
+| `tagline` | Under the title, in the display face, italic — it is the studio's own sentence about the film and belongs with the name, not with the synopsis | Nothing |
+| `runtime_minutes` | Joins the existing meta line: `2016 · 2h 25m · Thriller · Drama` | The meta line reads as before |
+| `tmdb_rating` | `8.1 / 10 · 4,812 ratings`, the count always travelling with the average | Nothing; a zero count is no score, not "0 ratings" |
+| `trailer` | A poster-framed `Play trailer` plate, below the hero | No section at all |
+| `directors`, `cast` | A `Cast and crew` block; the cast is a horizontal scroller with a monogram where a portrait is missing | No block |
+
+**The trailer loads nothing until it is pressed.** The plate is drawn from
+artwork the page already holds — the backdrop, or the poster — precisely because
+the common "lite embed" pattern shows YouTube's own thumbnail, which is a
+YouTube request made on behalf of every viewer of every movie page. Pressing it
+builds a `youtube-nocookie.com` embed with a visible title, closable by button
+or Escape, returning focus to the plate. The promise is asserted two ways in
+`e2e/movie-detail.spec.ts`: no `iframe`, and no request to the embed host.
+
+**Attribution.** A `Details from TMDB` line, with the TMDB mark and the required
+non-endorsement sentence, sits with the enriched fields it covers. It is scoped
+to those fields and does not stand in for shell-level attribution.
+
+### Rating
+
+Movie detail owns the product's one **large** rating control
+(`components/movie/rating-stars.tsx`); every other surface keeps the compact
+editor. The difference is that detail is where rating is the decision rather
+than an incidental edit, and it earns three behaviours the small editor has no
+room for.
+
+- **It previews.** Hover and keyboard focus fill the row from the left. The row
+  is one tab stop with arrow-key selection, so reaching `Clear rating` costs one
+  stop rather than five.
+- **It acknowledges, after the commit.** Stars fill left to right one
+  `--motion-stagger` apart, the chosen star pops once over `--motion-pop` with a
+  glow that fades, and then the row folds into a chip. The optimistic frame
+  fills the row so a press has an immediate answer, but the celebration waits
+  for the API: celebrating a write that can still roll back is exactly the lie
+  the commit-before-acknowledge rule exists to prevent. Under
+  `prefers-reduced-motion` the sequence is skipped and the result is identical.
+- **It collapses.** `You rated 4/5 · Change rating`. Five large controls for a
+  decision already made are five chances to change it by accident, and a movie
+  that arrives already rated opens collapsed for the same reason.
+  `Change rating` reopens the row pre-filled from what is *stored*, with focus
+  on that value; `Clear rating` lives inside the reopened row, one deliberate
+  step away from a value somebody recorded.
+
+The panel keeps one honest sentence under the control, per ADR 0012: rating
+records a watch, and the star value is display feedback rather than a graded
+training signal.
+
 ## `/quick-picks` — Rapid preference collection
 
 **User and job:** Classify several movies quickly to create or refine a useful

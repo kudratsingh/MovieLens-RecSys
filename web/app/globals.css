@@ -32,6 +32,17 @@
   --degraded: #a89bc6;
   --poster-fallback: #29251f;
   --poster-overlay: rgba(9, 8, 7, 0.78);
+  /*
+   * One gold for "a rating exists". It is deliberately brighter than
+   * `--warning`, which has to read as caution on a status line: a star is not a
+   * warning, and at 4.5:1 amber the row looked switched off next to the coral
+   * accent. The same value carries the aggregate TMDB score, so the page has a
+   * single colour meaning "someone scored this" — theirs at the top, yours in
+   * the rating panel — and coral stays reserved for navigation and identity.
+   */
+  --rating-star: #ffc94d;
+  --rating-star-idle: #7d7568;
+  --rating-star-glow: rgba(255, 201, 77, 0.42);
   --font-body: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --space-1: 0.25rem;
@@ -49,7 +60,21 @@
   --radius-lg: 1.25rem;
   --motion-fast: 120ms;
   --motion-standard: 220ms;
+  /*
+   * The acknowledgement pair. `--motion-pop` is the one overshoot in the
+   * product and `--ease-pop` is the only easing that leaves 0–1: both exist for
+   * the moment a rating commits, where the point is that the press *landed*.
+   * `--motion-collapse` is the same gesture running the other way — a control
+   * folding into the summary of what it recorded — and `--motion-stagger` is
+   * the gap between two stars filling, small enough to read as one sweep rather
+   * than five events. The JS that drives the sequence imports the same numbers
+   * from `components/movie/rating-stars.tsx`; if these change, change both.
+   */
+  --motion-stagger: 40ms;
+  --motion-pop: 280ms;
+  --motion-collapse: 200ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
   /*
    * Elevation. A cast shadow does very little work on a #0b0a09 ground — a
    * dark poster on the canvas reads as a hole rather than as an object — so the

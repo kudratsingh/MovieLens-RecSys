@@ -134,7 +134,11 @@ export const catalogResponse: CatalogResponse = {
 };
 
 export const movieDetailResponse: MovieDetailResponse = {
-  item: catalogResponse.items[0],
+  // Detail's item type carries `details`; the list items above deliberately do
+  // not. A `null` here is the common case in the reviewed snapshot — most
+  // titles have no enriched TMDB record — and it is the value the degraded
+  // detail layout is built around.
+  item: { ...catalogResponse.items[0], details: null },
   tenant_id: "demo",
   user_id: 900000101,
 };

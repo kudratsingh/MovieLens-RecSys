@@ -30,6 +30,11 @@
 #                      audit's latency_ms is timed around the handler only, so
 #                      k6 minus handler is the share spent outside it.
 #
+# It also records which medium Postgres's data directory was on, so an evidence
+# directory says what it measured rather than leaving that to be inferred from
+# the job that produced it. CI layers docker-compose.ci-load.yml and gets tmpfs;
+# a laptop run gets Docker's volume driver unless that file is passed too.
+#
 # Two workloads use this wrapper:
 #
 #   recommendations  the pinned p99 gate (non-negotiables #4/#11). k6's exit
@@ -149,6 +154,36 @@ capture() {
 			fi
 		} >> "$LOAD_RESULTS_DIR/cpu-stat-$when.txt"
 	done
+}
+
+# Which medium Postgres's data directory is on for this run: `yes` for tmpfs,
+# `no` for anything else, `unknown` when there is no container to ask.
+#
+# Every request commits a durable audit row before it answers, so the device
+# under the WAL is inside every percentile this gate reports. The CI load job
+# takes the runner's disk out of the measurement by layering
+# docker-compose.ci-load.yml (see ADR 0010's 2026-08-28 note); nothing else
+# does. Reading it back from the container rather than from the caller's
+# intent is what lets the breakdown state which of the two it measured.
+pgdata_storage() {
+	# shellcheck disable=SC2086
+	container=$($DEMO_COMPOSE --profile load ps -q postgres 2>/dev/null || true)
+	if [ -z "$container" ]; then
+		echo unknown
+		return 0
+	fi
+	# Both spellings, because Compose has two: a long-syntax `type: tmpfs`
+	# entry shows up in .Mounts, while the short `tmpfs:` key lands only in
+	# HostConfig.Tmpfs. Ranging over a nil map yields nothing, so the second
+	# half is silent when the first one answered.
+	found=$(docker inspect --format \
+		'{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Type}} {{end}}{{end}}{{range $target, $opts := .HostConfig.Tmpfs}}{{if eq $target "/var/lib/postgresql/data"}}tmpfs {{end}}{{end}}' \
+		"$container" 2>/dev/null || true)
+	case "$found" in
+		*tmpfs*) echo yes ;;
+		"") echo unknown ;;
+		*) echo no ;;
+	esac
 }
 
 # fdatasync latency on the filesystem Postgres commits to. Runs in a throwaway
@@ -297,6 +332,7 @@ summarize_window() {
 	# shellcheck disable=SC2086
 	"$PYTHON" synthetic/load/summarize.py "$window_dir" \
 		--workload "$LOAD_WORKLOAD" --k6-exit "$k6_exit" $advisory \
+		--postgres-data-on-tmpfs "$PGDATA_STORAGE" \
 		--disk-fsync "$window_dir/disk-fsync.jsonl" \
 		--server-side "$window_dir/server-side.json" \
 		--server-side-before "$window_dir/server-side-before.json" "$@" \
@@ -310,6 +346,11 @@ verdict_of() {
 		echo 1
 	fi
 }
+
+# Read once: postgres is not recreated between windows, and both windows are
+# summarized against the same fact.
+PGDATA_STORAGE=$(pgdata_storage)
+echo "$PGDATA_STORAGE" > "$LOAD_RESULTS_DIR/postgres-storage.txt"
 
 capture before
 run_window window-1
