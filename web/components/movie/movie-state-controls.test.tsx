@@ -359,3 +359,83 @@ describe("the rating editor says the same thing in both input shapes", () => {
     expect(onRate.mock.calls[1][1]).toBe(select);
   });
 });
+
+describe("rail density shortens the word, never the action", () => {
+  it("keeps the full action as the accessible name while the visible label fits one line", () => {
+    const { rerender } = render(
+      <MovieStateControls
+        compact
+        controls={RECOMMENDATION_CONTROLS}
+        idPrefix="rail-6"
+        onAction={vi.fn()}
+        state={unknown}
+        title="Heat"
+      />,
+    );
+
+    // `Mark watched` is what a screen reader, speech input, and every journey
+    // that asks for this control by name still get; `Watched` is only what the
+    // pill has room to print at a rail card's width.
+    const watched = screen.getByRole("button", { name: "Mark watched" });
+    expect(watched).toHaveTextContent("Watched");
+    expect(watched).toHaveAttribute("aria-pressed", "false");
+
+    rerender(
+      <MovieStateControls
+        compact
+        controls={RECOMMENDATION_CONTROLS}
+        idPrefix="rail-6"
+        onAction={vi.fn()}
+        state={{ ...unknown, watchlisted: true }}
+        title="Heat"
+      />,
+    );
+
+    const saved = screen.getByRole("button", { name: "In watchlist" });
+    // The visible word does not change with the state, so the pill cannot
+    // change width and the row cannot jiggle under the viewer.
+    expect(saved).toHaveTextContent("Watchlist");
+    expect(saved).toHaveAttribute("aria-pressed", "true");
+    expect(saved).toHaveClass("movie-state-on");
+  });
+
+  it("leaves every other surface's labels exactly as they were", () => {
+    render(
+      <MovieStateControls
+        controls={RECOMMENDATION_CONTROLS}
+        idPrefix="featured-6"
+        onAction={vi.fn()}
+        state={{ ...unknown, watchlisted: true }}
+        title="Heat"
+      />,
+    );
+
+    const labels = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent?.trim());
+    expect(labels).toEqual(["In watchlist", "Mark watched", "Not for me"]);
+    expect(screen.getByRole("button", { name: "Mark watched" })).not.toHaveAttribute(
+      "aria-label",
+    );
+  });
+
+  it("marks a recorded watch as recorded rather than as still in flight", async () => {
+    const { container } = render(
+      <MovieStateControls
+        compact
+        controls={RECOMMENDATION_CONTROLS}
+        idPrefix="rail-7"
+        onAction={vi.fn()}
+        state={{ ...unknown, watched: true }}
+        title="Heat"
+      />,
+    );
+
+    const watched = screen.getByRole("button", { name: "Watched" });
+    expect(watched).toHaveAttribute("aria-disabled", "true");
+    expect(watched).toHaveAttribute("aria-busy", "false");
+    // The class the stylesheet keys the non-faded, non-`progress` look off.
+    expect(watched).toHaveClass("movie-state-recorded");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});

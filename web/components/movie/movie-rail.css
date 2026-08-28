@@ -28,12 +28,24 @@
 .rail-track {
   display: grid;
   gap: clamp(0.75rem, 2vw, 1.25rem);
-  grid-auto-columns: minmax(9rem, 13.5rem);
+  /*
+   * The minimum is what actually sizes a full rail: nine cards never fit their
+   * 13.5rem maximum, so every card lands on the floor. At 9rem that floor was
+   * a 144px card, which is where `Mark watched` ran out of pill and wrapped
+   * onto a second line. 11.75rem is the narrowest card that holds two labelled
+   * controls side by side with slack for a wider system font, and it still
+   * shows six and a half posters at 1440 — enough that the rail continues past
+   * the fold, which is the only thing the width had to buy.
+   */
+  grid-auto-columns: minmax(11.75rem, 13.5rem);
   grid-auto-flow: column;
   margin-inline: calc(clamp(1rem, 4vw, 4rem) * -1);
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  padding: 0.2rem clamp(1rem, 4vw, 4rem) 1.25rem;
+  /* The top padding is headroom for the hover lift and its shadow. An
+     overflow-x container resolves overflow-y to `auto`, so without it a lifted
+     card either clips or gives the track a vertical scrollbar. */
+  padding: 0.75rem clamp(1rem, 4vw, 4rem) 1.25rem;
   scroll-padding-inline: clamp(1rem, 4vw, 4rem);
   scroll-snap-type: inline proximity;
   scrollbar-color: var(--border-strong) transparent;
@@ -48,15 +60,151 @@
     display: none;
   }
 
+  /*
+   * Sized in rem rather than in `42vw`, because what the card has to hold is
+   * two 44px controls side by side and a viewport percentage does not know
+   * that. At the old 8.8rem floor they stacked into a three-high tower taller
+   * than the poster above it. This still leaves the next card visibly cut at
+   * the right edge, which is the continuation signal the rail owes a reader.
+   */
   .rail-track {
-    grid-auto-columns: minmax(8.8rem, 42vw);
+    grid-auto-columns: minmax(12rem, 12.75rem);
   }
 }
 
-/* Live rails put a control under each poster; the track sizes the wrapper. */
+/*
+ * Live rails put a control row under each poster, and the row has to sit at
+ * the same height on every card in the track — a one-line title next to a
+ * two-line title used to leave two neighbouring `Watchlist` pills at different
+ * heights, which is what made the row read as ragged.
+ *
+ * Two things hold that line, and both are wanted. The reserved two-line title
+ * block in `poster-card.css` makes every caption the same height in the first
+ * place; this grid pins the controls to the bottom of the cell regardless, so
+ * a card that does pick up an extra line — a degraded-metadata note, a wider
+ * system font — moves its own caption rather than its neighbours' controls.
+ */
 .rail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
+}
+
+/*
+ * The rail's own control density.
+ *
+ * The shared family owns what a control means and what a recorded one looks
+ * like; where it sits and how big it is belong to the surface, the same way the
+ * Browse grid states its own in `catalog-grid.css`. Two pills on one row and
+ * the quiet third action beneath them, rather than the three-high stack of
+ * full-width ovals — one of them two lines tall — that ran to roughly 70% of
+ * the poster's height above it.
+ *
+ * `auto-fit` rather than a fixed pair, so the row answers to the width it
+ * actually has instead of to a viewport breakpoint: the pills sit side by side
+ * wherever a labelled pill fits and stack where one does not, which is what a
+ * 320px sweep or a wider system font needs. Each pill is `1fr`, so it is
+ * exactly half the card whatever its label says — saving a movie cannot change
+ * a pill's width, and the row cannot jiggle under the viewer.
+ */
+.rail-item .movie-state-row {
+  display: grid;
+  gap: 0.3rem 0.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr));
+}
+
+.rail-item .movie-state-row button {
+  font-size: 0.72rem;
+  gap: 0.3rem;
+}
+
+.rail-item .movie-state-watchlist,
+.rail-item .movie-state-watched {
+  min-height: 2.05rem;
+  padding: 0.3rem 0.4rem;
+}
+
+/* A raised chip rather than a hole cut in the page: a hairline top highlight
+   and a shallow shadow are what separate a control from a near-black ground. */
+.rail-item .button-secondary {
+  background: linear-gradient(var(--surface-raised), var(--surface-base));
+  box-shadow: var(--elevation-1), inset 0 1px 0 var(--edge-highlight);
+}
+
+.rail-item .button-secondary:hover:not([aria-disabled="true"]) {
+  background: linear-gradient(
+    color-mix(in srgb, var(--accent) 12%, var(--surface-overlay)),
+    var(--surface-raised)
+  );
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+  box-shadow: var(--elevation-2), inset 0 1px 0 var(--edge-highlight);
+}
+
+/*
+ * A recorded state borrows the accent at low alpha rather than filling with it.
+ * On a rail of nine cards a solid coral pill per saved movie would out-shout
+ * the posters; a tinted chip with a coral edge is unmistakable beside its
+ * untinted neighbours without competing with the artwork.
+ */
+.rail-item .movie-state-on.button-primary,
+.rail-item .movie-state-on.button-secondary {
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  box-shadow: none;
+  color: var(--text-primary);
+}
+
+/* State is carried by the mark as well as by the fill, so the difference
+   survives greyscale, forced colours, and a viewer who does not see coral. */
+.rail-item .movie-state-watchlist.movie-state-on svg {
+  color: var(--accent-strong);
+  fill: currentColor;
+}
+
+.rail-item .movie-state-watched.movie-state-on svg {
+  background: var(--accent);
+  border-radius: 999px;
+  color: var(--text-inverse);
+  padding: 0.1rem;
+}
+
+.rail-item .movie-state-dismissal.movie-state-on {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.rail-item .movie-state-row svg {
+  flex: 0 0 auto;
+  height: 0.95rem;
+  width: 0.95rem;
+}
+
+.rail-item .movie-state-dismissal {
+  grid-column: 1 / -1;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.4rem;
+}
+
+/* The quiet action had no hover state at all, so the third decision on a card
+   read as a caption rather than as something a viewer could press. */
+.rail-item .movie-state-dismissal:hover:not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--surface-raised) 85%, transparent);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+/*
+ * On the narrow profile every control on the card is a thumb target, so all
+ * three go to 44px and the type comes up with them. A width query rather than
+ * `pointer: coarse` on purpose: the responsive Playwright matrix emulates
+ * viewport size, not input, so a pointer query would leave the mobile run
+ * measuring desktop-sized targets.
+ */
+@media (max-width: 520px) {
+  .rail-item .movie-state-row button {
+    font-size: 0.76rem;
+    min-height: 2.75rem;
+    padding-inline: 0.35rem;
+  }
 }

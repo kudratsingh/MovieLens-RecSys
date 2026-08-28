@@ -1,5 +1,39 @@
 .poster-card {
   min-width: 0;
+  /* The caption's type scale is a card-level variable so the reserved title
+     block below can be derived from it rather than restated as a magic pixel
+     height that silently stops matching when the font size changes. */
+  --poster-title-size: 0.9rem;
+  --poster-title-leading: 1.25;
+}
+
+/*
+ * A compact card stretches: the poster and caption take the top of the cell and
+ * whatever is placed under the card — a rail's control row — is pushed to the
+ * bottom. That is what keeps neighbouring cards' controls on one baseline even
+ * if a caption picks up an extra line the reservation below did not anticipate.
+ */
+.poster-card-compact {
+  --poster-title-size: 0.82rem;
+  --poster-title-leading: 1.2;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* A rail caption is a label for a poster, not a paragraph: it earns the two
+   reserved title lines and one metadata line, and nothing else. */
+.poster-card-compact .poster-card-copy {
+  padding-top: 0.5rem;
+}
+
+.poster-card-compact .poster-meta {
+  font-size: 0.68rem;
+  margin-top: 0.22rem;
+}
+
+.poster-card-compact .poster-card-link {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 /*
@@ -17,14 +51,27 @@
   background: var(--poster-fallback);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  box-shadow: var(--elevation-1);
   display: block;
   overflow: hidden;
   position: relative;
   text-decoration: none;
+  transition:
+    border-color var(--motion-standard) var(--ease-out),
+    box-shadow var(--motion-standard) var(--ease-out),
+    transform var(--motion-standard) var(--ease-out);
 }
 
+/*
+ * One pseudo-element, two jobs: the scrim that keeps the open cue legible over
+ * bright artwork, and the top edge highlight from the elevation scale. It has
+ * to be painted here rather than as an inset shadow on the frame, because the
+ * frame clips an image that would cover it.
+ */
 .poster-frame::after {
   background: linear-gradient(transparent 58%, var(--poster-overlay));
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 var(--edge-highlight);
   content: "";
   inset: 0;
   opacity: 0.78;
@@ -48,22 +95,47 @@
   opacity: 1;
 }
 
-.rank-badge {
-  align-items: center;
-  background: var(--surface-inverse);
-  border-radius: 999px;
-  color: var(--text-inverse);
-  display: flex;
-  font-size: 0.65rem;
-  font-weight: 850;
-  height: 2rem;
-  justify-content: center;
-  left: 0.65rem;
-  min-width: 2rem;
-  padding: 0 0.45rem;
-  position: absolute;
-  top: 0.65rem;
-  z-index: 2;
+/*
+ * Under the pointer the poster gains a step of elevation and a warm spill, so
+ * the response is a change in temperature as much as in depth — the same coral
+ * the featured slot's primary action is painted in. The lift itself is the only
+ * part that moves, so it is the only part behind the motion query; a reduced-
+ * motion viewer still gets the whole shadow and border response.
+ */
+.poster-card-link:hover .poster-frame,
+.poster-card-link:focus-visible .poster-frame {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+  box-shadow: var(--elevation-3), var(--elevation-spill);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .poster-card-link:hover .poster-frame,
+  .poster-card-link:focus-visible .poster-frame {
+    transform: translateY(-4px);
+  }
+}
+
+/*
+ * The rank, hanging in the caption gutter in the display serif.
+ *
+ * It is set in the same face as the section titles and the featured movie's
+ * name, which nothing else inside a card uses: a ranked rail should look like
+ * an edited countdown rather than a grid of tiles wearing numbered stickers.
+ * Lining tabular figures keep `9` and `10` on the same vertical.
+ */
+.poster-rank {
+  align-self: baseline;
+  color: var(--accent-strong);
+  font-family: var(--font-display), Georgia, serif;
+  font-size: calc(var(--poster-title-size) * 1.45);
+  font-variant-numeric: lining-nums tabular-nums;
+  grid-column: 1;
+  grid-row: 1;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  /* The gutter is padding on the numeral rather than a column gap, so a card
+     with no rank — Browse, Library, detail — has no phantom indent. */
+  padding-right: 0.4rem;
 }
 
 .poster-open-cue {
@@ -122,22 +194,35 @@
   text-transform: uppercase;
 }
 
+/*
+ * Rank, title, and the watchlist mark share the first row; the metadata line
+ * and any degraded-source note run under the title, clear of the rank gutter.
+ */
 .poster-card-copy {
-  align-items: flex-start;
-  display: flex;
-  gap: 0.5rem;
-  justify-content: space-between;
-  padding-top: 0.75rem;
+  align-items: start;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding-top: 0.6rem;
 }
 
 .poster-title {
+  align-self: baseline;
   color: var(--text-primary);
   display: -webkit-box;
-  font-size: 0.9rem;
+  font-size: var(--poster-title-size);
   font-weight: 720;
-  line-height: 1.25;
+  grid-column: 2;
+  grid-row: 1;
+  line-height: var(--poster-title-leading);
   overflow: hidden;
   text-decoration: none;
+  /*
+   * Two lines are always reserved, whether the title needs one or two. That is
+   * what puts every card's caption — and therefore every card's control row —
+   * at the same height across a rail, instead of letting `Toy Story` and
+   * `To Kill a Mockingbird` set two different baselines side by side.
+   */
+  min-height: calc(var(--poster-title-size) * var(--poster-title-leading) * 2);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -154,6 +239,14 @@
   margin: 0.3rem 0 0;
 }
 
+/* One line, ellipsised: a wrapped genre would undo the reserved caption. */
+.poster-meta {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .poster-reason {
   color: var(--text-secondary);
   display: -webkit-box;
@@ -165,11 +258,16 @@
 }
 
 .poster-state {
+  align-self: start;
   color: var(--accent-strong);
-  flex: 0 0 auto;
+  grid-column: 3;
+  grid-row: 1;
+  padding-left: 0.4rem;
 }
 
+/* Saved is a filled mark, not only a coral one. */
 .poster-state svg {
+  fill: currentColor;
   height: 1rem;
   width: 1rem;
 }
@@ -187,6 +285,7 @@
 .poster-metadata-note {
   color: var(--degraded);
   font-size: 0.68rem;
+  grid-column: 2 / -1;
   letter-spacing: 0.04em;
   margin: 0.3rem 0 0;
 }
