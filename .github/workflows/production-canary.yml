@@ -64,7 +64,31 @@ jobs:
       DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
       DEPLOY_USER: ${{ vars.DEPLOY_USER }}
     steps:
+      # The schedule starts firing the moment this file lands on main, which is
+      # before any host exists. A canary that goes red every thirty minutes for
+      # a deployment nobody has created yet trains everyone to ignore it, so an
+      # environment with *nothing* configured is treated as "not yet", and the
+      # run ends as a green no-op with a notice. A *partially* configured
+      # environment is a different thing — a secret that was deleted, a
+      # variable that was mistyped — and that still fails loudly below, because
+      # silence there would be the canary quietly ceasing to exist.
+      - name: Decide whether a production host exists yet
+        id: configured
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ] && [ -z "${DEPLOY_USER}" ] \
+            && [ -z "${DEPLOY_SSH_KEY}" ] && [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::notice::No production host is configured yet (the production-canary environment carries none of DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS). The canary is dormant until docs/deployment-runbook.md section 6 is done."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Open an SSH agent holding the deploy key
+        if: steps.configured.outputs.configured == 'true'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -102,6 +126,7 @@ jobs:
       # clean zero.
       - name: Run the verification matrix
         id: verify
+        if: steps.configured.outputs.configured == 'true'
         run: |
           set -euo pipefail
 
@@ -153,7 +178,7 @@ jobs:
       # 0014 names as the follow-up exists, because until then this profile's
       # refusals measure the limiter and not the service.
       - name: Run the advisory loadcheck
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_loadcheck }}
+        if: ${{ !cancelled() && steps.configured.outputs.configured == 'true' && github.event_name == 'workflow_dispatch' && inputs.run_loadcheck }}
         run: |
           set -euo pipefail
 
@@ -210,5 +235,5 @@ jobs:
           fi
 
       - name: Close the SSH agent
-        if: always()
+        if: always() && steps.configured.outputs.configured == 'true'
         run: ssh-agent -k > /dev/null 2>&1 || true
