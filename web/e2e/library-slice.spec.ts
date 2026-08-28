@@ -99,7 +99,7 @@ test("each collection owns its URL state and its own copy", async ({ page }) => 
   await expect(page.getByText(/Saving is organizational only/)).toBeVisible();
   await expect(page.getByRole("list", { name: "Watchlist movies" })).toBeVisible();
 
-  await page.getByRole("tab", { name: "History 15" }).click();
+  await page.getByRole("tab", { name: "Seen 15" }).click();
   await expect(page).toHaveURL(/tab=history/);
   await expect(page.getByText(/Watched titles are the positive interactions/)).toBeVisible();
 });
@@ -107,7 +107,7 @@ test("each collection owns its URL state and its own copy", async ({ page }) => 
 test("history appends its next page without repeating a row", async ({ page }) => {
   await page.goto("/ui-preview/library?tab=history");
 
-  const rows = page.getByRole("list", { name: "History movies" }).getByRole("listitem");
+  const rows = page.getByRole("list", { name: "Seen movies" }).getByRole("listitem");
   await expect(rows).toHaveCount(12);
 
   await page.getByRole("button", { name: "Load more" }).click();
@@ -163,4 +163,133 @@ test("primary controls stay thumb-sized on a narrow screen", async ({ page }, te
     .getByRole("button", { name: "Mark watched" });
   const box = await button.boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+});
+
+/**
+ * The Seen tab: an evolution of History, not a new route.
+ *
+ * `history` is still the URL value, the API value, and the tab's identity in
+ * the type — only what the reader sees changed. What is new is the spotlight
+ * above the list and the search, genre, year and ranking controls beside it,
+ * and all of them walk the same page of rows the list shows.
+ */
+test("Seen leads with one title at a time, walking the list it sits above", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/library?tab=history");
+
+  const spotlight = page.getByRole("region", { name: "Seen spotlight" });
+  await expect(spotlight).toBeVisible();
+  await expect(spotlight.getByText("1 of 15", { exact: true })).toBeVisible();
+  // The spotlight's title is the list's first row, because it is the list.
+  const first = await spotlight.getByRole("heading", { level: 3 }).innerText();
+  const rows = page.getByRole("list", { name: "Seen movies" }).getByRole("listitem");
+  await expect(rows.first()).toContainText(first);
+  await expect(spotlight.getByRole("button", { name: "Previous seen title" })).toBeDisabled();
+
+  await spotlight.getByRole("button", { name: "Next seen title" }).click();
+  await expect(spotlight.getByText("2 of 15", { exact: true })).toBeVisible();
+  await expect(spotlight.getByRole("heading", { level: 3 })).not.toHaveText(first);
+  await expect(spotlight.getByRole("button", { name: "Previous seen title" })).toBeEnabled();
+
+  // The arrow keys move it too, and focus stays on the pressed control so a
+  // repeated press keeps working.
+  await page.keyboard.press("ArrowRight");
+  await expect(spotlight.getByText("3 of 15", { exact: true })).toBeVisible();
+  await expect(spotlight.getByRole("button", { name: "Next seen title" })).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(spotlight.getByText("2 of 15", { exact: true })).toBeVisible();
+
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test("the enriched fields arrive on top of a card that is already complete", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/library?tab=history");
+  const spotlight = page.getByRole("region", { name: "Seen spotlight" });
+
+  // Runtime and the crowd score come from the detail record; the title, the
+  // year and the seen-on date never waited for them.
+  await expect(spotlight.getByText(/^Seen on /)).toBeVisible();
+  await expect(spotlight.getByText("8.1 / 10 · 4,812 ratings")).toBeVisible();
+  await expect(spotlight.getByText(/2h 25m/)).toBeVisible();
+});
+
+test("Seen offers the filters and the rankings the collection can answer", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/library?tab=history");
+
+  // Located by id: both controls are wrapped labels, and a select's accessible
+  // name picks up its selected option's text as well as the label's.
+  const sort = page.locator("#library-sort");
+  await expect(sort.locator("option")).toHaveText([
+    "Most recent",
+    "Title",
+    "Highest rated",
+    "Newest release",
+    "Highest TMDB score",
+  ]);
+
+  await page.locator("#library-genre").selectOption("Animation");
+  await expect(page).toHaveURL(/genre=Animation/);
+  const rows = page.getByRole("list", { name: "Seen movies" }).getByRole("listitem");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("Perfect Blue");
+  // The spotlight walks the filtered list, so it says what the filter left.
+  await expect(
+    page.getByRole("region", { name: "Seen spotlight" }).getByText("1 of 1", {
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  await sort.selectOption("tmdb");
+  await expect(page).toHaveURL(/sort=tmdb/);
+  // The filter still stands, and a title the snapshot never scored prints
+  // nothing in the mark's place rather than an "unscored" label.
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).not.toContainText("TMDB");
+
+  await page.locator("#library-genre").selectOption("");
+  await expect(page).not.toHaveURL(/genre=/);
+  // Highest crowd score first, with the score printed beside the row it belongs
+  // to — the ordering and the mark read the same field, so they cannot disagree.
+  await expect(rows.first()).toContainText("Parasite");
+  await expect(rows.first()).toContainText("TMDB 8.5");
+});
+
+test("a year range that matches nothing says so, and offers a way back", async ({
+  page,
+}) => {
+  await page.goto("/ui-preview/library?tab=history&year_from=1900&year_to=1910");
+
+  await expect(page.getByText("No matches in this collection")).toBeVisible();
+  await expect(page.getByText("Nothing in Seen matches these filters.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Seen spotlight" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByRole("list", { name: "Seen movies" })).toBeVisible();
+  await expect(page).not.toHaveURL(/year_from/);
+});
+
+test("a page link that no longer matches the view restarts from the top", async ({
+  page,
+}) => {
+  // A cursor is bound to the query fingerprint it was issued under, so this one
+  // — kept from a differently sorted view — is a `400` the route recovers from
+  // rather than an outage it reports.
+  await page.goto("/ui-preview/library?tab=history&cursor=recorded%3A12%3Astale-view");
+
+  await expect(
+    page.getByText(
+      "That page link no longer matches this view, so the list starts from the beginning.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("list", { name: "Seen movies" })).toBeVisible();
+  await expect(page).not.toHaveURL(/cursor=/);
+  // Recovered, not reported: the collection region never renders its failure.
+  await expect(
+    page.getByRole("alert", { name: /Seen collection could not be loaded/ }),
+  ).toHaveCount(0);
 });
