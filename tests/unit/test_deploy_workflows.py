@@ -602,3 +602,24 @@ def test_the_sentinel_match_rejects_a_partial_verify_run(canary: dict[str, Any])
     # VERIFY-SUBSET-OK, and must not be read as a full pass.
     assert not matches(VERIFY_SUBSET_SENTINEL)
     assert not matches("not-VERIFY-OK-either")
+
+
+def test_the_canary_is_dormant_only_while_nothing_is_configured(canary: dict[str, Any]) -> None:
+    # The schedule fires before any host exists. An environment carrying none of
+    # the four deploy values makes the run a green no-op with a notice; anything
+    # partially configured must still fail loudly, or a deleted secret would turn
+    # the canary into silence.
+    steps = canary["jobs"]["canary"]["steps"]
+    guard = steps[0]
+    assert guard["id"] == "configured"
+    script = guard["run"]
+    for name in ("DEPLOY_HOST", "DEPLOY_USER", "DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"):
+        assert f'-z "${{{name}}}"' in script
+    # Dormancy is the conjunction of all four being empty, never a disjunction.
+    assert script.count("&&") >= 3 and "||" not in script.split("then")[0]
+    assert "configured=false" in script and "configured=true" in script
+    gated = [step for step in steps[1:] if step.get("name") != "Close the SSH agent"]
+    for step in gated:
+        assert "steps.configured.outputs.configured == 'true'" in str(
+            step.get("if", "")
+        ), f"step {step.get('name')!r} runs without the host guard"

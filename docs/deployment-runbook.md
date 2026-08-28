@@ -272,6 +272,11 @@ The second is not redundant: `.github/workflows/production-canary.yml` runs on a
 required reviewer on a job that fires every thirty minutes means every canary queues for approval —
 that is, no canary at all.
 
+Until this section is done the schedule still fires: with **none** of the four values set the canary
+ends as a green no-op with a notice saying so, and starts verifying the moment they exist. A
+*partially* configured environment — a secret deleted, a variable mistyped — fails loudly instead,
+so a canary can go quiet only by never having been armed, not by breaking.
+
 - `DEPLOY_SSH_KEY` is the **private** half of the key from §3, PEM, newlines included. The workflow
   loads it into an `ssh-agent` for the job's lifetime and never writes it to disk.
 - `DEPLOY_KNOWN_HOSTS` is the box's host key, captured **once** from a machine you trust:
