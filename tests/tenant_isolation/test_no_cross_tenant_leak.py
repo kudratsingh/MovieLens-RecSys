@@ -600,15 +600,22 @@ def test_movie_detail_publishes_shared_facts_and_only_the_callers_own_state(
 def test_movie_detail_state_overlay_survives_a_write_without_crossing_tenants(
     client: TestClient, mint_token: TokenMinter
 ) -> None:
-    """A write through one tenant's detail page is invisible from the other."""
+    """A write through one tenant's detail page is invisible from the other.
+
+    The demo canary already has this title watched at 3.5 stars (the fixture
+    seeds it that way so the overlay test has a rating to read), and a watched
+    title cannot be watchlisted — the API refuses that transition on purpose.
+    So the write that has to stay inside its tenant is a rating change.
+    """
     default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
     demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
 
-    added = client.put(
-        f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/watchlist",
+    rated = client.put(
+        f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/rating",
         headers=demo_headers,
+        json={"rating": 4.5},
     )
-    assert added.status_code == 200
+    assert rated.status_code == 200, rated.text
     try:
         demo_detail = client.get(
             f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}", headers=demo_headers
@@ -619,7 +626,8 @@ def test_movie_detail_state_overlay_survives_a_write_without_crossing_tenants(
 
         assert demo_detail.status_code == 200
         assert default_detail.status_code == 200
-        assert demo_detail.json()["item"]["state"]["watchlisted_at"] is not None
+        assert demo_detail.json()["item"]["state"]["rating"] == 4.5
+        assert demo_detail.json()["item"]["state"]["watched_at"] is not None
         assert demo_detail.json()["item"]["state"]["tenant_id"] == "demo"
         # Same shared title, same details payload, no demo state on it.
         assert default_detail.json()["item"]["details"]["trailer"]["key"] == (
@@ -628,11 +636,12 @@ def test_movie_detail_state_overlay_survives_a_write_without_crossing_tenants(
         assert default_detail.json()["item"]["state"] is None
         assert '"tenant_id":"demo"' not in default_detail.text
     finally:
-        removed = client.delete(
-            f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/watchlist",
+        restored = client.put(
+            f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/rating",
             headers=demo_headers,
+            json={"rating": 3.5},
         )
-        assert removed.status_code == 200
+        assert restored.status_code == 200, restored.text
 
 
 def _item_state(items: list[dict[str, object]], movie_id: int) -> dict[str, object] | None:
