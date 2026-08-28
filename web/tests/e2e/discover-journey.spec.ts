@@ -30,7 +30,9 @@ const DISCOVER = `/discover?userId=${PERSONA_ID}`;
 /** Reads the movie ID the primary card links to, so cleanup can undo it. */
 async function featuredMovieId(page: Page): Promise<number> {
   // Only the primary movie renders an `Open movie` link.
-  const href = await page.getByRole("link", { name: /Open movie/ }).getAttribute("href");
+  const href = await page
+    .getByRole("link", { name: /Open movie/ })
+    .getAttribute("href");
   const match = /\/movies\/(\d+)/.exec(href ?? "");
   expect(match, `expected a movie link, got ${href}`).not.toBeNull();
   return Number(match?.[1]);
@@ -73,14 +75,25 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
   // 1. The primary movie is the first read, and the label follows the response.
   const featured = page.getByRole("heading", { level: 1 });
   await expect(featured).toBeVisible();
+  // Two fallback labels exist on purpose: "Popular while we learn" for a cold
+  // persona, "Popularity fallback" for a warm one the router still sent to the
+  // fallback (an absent model server, an unseeded retrieval). Either is honest
+  // copy for a fallback response; learned copy is the only thing that must
+  // never appear over one.
   await expect(
-    page.getByText(/Popular while we learn|Ranked by the learned model/).first(),
+    page
+      .getByText(
+        /Popular while we learn|Popularity fallback|Ranked by the learned model/,
+      )
+      .first(),
   ).toBeVisible();
 
-  // The two labels are mutually exclusive: whichever policy the router chose,
-  // the other one must not appear anywhere on the page.
+  // The two families are mutually exclusive: whichever policy the router
+  // chose, the other one must not appear anywhere on the page.
   const learned = await page.getByText("Ranked by the learned model").count();
-  const fallback = await page.getByText("Popular while we learn").count();
+  const fallback = await page
+    .getByText(/Popular while we learn|Popularity fallback/)
+    .count();
   expect(learned === 0 || fallback === 0).toBe(true);
   await expect(page.getByText(/because you liked/i)).toHaveCount(0);
 
@@ -95,7 +108,9 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
   // The audit read may succeed or fail depending on which services the demo
   // stack is running; either way it resolves into its own region and the
   // reason above it stays readable.
-  await expect(drawer.getByRole("heading", { name: "Prediction audit" })).toBeVisible();
+  await expect(
+    drawer.getByRole("heading", { name: "Prediction audit" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(featured).toBeVisible();
 
@@ -113,7 +128,9 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
   });
 
   try {
-    const markWatched = page.getByRole("button", { name: "Mark watched" }).first();
+    const markWatched = page
+      .getByRole("button", { name: "Mark watched" })
+      .first();
     await markWatched.click();
 
     // One press is enough on any run, not only the first one against a fresh
@@ -149,9 +166,11 @@ test("sign in, read the served policy, open the evidence, and refresh on feedbac
     // 5. The committed state is durable: an independent read observes it.
     const detail = await page.evaluate(
       async ({ userId, movie }) =>
-        (await fetch(`/api/users/${userId}/movies/${movie}`, { cache: "no-store" }).then(
-          (response) => response.json(),
-        )) as { item?: { state?: { rating?: number; watched_at?: string | null } } },
+        (await fetch(`/api/users/${userId}/movies/${movie}`, {
+          cache: "no-store",
+        }).then((response) => response.json())) as {
+          item?: { state?: { rating?: number; watched_at?: string | null } };
+        },
       { userId: PERSONA_ID, movie: movieId },
     );
     expect(detail.item?.state?.rating).toBe(4);
@@ -224,9 +243,11 @@ test("the first press on a title that already carries state still commits", asyn
     // 4. Durable, not just optimistic.
     const detail = await page.evaluate(
       async ({ userId, movie }) =>
-        (await fetch(`/api/users/${userId}/movies/${movie}`, { cache: "no-store" }).then(
-          (response) => response.json(),
-        )) as { item?: { state?: { watchlisted_at?: string | null } } },
+        (await fetch(`/api/users/${userId}/movies/${movie}`, {
+          cache: "no-store",
+        }).then((response) => response.json())) as {
+          item?: { state?: { watchlisted_at?: string | null } };
+        },
       { userId: PERSONA_ID, movie: movieId },
     );
     expect(detail.item?.state?.watchlisted_at).not.toBeNull();
@@ -241,5 +262,7 @@ test("Discover is not reachable without a session", async ({ page }) => {
   // The door, and it keeps the destination: a deep link that survives sign-in
   // is what S10 fixed, so a bare `/` here would be the regression.
   await expect(page).toHaveURL(/\/\?next=%2Fdiscover/);
-  await expect(page.getByRole("button", { name: "Continue with Keycloak" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue with Keycloak" }),
+  ).toBeVisible();
 });

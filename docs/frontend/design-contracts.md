@@ -116,7 +116,10 @@ and a route into the Library instead.
 - `Top picks for you` — the primary model-ranked list.
 - `Explore [genre]` — a filtered view derived from the user's observable taste
   profile, only when the label can be supported.
-- `Popular while we learn` — cold-start or explicit degraded path.
+- `Popular while we learn` — cold-start: the persona is below the learned-serving threshold.
+- `Popularity fallback` — a warm persona the router still sent to the fallback (the model
+  server unavailable, an unseeded retrieval); it says what happened without claiming the
+  system is still gathering signals it already has.
 
 Do not manufacture separate personalized policies by slicing one list into
 misleading categories. When only one ranked list is available, show one rail
