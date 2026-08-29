@@ -84,6 +84,7 @@ ARTIFACT_AS_OF := 2026-09-01T00:00:00+00:00
 ARTIFACT_PLATFORM ?= linux/amd64
 ARTIFACT_IMAGE ?= movielens-recsys/features:artifacts
 ARTIFACT_DIR ?= infra/model-bundle
+
 # The build reads the ratings table directly as admin_user. The defaults reach
 # the demo Compose stack's Postgres; CI overrides them to reach its own.
 ARTIFACT_NETWORK ?= movielens-demo_default
@@ -118,7 +119,12 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 	-e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 \
 	-e MKL_NUM_THREADS=1 -e VECLIB_MAXIMUM_THREADS=1
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+# --- ADR 0011 cold-start cohort ----------------------------------------------
+# DVC-tracked, regenerable, and picked up automatically by every train-* target
+# that finds it at this path.
+SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
+
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -244,6 +250,16 @@ data-ingest-reset:
 
 eda:
 	python -m notebooks.eda
+
+# ADR 0011's synthetic cold-start cohort. Reads ratings from Postgres, the way
+# every train-* target does, and writes the DVC-tracked parquet the trainers
+# pick up. Deterministic: a regeneration on the same seed and dataset version
+# produces a byte-identical file, so `dvc status` stays clean unless something
+# genuinely changed. On a machine with the CSVs on disk but nothing in
+# Postgres, pass the file instead:
+#   python -m synthetic.cold_start.generator --ratings-csv data/raw/ml-25m/ratings.csv
+synth-cold-cohort:
+	python -m synthetic.cold_start.generator --out $(SYNTH_COLD_PARQUET)
 
 dvc-pull:
 	dvc pull

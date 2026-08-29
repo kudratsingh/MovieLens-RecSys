@@ -88,3 +88,181 @@ Cold-start coverage is measured via a **fixed-seed synthetic cohort of 2 000 use
 - **Regeneration is not deterministic.** Would mean seed + dataset version does not uniquely determine the parquet — some transitive dependency (numpy RNG API changes, a hash function's Python version) leaked in. Fix by pinning the RNG version explicitly and asserting `parquet_hash == expected_hash` in CI.
 - **Standard-error at n = 500 turns out too loose for the claim we actually want to make.** Would mean either the cohort size needs to grow, or the target set size needs to grow. Prefer growing the target set (per rationale #3) — 500 users with 5 targets each gives 2 500 (user, target) pairs at similar wall-cost, and the variance calculation improves.
 - **Cold-item coverage becomes the primary gap.** Would signal that this ADR's scope was too narrow — cold users are only half the cold-start problem. Follow-up ADR extends the same methodology to items.
+
+---
+
+## 2026-08-29 — implementation note: what the harness settled, and what it found
+
+Written when `synthetic/cold_start/` landed. Status stays **Accepted**; nothing
+above is retracted. This records the choices the ADR left open, one deliberate
+deviation from its Consequences, one deferral, and one finding — the first
+thing the cohort measured turned out to falsify a claim this ADR was written to
+check, which is the harness working rather than the harness failing.
+
+### The target is the *first* draw, not the last
+
+The ADR says each user's history and target come from the same
+popularity-weighted draw, with the target excluded from the history. It does
+not say in which order. That turns out to matter. The generator draws
+`history_size + 1` distinct items in one weighted sample-without-replacement
+pass and takes **the first as the target**, the rest as history.
+
+The reason is comparability across buckets, which is the entire point of having
+buckets. In a weighted sample without replacement, the first element has exactly
+the marginal distribution of a single popularity-weighted draw, regardless of
+how many items follow it. Taking the *last* element instead would make bucket
+10's target the eleventh-ranked draw and bucket 0's the first — a systematically
+less popular, therefore harder, target in the deeper buckets. Per-bucket recall
+would then differ partly because of target difficulty rather than history size,
+which is the same class of confound that rationale #6 fixes timestamps to avoid.
+`test_the_target_distribution_does_not_drift_across_buckets` holds the property.
+
+### No Keycloak realm for `synth_cold` — a deviation, recorded
+
+The Consequences section says the tenant arrives as a seeded realm JSON under
+`infra/keycloak/realms/`, alongside `default-realm.json` and `demo-realm.json`.
+It does not. Migration `0015_synth_cold_tenant` registers the row in
+`public.tenants` and stops there.
+
+The ADR's own sentence is the argument against its own conclusion: *"Users don't
+need Keycloak identities — they're used only for offline evaluation, not for
+authenticated API requests."* A realm nobody can log into is an idle
+authentication surface, and it is not free — the realm-drift CI job enumerates
+every realm and compares it to what the stack imports, so a third realm becomes
+a permanent extra row in an inventory that exists to catch drift. The tenant tag
+is the RLS isolation ADR 0008 asks for and it does that job without a realm. If
+a future phase ever needs a synthetic cold user to make an authenticated
+request, the realm is one file and this note is why it wasn't there.
+
+### The Prefect regeneration task is Phase 4 work
+
+Consequences names a `generate_synth_cold_cohort` task in the retraining flow.
+`pipelines/` is empty until Phase 4 — Prefect DAGs are that phase's scope — so
+the regeneration is a Make target (`make synth-cold-cohort`) and the
+idempotency the ADR asks of the task is instead a property of the generator: it
+is deterministic, so a regeneration on an unchanged dataset rewrites a
+byte-identical file and `dvc status` stays clean. When the Prefect flows land,
+the task wraps that target; the "no-op if the hash matches" behaviour is
+already there.
+
+### `MetricPair` is `UserMetrics`, wrapped
+
+The ADR names the new field `synthetic_cold_slices: dict[int, MetricPair]`.
+There is no `MetricPair` in the codebase; the pair of recall and NDCG has been
+`UserMetrics` since Phase 1. The field is
+`dict[int, SyntheticColdSlice]`, where a slice carries the `UserMetrics` plus
+the two counts fallback attribution needs — `n_users` and `n_fallback_served`.
+The latter is `int | None`, not an `int` defaulting to zero, because "no routing
+predicate was supplied" and "the predicate said zero users fell back" are
+different claims and a coverage harness may not blur them. The popularity
+baseline is the case that makes this concrete: it *is* the fallback, has no
+learned path to route to, and so logs per-bucket recall with no routing tag at
+all.
+
+### The finding: the offline models' fallback boundary is not ADR 0001's threshold
+
+This is what the cohort was built to detect, and it fired on first use.
+
+ADR 0001 says *"Cold-start users fall back to the popularity baseline at serving
+time until they cross the threshold"*, and the deployed online path does exactly
+that — `src/serving/recommendations.py` routes on unique watched titles against
+`COLD_START_THRESHOLD = 5`. The four **offline** candidate models do not. Their
+`was_served_by_*` predicates all reduce to *"is this user in the fitted user
+index at all?"* — `_knn is not None and user_id in self._user_to_index` for
+item-item, and the same shape for CF/ALS and the two-tower. A user with a single
+interaction is in that index, so the learned path serves them.
+
+Measured, on the full 25M dataset, with item-item at `K_CANDIDATES = 500`:
+
+| bucket | fallback-served | expected | recall@500 | ndcg@500 |
+|---|---|---|---|---|
+| h0 | 500 | 500 | 0.4760 | 0.0823 |
+| h1 | 0 | 500 | 0.1440 | 0.0264 |
+| h3 | 0 | 500 | 0.2880 | 0.0470 |
+| h10 | 0 | 0 | 0.3900 | 0.0619 |
+
+`synth_cold_routing_ok = false`. Buckets 1 and 3 are the disagreement: users the
+evaluation protocol calls cold, served by the learned path.
+
+The recall column says something the fallback counts alone do not. **A
+1-interaction user scores 0.1440 where the same user routed to the fallback would
+have scored something near h0's 0.4760** — the two buckets differ only in
+history size and routing, since the target distribution is identical across
+buckets by construction (see the target-ordering note above). Serving one watched
+film's cosine neighbours to a user is, on this cohort, roughly three times worse
+than serving them the popular head. h3 recovers to 0.2880 and h10 to 0.3900, a
+monotone climb back toward the fallback but still short of it at ten
+interactions.
+
+Read that with the caveat this ADR's own Risks section insists on: the targets
+are popularity-weighted, so the popularity fallback hits them at the rate
+popularity intersects popularity, and h0 is flattered by construction. The
+comparison that *is* clean is h1 against h0, because those two buckets are
+identical in everything except how many items the user had and which path served
+them. It is evidence for a direction, not a verdict — but it is the first
+evidence there has ever been, which is the point of building the cohort.
+
+Nothing is being quietly repaired here. `expected_fallback_served` derives the
+contract from `COLD_START_THRESHOLD` rather than from whatever a model happens
+to do, so the mismatch stays visible as a number instead of being defined away —
+and the per-bucket counts, the expectation, and the tag all go to MLflow, so the
+run says what was measured next to what should have been. Changing four models'
+routing would move every warm/cold and per-policy metric already logged in
+`phase-1-baselines` and `phase-2-candidates`, which is its own unit of work with
+its own before-and-after, not a side effect of the PR that first measured the
+gap. It is on the Phase 3 platform-track backlog.
+
+It is worth being precise about which of the two behaviours is wrong, because
+that is not yet settled. Serving 1-interaction users from item-item is not
+obviously worse than serving them popularity — one interaction is a real signal
+and the cosine neighbours of one watched film are a defensible recommendation.
+The defect is that two parts of the same system answer "is this user cold?"
+differently while ADR 0001 states one answer, so the offline metrics are not
+measuring the policy production runs. Either the models adopt the threshold or
+ADR 0001 is amended to say that offline retrieval routes on index membership and
+only the serving path applies the threshold. That decision needs a run of both
+to compare, which is precisely what this cohort now makes cheap.
+
+### The popularity baseline is the control, and it comes out flat
+
+`src/training/popularity.py` logs the same buckets with **no routing predicate**
+— `synth_cold_fallback_served_h*` reads `unmeasured` and no `synth_cold_routing_ok`
+tag is set. That is not an omission: `PopularityModel` *is* the fallback, has no
+learned path to route to, and a fallback count for it would be a tautology.
+
+What it does buy is a control. On the same cohort at `K = 10` it scores h0
+0.0340, h1 0.0420, h3 0.0160, h10 0.0240 — non-monotone, and inside roughly
+±0.008 of each other at the ±1 standard error a Bernoulli mean at n = 500 and
+p ≈ 0.03 carries. A single unpersonalized policy serving every bucket produces
+no trend in history size, which is what it should: the only thing that varies
+across buckets for it is how many of a user's own items the seen-filter removes
+from a ten-item window.
+
+That matters for reading the item-item table above. The buckets are not
+intrinsically unequal in difficulty — if they were, this run would slope too.
+So the 0.4760 → 0.1440 → 0.2880 → 0.3900 profile is a property of retrieval and
+routing rather than of the cohort's construction. (The two runs are at different
+K and their *levels* are not comparable; the claim here is only about the
+presence or absence of a slope within each run.)
+
+### Ranker end-to-end coverage is included
+
+`synth_cold_recall_at_k_h*` comes out of `src/training/ranker.py` as well as
+the candidate trainers — the cohort's users are ranked through the same
+candidate → features → LightGBM path as holdout users, at `as_of == split.cutoff`,
+which their `cutoff - 86400` history rows sit strictly before. The ranker's
+routing predicate is its candidate model's, because a ranker only reorders what
+retrieval handed it. Ranker *training* positives are still sampled from the real
+train slice only: the cohort's rows fall inside the trailing sampling window and
+would otherwise be eligible, and a synthetic user is here to be scored, not to
+teach LambdaRank what a group looks like.
+
+### What the first real generation produced
+
+Against MovieLens 25M at `data_version c3ce6309f6f0ec347a9e0a662c640021.dir`,
+split cutoff `1466837397` (train 20 000 075 rows), seed 42: 9 000 rows, 2 000
+users, 7 000 history rows, 1 313 distinct target titles, cohort fingerprint
+`ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2`. Regenerating
+it produced a byte-identical parquet. The 7 000 attached rows are 0.035% of
+train and no cohort user appears in holdout, so the warm/cold metrics every
+earlier run reported are unchanged.

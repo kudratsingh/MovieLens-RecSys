@@ -19,6 +19,7 @@ from src.data.load import load_ratings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K, evaluate
 from src.models.candidates.cf import CFModel
+from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,16 @@ def main() -> None:
         split.cutoff,
     )
 
+    # ADR 0011's cold-start cohort joins the training frame here, if this
+    # machine has it. At most 7 000 rows against ~20 M, and none of its users
+    # appear in holdout, so the warm/cold numbers below are unmoved — the
+    # cohort exists to be routed and scored, not to shift an existing metric.
+    train_frame, cohort = synth_cold.prepare(split, logger=logger)
+
     logger.info("Fitting CF (ALS) model ...")
     model = CFModel()
     t0 = time.perf_counter()
-    model.fit(split.train)
+    model.fit(train_frame)
     fit_seconds = time.perf_counter() - t0
     logger.info(
         "Fit in %.1fs (factors=%d, iters=%d, %d users x %d items)",
@@ -62,20 +69,30 @@ def main() -> None:
     logger.info("Recommending top-%d for each holdout user ...", K)
     t1 = time.perf_counter()
     holdout_user_ids = split.holdout["userId"].unique().tolist()
-    recommendations = model.recommend_for_users(holdout_user_ids, k=K)
+    cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
+    recommendations = model.recommend_for_users(holdout_user_ids + cohort_user_ids, k=K)
     recommend_seconds = time.perf_counter() - t1
     logger.info(
         "Recommended for %d users in %.1fs",
-        len(holdout_user_ids),
+        len(holdout_user_ids) + len(cohort_user_ids),
         recommend_seconds,
     )
 
     logger.info("Building eval inputs ...")
     holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
+    # Counts come from the real train slice, not the cohort-attached frame:
+    # the warm/cold partition is over holdout users, and no synthetic user is
+    # ever looked up in it.
     train_counts = split.train.groupby("userId").size().to_dict()
 
     logger.info("Evaluating ...")
-    result = evaluate(recommendations, holdout, train_counts)
+    result = evaluate(
+        recommendations,
+        holdout,
+        train_counts,
+        synthetic_cold_users=cohort.targets_by_bucket if cohort is not None else None,
+        synthetic_cold_served_by=model.was_served_by_als if cohort is not None else None,
+    )
     logger.info(
         "Warm (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
         result.n_warm_users,
@@ -127,6 +144,9 @@ def main() -> None:
         K,
         result_fallback.overall.ndcg,
     )
+
+    if cohort is not None:
+        synth_cold.log_summary(result, logger=logger, k=K)
 
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
@@ -185,6 +205,12 @@ def main() -> None:
                 "n_fallback_served_users": len(holdout_fallback),
             }
         )
+        if cohort is not None:
+            mlflow.log_params(synth_cold.params(cohort))
+            mlflow.log_metrics(synth_cold.metrics(result, suffix=synth_cold.SUFFIX_AT_K))
+            mlflow.set_tag(
+                synth_cold.ROUTING_TAG, str(synth_cold.routing_is_correct(result)).lower()
+            )
     logger.info("MLflow run logged. Done.")
 
 
