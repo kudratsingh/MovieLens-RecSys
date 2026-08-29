@@ -133,22 +133,28 @@ across 28 days and 2,641 users, and the remaining 19.48% is reserved as test.
 **Offline model metrics.** `src/evaluation/` is the single source of truth — recall@500 for the
 candidate stage, NDCG@10 for the ranker, sliced warm and cold per
 [ADR 0001](docs/adr/0001-evaluation-protocol.md), with `EvalResult.k` stamped on every result so a
-candidate-stage number can never be read as an end-to-end one. **No run's metric values are committed
-to this repository.** MLflow holds them, and quoting a figure here that no file backs would be the
-opposite of what the rest of this README is for. What is on the record, in merged pull requests: cold
-NDCG@10 ≈ 0.49 against warm ≈ 0.03 for both Phase 1 baselines
-([PR #17](https://github.com/kudratsingh/MovieLens-RecSys/pull/17) — cold users rate the canonical
-popular titles, which is exactly why per-policy attribution exists), and the LightGBM ranker at warm
-recall@10 0.033 / NDCG@10 0.048
-([PR #26](https://github.com/kudratsingh/MovieLens-RecSys/pull/26)). The one committed recall@500 is on the
-synthetic cold-start cohort rather than the natural holdout: item-item at history sizes 0/1/3/10
-scores 0.4760 / 0.1440 / 0.2880 / 0.3900 with `synth_cold_routing_ok = false`
-([ADR 0011, 2026-08-29 note](docs/adr/0011-cold-start-coverage.md)). No full-holdout recall@500 for
-item-item or two-tower has been committed anywhere.
+candidate-stage number can never be read as an end-to-end one. The table is one run of each trainer
+on the full 25M rows on 2026-08-29 (single seed, one machine); every figure with its run, wall-clock
+and caveats is in [`docs/results.md`](docs/results.md). Holdout: 1,939 warm users, 702 cold.
 
-> **Results table — pending.** A comparable table across popularity, CF/ALS, item-item, two-tower and
-> the ranker, from fresh runs through the one harness on the one holdout, lands in its own pull
-> request and belongs here.
+| Stage | Model | Warm recall / NDCG | Cold recall / NDCG | Overall recall / NDCG |
+|---|---|---:|---:|---:|
+| Baseline, K = 10 | Popularity | 0.0163 / 0.0309 | 0.0638 / 0.4881 | 0.0290 / 0.1525 |
+| Baseline, K = 10 | CF / ALS | 0.0338 / 0.0578 | 0.0638 / 0.4880 | 0.0418 / 0.1722 |
+| Candidates, K = 500 | Item-item cosine | 0.4001 / 0.1392 | 0.5290 / 0.4392 | 0.4344 / 0.2190 |
+| Ranker, K = 10 | LightGBM LambdaRank | 0.0394 / 0.0554 | 0.0793 / 0.5631 | 0.0500 / 0.1904 |
+
+Three things the table says that a leaderboard would not. Cold NDCG@10 dwarfs warm for every model
+because cold users rate the canonical popular titles — which is why per-policy attribution exists.
+The ranker lifts warm recall@10 by 16.5% over CF/ALS while its warm NDCG@10 *falls* 4.2%, so
+[ADR 0001](docs/adr/0001-evaluation-protocol.md)'s +3% promotion gate clears on the aggregate only
+because of the cold slice; which slice the Phase 4 gate reads is an open decision, and item-item's
+top-500 holds only 56.9% of the ranker's sampled training positives. The two-tower did not finish a
+90-minute CPU budget, so [ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s comparison on the
+full dataset stays open with 0.4001 as the number to beat. On the synthetic cold-start cohort,
+item-item at history sizes 0/1/3/10 scores recall@500 0.4760 / 0.1440 / 0.2880 / 0.3900 with
+`synth_cold_routing_ok = false`
+([ADR 0011, 2026-08-29 note](docs/adr/0011-cold-start-coverage.md)).
 
 ## What makes this not a toy
 
