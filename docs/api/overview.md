@@ -18,8 +18,10 @@ carrying `aud=movielens-api`. Three things about it are load-bearing:
   sets** (ADR 0007). One Keycloak realm per tenant; the middleware derives the
   tenant from the verified issuer and rejects a realm with no row in
   `public.tenants`.
-- **The calling client must be in the allow-list.** `azp` has to be
-  `movielens-api` or `movielens-web`.
+- **The calling client must be in the allow-list.** `azp` has to be one of
+  the configured authorized parties — `movielens-api` and `movielens-web` in
+  the development realms, plus `movielens-verify` (the release and canary
+  identity) in production.
 - **Selecting an arbitrary persona is a privilege.** `{user_id}` is a MovieLens
   persona inside the caller's tenant; reaching one that is not the caller's own
   requires the confidential service client or the `demo-impersonator` realm role
