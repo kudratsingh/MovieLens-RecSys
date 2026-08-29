@@ -1,309 +1,288 @@
 # MovieLens Two-Stage Recommender
 
-[![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+A multi-tenant, authenticated two-stage recommender on MovieLens 25M: item-item retrieval into a LightGBM ranker, served by FastAPI behind Keycloak and PostgreSQL row-level security, with a k6-gated p99 and a Next.js product on top of the same API any other client would use.
 
-A two-stage movie recommender on MovieLens 25M, built end-to-end with the engineering discipline of a production ML platform — ADR-gated decisions, time-respecting splits, stage-specific evaluation, and per-policy attribution. The point is the engineering around the model, not the leaderboard.
+[![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![TypeScript 5 · Next.js 16](https://img.shields.io/badge/typescript%205-next.js%2016-black)
+[![license: all rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](#license)
 
-**Status:** Phase 1 (foundation) complete · Phase 2 (two-stage offline) complete · Phase 3 (serving, auth, multi-tenancy, synthetic load) in progress — the authenticated movie-discovery frontend is delivered and `/` is cut over to it.
+<img alt="Discover at 1440px, signed in as Demo Walkthrough and exploring as the Drama Fan persona: a featured recommendation labelled RANKED BY THE LEARNED MODEL, rank 1, with Open movie, Watchlist, Mark watched and Not for me controls, the Why this? disclosure closed beneath them, and the ranked rail beginning below." src="docs/frontend/evidence/current/discover-desktop-1440.png" width="100%">
 
-## Architecture
+The modeling here is deliberately ordinary. What is not is everything around it: the tenant boundary
+the database enforces rather than the application, the feature-freshness contract, the SHA-256-pinned
+serving bundle, the latency gate that measures the service instead of the CI runner, and a serving
+contract that reports when the learned path did *not* run rather than quietly taking credit for the
+fallback. The point is the engineering around the model, not the leaderboard. Every significant
+decision is written down before the code that depends on it lands — sixteen ADRs, each with its
+alternatives analyzed and the signals that would reopen it.
 
-The target system is a two-stage candidate-generator + ranker pipeline behind authenticated, multi-tenant serving. Phase 2 builds the offline modeling half; Phase 3 builds the serving and isolation half.
+## What is real today
 
-```mermaid
-flowchart LR
-    R[Authenticated request<br/>tenant_id + user_id] --> AR[Auth + Tenant Router]
-    AR --> CG[Candidate Generator<br/>~500 items]
-    CG --> FS[Online Feature Store<br/>Redis, tenant-scoped]
-    FS --> RK[LightGBM Ranker<br/>LambdaRank]
-    RK --> RESP[Top-K + audit log<br/>p99 &lt; 100ms SLO]
-```
+**As of 2026-08-29.** Phases 1 and 2 are complete. Phase 3 is in progress, and this is what is on
+`main` and runs locally through Docker Compose:
 
-The candidate stage has multiple implementations selected via per-tenant champion routing:
+- **Authenticated serving.** Keycloak OIDC, one realm per tenant; the tenant comes from the token
+  issuer, never from a client-declared claim. Every endpoint but `/healthz` and `/readyz` needs a token.
+- **Tenant isolation the database enforces.** Forced row-level security on every tenant-scoped table,
+  `SET LOCAL app.tenant_id` inside a per-request transaction, pgBouncer in transaction-pool mode so
+  it cannot leak. The API refuses to boot if its engine can bypass RLS or the pooler is in session mode.
+- **A learned two-stage path.** Item-item retrieval into a LightGBM LambdaRank booster, loaded once at
+  startup from a SHA-256-pinned manifest by a private sidecar, reading features from Feast over Redis.
+  Cold or unavailable paths fall back to popularity and *say so* in the response.
+- **Durable prediction audits.** Ranked items, scores, online feature values, model versions,
+  structured fallback reason and per-stage timings, committed before the response is sent.
+- **The movie-discovery product.** Discover, Browse, movie detail, Library and Quick Picks behind one
+  shell, ML evidence behind progressive disclosure. `/` serves it; the pre-redesign dashboard is
+  retained at `/legacy` as a documented rollback.
 
-```mermaid
-flowchart LR
-    CG[Candidate Generator] --> POP[Popularity<br/>cold-start fallback]
-    CG --> CF[CF / ALS<br/>matrix factorization]
-    CG --> II[Item-item<br/>cosine kNN, k=200]
-    CG --> TT[Two-tower<br/>history-based + FAISS ANN]
-```
+**Nothing is deployed.** The production target is specified, built and rehearsed end to end — one
+Hetzner CX22 running `docker-compose.prod.yml` behind its own Caddy edge, GHCR images tagged with the
+commit SHA, an SSH deploy that rolls back automatically when post-deploy verification fails — and the
+whole release sequence has been driven from empty volumes in production mode on a laptop, in a
+[14-step rehearsal](docs/production-readiness-review.md) that earned its keep: it was the first boot
+of this codebase with `ENVIRONMENT != dev`, and every defect it exposed was fixed in the same branch.
+**The machine has not been created, so there is no URL**, and the deploy and canary workflows stay
+green no-ops until one is configured. See [ADR 0013](docs/adr/0013-production-deployment-target.md)
+and the [deployment runbook](docs/deployment-runbook.md).
 
-Each candidate model is scored on **recall@500** against a temporal holdout; the ranker is scored on **NDCG@10** against the same holdout after ranking the 500 survivors. Both metrics are produced by a single evaluation harness so candidate-stage and ranker-stage numbers are never confused with end-to-end numbers.
+Still open in Phase 3: programmatic cold-start cohorts, per-tenant champion routing, audit coverage
+for non-prediction endpoints, and dev/staging Compose files. The frontend finish gate passes every
+criterion a reviewer can settle and [holds](docs/frontend/finish-gate-review.md) on moderated
+sessions with real participants, which a reviewer cannot substitute for. The long form is in
+[CLAUDE.md](CLAUDE.md) and [`docs/README.md`](docs/README.md).
 
-## Current phase status
+## Quickstart
 
-The status reflects what is actually merged on `main`, not what is planned.
-
-| Phase | Scope | Status |
-|---|---|---|
-| 1 — Foundation | MovieLens 25M ingestion, DVC, MLflow, evaluation harness, temporal split, popularity + CF baselines | **Complete** |
-| 2 — Two-stage architecture (offline) | Item-item, two-tower, feature module, LightGBM ranker, stage-specific metrics | **Complete** |
-| 3 — Serving, auth, multi-tenancy, synthetic-load | Feast, FastAPI, Redis, OAuth/JWT auth, per-tenant isolation, synthetic-user harness for load + cold-start coverage | **In progress** — the repeatable demo serves item-item + LightGBM, persists prediction audits and durable movie state, and passes real Keycloak browser auth, the pinned k6 p99 gate, page-shaped load budgets, and a browser timing gate. The movie-discovery frontend (Discover, Browse, movie detail, Library, Quick Picks) is delivered behind one shell and `/` serves it, with the pre-redesign dashboard retained at `/legacy` pending a participant-backed finish-gate PASS. ADR 0011's fixed-seed cold-start cohort now scores every trainer per history bucket {0, 1, 3, 10} with fallback attribution, which turned up a routing gap worth its own unit; per-tenant champion routing, generic request audits, and dev/staging Compose remain |
-| 4 — Orchestration + promotion gate | Prefect DAGs, automated evaluation gate, model registry promotion | Planned |
-| 5 — Monitoring + drift | Per-tenant Grafana, Evidently drift detection, synthetic drift simulation | Planned |
-| 6 — A/B + shadow deploys | Tenant-aware champion/challenger routing, statistical significance | Planned |
-
-## Deployment
-
-Production is a single Hetzner CX22 running `docker-compose.prod.yml` behind a Caddy edge, with two
-public hostnames and everything else — the API included — on the host's private Docker network.
-CI publishes `linux/amd64` images to GHCR tagged with the commit SHA, and a merge to `main` deploys
-over SSH: pull at that SHA, run the release jobs, bring the serving tier up, then run the post-deploy
-verification matrix, **rolling back to the previous release automatically if it fails**. The choice
-and its single-host consequences are in [ADR 0013](docs/adr/0013-production-deployment-target.md);
-the step-by-step is [`docs/deployment-runbook.md`](docs/deployment-runbook.md). The same Compose file
-is the local production-mode rehearsal, which is what makes the rehearsal evidence about production
-rather than about a lookalike.
-
-## Why this exists / what's interesting
-
-Most public recsys repos are notebooks that train a model and report a number. This repo is structured to look like a system, not an experiment. The artifacts worth looking at first:
-
-- **[Design decisions (ADRs)](docs/adr/)** — every significant choice is written down with alternatives and consequences. If you read one document, read [ADR 0001 (evaluation protocol)](docs/adr/0001-evaluation-protocol.md) — it pins the contract everything else is scored against.
-- **[Documentation map](docs/README.md)** — the reading path through the rest of it, and what each document does and does not claim. The Phase 3 vertical-slice plan that used to be linked here has been delivered and is now a [record](docs/records/demo-plan.md).
-- **[Local demo runbook](docs/demo-runbook.md)** — clean-checkout startup, seeding, smoke validation, walkthrough, reset, and troubleshooting.
-- **[Movie-discovery frontend plan](docs/frontend/)** — product discovery,
-  route contracts, backend readiness, implementation bundles, and finish gate.
-- **[UI finish-gate review](docs/frontend/finish-gate-review.md)** — the gate
-  applied to the running product rather than to a plan: what was run, a verdict
-  per criterion, the blocking items and how they were cleared, and the
-  non-blocking findings left open.
-- **[Generated API contract](docs/api/)** — committed OpenAPI and generated
-  TypeScript types with Python and Node CI drift checks.
-- **Time-respecting evaluation** — temporal train/holdout/test split with a fixed cutoff timestamp. No random splits on time-series data, ever.
-- **Stage-specific metrics** — the candidate stage is scored on recall over its full retrieval window (recall@500), the ranker on NDCG@10 over its output. Both metrics flow through one harness with `EvalResult.k` stamped on every result so they can't be confused.
-- **Per-policy MLflow attribution** — every candidate model embeds a popularity fallback for cold users; per-policy metrics partition the holdout by which routing branch actually served each user. So you know whether the learned model is doing work or the fallback is.
-- **A `phase-2-candidates` MLflow experiment** with directly comparable runs across popularity, CF/ALS, item-item, and two-tower — same harness, same holdout, same K.
-- **Versioned learned serving artifacts** — a SHA-256-pinned manifest binds the item-item index, LightGBM booster, tenant, and ordered Feast feature contract. The model sidecar loads that bundle once at startup; requests never fit or rebuild models.
-- **Durable prediction audits** — every recommendation stores the exact ranked items, scores, online feature values, model versions, fallback reason, and candidate/feature/ranker/total latency behind the same Postgres RLS boundary as serving data.
-- **A measured latency contract** — a pinned k6 container drives authenticated warm, cold, and mixed traffic. The 60-second smoke profile gates p99 below 100 ms, zero request errors, correct responses, and more than 50 requests/second in CI. It also measures the service rather than the runner: it quiesces what it does not measure, warms every worker before the window opens, fails warm traffic that quietly degrades to the popularity fallback, and re-measures a breached window exactly once — and only when the host's own CPU-steal record shows the runner was preempted. The thresholds themselves have never moved.
-- **Page-shaped budgets and browser timing, kept separate from it** — each route's real fan-out, cursor continuation, and mutation-plus-immediate-read sequence is driven as a tagged per-step k6 workload against derived budgets, while LCP, CLS, and time-to-visible-acknowledgement are measured in a throttled mobile browser. A percentile over one endpoint is not a page, and the two are not allowed to stand in for each other.
-- **A serving contract that refuses to overclaim** — `serving_policy` reports whether the learned two-stage path actually ran, how many positive seeds retrieval used, and what scale `items[].score` is on. A retrieval that no seed reached is labelled `unseeded-retrieval` with `learned: false` rather than borrowing the learned name, and the UI's copy follows the reported flag instead of inferring one. A rank score is never rendered as a match percentage.
-- **Reproducibility-by-default** — `make train-*` on a fixed seed produces the same model artifact hash. Non-determinism is treated as a bug to find, not tolerate.
-
-## Design decisions
-
-ADRs live under [`docs/adr/`](docs/adr/). Backend ADRs use a flat numeric line; frontend ADRs have their own namespace under [`docs/adr/frontend/`](docs/adr/frontend/).
-
-| # | Decision | Why it matters |
-|---|---|---|
-| [0001](docs/adr/0001-evaluation-protocol.md) | Evaluation protocol — temporal split, recall@K + NDCG@K, warm/cold slicing, no ad-hoc metrics | Pins the contract every model is scored against, before any model code |
-| [0002](docs/adr/0002-implicit-feedback-label.md) | Every rating is a positive interaction; no rating-value threshold | Aligns with production implicit-feedback practice; throws away no signal |
-| [0003](docs/adr/0003-two-stage-architecture.md) | Two-stage architecture: candidate generator + ranker | Single-model global scoring blows the p99 < 100ms SLO by 1–2 orders of magnitude |
-| [0004](docs/adr/0004-item-item-before-two-tower.md) | Item-item ships before two-tower as the zero-learned-parameters baseline | A learned model needs a baseline to beat or its recall numbers don't mean anything |
-| [0005](docs/adr/0005-lightgbm-over-neural-ranker.md) | LightGBM over a neural ranker — tabular features are GBDT's home turf | LambdaRank directly optimizes the per-user ordering the serving stage needs |
-| [0006](docs/adr/0006-two-tower-retrieval-architecture.md) | History-based two-tower retrieval with FAISS | Avoids memorizing user IDs and pins the learned retrieval architecture |
-| [0007](docs/adr/0007-auth-provider-keycloak.md) | Keycloak OIDC with realm-per-tenant issuers | Makes tenant identity part of the verified token issuer boundary |
-| [0008](docs/adr/0008-multi-tenancy-rls.md) | Postgres row-level security | Makes the database reject cross-tenant reads and writes even when application filtering is wrong |
-| [0009](docs/adr/0009-feature-store-feast.md) | Feast over direct SQL or a hand-rolled online feature cache | Pins point-in-time historical reads and tenant-keyed Redis serving behind one schema |
-| [0010](docs/adr/0010-synthetic-load-k6.md) | k6 for synthetic load | Turns the p99 SLO into an authenticated CI pass/fail contract |
-| [0011](docs/adr/0011-cold-start-coverage.md) | Controlled synthetic cold-start cohorts | Makes zero- and short-history behavior measurable by cohort |
-| [0012](docs/adr/0012-browser-identity-feedback-and-online-freshness.md) | Browser identity, durable movie state, and online-freshness semantics | Separates actor from demo persona, pins feedback effects, and prevents success before commit |
-| [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js + Tailwind for the portfolio frontend | Real Server Components, route handlers, image optimization for poster grids |
-| [frontend/0002](docs/adr/frontend/0002-movie-discovery-experience.md) | Poster-first movie discovery with progressive ML disclosure | Replaces the rating wall with Discover, Browse, Library, detail, and optional Quick Picks routes |
-
-ADRs are written as substantive documents (typical length 100–180 lines), each treating alternatives with analysis rather than a single rejection sentence and including consequences and second-order effects.
-
-## Non-negotiables (what makes this not a toy)
-
-These are bright-line rules the project is held to. Each maps to a real production failure mode.
-
-1. **Time-respecting splits.** No random splits on temporal data. Ever.
-2. **Feature parity test in CI.** Offline-computed feature must match online-served feature for the same user/item. This is the bug that ruins most real recsys deployments.
-3. **Cold-start handling.** Explicit fallback for new users (no history) and new movies (no interactions); measured against synthetic cold-start cohorts, not assumed.
-4. **Latency SLO.** p99 < 100ms, measured under synthetic load.
-5. **Reproducibility test.** `make train-<model>` on a fixed seed produces the same model artifact hash. If it doesn't, find what's nondeterministic.
-6. **ADRs.** One ADR per significant decision, substantive enough to defend in a design review.
-7. **Evaluation gate before promotion.** A model is never promoted without beating the incumbent on holdout — automated, not eyeballed.
-8. **Logged predictions and features.** Every online prediction logs the features used, the tenant, the model version, and the latency.
-9. **Tenant isolation.** Cross-tenant data leakage is the highest-severity bug class; CI canary tests every endpoint as tenant A and asserts no tenant B data leaks.
-10. **Auth on every endpoint except `/healthz`.** No internal unauthenticated paths.
-11. **Synthetic-load smoke test in CI.** Every serving PR runs a short load script; p99 over the SLO threshold fails the PR.
-
-The online recommendation path now enforces non-negotiables 2, 4, and 8–11.
-The broader Phase 3 work extends the same contracts to its remaining surfaces.
-
-## Stack
-
-| Layer | Choice |
-|---|---|
-| Models | PyTorch (two-tower), LightGBM (ranker) |
-| Candidate-stage classical baselines | `implicit` (ALS + cosine item-item) |
-| ANN retrieval | FAISS-CPU (IVF-Flat over cosine-normalized item embeddings) |
-| Data store | PostgreSQL |
-| Data versioning | DVC |
-| Feature store | Feast (Postgres offline store, Redis online store) |
-| Tracking + registry | MLflow |
-| Orchestration | Prefect (Phase 4) |
-| Serving | FastAPI + Redis |
-| Auth provider | Keycloak OIDC, realm per tenant |
-| Multi-tenancy isolation | PostgreSQL row-level security |
-| Synthetic load | k6 |
-| Frontend | Next.js + TypeScript + Tailwind |
-| Monitoring | Prometheus + Grafana; Evidently from Phase 5 |
-| Containers | Docker + docker-compose |
-| CI/CD | GitHub Actions (ruff, black, strict mypy, pytest, feature parity, tenant isolation, k6 SLO gate + page-shaped budgets, frontend lint/typecheck/build/accessibility, service-backed browser journeys, Compose validation) |
-
-## Phase plan (abbreviated)
-
-The full plan with lessons-per-phase lives in the project's design notes. The short version:
-
-- **Phase 1 — Foundation** *(complete)*. Postgres + DVC + MLflow + docker-compose, temporal split per ADR 0001, evaluation harness as single source of truth, popularity + CF/ALS baselines.
-- **Phase 2 — Two-stage architecture, offline** *(complete)*. Item-item and two-tower candidate generators, provisional feature module, LightGBM ranker, and stage-specific metrics (recall@500 / NDCG@10) through the same harness.
-- **Phase 3 — Serving, auth, multi-tenancy, synthetic-load** *(in progress)*. Keycloak auth, encrypted browser sessions with PKCE/refresh/logout/CSRF, Postgres RLS, tenant routing, Feast-backed online features, learned item-item + LightGBM serving, durable prediction audits, durable movie state, a local catalog read model, and the k6 SLO gate are in place. The movie-discovery frontend — Discover, Browse, movie detail, Library, and Quick Picks behind one shell, with the ML evidence behind progressive disclosure — is delivered and cut over; it runs through [`docs/frontend/`](docs/frontend/), and its [finish gate](docs/frontend/finish-gate-review.md) passes every criterion a reviewer can settle, holding only on moderated participant research. Programmatic cold-start cohorts, per-tenant champion routing, generic audits, a rate-limiting decision, and environment-specific Compose remain.
-- **Phase 4 — Orchestration + promotion gate.** Prefect DAGs, automated evaluation-gated promotion against the incumbent champion.
-- **Phase 5 — Monitoring + drift.** Per-tenant Grafana dashboards, Evidently drift detection, synthetic drift simulation that proves the alert path fires.
-- **Phase 6 — A/B + shadow deploys.** Tenant-aware champion/challenger routing, shadow-mode logging, statistical significance for online experiments.
-
-## Repo structure
-
-```
-docker-compose.yml      # dev stack: Postgres, Redis, pgBouncer, Keycloak, MLflow, Prometheus, Grafana
-docker-compose.demo.yml # overlay for the one-command demo: API, model/feature sidecars, web, k6
-Makefile                # install, lint, test, train-*, serve, web-*, db-migrate, demo-*
-alembic/                # migrations: tenant roles + table, tenant_id columns, RLS, audits
-docs/
-  adr/                  # backend ADRs (flat numeric line) + index
-    frontend/           # frontend ADRs (own numeric line)
-  api/                  # committed OpenAPI contract (generated by scripts/generate_openapi.py)
-  frontend/             # movie-discovery product discovery, design contracts, plan, testing strategy,
-                        #   finish-gate review, and evidence/ screenshot matrices per bundle
-  records/              # not maintained: the demo plan and the deployment/serving handoffs
-  demo-runbook.md       # clean-checkout demo startup, walkthrough, reset, troubleshooting
-  eda.md                # MovieLens 25M exploratory analysis writeup
-notebooks/              # EDA as a script (SQL aggregations against Postgres), run via make eda
-pipelines/              # Prefect flows (Phase 4; empty package today)
-scripts/                # repo tooling: OpenAPI generation for the committed API contract
-src/
-  auth/                 # Keycloak JWKS fetch/cache and JWT-validating middleware
-  data/                 # download, ingestion, schemas, temporal split, demo schema bootstrap
-  evaluation/           # single source of truth for metrics (recall@K, NDCG@K, warm/cold slicing)
-  features/             # point-in-time feature module, Feast materialization, online reads
-    feast_repo/         # Feast repository: entities, feature views, feature_store.yaml
-  models/
-    candidates/         # popularity, CF/ALS, item-item, two-tower
-    ranker/             # LightGBM LambdaRank
-    artifacts.py        # serving manifest + deterministic item-item index
-  serving/              # FastAPI app, orchestration, feature/model clients, prediction audit, TMDB proxy
-    tenancy/            # tenant router: resolves the verified tenant to its config + Redis key prefix
-  training/             # offline training/evaluation entrypoints plus demo artifact packaging
-synthetic/
-  personas/             # stable named demo users, catalog manifest, idempotent seeder
-  load/                 # recommendations.js + thresholds.js  — the pinned authenticated p99 gate
-                        # pages.js + page_thresholds.js       — page-shaped per-step budgets
-                        # run_gate.sh, summarize.py, probe_host_cpu.py — run, decide, explain
-                        # reliability.py                      — non-latency serving promises
-  smoke/                # behavioral smoke check the demo and CI run against the live stack
-tests/
-  unit/                 # model contracts, eval protocol, auth, tenancy, serving, demo fixtures
-  feature_parity/       # offline-computed feature == online-served feature
-  learned_serving/      # end-to-end two-stage path against the seeded stores
-  tenant_isolation/     # cross-tenant leakage canaries against Postgres RLS + Keycloak
-  integration/          # placeholder; expands with the rest of Phase 3
-web/                    # Next.js + TypeScript + Tailwind frontend
-  app/                  # /, /discover, /browse, /movies/[movieId], /library, /quick-picks, /legacy,
-                        #   /ui-preview, and the BFF route handlers under app/api
-  lib/                  # resources/ (the one server-owned API client), movie-state/ (the one write
-                        #   path), api.generated.ts (typed from docs/api/openapi.json)
-  e2e/                  # fixture-mode Playwright: responsive, accessibility, and finish-gate matrices
-  tests/                # unit/ (Vitest + RTL + axe), e2e/ (service-backed journeys), perf/ (LCP/CLS/ack)
-infra/                  # API + model Dockerfiles, Keycloak realms, pgBouncer, Caddy edge, MLflow image,
-                        #   Postgres init, k6 pin
-  host/                 # bootstrap.sh + the systemd units that make the production host
-  deploy/               # deploy.sh, the env contract, the one-time role SQL
-```
-
-## Local development
-
-The dev stack runs on local docker-compose: Postgres (+ pgBouncer), Redis, Keycloak (with its own Postgres), MLflow (with Postgres backend store), Prometheus, Grafana.
-
-```bash
-# one-time
-make install              # python deps via pyproject
-make infra-up             # docker compose up: postgres, pgbouncer, redis, keycloak, mlflow, prometheus, grafana
-
-# fetch + ingest data (one-time, DVC-tracked)
-make data-download        # downloads MovieLens 25M
-make data-ingest          # ingests into Postgres
-make db-migrate           # alembic upgrade head: tenant roles, tenant_id columns, RLS, audits
-
-# routine
-make lint                 # ruff + black --check
-make typecheck            # mypy (strict) on src/ and synthetic/
-make test                 # full pytest suite; make test-unit for the fast subset
-make train-popularity     # Phase 1 baseline → MLflow phase-1-baselines
-make train-cf             # Phase 1 baseline → MLflow phase-1-baselines
-make train-itemitem       # Phase 2 candidate → MLflow phase-2-candidates
-make train-twotower       # Phase 2 candidate → MLflow phase-2-candidates
-make train-ranker         # Phase 2 ranker    → MLflow phase-2-ranker
-make serve                # uvicorn on :8000 with reload (needs infra-up + db-migrate)
-make web-dev              # Next.js dev server on :3001 (make web-install first)
-make web-test             # Vitest unit, component, and accessibility suite
-make web-e2e              # service-backed Playwright journeys (needs the seeded demo stack)
-```
-
-MLflow UI: <http://localhost:5000>. Grafana: <http://localhost:3000>. Keycloak admin: <http://localhost:8080> (dev credentials live in `docker-compose.yml`). API: <http://localhost:8000>.
-
-## Working demo
-
-The portfolio walkthrough uses an isolated Compose project and a reviewed mini
-catalog, so the 25M dataset is not required:
+Docker Desktop or another Docker Engine with Compose v2. Ports 3001, 5432, 6379, 6432, 8000 and 8080
+must be free. Python and Node are not needed on the host. The first start downloads base images and
+builds the application images, and is substantially slower than later cached starts.
 
 ```bash
 cp .env.example .env
 make demo-up
 make demo-seed
 make demo-smoke
-make demo-audits
 ```
 
-Open <http://localhost:3001> and sign in through Keycloak — the demo stack runs
-with the dev bypass disabled, so this is the real authorization-code + PKCE
-flow. `/` lands on Discover: a featured recommendation whose policy label
-follows what the response actually reported, a ranked rail, and `Why this?` →
-`Show prediction audit` to reach the prediction audit and the online feature
-values behind two deliberate actions. From there, browse the catalog, open a
-movie, save it, mark it watched, rate it, find and edit that state in Library,
-and take one decision at a time in Quick Picks. Warm personas show the
-`item-item-cosine+lightgbm` policy and checksum-pinned model versions; Cold
-Start shows the explicit `popularity` fallback. The pre-redesign dashboard is
-still deployed at `/legacy`, linked from the footer.
+Open <http://localhost:3001> and sign in as **`demo` / `demo`** — a dev-only account seeded from
+`infra/keycloak/realms/demo-realm.json`, labelled as such in the file and not a secret. The demo
+stack runs with the auth bypass disabled, so this is the real authorization-code + PKCE flow.
 
-`make demo-audits` prints the latest exact predictions, features, versions, and
-stage timings. The measurement gates run against the same stack:
+It runs an isolated Compose project against a reviewed 120-title catalog, so the 25M dataset is not
+required. Warm personas are served the `item-item-cosine+lightgbm` policy with checksum-pinned model
+versions; the Cold Start persona gets the explicit `popularity` fallback. `make demo-audits` prints
+the newest durable audit rows — the exact predictions, features, versions and stage timings behind
+what you just saw. TMDB posters are optional: set `TMDB_READ_ACCESS_TOKEN` in `.env` first, or leave
+it empty for generated artwork. Walkthrough, reset and troubleshooting:
+[`docs/demo-runbook.md`](docs/demo-runbook.md).
+
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/online-request-path.dark.svg">
+  <img alt="One authenticated GET /users/{id}/recommendations as a sequence: request-id adoption, token verification and tenant derivation, the rate-limit bucket, the movie-state read, the cold-start branch versus the learned two-stage path through the sidecar, the audit insert, and the commit that precedes the response." src="docs/diagrams/online-request-path.svg" width="100%">
+</picture>
+
+**Online.** The tenant comes from the issuer that signed the token; the audience and authorized party
+must be on an allow-list. A per-request transaction opens with `SET LOCAL app.tenant_id`, and one
+read of `user_movie_state` returns positives and exclusions separately. Below five positive signals
+the request takes the popularity fallback. Above it, the private sidecar retrieves item-item
+candidates — only dismissals may drop a seed — batch-reads eight features per candidate from Redis,
+and scores them with LightGBM. Exclusions are re-applied at retrieval, at hydration, and in a final
+fail-closed sweep. The audit row commits *before* the response goes out, so there is no 2xx for a
+prediction that could still fail to become durable.
+
+**Offline.** MovieLens 25M into Postgres, a temporal split, point-in-time features, both model
+stages, then a SHA-256-pinned manifest binding the index, the booster, the tenant and the ordered
+feature contract. That bundle is baked into the sidecar image, so rolling back the model is rolling
+back the image. The full walkthrough — with the tenancy, data-model, topology and CI diagrams — is in
+[`docs/architecture.md`](docs/architecture.md).
+
+## Measured
+
+Latency is a gate, not a claim. The pinned k6 profile drives real Keycloak-authenticated warm, cold
+and mixed traffic for 60 seconds and fails the build on **p99 ≥ 100 ms, any request error, any
+response that is not correct, or fewer than 50 requests/second**. The thresholds have never moved.
+
+| Measurement | When | Result |
+|---|---|---|
+| Accepted CI baseline | 2026-08-20 | p50 6.31 ms · p95 14.27 ms · p99 41.30 ms, 54.08 req/s over 3,301 requests, zero errors |
+| Native thread teams pinned to 1 in the model server ([PR #69](https://github.com/kudratsingh/MovieLens-RecSys/pull/69)) | 2026-08-27 | p99 903.64 ms → **48.99 ms** at 0% host CPU steal, on the same unchanged gate |
+| CI Postgres data directory moved to tmpfs ([PR #80](https://github.com/kudratsingh/MovieLens-RecSys/pull/80)) | 2026-08-28 | p99 230.74 ms → **24.41 ms**; WAL sync 3.15 → 0.21 ms per commit |
+| The same gate at the production topology | 2026-08-27 | p50 6.85 ms · p95 9.47 ms · p99 12.93 ms, zero errors, zero dropped iterations |
+| Rate limiter at its first defaults (120/min, burst 30) | 2026-08-27 | **37.9% of 301 requests refused** — keep-alive pins one client to one worker's bucket; defaults are now 600/min, burst 120 |
+
+Sources: [ADR 0010](docs/adr/0010-synthetic-load-k6.md) (the first three),
+[the readiness review's R-14](docs/production-readiness-review.md), and
+[ADR 0014](docs/adr/0014-request-rate-limiting.md). Rows two and three are worth reading in full: in
+both, the number moved because the *measurement* was wrong rather than the service, and the
+resolution was to take the runner out of the measured path — never to relax a threshold.
+
+**The data.** 25,000,095 ratings, 162,541 users, 59,047 movies ever rated (62,423 in catalog),
+sparsity 0.2605%. The split is temporal and fixed: `T = percentile_disc(0.8)` lands on
+2016-06-25 06:49:57 UTC, train is 20,000,075 rows (80.00% on the nose), holdout is 129,683 rows
+across 28 days and 2,641 users, and the remaining 19.48% is reserved as test.
+[`docs/eda.md`](docs/eda.md) has the distributions and what the long tail means for cold start.
+
+**Offline model metrics.** `src/evaluation/` is the single source of truth — recall@500 for the
+candidate stage, NDCG@10 for the ranker, sliced warm and cold per
+[ADR 0001](docs/adr/0001-evaluation-protocol.md), with `EvalResult.k` stamped on every result so a
+candidate-stage number can never be read as an end-to-end one. **No run's metric values are committed
+to this repository.** MLflow holds them, and quoting a figure here that no file backs would be the
+opposite of what the rest of this README is for. What is on the record, in merged pull requests: cold
+NDCG@10 ≈ 0.49 against warm ≈ 0.03 for both Phase 1 baselines
+([PR #17](https://github.com/kudratsingh/MovieLens-RecSys/pull/17) — cold users rate the canonical
+popular titles, which is exactly why per-policy attribution exists), and the LightGBM ranker at warm
+recall@10 0.033 / NDCG@10 0.048
+([PR #26](https://github.com/kudratsingh/MovieLens-RecSys/pull/26)). No recall@500 for item-item or
+two-tower has been committed anywhere.
+
+> **Results table — pending.** A comparable table across popularity, CF/ALS, item-item, two-tower and
+> the ranker, from fresh runs through the one harness on the one holdout, lands in its own pull
+> request and belongs here.
+
+## What makes this not a toy
+
+Eleven bright-line rules, most of them enforced by a named CI job rather than by intention. The
+[full list](CLAUDE.md) is in the project brief; these are the ones with mechanisms behind them:
+
+| Job | What it proves |
+|---|---|
+| `feature-parity` | An offline-computed feature equals the online-served feature for the same key, against live Postgres and Redis. This is the bug that ruins most real recsys deployments. |
+| `tenant-isolation` | Authenticates as tenant A against real Keycloak and RLS, fires every endpoint, and asserts no tenant B data surfaces. Cross-tenant leakage is the highest-severity bug class here. |
+| `synthetic-load-smoke` | The 60-second k6 gate above, plus page-shaped per-step budgets and the non-latency reliability checks. Runs the job's Postgres on tmpfs, because every request commits an audit row and the runner's block device would otherwise sit inside every percentile it measures. |
+| `serving-artifacts` | Rebuilds the serving bundle inside the image and diffs it against the committed one, so a training change that would silently move an artifact hash fails the build. |
+| `realm-drift` | Exports both Keycloak realms from a fresh volume and diffs them against the committed seeds. |
+| `browser-auth-e2e` | Real PKCE browser journeys with the dev bypass disabled, then LCP, CLS and time-to-acknowledgement in a throttled mobile browser. |
+| `demo-compose` | Validates the demo and production Compose models, and greps the rendered production model to assert `DEV_AUTH_BYPASS` appears nowhere in it. |
+| `lint` / `frontend` | Ruff, Black, strict mypy, and the two contract drift checks: the committed OpenAPI document and the TypeScript types generated from it. |
+
+`main` is protected: pull requests are required, force-pushes and deletions are blocked, and
+`lint`, `test`, `feature-parity`, `tenant-isolation`, `synthetic-load-smoke`, `demo-compose`,
+`frontend` and `browser-auth-e2e` are required status checks. Images publish to GHCR only after every
+job is green.
+
+## Product
+
+<img alt="Browse at 390px: catalog search, a filters control, a sort selector reading Most watched here, a 24 titles loaded count, the poster grid, and the mobile bottom navigation." src="docs/frontend/evidence/current/browse-mobile-390.png" width="30%"> <img alt="The movie detail page for The Matrix: tagline, runtime, genres, TMDB score, synopsis, the Watchlist / Watched / Not for me controls, and a rating of 5 out of 5 captioned as display feedback rather than a graded training signal." src="docs/frontend/evidence/current/movie-detail-desktop-1440.png" width="30%"> <img alt="The Why this? disclosure open on Discover, showing the prediction audit: policy item-item-cosine+lightgbm, the learned-two-stage reason over 8 positive seeds, the filter policy, candidate sources, pinned candidate, ranker and feature versions, the feature event time, the per-stage latency breakdown, the rank score, and the online feature values." src="docs/frontend/evidence/current/discover-why-this-desktop-1440.png" width="30%">
+
+The frontend is not an end-user product; it is the surface that makes the engineering visible.
+**Discover** loads recommendations and watch history as independent regions, so a failed resource
+never blanks the ones around it, and the policy label follows what the response reported rather than
+an inference. **Browse** sits on a cursor-paginated catalog contract with URL-owned filters and
+cursors bound to the query fingerprint — reuse one against a different query and it is a 400, not a
+wrong page. The **movie page** carries TMDB detail over a local read model, so a poster grid never
+fans out to TMDB per card. **Library** reads Rated, Watchlist and Seen independently, with optimistic
+writes reconciled against the committed revision. **Quick Picks** advances only after the API
+commits, because a one-card queue that rolled back would re-show a title the viewer already
+dismissed. Throughout, the ML evidence — prediction audit, online feature values, the uncalibrated
+rank score — is two deliberate actions away, never in the way of the first movie.
+
+Product docs, design contracts and the testing strategy are in
+[`docs/frontend/`](docs/frontend/README.md); the
+[finish-gate review](docs/frontend/finish-gate-review.md) records the verdict per criterion and what
+is still owed.
+
+## Design decisions
+
+| # | Decision |
+|---|---|
+| [0001](docs/adr/0001-evaluation-protocol.md) | Temporal split, recall/NDCG@10 reported warm and cold separately, +3% relative promotion gate |
+| [0002](docs/adr/0002-implicit-feedback-label.md) | Every rating is a positive interaction; the rating value leaves the modeling pipeline |
+| [0003](docs/adr/0003-two-stage-architecture.md) | Two stages, because single-model global scoring misses the p99 SLO by orders of magnitude |
+| [0004](docs/adr/0004-item-item-before-two-tower.md) | Item-item first, as the zero-learned-parameters baseline the two-tower must beat |
+| [0005](docs/adr/0005-lightgbm-over-neural-ranker.md) | LambdaRank GBDT over a neural ranker; tabular point-in-time features are GBDT's home turf |
+| [0006](docs/adr/0006-two-tower-retrieval-architecture.md) | History-based two-tower, sampled softmax with log-uniform correction, FAISS IVF-Flat |
+| [0007](docs/adr/0007-auth-provider-keycloak.md) | Self-hosted Keycloak, realm per tenant; tenant from the issuer, never from a claim |
+| [0008](docs/adr/0008-multi-tenancy-rls.md) | Forced Postgres row-level security, `SET LOCAL` per request, pgBouncer in transaction mode |
+| [0009](docs/adr/0009-feature-store-feast.md) | Feast with Postgres offline and Redis online; `tenant_id` a join key on every feature view |
+| [0010](docs/adr/0010-synthetic-load-k6.md) | k6 as the SLO's only authority, with a measurement-validity rule instead of a movable threshold |
+| [0011](docs/adr/0011-cold-start-coverage.md) | Fixed-seed synthetic cohorts at history sizes 0/1/3/10, scored per bucket |
+| [0012](docs/adr/0012-browser-identity-feedback-and-online-freshness.md) | Actor separated from demo persona, durable movie state, commit before acknowledgement |
+| [0013](docs/adr/0013-production-deployment-target.md) | One Hetzner CX22 running the same Compose file the rehearsal runs; cost is the deciding factor and says so |
+| [0014](docs/adr/0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket on the verified token, never on a client IP; per-worker, and honest about it |
+| [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js App Router with TypeScript and Tailwind |
+| [frontend/0002](docs/adr/frontend/0002-movie-discovery-experience.md) | Poster-first discovery with ML evidence behind progressive disclosure |
+
+[`docs/adr/README.md`](docs/adr/README.md) has the one-line decision for each, the status notes, and a
+four-ADR reading order for a reviewer in a hurry.
+
+## Stack
+
+| Layer | Choice |
+|---|---|
+| Models | PyTorch (two-tower), LightGBM LambdaRank (ranker), `implicit` (ALS, cosine item-item) |
+| ANN retrieval | FAISS-CPU, IVF-Flat over cosine-normalized item embeddings |
+| Data store | PostgreSQL, with Alembic migrations and pgBouncer in transaction-pool mode |
+| Reproducibility | DVC for data, MLflow for experiments and the registry |
+| Feature store | Feast — Postgres offline, Redis online |
+| Serving | FastAPI + Redis, with a private model sidecar |
+| Auth | Keycloak OIDC, one realm per tenant |
+| Tenant isolation | PostgreSQL forced row-level security |
+| Frontend | Next.js 16 + TypeScript 5 + Tailwind; Vitest, Playwright, jest-axe |
+| Load + reliability | k6 (pinned), with page-shaped budgets and a browser timing suite |
+| Planned | Prefect orchestration (Phase 4), Evidently drift detection (Phase 5); Prometheus + Grafana run today |
+| CI/CD | GitHub Actions — twelve jobs, GHCR `linux/amd64` images tagged with the commit SHA |
+| Hosting (specified, not provisioned) | One Hetzner CX22 behind Caddy; SSH deploy with automatic rollback |
+
+## Repository map
+
+```
+src/            auth/ · data/ · evaluation/ · features/ · models/ · serving/ · training/ · release/
+alembic/        fourteen migrations: tenant roles, tenant_id, forced RLS, movie state, audits
+synthetic/      load/ (the k6 gate) · personas/ · smoke/ · tenant_isolation/   → synthetic/README.md
+web/            Next.js app, the one resource boundary, the one write path, four test layers
+tests/          unit/ · feature_parity/ · learned_serving/ · tenant_isolation/ · integration/
+infra/          images, Keycloak realms, pgBouncer, Caddy edge, host bootstrap  → infra/README.md
+docs/           architecture, ADRs, API contract, frontend, runbooks, EDA      → docs/README.md
+```
+
+## Documentation
+
+Read in this order:
+
+1. [`docs/architecture.md`](docs/architecture.md) — the system on one page, with ten rendered diagrams
+2. [`docs/adr/README.md`](docs/adr/README.md) — every decision, its alternatives, and what would reopen it
+3. [`docs/api/overview.md`](docs/api/overview.md) — every endpoint, and the committed OpenAPI contract beside it
+4. [`docs/demo-runbook.md`](docs/demo-runbook.md) — running the whole stack from a clean checkout
+5. [`docs/frontend/README.md`](docs/frontend/README.md) — the product docs, and the [finish gate](docs/frontend/finish-gate-review.md)
+6. [`docs/production-readiness-review.md`](docs/production-readiness-review.md) — the gap review and the 14-step rehearsal record
+7. [`docs/deployment-runbook.md`](docs/deployment-runbook.md) — the machine, DNS, secrets, first deploy, rollback, backups
+8. [`docs/eda.md`](docs/eda.md) — MovieLens 25M: scale, sparsity, the long tail, the split as applied
+9. [`docs/records/`](docs/records/) — dated documents kept for their reasoning and **not maintained**
+
+## Development
 
 ```bash
-cd web && npm run test:perf   # browser LCP, CLS, acknowledgement on the mobile profile
+make install          # Python deps
+make infra-up         # Postgres, pgBouncer, Redis, Keycloak, MLflow, Prometheus, Grafana
+make db-migrate       # alembic upgrade head
 
-make demo-load-quiesce        # stop what the load gate must not measure (api, web, setup jobs)
-make demo-load-smoke          # 60-second authenticated p99 gate on the recommendation path
-make demo-load-pages          # page-shaped API workloads, measured per step
-make demo-reliability-check   # request-id traceability, auth boundary, degraded metadata
+make lint             # ruff + black --check
+make typecheck        # mypy, strict, on src/ synthetic/ notebooks/
+make test             # pytest (make test-unit for the fast subset)
+make serve            # uvicorn on :8000 with reload
+
+make web-install      # then: make web-dev (:3001), web-test, web-e2e
+make diagrams         # re-render docs/diagrams/ from source
 ```
 
-`demo-load-quiesce` stops the browser demo's `api` and `web` containers, so run
-the walkthrough and `npm run test:perf` before it, or `make demo-up` again
-afterwards. Use `make demo-down` to stop while preserving state,
-`make demo-reset` to recreate only the demo-owned volumes, and `make demo-logs`
-when a dependency fails. See the
-[complete demo runbook](docs/demo-runbook.md) for the walkthrough and recovery
-steps.
+Training entrypoints are `make train-popularity`, `train-cf`, `train-itemitem`, `train-twotower` and
+`train-ranker`; each logs to its MLflow experiment (UI on <http://localhost:5000>).
+`make data-download` and `make data-ingest` fetch and load the full 25M dataset, which the demo does
+not need. Work goes on short-lived branches and merges by pull request — never a direct push to
+`main` —
+with [Conventional Commits](https://www.conventionalcommits.org/) and a filled-in
+[pull request template](.github/PULL_REQUEST_TEMPLATE.md).
 
-### Optional TMDB posters
+## Security
 
-The demo works without TMDB credentials and falls back to its MovieLens titles,
-genres, and generated artwork. To enable real posters and additional metadata,
-create a TMDB API Read Access Token in your TMDB account settings. For the
-containerized demo, put it in `.env` before `make demo-up`. For direct FastAPI
-development, expose it only to the backend process:
+Keycloak, JWT validation, RLS as the tenant boundary and a rate limiter are all real machinery here,
+and a report against any of it is welcome. The disclosure process, the guarantees the project
+considers highest-severity, and an explicit note on the dev-only credentials committed to this
+repository are in [`SECURITY.md`](SECURITY.md).
 
-```bash
-export TMDB_READ_ACCESS_TOKEN="your-read-access-token"
-make serve
-```
+## License
 
-The token is sent to TMDB as a server-side Bearer credential. It is never
-included in recommendation responses or the browser bundle. Successful and
-failed lookups are held in a bounded six-hour in-process cache so an upstream
-failure does not make recommendations unavailable or trigger repeated calls.
+Published for portfolio visibility. No open-source license is granted; all rights reserved.
