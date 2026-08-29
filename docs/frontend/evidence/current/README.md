@@ -14,7 +14,7 @@ of the whole product. This one is.
 | | |
 |---|---|
 | Captured | 2026-08-29 |
-| Commit | `b92e15049e600c0d15be60ce6fdc449fc107b07a`, with uncommitted changes under `web/`, `src/`, `synthetic/` or `infra/` — the images were built from that tree rather than from the commit alone |
+| Commit | `c9f63538bd6fc0e0ee7b6c049cef4cf484e8976a` |
 | Stack | `docker-compose.yml` + `docker-compose.demo.yml`, project `movielens-demo`, images built from this tree (`make demo-up`) and seeded (`make demo-seed`) |
 | Smoke | `make demo-smoke` passed before the first capture |
 | Auth | Real Keycloak, `DEV_AUTH_BYPASS=false`, authorization code + PKCE through the Next BFF, `demo`/`demo` |
@@ -60,7 +60,7 @@ returned for it at capture time:
 ## Capture command
 
 ```bash
-make demo-up          # build api + web from this commit
+make demo-up          # build api + web from this tree
 make demo-seed        # seed the reviewed 120-title fixture
 make demo-smoke       # must pass: warm personas have to report learned: true
 cd web
@@ -89,7 +89,7 @@ signals. Persona assignment follows the ownership table in
 
 ## Files
 
-21 PNGs, 4802 KB total.
+21 PNGs, 4798 KB total.
 
 | File | Size |
 |---|---|
@@ -107,38 +107,13 @@ signals. Persona assignment follows the ownership table in
 | `movie-detail-desktop-1440.png` | 266 KB |
 | `library-mobile-390.png` | 72 KB |
 | `library-tablet-768.png` | 163 KB |
-| `library-desktop-1440.png` | 148 KB |
-| `library-seen-mobile-390.png` | 73 KB |
-| `library-seen-tablet-768.png` | 326 KB |
+| `library-desktop-1440.png` | 147 KB |
+| `library-seen-mobile-390.png` | 72 KB |
+| `library-seen-tablet-768.png` | 322 KB |
 | `library-seen-desktop-1440.png` | 374 KB |
 | `quick-picks-mobile-390.png` | 80 KB |
 | `quick-picks-tablet-768.png` | 204 KB |
 | `quick-picks-desktop-1440.png` | 238 KB |
-
-## A defect these pictures record
-
-The Seen tab's filter row does not fit at the two narrower viewports, and the
-captures show it rather than hide it. Measured by this run, on the same page
-load that was photographed:
-
-| Viewport | Form width | Content width | Search field | Button overhang |
-|---|---|---|---|---|
-| `mobile-390` | 358 px | 358 px | 34 px | none |
-| `tablet-768` | 304 px | 401 px | 34 px | 97 px past the form |
-| `desktop-1440` | 512 px | 512 px | 145 px | none |
-
-Where the content is wider than the form, the `Filter` button is painted
-outside its own form and lands on the `Genre` control beside it; where the
-search field is a few dozen pixels wide, it is a text input nobody can read what
-they typed into. The Rated and Watchlist tabs are unaffected — they carry the
-same form without the year bounds, which is the part that will not shrink.
-
-This is a product defect on `main`, not a capture artifact: it reproduces on
-reload, at every width below the point where `.library-filter` reaches its
-`max-width`, and the same row is correct at `desktop-1440`. It belongs to the
-Seen work rather than to this evidence set, so it is recorded here and fixed
-elsewhere. These four numbers are re-measured on every re-shoot, so this section
-goes away on its own when the layout is fixed.
 
 ## What these pictures are not
 
