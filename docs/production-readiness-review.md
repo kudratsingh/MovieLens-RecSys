@@ -84,7 +84,7 @@ recorded elsewhere.
 | B14 | Rate limiting was measured absent rather than implemented | Fixed — a per-(tenant, subject) token bucket on every authenticated route, with the per-worker semantics written down | ADR 0014, `src/serving/ratelimit.py` |
 | B15 | The tenant-isolation canary was in-process only and skipped silently against an unreachable target | Fixed — a remote canary in the package the API image ships, run as a verify row; an unreachable target is a hard failure and CI can no longer skip | `synthetic/tenant_isolation/`, `src/release/verify.py`, `.github/workflows/ci.yml` |
 | B16 | No production-safe latency gate; the CI wrapper needs Compose recreation, cgroups and `/proc/stat` | Fixed as a deliberately weaker instrument — a canary profile with its own thresholds module and a scheduled workflow; the pinned gate is untouched | `synthetic/load/canary_thresholds.js`, `infra/k6/`, `.github/workflows/production-canary.yml` |
-| B17 | No backup, restore or rollback verification anywhere | Fixed — encrypted off-provider dumps, a restore drill that deliberately skips the seeder, and a rollback rehearsal across a migration; both were run | `infra/backup/`, `infra/deploy/rollback-rehearsal.sh`, runbook §9 |
+| B17 | No backup, restore or rollback verification anywhere | Fixed — encrypted off-provider dumps, a restore drill that deliberately skips the seeder, and a rollback rehearsal across a migration; both were run | `infra/backup/`, `infra/deploy/rollback-rehearsal.sh`, runbook §9 (rollback) and §10 (backups and the restore drill) |
 | B18 | No job had ever booted the app with `ENVIRONMENT != dev` | Partly — the local rehearsal is the first integration proof (R-9); CI validates the production model and asserts it declares no auth bypass, but does not boot it | `.github/workflows/ci.yml`, rehearsal R-9 |
 | B19 | `KEYCLOAK_AUTHORIZED_PARTIES` must be JSON; the CSV form crash-loops the container | Fixed — the preflight asserts the parsed value before the API boots on it, and the runbook prints the JSON form | `src/release/bootstrap.py`, the runbook |
 | B20 | Two init jobs were sequenced by `service_completed_successfully`, which a PaaS has no equivalent for | Fixed — one image with `bootstrap` and `verify` modes, ordered by the release script, with entrypoint fences rather than sleeps | `infra/api/entrypoint.sh`, `src/release/bootstrap.py` |
@@ -104,7 +104,7 @@ recorded elsewhere.
 | M14 | `TmdbMetadataClient` is dead code at runtime and the runbook was stale about it | Partly — the deployment records that the API needs no TMDB token and no outbound internet except JWKS; the unused client is still there | `src/serving/tmdb.py`, the runbook |
 | M15 | Keycloak had no healthcheck and realm drift was undetected | Fixed — a healthcheck that deliberately probes the `master` realm, plus a realm-drift job in CI | `docker-compose.prod.yml`, `.github/workflows/ci.yml` |
 | M16 | No `/me` ownership mapping; `demo-impersonator` grants full persona access | Deferred — mitigated by disabled registration and exactly three provisioned accounts; the real fix stays a product-track item | ADR 0012, ADR 0013 risks |
-| M17 | Audit coverage is recommendations-only | Deferred — stated plainly rather than left to read as "every authenticated request emits a row" | runbook §10 |
+| M17 | Audit coverage is recommendations-only | Deferred — stated plainly rather than left to read as "every authenticated request emits a row" | runbook §14 |
 | M18 | The smoke check could not authenticate against a non-demo Keycloak | Fixed — realm, client, grant and user are flags with unchanged defaults | `synthetic/smoke/demo.py` |
 | M19 | No post-deploy check exercised the write path | Fixed — verify runs an idempotent write with `expected_revision`, reads it back and reverts it | `src/release/verify.py` |
 | M20 | `/users/{id}/movies/{movieId}` and `/users/{id}/taste-profile` have no tenant-isolation coverage | Open — the suite's own docstring still names both as uncovered | `tests/tenant_isolation/test_no_cross_tenant_leak.py` |
@@ -239,7 +239,7 @@ a Redis-backed shared bucket is the named follow-up.
 - **[Deployment runbook](deployment-runbook.md)** — the operator's half: the four
   Postgres identities, the secret inventory, the first-deploy sequence, the
   owner-decision table, the incident quick reference, backups and the restore
-  drill, and §10's plain list of what the deployment does not do.
+  drill (§10), and §14's plain list of what the deployment does not do.
 - **`infra/deploy/`** — the environment contract (`production.env.example`, whose
   every credential is a required variable, so CI validating the production model
   against it is also a completeness check), the role provisioning SQL, and the

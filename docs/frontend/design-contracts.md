@@ -1,8 +1,10 @@
 # Movie-discovery frontend: design contracts
 
-**Status:** Accepted direction; implementation pending
+**Status:** Live contract. Every route described here is implemented and `/` has
+been cut over to the product (PR #65); the contracts below are what the shipped
+routes are held to, not a proposal.
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
 ## Shared product contract
 

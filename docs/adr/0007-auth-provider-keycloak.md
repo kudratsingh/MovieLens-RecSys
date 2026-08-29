@@ -5,6 +5,8 @@
 
 _Implementation note (2026-08-21): the `synthetic/auth/` token-minting helper described below never became its own package — the direct-password-grant helper lives in `synthetic/load/lib/auth.js` for the k6 harness and in `tests/tenant_isolation/conftest.py` for the isolation suite. Everything else here (realm-per-tenant, issuer-derived tenant, JWKS cache with force-refresh, the dev-bypass guard in `Settings`) landed as written in `src/auth/`._
 
+_Note (2026-08-29): criterion (b) below names `make up-dev`, a target that was planned but never built. The dev stack is `make infra-up` (`docker-compose.yml`), with `make demo-up` layering the browser demo on top of it; `make up-prod` is the production-mode stack. The criterion is unchanged — the airplane test is still the point — only the command's name was wrong. `docker-compose.{dev,staging}.yml` and their `make up-<env>` targets remain the open half of CLAUDE.md's multi-environment item._
+
 ## Context
 
 Phase 3 introduces real auth on every API endpoint except `/healthz` (non-negotiable #10). Every authenticated request must resolve to a tenant, and the tenant must be trustworthy — token-carried, not client-declared — because multi-tenancy isolation ([ADR 0008](0008-multi-tenancy-rls.md)) will use it to select champion models, Redis key prefixes, and rate limits. Cross-tenant data leakage is the highest-severity bug class (non-negotiable #9), and the tenant-resolution surface is where that class of bug lives.

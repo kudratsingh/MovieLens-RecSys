@@ -84,7 +84,17 @@ Open <http://localhost:3001>.
    Start on the fallback label, with the five-signal routing rule stated as
    policy rather than guessed at. Recommendations and watch history load as
    independent regions, so a dead history query cannot take the movie decision
-   with it.
+   with it. The featured slot is a queue position: `Watched`, `Watchlist`, and
+   `Not for me` each advance it. When the featured title is already on the
+   watchlist it carries an `On your watchlist` cue and a **Skip**, which advances
+   the queue and writes nothing at all — not a dismissal, and never a training
+   signal. After the third such skip in a session the page makes one inline
+   offer, *Stop featuring titles on your watchlist?*; the same toggle lives
+   permanently under **Featured picks**. Turning it off is durable per-persona
+   state (`user_preferences`, forced RLS, migration 0014) rather than a
+   browser setting, and it changes only the featured slot — the ranked rail still
+   lists watchlisted titles, marked `In watchlist`, because the rail is the
+   model's ranking and hiding items there would misrepresent it.
 3. **`Why this?`** Open the drawer beside the featured movie: the API's own item
    reason, the serving policy, the model version, the tenant, and the correlation
    ID — every row built only from a field the response actually carried, and a
@@ -101,20 +111,38 @@ Open <http://localhost:3001>.
    de-duplicated, with no invented total. Open a movie, then use **Back to
    Browse** — the accumulated window and the scroll position come back instead of
    restarting at the top.
-5. **Movie state.** On the detail page use `Watchlist`, then `Mark watched`, then
-   a star rating, and point out what each one claims. Watchlist is
+5. **The movie page, and movie state.** The detail page opens on a backdrop-led
+   hero: tagline, year, runtime and genres, the TMDB score with its attribution,
+   directors and a scrollable cast row, the overview, and a trailer that loads
+   nothing from YouTube until the poster frame is pressed — worth demonstrating,
+   because the privacy-enhanced embed is asserted to issue no request to any
+   YouTube host before that press. All of it comes from an offline enrichment
+   pass into a `details` JSONB column (migration 0013) returned by the detail
+   endpoint alone, so no page fans out to TMDB per card, and a title without
+   details degrades to the plain layout. Then use `Watchlist`, `Mark watched`,
+   and the star rating, and point out what each one claims. Watchlist is
    organizational and seeds no candidates. Watched is one positive interaction.
+   Rating commits before it celebrates — the staggered fill, pop and collapse
+   into `You rated 4/5 · Change rating` wait for the API, so a write that rolls
+   back is never celebrated, and the whole sequence is skipped under reduced
+   motion.
    The panel says in as many words that star magnitude is display feedback today
    rather than a graded training signal. Removing watched history is the only
    destructive action, so it sits behind `Confirm removing <title> from watched
    history` and states the consequence before it can be committed. `Not for me`
    is a reversible exclusion — `Undo not for me` puts it back — and never becomes
    a negative training label.
-6. **Library.** The **Rated**, **Watchlist**, and **History** tabs each load
+6. **Library.** The **Rated**, **Watchlist**, and **Seen** tabs each load
    independently, so one failing tab leaves the others and the ratings summary
-   readable. Find the title just rated. `Remove rating` is quiet, unconfirmed,
-   and leaves the movie in History; `Remove from history` is styled apart and
-   confirmed, because it destroys a signal rather than adding one. That
+   readable. (`Seen` is the visible label only — `/library?tab=history` is still
+   the address and `history` is still the API value.) Seen carries its own
+   search, genre and release-year filters and five rankings, with cursors bound
+   to the query fingerprint and an exact `matched` count rather than an invented
+   total, plus a spotlight above the list that walks the same filtered rows one
+   title at a time for a quick re-rate. Find the title just rated.
+   `Remove rating` is quiet, unconfirmed, and leaves the movie in Seen;
+   `Remove from history` is styled apart and confirmed, because it destroys a
+   signal rather than adding one. That
    distinction is the one worth dwelling on — the two used to look like the same
    button. The taste summary is labelled `live-ratings-v1` and presented as a
    live read of current ratings, not as a model explanation.
@@ -386,10 +414,17 @@ express: `/healthz` reachable without a token while nine other routes answer
 the audit row's `correlation_id`; auth, model and database provenance readable
 from `/whoami` and the audit row; bounded page sizes; a cursor reused under a
 different filter refused with 400; and a poster-less movie rendering as a record
-rather than a failure. It also records that **rate limiting is not implemented**
-— sixty rapid authenticated requests all answer 200, with no `429` and no
-`X-RateLimit-*` header. That check is advisory and describes the behaviour, so
-it will start describing a limiter the day one lands.
+rather than a failure. Rate limiting is one of the required checks: it asserts
+`X-RateLimit-*` on an admitted response and, once the bucket is drained, a `429`
+carrying `Retry-After`, `X-RateLimit-Remaining: 0` and a JSON `detail` — with no
+third outcome allowed. **On this stack it will report that the target has no
+limiter, and that is correct**: ADR 0014 turns the token bucket off in `dev`
+precisely so the load harnesses can drive a single Keycloak identity far past
+any sane per-subject rate. The check records that absence in words rather than
+passing over it silently, and names the fact that every deployed environment
+should instead show the enforced branch. To see the enforced branch locally, run
+it against the production-mode stack (`make up-prod`), where `ENVIRONMENT` is
+`production` and the limiter is on by default.
 
 Browser timing is a Playwright suite, not a load test:
 
