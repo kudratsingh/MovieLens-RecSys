@@ -270,6 +270,40 @@ test("Seen offers the filters and the rankings the collection can answer", async
   await expect(rows.first()).toContainText("TMDB 8.5");
 });
 
+test("Rated ranks by the movie's own facts as well as by the star value", async ({
+  page,
+}) => {
+  await openLibrary(page);
+
+  const sort = page.locator("#library-sort");
+  await expect(sort.locator("option")).toHaveText([
+    "Most recent",
+    "Title",
+    "Highest rated",
+    "Newest release",
+    "Highest TMDB score",
+  ]);
+  // The two new orderings are the sort control's alone. Genre and year still
+  // belong to Seen, so widening this list must not have dragged them along.
+  await expect(page.locator("#library-genre")).toHaveCount(0);
+  await expect(page.locator("#library-year-from")).toHaveCount(0);
+
+  const rows = page.getByRole("list", { name: "Rated movies" }).getByRole("listitem");
+
+  await sort.selectOption("release");
+  await expect(page).toHaveURL(/sort=release/);
+  await expect(rows.first()).toContainText("Decision to Leave");
+  await expect(rows.first()).toContainText("2022");
+
+  await sort.selectOption("tmdb");
+  await expect(page).toHaveURL(/sort=tmdb/);
+  // The ordering and the printed mark read the same field, so the leader has
+  // to carry the highest score rather than merely sit at the top.
+  await expect(rows.first()).toContainText("Parasite");
+  await expect(rows.first()).toContainText("TMDB 8.5");
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 test("a year range that matches nothing says so, and offers a way back", async ({
   page,
 }) => {

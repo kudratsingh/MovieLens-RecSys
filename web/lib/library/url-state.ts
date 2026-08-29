@@ -79,13 +79,19 @@ export function isLibraryTab(value: unknown): value is LibraryTab {
  *
  * `rating` only means something where every row carries one, so Watchlist does
  * not offer it — a watchlisted title cannot have a star value, and the endpoint
- * refuses the combination. `release` and `tmdb` order movie facts every tab's
- * rows have and the endpoint accepts them everywhere; they are offered on Seen
- * alone for now, which is a UI decision and one line to revisit.
+ * refuses the combination. That is the one exclusion with a product reason
+ * behind it.
+ *
+ * `release` and `tmdb` order movie facts rather than feedback, so every tab's
+ * rows carry them and the endpoint has always accepted them everywhere. Seen
+ * offered them alone at first only so the Rated tab's finish-gate evidence
+ * stayed valid while Seen was being built; a closed `<select>` shows its
+ * selected option and nothing else, so widening the list changes no capture.
+ * Rated now offers them too — "what I rated, newest film first" is the same
+ * question on either collection.
  */
 export function sortsForTab(tab: LibraryTab): readonly LibrarySort[] {
   if (tab === "watchlist") return ["recent", "title"] as const;
-  if (tab === "rated") return ["recent", "title", "rating"] as const;
   return LIBRARY_SORTS;
 }
 

@@ -65,7 +65,7 @@ reason, and the existing clients already read it as a bad request. `release`
 and `tmdb` are accepted on **every** tab; they order movie facts, which every
 tab's rows have, and there is no reason for the API to refuse an order it can
 produce. Which of them a viewer is *offered* is a UI decision, and it lives in
-`sortsForTab` (below).
+`sortsForTab` (below) — Rated and Seen now offer both.
 
 An unknown genre is a valid query that matches nothing: `200` with no rows, not
 a `400`.
@@ -340,7 +340,8 @@ rule where there is space for it.
   visible label of the third becomes `Seen`.
 - The Rated and Watchlist tabs: conditions, controls, copy, default sort, empty
   states. The single exception is the `rating` sort's new tie-break, called out
-  above.
+  above. (Rated's sort *options* changed later — see "Rated ranks by the
+  movie's own facts too".)
 - `counts` semantics, and the fact that all three are returned on every read.
 - Every mutation path. ADR 0012's transition table, `expected_revision`,
   idempotency keys, the conflict re-read and single replay, the
@@ -397,11 +398,16 @@ position. New fields on `LibraryUrlState`: `genre: string | null`,
 
 Rules, all of them extensions of rules that already exist here:
 
-- `sortsForTab`: `rated` → `recent, title, rating`; `watchlist` →
-  `recent, title`; `history` → `recent, title, rating, release, tmdb`.
-  `normalizeSort` still falls back to `recent` for a sort the tab does not
-  offer, so a hand-edited `?tab=rated&sort=tmdb` lands on `Most recent` rather
-  than on an error.
+- `sortsForTab`: `rated` and `history` → `recent, title, rating, release,
+  tmdb`; `watchlist` → `recent, title`. Watchlist is the one real exclusion,
+  and it has a product reason: a saved title carries no star value, and the
+  endpoint refuses `sort=rating&tab=watchlist` with a `400`. `normalizeSort`
+  still falls back to `recent` for a sort the tab does not offer, so a
+  hand-edited `?tab=watchlist&sort=tmdb` lands on `Most recent` rather than on
+  an error, and a viewer who ranked Seen by crowd score keeps that ranking when
+  they switch to Rated.
+  *(Rated gained `release` and `tmdb` after this document first landed — see
+  "Rated ranks by the movie's own facts too" below.)*
 - An inverted year range (`year_from > year_to`) drops **both** bounds, exactly
   as `parseBrowseQuery` does, because the endpoint answers it with a `422` and
   guessing which bound the viewer meant is worse than showing the unfiltered
@@ -605,7 +611,10 @@ walk, and the taste summary are all as they are today.
   documented order over a fixture with deliberate ties; unrated rows land last
   under `rating` and equal ratings break on watched date then movie ID; unknown
   release years land last under `release`; unscored titles land last under
-  `tmdb`.
+  `tmdb`. `release` and `tmdb` are asserted on `tab=rated` as well, over that
+  tab's own row set — the two sorts read the movie rather than the state row,
+  so the tab decides only which rows they order, and a watched-but-unrated
+  title has to be absent from both.
 - **Fingerprint**: stable for the same query; changes when any of `tab`, `sort`,
   `q`, `genre`, `year_from`, `year_to` changes; unchanged by `limit` and
   `cursor`; `"  the   thing "` and `"the thing"` produce the same one.
@@ -646,8 +655,9 @@ walk, and the taste summary are all as they are today.
 - **Vitest, `web/tests/unit/library-url-state.test.ts`**: the three new
   parameters parse, clamp and round-trip; only non-defaults are written; each of
   tab / sort / `q` / genre / year drops the cursor; an inverted range drops both
-  bounds; `sortsForTab("history")` is the five; `libraryViewKey` changes with
-  each new field.
+  bounds; `sortsForTab` is the five on both `history` and `rated` and two on
+  `watchlist`, and a sort survives a Rated ↔ Seen switch; `libraryViewKey`
+  changes with each new field.
 - **Vitest, `web/tests/unit/library-spotlight.test.ts`**: the pure reducer —
   clamping at both ends, `syncToWindow` following the movie id through an
   append, `removeCurrent` advancing and clamping at the tail, an empty window.
@@ -663,7 +673,9 @@ walk, and the taste summary are all as they are today.
   rating updates the row. Plus the existing jest-axe pass.
 - **Fixture-mode Playwright, `web/e2e/library-slice.spec.ts`**: the Seen tab at
   390 / 768 / 1440 with axe — spotlight present, filter and sort controls,
-  filtered-empty state, stale-cursor notice, and no page overflow at 320.
+  filtered-empty state, stale-cursor notice, and no page overflow at 320. The
+  Rated tab exercises its two added orderings at the same widths, and asserts
+  that the genre and year controls stayed on Seen.
 - **One service-backed journey** in `web/tests/e2e/`, in the serialized
   `browser-auth-e2e` set (`workers: 1`), owned by **Action Fan (900000101)**:
   sign in through Keycloak as `web/tests/e2e/keycloak.ts` does, open
@@ -703,17 +715,42 @@ the consequence for *tests* is the sharper one, and it is why the QA walk
 exercises removal on a title the persona has never seen rather than on a seeded
 row whose 2023 date it could not put back.
 
+## Rated ranks by the movie's own facts too
+
+*Settled after this document first landed; it closes what was open question 1.*
+
+Rated now offers `release` and `tmdb` alongside `recent`, `title` and `rating`.
+The original restriction was never a product judgement — the API has accepted
+both on every tab since the first version of this contract, and the rows the
+Rated tab already renders carry `release_year` and `tmdb_rating` and print
+them. Seen held them alone so that the Rated tab's finish-gate evidence stayed
+valid while Seen was being built. That turned out to cost nothing to undo: a
+closed `<select>` shows its selected option and nothing else, so no committed
+capture changes, and `recent` is still the default the resting URL omits.
+
+What "one edit to `sortsForTab`" left out is the check that the endpoint really
+answers both orderings over the *Rated* row set, which is a different set from
+Seen's — every rated title is watched, but not every watched title is rated.
+`tests/unit/test_serving_feedback.py` covers it on `tab=rated` directly:
+`release` and `tmdb` in the documented order with `COALESCE(..., -1)` putting
+the unknowns last, a watched-but-unrated row absent from both, an exact
+`matched`, and a one-row-at-a-time cursor walk that reproduces the whole order
+across the sentinel's ties.
+
+Three things are deliberately unchanged. Watchlist still offers two sorts, for
+the product reason above. The genre and year **filter controls** still render
+on Seen alone — the sort control is the only one this widens, and
+`web/e2e/library-slice.spec.ts` asserts the filters did not follow it. And
+because both tabs now answer the same five, `nextLibraryUrlState` carries the
+sort across a Rated ↔ Seen switch instead of resetting it to `recent`.
+
 ## Open questions
 
-1. **Whether Rated should also offer `release` and `tmdb`.** The API accepts
-   them on every tab; this change offers them on Seen only, so the Rated tab's
-   finish-gate evidence stays valid. Flipping it later is one edit to
-   `sortsForTab`.
-2. **Whether the spotlight's position should survive a reload.** It does not:
+1. **Whether the spotlight's position should survive a reload.** It does not:
    the URL owns tab, sort, filters and cursor, and a spotlight index in the URL
    would be a fourth thing to keep in step with a window that moves under a
    write. It resets to the first loaded title.
-3. **Whether `matched` needs a ceiling.** It does not for a persona-sized
+2. **Whether `matched` needs a ceiling.** It does not for a persona-sized
    library. If `/me` ownership ever lands and a real user's library is
    unbounded, `matched` is the field that needs a cap and a `999+` rendering,
    and the spotlight readout is the only thing reading it.
