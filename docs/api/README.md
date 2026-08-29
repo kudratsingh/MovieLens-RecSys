@@ -1,57 +1,56 @@
 # API contracts
 
 `openapi.json` is the committed, generated contract for the authenticated
-FastAPI surface. Do not edit it by hand.
+FastAPI surface. **Do not edit it by hand** — it is produced from the running
+app's route and Pydantic definitions, and a hand edit is overwritten by the next
+regeneration and caught by CI in between.
 
-Regenerate after changing a route or Pydantic model:
+For a readable tour of what the surface actually offers — every path, the auth
+rules, the rate-limit headers, and a worked recommendation response — read
+[`overview.md`](overview.md). This page is about the artifact itself.
+
+## Regenerating and checking
+
+Regenerate after changing a route, a Pydantic model, or a response description:
 
 ```bash
-make api-contract
-make web-api-types
+make api-contract      # writes docs/api/openapi.json
+make web-api-types     # writes web/lib/api.generated.ts from it
 ```
 
-CI and local verification use:
+Verify without writing — this is what CI runs, and what to run before pushing:
 
 ```bash
 make api-contract-check
 make web-api-types-check
 ```
 
-The artifact includes stable operation IDs, the Keycloak bearer-security
-scheme, shared error responses, and request/response constraints. Generated
-frontend types must consume this file rather than importing Python models or
-maintaining a separate handwritten interpretation.
+Both are drift checks: they regenerate into a temporary location and fail on any
+difference. A red `api-contract-check` means the committed schema no longer
+describes the code; a red `web-api-types-check` means the TypeScript was not
+regenerated after the schema moved.
 
-Bundle 2 adds the selected-persona Library and feedback resources:
+## What the artifact carries
 
-- `GET /users/{user_id}/library` with bounded, filter-bound keyset cursors;
-- `GET /users/{user_id}/taste-profile` labeled `live-ratings-v1`;
-- independent `watched`, `rating`, `watchlist`, and `dismissal` PUT/DELETE
-  resources; and
-- canonical mutation responses containing a revision and idempotency request
-  ID. Rating deletion preserves watched state; deleting watched state is the
-  separate history-removal resource.
+Stable operation IDs, the Keycloak bearer security scheme, shared error
+responses, and request/response constraints. The generated frontend types are
+the only thing `web/` may consume — no importing Python models, and no separate
+hand-written interpretation of the same shapes that can quietly disagree.
 
-Bundle 3 adds `listDemoCatalog` and `getMovieDetail`. Catalog cursors are
-opaque, versioned, and bound to the active filter/sort query. Browse and detail
-metadata come from the persisted local read model, overlay the complete durable
-movie state, and never trigger live per-card TMDB calls.
+Two conventions apply to the whole surface rather than to any one operation, so
+they are documented rather than modelled in the schema:
 
-The Bundle 6 serving prerequisite extends two operations additively:
-
-- `recommendMovies` gains `serving_policy` — `name`, `learned`,
-  `positive_signal_count`, `threshold`, `reason`, `score_scale`,
-  `filter_policy`, and `excluded_count`. The flat `policy` string is retained
-  for existing clients and always equals `serving_policy.name`. `score_scale`
-  states what `items[].score` is (`lightgbm-rank-score` or
-  `tenant-interaction-count`); it is an ordering, not a probability, and must
-  not be rendered as a match percentage.
-- `listRecommendationAudits` gains `correlation_id`, `input_state_revision`,
-  `input_state_hash`, `exclusion_hash`, `positive_signal_count`,
-  `excluded_count`, `filter_policy`, `feature_event_time`, `candidate_sources`,
-  and `reason`, and each prediction gains `candidate_source` and
-  `seed_movie_id`. Audits written before this change report `unknown`
-  attribution rather than a fabricated source.
+- **`X-Request-ID` on every response.** A caller-supplied value is adopted when
+  it is 1–128 printable ASCII characters with no whitespace, and otherwise
+  replaced with a minted UUID — a malformed header never fails the request.
+  Recommendation audits store the echoed value as `correlation_id`; `request_id`
+  remains the audit row's own UUID identity, so a replayed correlation header
+  cannot collide with an existing row.
+- **`X-RateLimit-*` on every authenticated response**, with `429` +
+  `Retry-After` when the bucket is drained (ADR 0014). The headers describe a
+  per-worker bucket rather than a cluster-wide quota; the schema's `info`
+  description says so, and [`overview.md`](overview.md#cross-cutting-response-conventions)
+  explains why.
 
 ## `serving_policy` reason vocabulary
 
@@ -70,10 +69,8 @@ the values the existing fields take.
 `excluded-id-blocked` also appears appended to another reason, after a `;`, when
 some — but not all — ids were dropped on the way out.
 
-Request correlation applies to the whole surface rather than one operation, so
-it is not modelled in the schema: every response carries `X-Request-ID`. A
-caller-supplied value is adopted when it is 1–128 printable ASCII characters
-with no whitespace, and otherwise replaced with a minted UUID — a malformed
-header never fails the request. Recommendation audits store the echoed value
-as `correlation_id`; `request_id` remains the audit row's own UUID identity so
-a replayed correlation header cannot collide with an existing row.
+The `unseeded-retrieval` row is worth dwelling on, because it is the one the
+schema exists to make impossible to fake. Before PR #64, a retrieval that no
+positive seed reached still reported `learned: true`; the list was the index's
+popularity fill with a ranker applied to it, which is a different claim. The
+distinction is now in the response rather than in a reader's head.
