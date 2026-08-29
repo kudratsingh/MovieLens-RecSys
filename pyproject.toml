@@ -49,6 +49,10 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "types-redis",
+    # notebooks/eda.py renders the figures docs/eda.md embeds. A dev extra
+    # rather than a runtime dependency: nothing that serves a request draws a
+    # chart, and the API image is on a size budget CI enforces.
+    "matplotlib>=3.10,<4",
     # The deployment tests parse docker-compose.prod.yml and the GitHub
     # workflows. PyYAML has always been installed here transitively (mlflow,
     # prefect, dvc and feast all pull it), which is exactly why it is named:

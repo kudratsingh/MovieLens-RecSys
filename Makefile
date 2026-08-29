@@ -129,16 +129,18 @@ SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 install:
 	pip install -e ".[dev]"
 
+# notebooks/ is in this list because CI has always linted it. Leaving it out
+# locally meant `make lint` could pass on a tree the lint job then failed.
 lint:
-	ruff check src/ synthetic/ tests/
-	black --check src/ synthetic/ tests/
+	ruff check src/ synthetic/ tests/ notebooks/
+	black --check src/ synthetic/ tests/ notebooks/
 
 format:
-	ruff check --fix src/ synthetic/ tests/
-	black src/ synthetic/ tests/
+	ruff check --fix src/ synthetic/ tests/ notebooks/
+	black src/ synthetic/ tests/ notebooks/
 
 typecheck:
-	mypy src/ synthetic/
+	mypy src/ synthetic/ notebooks/
 
 api-contract:
 	python -m scripts.generate_openapi
