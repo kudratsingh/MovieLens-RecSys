@@ -32,6 +32,11 @@ alternatives analyzed and the signals that would reopen it.
   Cold or unavailable paths fall back to popularity and *say so* in the response.
 - **Durable prediction audits.** Ranked items, scores, online feature values, model versions,
   structured fallback reason and per-stage timings, committed before the response is sent.
+- **Measured cold-start coverage.** A fixed-seed cohort of 2,000 synthetic users at history sizes
+  0/1/3/10, scored per bucket by the same evaluation harness ([ADR 0011](docs/adr/0011-cold-start-coverage.md)).
+  On its first run it falsified a claim: the offline candidate models fall back on "no history at
+  all" rather than on the threshold of five, so a one-interaction user was handed item-item
+  neighbours and did about a third as well as the fallback would have — reported, not patched.
 - **The movie-discovery product.** Discover, Browse, movie detail, Library and Quick Picks behind one
   shell, ML evidence behind progressive disclosure. `/` serves it; the pre-redesign dashboard is
   retained at `/legacy` as a documented rollback.
@@ -46,8 +51,8 @@ of this codebase with `ENVIRONMENT != dev`, and every defect it exposed was fixe
 green no-ops until one is configured. See [ADR 0013](docs/adr/0013-production-deployment-target.md)
 and the [deployment runbook](docs/deployment-runbook.md).
 
-Still open in Phase 3: programmatic cold-start cohorts, per-tenant champion routing, audit coverage
-for non-prediction endpoints, and dev/staging Compose files. The frontend finish gate passes every
+Still open in Phase 3: per-tenant champion routing, audit coverage for non-prediction endpoints,
+dev/staging Compose files, and the offline routing gap the cold-start cohort found (below). The frontend finish gate passes every
 criterion a reviewer can settle and [holds](docs/frontend/finish-gate-review.md) on moderated
 sessions with real participants, which a reviewer cannot substitute for. The long form is in
 [CLAUDE.md](CLAUDE.md) and [`docs/README.md`](docs/README.md).
@@ -135,8 +140,11 @@ NDCG@10 ≈ 0.49 against warm ≈ 0.03 for both Phase 1 baselines
 ([PR #17](https://github.com/kudratsingh/MovieLens-RecSys/pull/17) — cold users rate the canonical
 popular titles, which is exactly why per-policy attribution exists), and the LightGBM ranker at warm
 recall@10 0.033 / NDCG@10 0.048
-([PR #26](https://github.com/kudratsingh/MovieLens-RecSys/pull/26)). No recall@500 for item-item or
-two-tower has been committed anywhere.
+([PR #26](https://github.com/kudratsingh/MovieLens-RecSys/pull/26)). The one committed recall@500 is on the
+synthetic cold-start cohort rather than the natural holdout: item-item at history sizes 0/1/3/10
+scores 0.4760 / 0.1440 / 0.2880 / 0.3900 with `synth_cold_routing_ok = false`
+([ADR 0011, 2026-08-29 note](docs/adr/0011-cold-start-coverage.md)). No full-holdout recall@500 for
+item-item or two-tower has been committed anywhere.
 
 > **Results table — pending.** A comparable table across popularity, CF/ALS, item-item, two-tower and
 > the ranker, from fresh runs through the one harness on the one holdout, lands in its own pull
@@ -222,7 +230,7 @@ four-ADR reading order for a reviewer in a hurry.
 | Tenant isolation | PostgreSQL forced row-level security |
 | Frontend | Next.js 16 + TypeScript 5 + Tailwind; Vitest, Playwright, jest-axe |
 | Load + reliability | k6 (pinned), with page-shaped budgets and a browser timing suite |
-| Planned | Prefect orchestration (Phase 4), Evidently drift detection (Phase 5); Prometheus + Grafana run today |
+| Planned | Prefect orchestration (Phase 4), Evidently drift detection (Phase 5); Prometheus + Grafana are in the dev Compose stack, and nothing exports `/metrics` yet ([ADR 0013](docs/adr/0013-production-deployment-target.md)) |
 | CI/CD | GitHub Actions — twelve jobs, GHCR `linux/amd64` images tagged with the commit SHA |
 | Hosting (specified, not provisioned) | One Hetzner CX22 behind Caddy; SSH deploy with automatic rollback |
 
@@ -272,8 +280,7 @@ Training entrypoints are `make train-popularity`, `train-cf`, `train-itemitem`, 
 `train-ranker`; each logs to its MLflow experiment (UI on <http://localhost:5000>).
 `make data-download` and `make data-ingest` fetch and load the full 25M dataset, which the demo does
 not need. Work goes on short-lived branches and merges by pull request — never a direct push to
-`main` —
-with [Conventional Commits](https://www.conventionalcommits.org/) and a filled-in
+`main` — with [Conventional Commits](https://www.conventionalcommits.org/) and a filled-in
 [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
 
 ## Security
