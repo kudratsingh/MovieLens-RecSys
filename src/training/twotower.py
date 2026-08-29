@@ -34,6 +34,7 @@ from src.data.load import load_ratings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
+from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,12 @@ def main() -> None:
         f"{len(split.test):,}",
         split.cutoff,
     )
+
+    # ADR 0011's cold-start cohort joins the training frame here, if this
+    # machine has it. At most 7 000 rows against ~20 M, and none of its users
+    # appear in holdout, so the warm/cold numbers below are unmoved — the
+    # cohort exists to be routed and scored, not to shift an existing metric.
+    train_frame, cohort = synth_cold.prepare(split, logger=logger)
 
     config = TwoTowerConfig()
     model = TwoTowerModel(config=config)
@@ -109,7 +116,7 @@ def main() -> None:
             # that 3 epochs was actually already at a plateau.
             mlflow.log_metric("train_loss", mean_loss, step=epoch)
 
-        model.fit(split.train, on_epoch=_log_epoch)
+        model.fit(train_frame, on_epoch=_log_epoch)
         fit_seconds = time.perf_counter() - t0
         logger.info(
             "Fit in %.1fs (%d users x %d items, %d epochs)",
@@ -122,20 +129,33 @@ def main() -> None:
         logger.info("Recommending top-%d for each holdout user ...", K_CANDIDATES)
         t1 = time.perf_counter()
         holdout_user_ids = split.holdout["userId"].unique().tolist()
-        recommendations = model.recommend_for_users(holdout_user_ids, k=K_CANDIDATES)
+        cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
+        recommendations = model.recommend_for_users(
+            holdout_user_ids + cohort_user_ids, k=K_CANDIDATES
+        )
         recommend_seconds = time.perf_counter() - t1
         logger.info(
             "Recommended for %d users in %.1fs",
-            len(holdout_user_ids),
+            len(holdout_user_ids) + len(cohort_user_ids),
             recommend_seconds,
         )
 
         logger.info("Building eval inputs ...")
         holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
+        # Counts come from the real train slice, not the cohort-attached frame:
+        # the warm/cold partition is over holdout users, and no synthetic user
+        # is ever looked up in it.
         train_counts = split.train.groupby("userId").size().to_dict()
 
         logger.info("Evaluating at K_CANDIDATES=%d ...", K_CANDIDATES)
-        result = evaluate(recommendations, holdout, train_counts, k=K_CANDIDATES)
+        result = evaluate(
+            recommendations,
+            holdout,
+            train_counts,
+            k=K_CANDIDATES,
+            synthetic_cold_users=cohort.targets_by_bucket if cohort is not None else None,
+            synthetic_cold_served_by=(model.was_served_by_twotower if cohort is not None else None),
+        )
         logger.info(
             "Warm (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
             result.n_warm_users,
@@ -223,6 +243,13 @@ def main() -> None:
                 "n_fallback_served_users": len(holdout_fallback),
             }
         )
+        if cohort is not None:
+            synth_cold.log_summary(result, logger=logger, k=K_CANDIDATES)
+            mlflow.log_params(synth_cold.params(cohort))
+            mlflow.log_metrics(synth_cold.metrics(result, suffix=synth_cold.SUFFIX_AT_K_CANDIDATES))
+            mlflow.set_tag(
+                synth_cold.ROUTING_TAG, str(synth_cold.routing_is_correct(result)).lower()
+            )
     logger.info("MLflow run logged. Done.")
 
 

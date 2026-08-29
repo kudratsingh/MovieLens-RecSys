@@ -56,6 +56,7 @@ from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, K, evalu
 from src.features import FeatureIndex
 from src.models.candidates.itemitem import ItemItemModel
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
+from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
 
@@ -226,15 +227,21 @@ def main() -> None:
         split.cutoff,
     )
 
+    # ADR 0011's cold-start cohort joins the training frame here, if this
+    # machine has it. At most 7 000 rows against ~20 M, and none of its users
+    # appear in holdout, so the warm/cold numbers below are unmoved — the
+    # cohort exists to be routed and scored, not to shift an existing metric.
+    train_frame, cohort = synth_cold.prepare(split, logger=logger)
+
     logger.info("Fitting candidate model (item-item cosine) ...")
     t0 = time.perf_counter()
-    candidate_model = ItemItemModel().fit(split.train)
+    candidate_model = ItemItemModel().fit(train_frame)
     candidate_fit_seconds = time.perf_counter() - t0
     logger.info("Candidate fit in %.1fs", candidate_fit_seconds)
 
     logger.info("Building feature index ...")
     t0 = time.perf_counter()
-    feature_index = FeatureIndex.build(split.train, movies)
+    feature_index = FeatureIndex.build(train_frame, movies)
     feature_build_seconds = time.perf_counter() - t0
     logger.info("Feature index in %.1fs", feature_build_seconds)
 
@@ -243,6 +250,10 @@ def main() -> None:
         RANKER_POSITIVE_WINDOW_DAYS,
         RANKER_POSITIVE_LIMIT,
     )
+    # Positives are sampled from the real train slice, never from the cohort.
+    # The cohort's rows all sit inside the trailing window, so they would
+    # otherwise be eligible — and a synthetic user is here to be *scored* by
+    # the ranker, not to teach it what a LambdaRank group looks like.
     positives = _sample_training_positives(
         split.train,
         n_days=RANKER_POSITIVE_WINDOW_DAYS,
@@ -277,14 +288,17 @@ def main() -> None:
     logger.info("Ranking holdout users end-to-end (candidate → features → ranker → top-%d) ...", K)
     t0 = time.perf_counter()
     holdout_user_ids = split.holdout["userId"].unique().tolist()
+    cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
     # Features at holdout evaluation time use as-of == train cutoff — the
     # last moment before holdout starts. Everything strictly earlier is
-    # visible; nothing from holdout leaks.
+    # visible; nothing from holdout leaks. The cohort's rows sit 24 hours
+    # before that cutoff, so a synthetic user's features are as visible here
+    # as any real user's.
     recommendations = _rank_for_holdout(
         ranker=ranker,
         candidate_model=candidate_model,
         feature_index=feature_index,
-        holdout_user_ids=holdout_user_ids,
+        holdout_user_ids=holdout_user_ids + cohort_user_ids,
         as_of_timestamp=split.cutoff,
         k_candidates=K_CANDIDATES,
         k_final=K,
@@ -292,14 +306,26 @@ def main() -> None:
     rank_seconds = time.perf_counter() - t0
     logger.info(
         "Ranked %d users in %.1fs",
-        len(holdout_user_ids),
+        len(holdout_user_ids) + len(cohort_user_ids),
         rank_seconds,
     )
 
     logger.info("Evaluating end-to-end at K=%d ...", K)
     holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
     train_counts = split.train.groupby("userId").size().to_dict()
-    result = evaluate(recommendations, holdout, train_counts, k=K)
+    result = evaluate(
+        recommendations,
+        holdout,
+        train_counts,
+        k=K,
+        synthetic_cold_users=cohort.targets_by_bucket if cohort is not None else None,
+        # The two-stage path routes exactly where its candidate stage routes:
+        # a user the item-item index cannot serve gets popularity candidates,
+        # and the ranker only reorders whatever it was handed.
+        synthetic_cold_served_by=(
+            candidate_model.was_served_by_itemitem if cohort is not None else None
+        ),
+    )
     logger.info(
         "Warm (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
         result.n_warm_users,
@@ -323,6 +349,9 @@ def main() -> None:
         K,
         result.overall.ndcg,
     )
+
+    if cohort is not None:
+        synth_cold.log_summary(result, logger=logger, k=K)
 
     importances = ranker.feature_importances(importance_type="gain")
     logger.info("Feature importances (gain): %s", importances)
@@ -383,6 +412,12 @@ def main() -> None:
                 "n_cold_users": result.n_cold_users,
             }
         )
+        if cohort is not None:
+            mlflow.log_params(synth_cold.params(cohort))
+            mlflow.log_metrics(synth_cold.metrics(result, suffix=synth_cold.SUFFIX_AT_K))
+            mlflow.set_tag(
+                synth_cold.ROUTING_TAG, str(synth_cold.routing_is_correct(result)).lower()
+            )
         # Feature importances land as their own metrics so MLflow's
         # comparison view can plot them across runs; the "importance"
         # prefix keeps them grouped.

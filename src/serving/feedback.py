@@ -22,6 +22,7 @@ from uuid import UUID
 from sqlalchemy import JSON, Connection, bindparam, text
 
 from src.serving.recommendations import UnknownDemoPersonaError, UnknownMovieError
+from src.serving.sql import escape_like
 
 FeedbackAction = Literal[
     "watched_set",
@@ -954,10 +955,10 @@ def _row_set(*, user_id: int, query: LibraryQuery) -> tuple[str, dict[str, objec
     parameters: dict[str, object] = {"user_id": user_id}
     if query.q:
         where.append("lower(m.title) LIKE :query ESCAPE '\\'")
-        parameters["query"] = f"%{_escape_like(query.q.lower())}%"
+        parameters["query"] = f"%{escape_like(query.q.lower())}%"
     if query.genre:
         where.append("('|' || m.genres || '|') LIKE :genre ESCAPE '\\'")
-        parameters["genre"] = f"%|{_escape_like(query.genre)}|%"
+        parameters["genre"] = f"%|{escape_like(query.genre)}|%"
     if query.year_from is not None:
         where.append("cm.release_year >= :year_from")
         parameters["year_from"] = query.year_from
@@ -1025,13 +1026,3 @@ def _cursor_parameters(cursor: tuple[list[str | float], int]) -> dict[str, objec
     for index, value in enumerate(values):
         parameters[f"cursor_key_{index}"] = value
     return parameters
-
-
-def _escape_like(value: str) -> str:
-    """Escape a viewer's text so ``%`` and ``_`` match themselves.
-
-    Same rule ``src/serving/catalog.py`` applies to its own search. It is
-    spelled again here rather than imported because that module already imports
-    this one, and the dependency runs in exactly one direction.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

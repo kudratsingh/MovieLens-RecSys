@@ -1,0 +1,70 @@
+%% Sources: docker-compose.yml, docker-compose.demo.yml, docker-compose.prod.yml,
+%% src/serving/app.py, src/serving/orchestration.py, src/serving/model_server.py,
+%% src/auth/middleware.py, src/features/online.py, src/features/feast_repo/,
+%% src/models/artifacts.py, infra/model-bundle/manifest.json,
+%% synthetic/personas/enrich_posters.py, alembic/versions/.
+%% Not drawn because they do not exist on main: Prefect, Evidently, a model
+%% registry, an A/B router, a /metrics endpoint.
+flowchart TB
+  V(["Viewer in a browser"])
+
+  subgraph WEB["Next.js — web:3001"]
+    direction TB
+    BFF["BFF route handlers<br/>Auth.js authorization code + PKCE<br/>tokens kept in an encrypted HttpOnly session"]
+    RC["lib/resources — the one server-owned client<br/>per-resource timeout budgets<br/>a forwarded bearer is refused, not dropped"]
+    BFF --> RC
+  end
+
+  subgraph API["FastAPI — api:8000"]
+    direction TB
+    MW["Middleware, outer to inner<br/>RequestId · Auth · RateLimit · Audit"]
+    CO["Recommendation coordinator<br/>positives and exclusions, policy, fallback"]
+    MW --> CO
+  end
+
+  subgraph SIDE["model-server — private sidecar, bearer token, no published port"]
+    direction TB
+    CI["item-item CandidateIndex<br/>retrieve, then popularity fill"]
+    FT["Feast online read<br/>8 ranker features per candidate"]
+    LG["LightGBM LambdaRank<br/>score and order"]
+    CI --> FT --> LG
+  end
+
+  KC["Keycloak<br/>one realm per tenant<br/>issues tokens, serves JWKS"]
+  PGB["pgBouncer<br/>transaction pool mode"]
+  PG[("Postgres<br/>forced RLS on 7 tenant-scoped tables<br/>shared catalog beside them")]
+  RD[("Redis<br/>Feast online store")]
+  FSV["feature-server<br/>evidence surface only<br/>serves GET /users/{id}/features<br/>NOT on the ranking path"]
+
+  V --> BFF
+  V -. "sign-in redirect" .-> KC
+  RC -- "bearer token" --> MW
+  KC -. "JWKS, cached 300 s" .-> MW
+  MW -- "SET LOCAL app.tenant_id<br/>then COMMIT before the response" --> PGB
+  PGB --> PG
+  CO -- "POST /rank<br/>0.5 s timeout" --> CI
+  CO --> PGB
+  MW --> FSV
+  FT --> RD
+  FSV --> RD
+
+  subgraph OFF["Offline lane — run by hand today, no orchestrator on main"]
+    direction TB
+    ML["MovieLens 25M<br/>25,000,095 ratings"]
+    ING["src/data/ingest.py<br/>Postgres is the source of truth"]
+    SPL["Temporal split<br/>train / holdout / test"]
+    FEA["Point-in-time features<br/>into feature_store.* in Postgres"]
+    TRN["Training<br/>candidates + LightGBM ranker<br/>tracked in MLflow"]
+    BUN["ServingManifest<br/>SHA-256 per artifact<br/>committed at infra/model-bundle/"]
+    ML --> ING --> SPL --> FEA --> TRN --> BUN
+  end
+
+  TMDB(["TMDB"]) -. "offline catalog enrichment<br/>no request-time call" .-> ING
+  BUN -- "baked into the features image at build" --> CI
+  FEA -- "materialize<br/>tenant-keyed snapshots" --> RD
+
+  DEV["Dev stack only, never deployed<br/>MLflow · Prometheus · Grafana<br/>there is no /metrics endpoint to scrape"]
+  TRN -.-> DEV
+
+  classDef edge fill:#00000000,stroke-dasharray:4 3
+  class DEV,TMDB edge

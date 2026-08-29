@@ -137,25 +137,32 @@ describe("library URL state", () => {
   });
 
   it("offers each collection only the orderings it can answer", () => {
-    expect(sortsForTab("rated")).toEqual(["recent", "title", "rating"]);
+    // `release` and `tmdb` read the movie, not the feedback, so both
+    // collections that carry a star value offer all five. Watchlist is the one
+    // real exclusion: a saved title has no rating, and the endpoint answers
+    // `sort=rating&tab=watchlist` with a 400.
+    const everySort = ["recent", "title", "rating", "release", "tmdb"];
+    expect(sortsForTab("rated")).toEqual(everySort);
+    expect(sortsForTab("history")).toEqual(everySort);
     expect(sortsForTab("watchlist")).toEqual(["recent", "title"]);
-    expect(sortsForTab("history")).toEqual([
-      "recent",
-      "title",
-      "rating",
-      "release",
-      "tmdb",
-    ]);
 
     // A hand-edited sort a tab does not offer lands on Most recent rather than
     // on an error the reader cannot act on.
-    expect(normalizeSort("rated", "tmdb" as LibrarySort)).toBe("recent");
     expect(normalizeSort("watchlist", "rating" as LibrarySort)).toBe("recent");
+    expect(normalizeSort("watchlist", "tmdb" as LibrarySort)).toBe("recent");
+    expect(normalizeSort("rated", "tmdb" as LibrarySort)).toBe("tmdb");
+    expect(normalizeSort("rated", "release" as LibrarySort)).toBe("release");
     expect(normalizeSort("history", "tmdb" as LibrarySort)).toBe("tmdb");
 
     expect(
       nextLibraryUrlState(state({ sort: "rating" }), { tab: "watchlist" }).sort,
     ).toBe("recent");
+    // Moving between the two collections that do answer them keeps the sort,
+    // so a viewer who ranked Seen by crowd score and switches to Rated is
+    // still looking at the same question.
+    expect(
+      nextLibraryUrlState(state({ tab: "history", sort: "tmdb" }), { tab: "rated" }).sort,
+    ).toBe("tmdb");
   });
 
   it("drops a cursor whenever the view it was issued for changes", () => {

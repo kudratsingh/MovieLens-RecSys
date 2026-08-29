@@ -128,3 +128,17 @@ The release order is part of the decision rather than an implementation detail, 
 - **The verify matrix goes green while the product is visibly broken.** It asserts persona slugs, policies, the learned flag, the auth boundary, isolation denials, a write round trip and the audit rollup. If a real regression walks past all of that, the matrix is under-specified and the fix is a new row — this is the check we would most like to be told is insufficient, and a 30-minute canary that only exercises the recommendations path is a thin backstop for it.
 - **Anything is fixed by hand on the box and the fix is not written back into a script.** A single host makes hand-editing possible in a way a PaaS did not, which is a convenience and a trap: the next deploy overwrites the containers and the fix disappears, or worse, it does not and the box stops matching the repository. Any manual step that survives a session belongs in `infra/host/bootstrap.sh` or `infra/deploy/deploy.sh` the same day.
 - **The k6 canary's p99 sits persistently above CI's at one-eleventh the arrival rate.** At ~5 arrivals/second against 55 in CI, production should not be the slower of the two. If it is, the suspect is the shared vCPU, and the answer is dedicated capacity — never a threshold change.
+
+## Implementation note — 2026-08-29
+
+The topology as specified, drawn from `docker-compose.prod.yml`, `infra/edge/Caddyfile`,
+`infra/host/` and `infra/deploy/deploy.sh`. Ten long-lived services, of which
+only the edge publishes a port; nine run-to-completion jobs behind the `jobs`
+profile. The machine itself does not exist yet — this is the shape the first
+deploy will produce, and the rehearsal has run the whole sequence locally
+against the same file.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/production-topology.dark.svg">
+  <img alt="The production topology: one Hetzner CX22 with only the Caddy edge publishing ports and key-only SSH from GitHub Actions, ten long-lived services on a private network, the jobs profile, and the systemd units for boot, nightly backup and weekly prune." src="../diagrams/production-topology.svg" width="100%">
+</picture>

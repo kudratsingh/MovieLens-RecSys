@@ -113,7 +113,12 @@ not, because it is `final` on this surface and a bare `Undo` would quietly
 become the destructive edit the control set refuses. It offers the rating prompt
 and a route into the Library instead.
 
-That rating prompt is **an offer with an end**. It opens under the ranked card
+That rating prompt renders the **shared large star control** — see
+[Rating](#rating) — because it exists for one decision and is headed
+`Rate <title>`. It previews on hover and keyboard focus, it is one tab stop
+moved with the arrow keys, and its targets stay at 44px on the mobile profile.
+
+The prompt is **an offer with an end**. It opens under the ranked card
 after a watched decision and it closes the moment a star commits: the panel is
 removed rather than left standing with its stars filled in, and one sentence
 takes its place in the status region — `Rated <title> 4/5. Ratings do not
@@ -429,11 +434,18 @@ to those fields and does not stand in for shell-level attribution.
 
 ### Rating
 
-Movie detail owns the product's one **large** rating control
-(`components/movie/rating-stars.tsx`); every other surface keeps the compact
-editor. The difference is that detail is where rating is the decision rather
-than an incidental edit, and it earns three behaviours the small editor has no
-room for.
+Movie detail is the home of the product's **large** rating control
+(`components/movie/rating-stars.tsx`), and it is shared with the two other
+surfaces where rating is the decision rather than an incidental edit: the Seen
+spotlight, and Discover's `Just marked watched` prompt, which is headed
+`Rate <title>` and holds nothing else. Quick Picks and the Library rows keep the
+compact editor, because a star there is one press of a queue decision or an edit
+to a value that already exists. The rule is the surface's job, not its route —
+applied any other way, the product ends up with two whole-star controls free to
+drift apart in target size, in keyboard model, and in what a press looks like
+before it commits.
+
+The large control earns three behaviours the small editor has no room for.
 
 - **It previews.** Hover and keyboard focus fill the row from the left. The row
   is one tab stop with arrow-key selection, so reaching `Clear rating` costs one
@@ -451,6 +463,14 @@ room for.
   `Change rating` reopens the row pre-filled from what is *stored*, with focus
   on that value; `Clear rating` lives inside the reopened row, one deliberate
   step away from a value somebody recorded.
+
+The acknowledgement and the collapse belong to a surface the viewer stays on,
+which is detail and the Seen spotlight. Discover's prompt ends itself the moment
+the rating commits and answers in the status region on the way back to the
+featured movie, so the sequence never gets a chance to run there — a 640ms
+celebration in front of a page that is handing the viewer their next movie would
+be the delay rather than the reward. The optimistic fill is what answers the
+press on that surface, and it is the same optimistic fill as everywhere else.
 
 The panel keeps one honest sentence under the control, per ADR 0012: rating
 records a watch, and the star value is display feedback rather than a graded

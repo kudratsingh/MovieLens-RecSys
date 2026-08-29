@@ -1,0 +1,58 @@
+%% Sources: docs/adr/0007-auth-provider-keycloak.md, docs/adr/0008-multi-tenancy-rls.md,
+%% src/auth/middleware.py, src/serving/app.py, src/serving/startup_checks.py,
+%% alembic/versions/0001..0014, infra/pgbouncer/, infra/deploy/provision-roles.sql,
+%% tests/tenant_isolation/test_no_cross_tenant_leak.py,
+%% synthetic/tenant_isolation/remote_canary.py.
+flowchart TB
+  subgraph IDP["Keycloak — one realm per tenant"]
+    direction LR
+    RD1["realm: default"]
+    RD2["realm: demo"]
+    RV["client movielens-verify<br/>production only"]
+  end
+
+  TOK["Access token<br/>iss = base/realms/&lt;realm&gt;<br/>aud = movielens-api<br/>azp in the allow-list"]
+  RD1 --> TOK
+  RD2 --> TOK
+
+  PRIN["RequestPrincipal<br/>tenant_id = realm from the issuer<br/>user_id = sub, roles from realm_access"]
+  TOK -- "the issuer is the tenant,<br/>never a client-declared claim" --> PRIN
+
+  GATE{"demo-impersonator role,<br/>or the confidential service client?"}
+  PRIN --> GATE
+  GATE -- no --> D403["403 on every /users/* route and /personas.<br/>/whoami is the one authenticated route without the gate."]
+  GATE -- yes --> SESS
+
+  SESS["Request transaction<br/>SET LOCAL app.tenant_id<br/>SELECT 1 FROM public.tenants — 403 if absent"]
+
+  subgraph ROLES["Four Postgres identities, and they are not interchangeable"]
+    direction TB
+    R1["postgres — SUPERUSER<br/>the one-time provisioning SQL, nothing else"]
+    R2["migrator — BYPASSRLS<br/>the release job only; owns every base table"]
+    R3["admin_user — BYPASSRLS<br/>model-server, feature-server, materialization<br/>direct to Postgres, past the pooler by design"]
+    R4["app_user — RLS applies<br/>THE ONLY ROLE THAT SERVES A REQUEST"]
+  end
+
+  PGB["pgBouncer — transaction pool mode<br/>forced-user aliases movielens_app and movielens_admin<br/>Session mode would let SET LOCAL leak across requests,<br/>so startup_checks.py refuses to boot unless it is transaction."]
+  SESS --> R4
+  R4 -- "the only role through the pooler" --> PGB
+
+  subgraph DB["Postgres"]
+    direction TB
+    RLS["Forced RLS — 7 tables<br/>ratings · tags · demo_personas<br/>recommendation_audits · user_movie_state<br/>user_feedback_events · user_preferences<br/><br/>policy USING and WITH CHECK<br/>tenant_id =<br/>current_setting('app.tenant_id')"]
+    SHARED["No RLS, deliberately shared<br/>movies · links · movie_catalog_metadata<br/>public.tenants — the cross-tenant registry<br/>feature_store.* — admin_user only, app_user has no grant"]
+  end
+
+  PGB --> RLS
+  R3 --> SHARED
+  R3 --> RLS
+  R2 --> DB
+  R1 --> DB
+
+  CI["CI canary<br/>tests/tenant_isolation/<br/>23 cross-tenant assertions<br/>on the real Compose stack"]
+  RC["Deployed probe<br/>synthetic/tenant_isolation/<br/>remote_canary.py<br/>ships in the API image; run by<br/>the verify matrix and the canary job"]
+  DB -.-> CI
+  DB -.-> RC
+
+  classDef danger stroke-width:2px
+  class R4,PGB danger
