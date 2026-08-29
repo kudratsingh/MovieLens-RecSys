@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation — ADRs, runbooks, and contracts
+    url: https://github.com/kudratsingh/MovieLens-RecSys/tree/main/docs
+    about: >
+      Why a piece is built the way it is usually already has an answer. ADRs
+      cover the decisions; the runbooks cover running the demo stack and the
+      production host.
+  - name: Report a security vulnerability
+    url: https://github.com/kudratsingh/MovieLens-RecSys/security/policy
+    about: >
+      Do not open a public issue for a vulnerability. The security policy
+      explains the private channel.

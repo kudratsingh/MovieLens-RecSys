@@ -20,6 +20,11 @@ name: Deploy production
 # job, start the stack, verify, roll back on a failed verification — lives in
 # infra/deploy/deploy.sh, on the box, where an operator can run exactly the same
 # thing by hand during an incident.
+#
+# Until that box exists the release half of this workflow is dormant: the gate
+# still runs and still proves the commit's CI green, and the deploy job ends as
+# a green no-op with a notice rather than a red run on every merge. The guard is
+# the same one production-canary.yml uses, for the same reason.
 
 on:
   workflow_run:
@@ -263,6 +268,34 @@ jobs:
       DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
       DEPLOY_ROLLBACK: ${{ needs.gate.outputs.rollback }}
     steps:
+      # This fires on every green CI run on main, which starts the moment the
+      # workflow lands and long before a host exists to release to. A red
+      # "Deploy production" on every merge for a deployment nobody has created
+      # yet is how a deploy failure stops being read at all, so an environment
+      # carrying *nothing* is treated as "not yet" and the job ends green with a
+      # notice. A *partially* configured environment — a secret deleted, a
+      # variable mistyped — is a different thing entirely and still fails loudly
+      # in the step below, because silence there would be releases quietly
+      # ceasing to happen.
+      #
+      # Only the release is skipped. The `gate` job above runs either way and
+      # keeps asserting that this commit's CI is green, which is worth having on
+      # its own.
+      - name: Decide whether a production host exists yet
+        id: configured
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ] && [ -z "${DEPLOY_USER}" ] \
+            && [ -z "${DEPLOY_SSH_KEY}" ] && [ -z "${DEPLOY_KNOWN_HOSTS}" ]; then
+            echo "::notice::No production host is configured yet (the production environment carries none of DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS). Deploys are dormant until docs/deployment-runbook.md section 6 is done."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The key is held by an agent for the life of the job and never written to
       # disk. The host key is pinned from DEPLOY_KNOWN_HOSTS: an SSH session
       # that accepts whatever key answers on port 22 authenticates the deploy
@@ -272,6 +305,7 @@ jobs:
       # for the flag that would do it. Pinning a new box means running
       # `ssh-keyscan` once into the DEPLOY_KNOWN_HOSTS secret.
       - name: Open an SSH agent holding the deploy key
+        if: steps.configured.outputs.configured == 'true'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -319,6 +353,7 @@ jobs:
       # shells, and "the SSH call returned" is not "the release landed".
       - name: Run the release on the host
         id: release
+        if: steps.configured.outputs.configured == 'true'
         run: |
           set -euo pipefail
 
@@ -379,9 +414,11 @@ jobs:
       # Read back even when the release failed — that is the run whose rollback
       # target somebody actually needs. deploy.sh records current→previous
       # before it pulls anything, so `previous` names the release that was
-      # serving when this run started whether or not the new one landed.
+      # serving when this run started whether or not the new one landed. There
+      # is nothing to read back on a dormant run, so `always()` is qualified by
+      # the guard rather than replaced by it.
       - name: Upload the recorded rollback target
-        if: always()
+        if: always() && steps.configured.outputs.configured == 'true'
         env:
           RELEASE_SENTINEL: ${{ steps.release.outputs.sentinel }}
         run: |
@@ -403,7 +440,7 @@ jobs:
           } | tee artifacts/rollback-target/release-state.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the rollback target
-        if: always()
+        if: always() && steps.configured.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rollback-target
@@ -411,5 +448,5 @@ jobs:
           if-no-files-found: warn
 
       - name: Close the SSH agent
-        if: always()
+        if: always() && steps.configured.outputs.configured == 'true'
         run: ssh-agent -k > /dev/null 2>&1 || true
