@@ -206,9 +206,10 @@ async function openTechnicalEvidence(page) {
  *
  * The Seen tab puts a search field, two year bounds and a submit button in one
  * form, and at the two narrower viewports the form is handed less width than
- * its content needs. A picture shows that something is wrong; three numbers say
- * what, and — because they are re-measured on every re-shoot — they stop saying
- * it the moment the layout is fixed, which a paragraph in a README would not.
+ * its content needs. A picture shows that something is wrong; these four
+ * measurements say what, and — because they are re-taken on every re-shoot —
+ * they stop saying it the moment the layout is fixed, which a paragraph in a
+ * README would not.
  */
 async function measureFilterRow(page) {
   return page.evaluate(() => {
@@ -569,7 +570,7 @@ returned for it at capture time:
 ## Capture command
 
 \`\`\`bash
-make demo-up          # build api + web from this commit
+make demo-up          # build api + web from this tree
 make demo-seed        # seed the reviewed 120-title fixture
 make demo-smoke       # must pass: warm personas have to report learned: true
 cd web
@@ -628,6 +629,39 @@ const policies = {};
 for (const userId of [DRAMA_FAN, ACTION_FAN, ECLECTIC, COLD_START]) {
   policies[userId] = await servingPolicy(page, userId);
   console.log(`${PERSONA_NAMES[userId]} (${userId}) served ${JSON.stringify(policies[userId])}`);
+}
+
+/*
+ * The one precondition worth refusing to capture without.
+ *
+ * A stack whose model sidecar is down, or whose features never materialized,
+ * still serves every one of these pages — it just serves the popularity
+ * fallback, and the pictures come out looking like a product that has no
+ * learned path. That is the single most misleading thing this set could
+ * publish, and it is invisible in a screenshot: the pages are pretty either
+ * way. So it is checked here rather than left to whoever remembers to run
+ * `make demo-smoke` first.
+ *
+ * Cold Start is checked from the other direction. Its capture is *about* the
+ * zero-signal state, so a persona some earlier run left dirty would make the
+ * Quick Picks frame a picture of nothing in particular.
+ */
+const notLearned = [DRAMA_FAN, ACTION_FAN, ECLECTIC].filter(
+  (userId) => !policies[userId]?.learned,
+);
+if (notLearned.length) {
+  await browser.close();
+  throw new Error(
+    `Refusing to capture: ${notLearned
+      .map((userId) => `${PERSONA_NAMES[userId]} was served ${policies[userId]?.name ?? "nothing"}`)
+      .join(", ")}. A warm persona on the fallback usually means the model sidecar or the materialized features are missing — run \`make demo-seed && make demo-smoke\` and diagnose before re-shooting.`,
+  );
+}
+if (policies[COLD_START]?.positive_signal_count !== 0) {
+  await browser.close();
+  throw new Error(
+    `Refusing to capture: Cold Start is carrying ${policies[COLD_START]?.positive_signal_count} positive signal(s) and has to be handed on at zero. Re-seed before re-shooting.`,
+  );
 }
 
 const coverage = await catalogCoverage(page, ECLECTIC);
