@@ -206,7 +206,7 @@ These are the things I'll hold the project to. Every one of them maps to a real 
 ```
 movielens-recsys/
 ├── CLAUDE.md                  # this file
-├── README.md
+├── README.md                  # the public front door: status, quickstart, measured numbers, ADR index
 ├── Makefile                   # train, serving-artifacts*, serve, test, lint, db-migrate, demo-*, prod-*,
 │                              #   api-contract*, web-api-types* targets
 ├── scripts/                   # generate_openapi.py — committed OpenAPI contract + CI drift check
@@ -227,6 +227,7 @@ movielens-recsys/
 │   ├── README.md              # the docs landing page: reading path for a visitor, map by subject
 │   ├── architecture.md        # public architecture overview (offline + online paths)
 │   ├── diagrams/              # mermaid sources + rendered light/dark SVGs (`make diagrams`)
+│   ├── assets/                # social-preview.png and the script that renders it
 │   ├── adr/                   # backend ADRs (flat numeric line) + cross-cutting
 │   │   └── frontend/          # frontend ADRs (own numeric line)
 │   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes,

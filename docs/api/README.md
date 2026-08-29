@@ -58,6 +58,14 @@ they are documented rather than modelled in the schema:
 only when looking at a single row. The response schema is unchanged — these are
 the values the existing fields take.
 
+The table below is the vocabulary; the diagram is the order the code evaluates
+it in, which is what decides which row a given request lands on.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/serving-policy-decision.dark.svg">
+  <img alt="The decision tree behind serving_policy in the order the code evaluates it: the cold-start threshold on positive signals, the sidecar call and its failure modes, whether any positive seed reached retrieval, hydration and the final exclusion sweep — with every resulting policy name, learned flag and reason prefix quoted verbatim." src="../diagrams/serving-policy-decision.svg" width="100%">
+</picture>
+
 | Prefix | `name` | `learned` | Meaning |
 |---|---|---|---|
 | `learned-two-stage` | `item-item-cosine+lightgbm` | `true` | Both stages ran. The reason reports the number of positive seeds retrieval **used**, which can be lower than `positive_signal_count` when a watched title is absent from the deployed candidate index. |
