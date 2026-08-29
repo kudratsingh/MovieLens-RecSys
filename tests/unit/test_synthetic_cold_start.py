@@ -252,6 +252,17 @@ def test_an_empty_train_slice_is_refused() -> None:
         generate_cohort(_train_ratings().iloc[0:0], CUTOFF)
 
 
+def test_a_shape_that_would_mint_colliding_user_ids_is_refused() -> None:
+    """Both ways the id scheme can break, refused rather than silently aliased."""
+    with pytest.raises(CohortGenerationError, match="must be distinct"):
+        generate_cohort(_train_ratings(), CUTOFF, buckets=(1, 1), users_per_bucket=2)
+
+    with pytest.raises(CohortGenerationError, match="id stride"):
+        generate_cohort(
+            _train_ratings(), CUTOFF, buckets=(0, 1), users_per_bucket=BUCKET_ID_STRIDE + 1
+        )
+
+
 # --- determinism -------------------------------------------------------------
 
 

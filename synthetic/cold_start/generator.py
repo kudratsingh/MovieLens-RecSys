@@ -53,6 +53,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from synthetic.cold_start.config import (
+    BUCKET_ID_STRIDE,
     COHORT_PARQUET_PATH,
     GENERATOR_VERSION,
     HISTORY_BUCKETS,
@@ -206,6 +207,15 @@ def generate_cohort(
         raise CohortGenerationError("cannot build a cohort from an empty train slice")
     if not buckets:
         raise CohortGenerationError("cannot build a cohort with no history buckets")
+    if len(set(buckets)) != len(buckets):
+        raise CohortGenerationError(f"history buckets must be distinct: {list(buckets)}")
+    if users_per_bucket > BUCKET_ID_STRIDE:
+        # The bucket is encoded in the user id as base + size × stride, so a
+        # bucket wider than the stride would mint ids belonging to the next one.
+        raise CohortGenerationError(
+            f"{users_per_bucket} users per bucket exceeds the {BUCKET_ID_STRIDE} id stride; "
+            "widen BUCKET_ID_STRIDE before widening the cohort"
+        )
 
     items, weights = item_popularity(train_ratings)
     largest_draw = max(buckets) + 1
