@@ -334,6 +334,13 @@
   font-size: 0.78rem;
 }
 
+/*
+ * The frame takes exactly the plate's box: same ratio, same cap, same border.
+ * That is not tidiness — it is what keeps the press from moving the page under
+ * the viewer's pointer, since the iframe replaces the plate in place and
+ * reserves its height from the ratio rather than from a document that has not
+ * loaded yet. Change one of the three here and change it above too.
+ */
 .movie-trailer-frame {
   aspect-ratio: 16 / 9;
   background: #000;
