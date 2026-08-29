@@ -12,6 +12,9 @@ build/
 .venv/
 venv/
 env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 
 # ML artifacts
 mlruns/
@@ -55,6 +58,11 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Local agent scratch, including the git worktrees checked out under
+# .claude/worktrees/ — a few hundred duplicated source files that one
+# `git add .` would otherwise commit into the tree they were cut from.
+.claude/
 
 # Logs
 *.log
