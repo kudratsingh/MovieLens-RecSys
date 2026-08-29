@@ -152,6 +152,14 @@
   margin-top: 0.4rem;
 }
 
+/* The stars are the same control a movie's own page uses, so the only thing
+   this surface owns is where they sit: a column that can take the note's full
+   measure on a wide screen without stretching to fill the row. */
+.just-watched-rating {
+  flex: 1 1 22rem;
+  max-width: 36rem;
+}
+
 .discover-browse-path {
   align-items: center;
   color: var(--text-muted);

@@ -216,8 +216,8 @@ change, and every surface that offers them renders the same component family in
 | Export | What it is |
 |---|---|
 | `MovieStateControls` | The watched / watchlist / dismissal row, plus the confirmation that guards removing watched history. |
-| `MovieRatingControl` | The compact rating editor, in whole stars or the stored half-star precision. Discover, Browse, the Library, and Quick Picks use it. |
-| `RatingStars` | Movie detail's large rating control (`components/movie/rating-stars.tsx`). Same intent, same write path, more room — see below. |
+| `MovieRatingControl` | The compact rating editor, in whole stars or the stored half-star precision. Quick Picks and the Library rows use it. |
+| `RatingStars` | The large rating control (`components/movie/rating-stars.tsx`), on the surfaces where rating is the decision: movie detail, the Seen spotlight, and Discover's `Just marked watched` prompt. Same intent, same write path, more room — see below. |
 | `MovieStatePanel` | Movie detail's composition: the family wired to the write path, with its own status and error regions. |
 
 Surfaces differ by *declaration*, not by forking the component. A control set is
@@ -297,11 +297,19 @@ counts against; without it the loaded window is the only honest denominator.
 
 The two rating editors are a deliberate split, and the line between them is
 whether rating is *the* decision on the surface or an edit alongside others. A
-Library row is editing a value it already has; a movie's own page is where
-somebody decides what they thought of it. So detail gets the larger stars (32px
-at desktop, 28px at 390, in a target that never drops below 44px), a preview
-fill from the left on hover and keyboard focus, a roving tab stop with arrow
-selection, and an acknowledgement.
+Library row is editing a value it already has, and a Quick Picks star is one
+press of a queue decision; a movie's own page, the Seen spotlight, and
+Discover's `Just marked watched` prompt are where somebody decides what they
+thought of a film. So those three get the larger stars (32px at desktop, 28px
+at 390, in a target that never drops below 44px), a preview fill from the left
+on hover and keyboard focus, a roving tab stop with arrow selection, and an
+acknowledgement.
+
+The rule is the surface's *job*, not its route: Discover's prompt is headed
+`Rate <title>` and contains nothing else, which is what qualified it. Before
+that it rendered the compact editor, and the product had two whole-star controls
+free to drift apart in target size, in keyboard model, and in what a press looks
+like before it commits.
 
 Everything that could make the two disagree is shared: both report a
 `MovieStateAction` to `useMovieState`, both write through `lib/movie-state/`,
