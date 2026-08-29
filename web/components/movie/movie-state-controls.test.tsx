@@ -315,21 +315,14 @@ describe("the rating editor says the same thing in both input shapes", () => {
     );
   });
 
-  it("reports the recorded value unless the surface carries its own copy", () => {
+  it("reports the recorded value, because it has no acknowledgement of its own", () => {
     const { rerender } = render(
-      <MovieRatingControl onRate={vi.fn()} rating={4} title="Heat" />,
+      <MovieRatingControl onRate={vi.fn()} rating={null} title="Heat" />,
     );
-    expect(screen.getByText("4 out of 5 recorded")).toBeVisible();
+    expect(screen.getByText("Not rated")).toBeVisible();
 
-    rerender(
-      <MovieRatingControl
-        onRate={vi.fn()}
-        rating={4}
-        showRecorded={false}
-        title="Heat"
-      />,
-    );
-    expect(screen.queryByText("4 out of 5 recorded")).not.toBeInTheDocument();
+    rerender(<MovieRatingControl onRate={vi.fn()} rating={4} title="Heat" />);
+    expect(screen.getByText("4 out of 5 recorded")).toBeVisible();
   });
 
   it("offers the stored half-star precision where a value is being edited", async () => {

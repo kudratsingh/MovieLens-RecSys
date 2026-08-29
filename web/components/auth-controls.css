@@ -3,14 +3,14 @@
  * it carries the same token classes the rest of the shell uses rather than the
  * utility classes it used to.
  *
- * That was not only a consistency point. `globals.css` declares
- * `button { color: inherit; font: inherit }` outside any cascade layer, and an
- * unlayered element selector outranks every Tailwind utility — so `text-zinc-300
- * text-xs` on this button rendered as `--text-primary` at 16px, a control
- * heavier than the header it sits in. A class beats an element selector, which
- * is why the token classes fix it and the utilities could not. The real repair
- * is `@layer base` around those rules, which changes the cascade under every
- * route and belongs in its own PR (finding N7).
+ * That started as a workaround: `globals.css` used to declare `button { color:
+ * inherit; font: inherit }` outside any cascade layer, which outranks every
+ * Tailwind utility, so `text-zinc-300 text-xs` on this button rendered as
+ * `--text-primary` at 16px. The class selector was the only thing that could
+ * win. The cascade defect itself is fixed now — those resets live in
+ * `@layer base` and utilities beat them again — so this file stays purely
+ * because one shared control should look the same on both routes, not because
+ * utilities would fail here.
  */
 
 .sign-out {

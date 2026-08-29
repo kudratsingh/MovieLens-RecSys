@@ -74,6 +74,31 @@ Dark-first is intentional. Every interactive control receives a visible
 `:focus-visible` ring. Primary mobile targets are at least 44 CSS pixels.
 Forced-color and reduced-motion media queries preserve meaning and operation.
 
+### Cascade layers
+
+`globals.css` is layered deliberately. `@import "tailwindcss"` declares
+`@layer theme, base, components, utilities`, and an unlayered author rule beats
+every layered one however weak its selector — so an element-level default
+written outside a layer silently out-ranks every Tailwind utility in the app.
+That was finding N7: `button, input, select { color: inherit; font: inherit }`
+and `a { color: inherit }` sat outside any layer, which made `text-*` — and the
+whole `font` shorthand family, so size, weight, family and line-height too —
+inert on buttons, inputs, selects and links. The only thing that could win was
+a class selector or an inline style, which is why three surfaces carried local
+workarounds instead of a one-class fix.
+
+Those resets are gone rather than wrapped: Tailwind's own preflight already
+declares them verbatim inside `@layer base`, so restating them bought nothing
+except the bug. What preflight does not cover — the page ground, the body type
+ramp, tap-highlight suppression, `::selection` — lives in the file's
+`@layer base` block, and that is where a new element-level default belongs.
+
+The one deliberate exception is `:focus-visible`, which stays unlayered. It is
+an accessibility guarantee rather than a default: layered, it would lose to
+`outline-none`, and a utility would be able to remove a focus indicator by
+accident. A surface that needs its own ring styles `:focus-visible` itself
+rather than switching this one off.
+
 ### Elevation
 
 A cast shadow does very little work on a `#0b0a09` canvas — a dark poster on a
@@ -216,8 +241,8 @@ change, and every surface that offers them renders the same component family in
 | Export | What it is |
 |---|---|
 | `MovieStateControls` | The watched / watchlist / dismissal row, plus the confirmation that guards removing watched history. |
-| `MovieRatingControl` | The compact rating editor, in whole stars or the stored half-star precision. Discover, Browse, the Library, and Quick Picks use it. |
-| `RatingStars` | Movie detail's large rating control (`components/movie/rating-stars.tsx`). Same intent, same write path, more room — see below. |
+| `MovieRatingControl` | The compact rating editor, in whole stars or the stored half-star precision. Quick Picks and the Library rows use it. |
+| `RatingStars` | The large rating control (`components/movie/rating-stars.tsx`), on the surfaces where rating is the decision: movie detail, the Seen spotlight, and Discover's `Just marked watched` prompt. Same intent, same write path, more room — see below. |
 | `MovieStatePanel` | Movie detail's composition: the family wired to the write path, with its own status and error regions. |
 
 Surfaces differ by *declaration*, not by forking the component. A control set is
@@ -297,11 +322,19 @@ counts against; without it the loaded window is the only honest denominator.
 
 The two rating editors are a deliberate split, and the line between them is
 whether rating is *the* decision on the surface or an edit alongside others. A
-Library row is editing a value it already has; a movie's own page is where
-somebody decides what they thought of it. So detail gets the larger stars (32px
-at desktop, 28px at 390, in a target that never drops below 44px), a preview
-fill from the left on hover and keyboard focus, a roving tab stop with arrow
-selection, and an acknowledgement.
+Library row is editing a value it already has, and a Quick Picks star is one
+press of a queue decision; a movie's own page, the Seen spotlight, and
+Discover's `Just marked watched` prompt are where somebody decides what they
+thought of a film. So those three get the larger stars (32px at desktop, 28px
+at 390, in a target that never drops below 44px), a preview fill from the left
+on hover and keyboard focus, a roving tab stop with arrow selection, and an
+acknowledgement.
+
+The rule is the surface's *job*, not its route: Discover's prompt is headed
+`Rate <title>` and contains nothing else, which is what qualified it. Before
+that it rendered the compact editor, and the product had two whole-star controls
+free to drift apart in target size, in keyboard model, and in what a press looks
+like before it commits.
 
 Everything that could make the two disagree is shared: both report a
 `MovieStateAction` to `useMovieState`, both write through `lib/movie-state/`,
