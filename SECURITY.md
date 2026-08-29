@@ -23,7 +23,7 @@ result, and which of the guarantees below it breaks. The `X-Request-ID` header
 is echoed on every response and stored on the audit row as `correlation_id`, so
 including it makes a report trivially reproducible.
 
-This is maintained by one person, in evenings. Expect an acknowledgement within
+This is maintained by one person. Expect an acknowledgement within
 a few days rather than within hours, and no fixed remediation SLA. **There is no
 bug bounty** and no payment of any kind — reports are accepted on that basis.
 
@@ -51,7 +51,7 @@ project's own non-negotiables, not aspirations:
 ## In scope
 
 - The FastAPI service in `src/` — auth middleware, tenancy, serving,
-  the rate limiter, the audit writer, the TMDB proxy.
+  the rate limiter, the audit writer, and the offline TMDB enrichment path.
 - The Next.js app in `web/`, including the BFF session boundary and its
   Origin/CSRF handling.
 - The Compose stacks (`docker-compose.yml`, `.demo.yml`, `.prod.yml`) as
