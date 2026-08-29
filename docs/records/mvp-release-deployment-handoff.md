@@ -60,7 +60,8 @@ this reason.
 - `/browse` is the searchable, filterable, cursor-paginated movie catalog.
 - `/movies/{movie_id}` is movie detail plus watchlist, watched, rating, and
   reversible dismissal controls.
-- `/library` separates Rated, Watchlist, and History.
+- `/library` separates Rated, Watchlist, and History. [The third tab is labelled
+  **Seen** as of 2026-08-28, PR #84; the URL and API value are still `history`.]
 - `/quick-picks` is the one-card-at-a-time decision flow with button, keyboard,
   and swipe input.
 - `/legacy` is the pre-redesign rating wall and is not the intended front door.
