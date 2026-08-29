@@ -81,7 +81,11 @@ import {
 } from "@/lib/movie-state/announce";
 import { bffMovieStateClient, type MovieStateClient } from "@/lib/movie-state/client";
 import { readCommittedStates } from "@/lib/movie-state/committed-store";
-import { restoreFocus, restoreFocusInPlace } from "@/lib/movie-state/focus";
+import {
+  restoreFocus,
+  restoreFocusInPlace,
+  type FocusTarget,
+} from "@/lib/movie-state/focus";
 import {
   newIdempotencyKey,
   type MovieStateMutationResult,
@@ -183,6 +187,12 @@ type UndoOffer = {
   /** The revision the commit returned, so the reversal asserts a real one. */
   revision: number;
   label: string;
+  /**
+   * Whether the viewer has already pressed it. An accepted offer is no longer
+   * an offer: it stops expiring, it stops inviting a second press, and it is
+   * owed a reversal whether or not the page is free to run one yet.
+   */
+  accepted: boolean;
 };
 
 function rankedIds(state: ResourceState<RecommendationResponse>): readonly number[] {
@@ -273,6 +283,7 @@ function undoOfferFor(
         action.method === "PUT"
           ? `Undo saving ${movie.title} to the watchlist`
           : `Undo removing ${movie.title} from the watchlist`,
+      accepted: false,
     };
   }
   if (action.resource === "dismissal") {
@@ -285,6 +296,7 @@ function undoOfferFor(
         action.method === "PUT"
           ? `Undo dismissing ${movie.title}`
           : `Undo restoring ${movie.title}`,
+      accepted: false,
     };
   }
   return null;
@@ -423,6 +435,24 @@ export function DiscoverExperience({
   // Re-pressing a control after a failure is one intent, not two, so it keeps
   // the key and the API replays instead of writing a second feedback event.
   const intent = useRef<Intent | null>(null);
+  /**
+   * An undo the viewer pressed while the decision it reverses was still
+   * finishing, waiting for the decision's own tail to run it.
+   *
+   * The offer is rendered the moment the write commits, but `inFlight` stays
+   * set through the re-read behind it, and `runUndo` used to open by returning
+   * silently while it was — so for the whole of that window the button was
+   * visible, enabled, and did nothing at all: no status change, no error, and a
+   * watchlist entry still standing. On a warm page that window is tens of
+   * milliseconds and nobody hits it; on a cold Next.js compile it was 41
+   * seconds, which is five times the eight the offer stands for.
+   *
+   * A press cannot be discarded, so it is held here instead. It is written and
+   * cleared in exactly the two places that also move `undo.accepted`, which is
+   * the same fact told to the renderer: a ref cannot re-render the button, and
+   * a render closure cannot be read by the tail that has to run the work.
+   */
+  const acceptedUndo = useRef<UndoOffer | null>(null);
   /** Queue length at the last extension attempt, so it asks once per answer. */
   const extendedAt = useRef(-1);
   /**
@@ -562,9 +592,11 @@ export function DiscoverExperience({
 
   // The offer is time-boxed rather than permanent: an `Undo` that outlives the
   // decision it belongs to becomes a button whose target the viewer can no
-  // longer name.
+  // longer name. An offer the viewer has already taken is not one of those —
+  // it is a reversal in progress, and withdrawing it on a timer would be the
+  // window closing on a press that was made inside it.
   useEffect(() => {
-    if (!undo) return;
+    if (!undo || undo.accepted) return;
     const timer = window.setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
     return () => window.clearTimeout(timer);
   }, [undo]);
@@ -777,11 +809,31 @@ export function DiscoverExperience({
     const next = await refetch();
     setPendingMovieId(null);
     inFlight.current = false;
+    if (!isResourceFailure(next)) {
+      setRecommendations(next);
+      if (hasResourceData(next)) absorb(next.data.items);
+    }
+
+    // An undo pressed while that re-read was running is owed its write, and it
+    // is owed the status line too: the decision it reverses has nothing left to
+    // announce, so neither a `refreshed` frame nor a `refresh-failed` one goes
+    // in front of it. The response is still folded in above — it is what keeps
+    // the rail and the exclusion set honest — and the reversal's own
+    // `restoreQueue` moves the cursor back after it rather than instead of it.
+    const accepted = acceptedUndo.current;
+    if (accepted) {
+      acceptedUndo.current = null;
+      const reversed = await runUndo(accepted, null);
+      // A committed reversal asks the server tree to re-run on its own. A
+      // failed one leaves the decision standing, and the watch history below
+      // has still changed, so the refresh this decision owes is made here.
+      if (!reversed) router.refresh();
+      return;
+    }
+
     if (isResourceFailure(next)) {
       setFlow({ kind: "refresh-failed", message, failure: next });
     } else {
-      setRecommendations(next);
-      if (hasResourceData(next)) absorb(next.data.items);
       // Watchlist is organizational (ADR 0012), so a watchlist press commits
       // and the ranked set legitimately comes back identical. Saying it was
       // refreshed anyway is what made a working button look broken.
@@ -796,10 +848,38 @@ export function DiscoverExperience({
     router.refresh();
   }
 
-  async function runUndo(offer: UndoOffer, control: HTMLElement) {
-    if (inFlight.current) return;
+  /**
+   * Takes back a decision the viewer has just made. It either runs the reversal
+   * now or holds it for the tail that is in the way — what it never does is
+   * drop the press.
+   *
+   * Answers whether the reversal committed, which is also whether it has
+   * already asked the server component tree to re-run.
+   */
+  async function runUndo(offer: UndoOffer, control: FocusTarget): Promise<boolean> {
+    if (inFlight.current) {
+      // The write this reverses has already committed; `inFlight` is still set
+      // because the decision's re-read is running behind it, and a read cannot
+      // move the revision this reversal asserts. So the press is recorded and
+      // handed to that tail rather than refused because the page happens to be
+      // busy finishing the thing being undone.
+      //
+      // Running it here instead would not serialise: the pending refetch would
+      // resolve afterwards and set its own `refreshed` frame — the reversed
+      // decision's sentence — on top of the reversal's.
+      acceptedUndo.current = offer;
+      setUndo({ ...offer, accepted: true });
+      setPendingMovieId(offer.movieId);
+      setFlow({ kind: "saving", message: `Undoing ${offer.title}…` });
+      return false;
+    }
+
     inFlight.current = true;
-    setUndo(null);
+    // Kept mounted while its own write runs, rather than removed on the press:
+    // it is where focus is, and Quick Picks' undo answers for itself the same
+    // way. `aria-disabled` is what stops a second press, so the button stays
+    // focusable through the write and through a rollback back onto it.
+    setUndo({ ...offer, accepted: true });
     setPendingMovieId(offer.movieId);
     setFlow({ kind: "saving", message: `Undoing ${offer.title}…` });
 
@@ -823,8 +903,15 @@ export function DiscoverExperience({
           voice: "discover",
         }),
       });
+      // The offer goes back on the table. A reversal that did not happen is
+      // still owed, and the viewer has to be able to ask for it again — the
+      // window restarts from here rather than from the decision.
+      setUndo({ ...offer, accepted: false });
+      // `control` is the button itself on a direct press and nothing at all on
+      // a queued one, where the press was made against a page that has since
+      // moved; the status line carries the sentence either way.
       restoreFocus(control, STATUS_ANCHOR);
-      return;
+      return false;
     }
 
     // Server state and cursor come back together: undoing the write without
@@ -834,6 +921,7 @@ export function DiscoverExperience({
     applyQueue((current) => restoreQueue(current, offer.movieId));
     setJustWatched(null);
     setAdvanceFrom(null);
+    setUndo(null);
     setFlow({
       kind: "refreshed",
       message: `${offer.title} is back, and the change was undone.`,
@@ -841,6 +929,7 @@ export function DiscoverExperience({
     });
     restoreFocus(`featured-${offer.movieId}-${offer.action.resource}`, STATUS_ANCHOR);
     router.refresh();
+    return true;
   }
 
   /**
@@ -1235,10 +1324,25 @@ function FlowStatus({
         // Beside the status rather than in a toast: a toast that stole focus
         // would interrupt the next decision, and one that did not would be
         // unreachable from the keyboard.
+        //
+        // `aria-disabled` rather than `disabled` once the press is taken, for
+        // the reason the control family gives: a disabled element cannot hold
+        // focus, and this is where focus is while the reversal runs and where a
+        // rollback has to put it back. The status line beside it is what says
+        // the press was heard — `Undoing <title>…`, in the same voice every
+        // other decision on this surface is acknowledged in.
         <button
+          aria-busy={undo.accepted}
+          aria-disabled={undo.accepted}
           aria-label={undo.label}
           className="button-quiet discover-undo"
-          onClick={(event) => onUndo(event.currentTarget)}
+          onClick={(event) => {
+            // Not a discarded press: the first one is already in progress and
+            // the button says so. What is refused here is a second reversal of
+            // one decision, which has nothing left to reverse.
+            if (undo.accepted) return;
+            onUndo(event.currentTarget);
+          }}
           type="button"
         >
           Undo

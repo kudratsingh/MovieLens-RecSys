@@ -554,6 +554,72 @@ test("the rating prompt is the same star control a movie's own page offers", asy
   expect(describeViolations(blocking), describeViolations(blocking)).toBe("");
 });
 
+/**
+ * The undo offer is rendered the moment the decision's write commits, but the
+ * re-read that follows the decision runs on behind it — and the route treats a
+ * write and its tail as one busy period. A press landing in that window used to
+ * produce nothing at all: no status change, no error, and the watchlist entry
+ * still standing. It is usually tens of milliseconds wide, which is why it took
+ * a cold compile to surface it, so this holds the re-read open and presses into
+ * it deliberately.
+ */
+test("an Undo pressed while the decision is still re-reading is never lost", async ({
+  page,
+}) => {
+  let releaseRefresh: () => void = () => {};
+  const refreshHeld = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  const writes: string[] = [];
+
+  await page.route(
+    (url) => url.pathname === "/api/auth/csrf",
+    (route) => route.fulfill({ json: { csrfToken: "fixture-csrf-token" } }),
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/watchlist"),
+    (route) => {
+      const method = route.request().method();
+      writes.push(method);
+      return route.fulfill({
+        json: committedState({ watchlisted_at: method === "PUT" ? WATCHED_AT : null }),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/recommendations"),
+    async (route) => {
+      await refreshHeld;
+      await route.fulfill({ json: learnedRecommendations });
+    },
+  );
+
+  await page.goto("/discover?demo=learned");
+  const status = page.locator("#discover-status");
+  await page
+    .locator("section.featured-movie")
+    .getByRole("button", { name: "Watchlist" })
+    .click();
+  await expect(status).toContainText("Refreshing recommendations");
+
+  const undo = page.getByRole("button", { name: /^Undo saving/ });
+  await undo.click();
+
+  // The press is answered while the re-read is still open, and the button stops
+  // inviting a second reversal of one decision without ceasing to be focusable.
+  await expect(status).toHaveText(`Undoing ${HANDMAIDEN}…`);
+  await expect(undo).toHaveAttribute("aria-disabled", "true");
+  expect(writes).toEqual(["PUT"]);
+
+  releaseRefresh();
+
+  // And it runs the moment the re-read lets it: once, and with the cursor back
+  // on the title the viewer asked to return to.
+  await expect(status).toContainText(`${HANDMAIDEN} is back, and the change was undone`);
+  expect(writes).toEqual(["PUT", "DELETE"]);
+  await expect(page.getByRole("heading", { level: 1, name: HANDMAIDEN })).toBeVisible();
+});
+
 test("the rating confirmation clears itself instead of going stale", async ({ page }) => {
   await stubMovieStateWrites(page);
   await page.goto("/discover?demo=learned");

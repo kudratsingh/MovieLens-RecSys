@@ -273,6 +273,23 @@ the status line that restores both the server row and the cursor; watched does
 not, because `watched: final` on this surface means what it says, and a bare
 `Undo` there would quietly become the destructive edit the control set refuses.
 
+**An `Undo` press is taken even when the route is not free to run it.** The
+offer appears the moment the decision's write commits, but the re-read that
+follows the decision runs on behind it, and the route treats a write and its
+tail as one busy period — so the button stood there enabled over a window it
+could do nothing in. A press landing there produced nothing at all: no status
+change, no error, and the watchlist entry still standing. It is usually tens of
+milliseconds wide and a slow re-read made it seconds. The press is now recorded
+and run by the tail that was blocking it — through the same write path, against
+the same revision the commit returned, which a read cannot have moved — and it
+is acknowledged at once (`Undoing <title>…`) rather than after. Serialisation is
+what makes it a queue rather than a concurrent write: a reversal run alongside
+the re-read would have the reversed decision's own `refreshed` sentence land on
+top of it. The button stays mounted and `aria-disabled` from the press until the
+reversal settles, so it keeps focus through the write and through a rollback
+back onto it, and a reversal that fails puts the offer back rather than leaving
+the viewer with a decision they asked to take back and nothing to press.
+
 ### The Seen spotlight
 
 `/library?tab=history` is the Seen experience: the tab's identity is still
