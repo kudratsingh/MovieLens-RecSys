@@ -35,10 +35,33 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis is the online feature store, not a cache: Feast serves every ranker
+  # feature out of it and a missing value reads back as 0.0 rather than as an
+  # error, so an emptied Redis is either a silently wrong ranking or -- since
+  # the model sidecar's warm-up guard turns that silence into a boot failure --
+  # a stack that will not start. Without the named volume below it was emptied
+  # by the documented restart path: `make demo-down` keeps volumes, but an
+  # anonymous one is not a volume anyone keeps, so the database and the model
+  # bundle came back while the features they need to be ranked did not.
+  # AOF for the same reason, and because `docker compose down` is a SIGTERM
+  # with a deadline: RDB's default save points would usually make it, and
+  # "usually" is what turned this into a defect that reproduced three times out
+  # of three but only after a load run. docker-compose.prod.yml declares the
+  # same volume and the same append-only mode.
   redis:
     image: redis:7
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--dir"
+      - "/data"
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -161,6 +184,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   mlflow_artifacts:
   grafana_data:
   keycloak_postgres_data:

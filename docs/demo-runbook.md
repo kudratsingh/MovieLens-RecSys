@@ -42,8 +42,12 @@ generated poster artwork, or set a TMDB API Read Access Token before
    applies every Alembic migration.
 4. Starts FastAPI only after schema setup succeeds and pgBouncer is healthy.
 5. Starts Next.js only after FastAPI is healthy.
-6. Restarts the feature/model sidecars when a previously seeded artifact
-   volume exists; a first clean start leaves them for `make demo-seed`.
+6. Restarts the feature/model sidecars when both halves of the learned path
+   survived: a serving bundle in the artifact volume, and rows in the Redis
+   online store. When either is missing it says so in one line and leaves them
+   for `make demo-seed` — the model sidecar refuses to boot against an empty
+   online store rather than rank every candidate from missing features, so
+   starting it there would only produce a timeout.
 7. Verifies FastAPI, Next.js, and the Keycloak demo realm from inside the demo
    network.
 
@@ -451,10 +455,21 @@ somewhere else; the report names which. It is written to
 
 ```bash
 make demo-logs   # tail the services that explain startup/runtime failures
-make demo-down   # stop containers and preserve demo volumes
-make demo-up     # restart while preserving the database (also undoes a quiesce)
+make demo-down   # stop every container, including the load profile, and preserve demo volumes
+make demo-up     # restart while preserving the database and the online store (also undoes a quiesce)
 make demo-reset  # delete only movielens-demo volumes, rebuild, migrate, and reseed
 ```
+
+`make demo-down` and `make demo-reset` enable the `load` profile, so they also
+cover the `api-load` and `k6` containers a load run starts. Without that,
+`api-load` survived a `down` and held the network open behind it.
+
+The volumes `make demo-down` preserves are Postgres, Keycloak's Postgres, the
+Feast registry, the model artifacts, and the Redis online store — so
+`make demo-down && make demo-up` comes back serving the learned path with no
+reseeding. Redis is a named volume for exactly that reason: it is the online
+feature store rather than a cache, and losing it is losing the features every
+ranking score is computed from.
 
 The Compose project name is pinned to `movielens-demo`. `make demo-reset` cannot
 remove volumes belonging to the normal development Compose project, but it does
@@ -469,6 +484,10 @@ permanently delete the isolated demo Postgres and Keycloak data.
 - **FastAPI is unhealthy:** inspect `api` and `pgbouncer` logs. Startup checks
   reject a BYPASSRLS application role or non-transaction pooling.
 - **Personas are missing:** run `make demo-seed`, then `make demo-smoke`.
+- **`make demo-up` says the online feature store is empty:** the serving bundle
+  outlived the Redis volume — a removed volume, or a stack seeded before that
+  volume was named. The sidecars are deliberately left down; `make demo-seed`
+  materializes the features and starts them.
 - **Warm personas show `popularity`:** inspect `model-server`, `feature-server`,
   and `api` with `make demo-logs`, then rerun `make demo-seed`. The API falls
   back deliberately when artifacts, online features, or the sidecar are invalid.
