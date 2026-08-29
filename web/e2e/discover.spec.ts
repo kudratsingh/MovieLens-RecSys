@@ -1,8 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type JSHandle, type Page } from "@playwright/test";
 
 import { learnedRecommendations } from "@/lib/fixtures/discover-fixtures";
 
-import { auditPage, describeViolations } from "./finish-gate-support";
+import { auditPage, describeViolations, scrollingHasSettled } from "./finish-gate-support";
 
 /**
  * Responsive coverage for the live `/discover` route, driven through the
@@ -451,6 +451,37 @@ async function stubMovieStateWrites(page: Page) {
   );
 }
 
+/**
+ * The `<title>` element the next decision is going to replace.
+ *
+ * Every committed decision on this route ends with `router.refresh()`, and Next
+ * renders the route's metadata inside the tree that refresh replaces: when the
+ * new payload commits, React unmounts the old `<title>` and mounts a new one.
+ * Holding the old node is how the wait below can tell "the refresh has landed"
+ * from "the refresh has not started yet", which are otherwise the same document.
+ */
+async function documentTitleNode(page: Page): Promise<JSHandle<Element | null>> {
+  return page.evaluateHandle(() => document.head.querySelector("title"));
+}
+
+/**
+ * The refresh a decision started has committed, and the head is whole again.
+ *
+ * The two DOM operations that swap the title normally land in the same commit,
+ * but on a contended runner they split — observed here 302ms apart — and for
+ * that stretch the document has no title at all. A full-page axe audit sampled
+ * in the gap reports `document-title`, which is a true statement about the
+ * instant and a false one about the page; it is what failed this file's last
+ * assertion at 390 roughly once in forty. So the audit waits for the hand-off's
+ * own last act rather than for a duration.
+ */
+async function refreshHasLanded(page: Page, replacing: JSHandle<Element | null>) {
+  await page.waitForFunction((previous) => {
+    const title = document.head.querySelector("title");
+    return title !== null && title !== previous;
+  }, replacing);
+}
+
 test("rating a just-watched movie clears the panel and hands the page back", async ({
   page,
 }) => {
@@ -459,6 +490,7 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
 
   const featured = page.locator("section.featured-movie");
   await expect(featured).toBeVisible();
+  const beforeWatched = await documentTitleNode(page);
   await featured.getByRole("button", { name: "Mark watched" }).click();
 
   // The panel opens under the ranked card, and reading it means being scrolled
@@ -468,6 +500,10 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
   // rather than trivially satisfied by a page that happened to fit.
   const panel = page.getByRole("region", { name: /^Rate / });
   await expect(panel).toBeVisible();
+  // The watch is a decision like any other, so it too ends in a refresh. Letting
+  // that one finish here is what leaves the rating with a document of its own to
+  // rebuild, and the wait after the rating with only one refresh to wait on.
+  await refreshHasLanded(page, beforeWatched);
   // `instant` only because the document declares `scroll-behavior: smooth`, so
   // a plain call here would still be animating when the next line reads the
   // offset. The scroll under test does its own thing a few lines down.
@@ -477,6 +513,7 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
   const scrolledDown = await page.evaluate(() => window.scrollY);
   expect(scrolledDown).toBeGreaterThan(0);
 
+  const beforeRating = await documentTitleNode(page);
   await panel.getByRole("button", { name: /^4 stars for / }).click();
 
   // 1. The panel leaves rather than standing there with its stars filled in —
@@ -509,6 +546,14 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
   await expect(watchlist).toBeFocused();
   await expect(watchlist).toBeInViewport({ ratio: 1 });
 
+  // 5. And then the whole hand-off is over: the silent refresh has rebuilt the
+  //    document, the head names it again, and the page has stopped travelling.
+  //    Only now is there a settled document to audit — the four assertions above
+  //    all pass while the refresh is still in the air.
+  await refreshHasLanded(page, beforeRating);
+  await expect(page).toHaveTitle(/\S/);
+  await scrollingHasSettled(page);
+
   const { blocking } = await auditPage(page);
   expect(describeViolations(blocking), describeViolations(blocking)).toBe("");
 });
@@ -519,12 +564,18 @@ test("the rating prompt is the same star control a movie's own page offers", asy
   await stubMovieStateWrites(page);
   await page.goto("/discover?demo=learned");
 
+  const beforeWatched = await documentTitleNode(page);
   await page
     .locator("section.featured-movie")
     .getByRole("button", { name: "Mark watched" })
     .click();
   const panel = page.getByRole("region", { name: /^Rate / });
   await expect(panel).toBeVisible();
+  // Same reason the rating test waits: this one audits with the panel still
+  // open, and the watch's refresh would otherwise be rebuilding the head under
+  // it. Today the assertions below happen to outlast the refresh; that is luck,
+  // not an ordering.
+  await refreshHasLanded(page, beforeWatched);
 
   // The three things the compact editor could not do, at every width the
   // matrix runs: a preview that fills from the left, one tab stop for the row,

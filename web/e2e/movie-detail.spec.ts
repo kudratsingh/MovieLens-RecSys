@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { scrollingHasSettled } from "./finish-gate-support";
+
 /**
  * The enriched movie detail and the rating interaction, in the isolated
  * preview at 390, 768, and 1440.
@@ -46,30 +48,6 @@ async function serveTheEmbedOurselves(page: Page): Promise<void> {
 /** The frame holds a loaded document, so what follows is not racing its load. */
 async function trailerHasLoaded(page: Page): Promise<void> {
   await expect(page.frameLocator("iframe").locator("#stub-embed")).toBeAttached();
-}
-
-/**
- * The document has stopped moving.
- *
- * Opening the trailer puts focus on `Close trailer`, and `html` carries
- * `scroll-behavior: smooth`, so the press starts an animated scroll — measured at ~470px
- * over ~300ms at 1440, and at nothing at all on the two smaller viewports, where the
- * control is already in view. Playwright checks that a target is stable before it computes
- * a click point, but the pointer event is dispatched a round trip later, which on a loaded
- * runner is long enough for a moving button to be somewhere else by the time the click
- * lands. Two consecutive frames at the same offset is the same stability rule Playwright
- * applies, asked before the press rather than during it.
- */
-async function scrollingHasSettled(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () =>
-      new Promise<boolean>((resolve) => {
-        const start = window.scrollY;
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(window.scrollY === start)));
-      }),
-    undefined,
-    { polling: 100 },
-  );
 }
 
 async function horizontalOverflow(page: Page): Promise<number> {
@@ -136,10 +114,12 @@ test("nothing reaches YouTube until the trailer is pressed", async ({ page }) =>
   ).not.toEqual([]);
 
   // Two things stand between the press and the close, and neither of them is the close:
-  // the frame's own load, and the scroll that moving focus starts. Both are the trailer's
-  // to spend, so they are spent here rather than inside the next assertion's budget. The
-  // focus check is what orders them — the scroll begins with it, so asking whether the
-  // page has settled any earlier would be asking about a page that had yet to move.
+  // the frame's own load, and the scroll that moving focus starts — measured at ~470px over
+  // ~300ms at 1440, and at nothing at all on the two smaller viewports, where the control is
+  // already in view. Both are the trailer's to spend, so they are spent here rather than
+  // inside the next assertion's budget. The focus check is what orders them — the scroll
+  // begins with it, so asking whether the page has settled any earlier would be asking
+  // about a page that had yet to move.
   const close = page.getByRole("button", { name: "Close trailer" });
   await trailerHasLoaded(page);
   await expect(close).toBeFocused();
