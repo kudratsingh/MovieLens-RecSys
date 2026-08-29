@@ -561,6 +561,49 @@ describe("a committed action refreshes recommendations before it says so", () =>
       panel.getByRole("button", { name: "4 stars for The Handmaiden" }),
     ).toBeVisible();
   });
+
+  it("rates through the shared control rather than a second star row", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/watched")) {
+          return Response.json(
+            committed({ watched_at: "2026-08-21T09:00:00Z", watchlisted_at: null }),
+          );
+        }
+        return Response.json(learnedRecommendations);
+      }),
+    );
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Mark watched" }));
+    const panel = within(await screen.findByRole("region", { name: "Rate The Handmaiden" }));
+
+    // `RatingStars`, identified by the behaviour only it has: the row is one
+    // tab stop moved with the arrow keys, and hover fills it from the left so
+    // the value is visible before it is committed. The compact editor has
+    // neither, and the point of this surface is that it no longer has to.
+    const first = panel.getByRole("button", { name: "1 star for The Handmaiden" });
+    expect(first).toHaveAttribute("tabindex", "0");
+    expect(panel.getByRole("button", { name: "2 stars for The Handmaiden" })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+
+    await user.hover(panel.getByRole("button", { name: "4 stars for The Handmaiden" }));
+    expect(first).toHaveClass("is-filled");
+    expect(panel.getByRole("button", { name: "5 stars for The Handmaiden" })).not.toHaveClass(
+      "is-filled",
+    );
+
+    // And the compact editor's recorded-value line goes with it: the panel's
+    // whole answer to a committed rating is the confirmation in the status
+    // region, so a second one here would be reporting the same thing twice.
+    expect(screen.queryByText("Not rated")).not.toBeInTheDocument();
+  });
 });
 
 describe("Quick Picks is reachable without claiming a fourth navigation slot", () => {
@@ -968,6 +1011,63 @@ describe("a rating from the follow-up panel finishes the decision", () => {
       "/library?userId=900000101",
     );
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("answers the press immediately and acknowledges only what committed", async () => {
+    const user = userEvent.setup();
+    let releaseRating: () => void = () => {};
+    const rating = new Promise<void>((resolve) => {
+      releaseRating = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/watched")) {
+          return Response.json(committed({ watched_at: WATCHED_AT, watchlisted_at: null }));
+        }
+        if (url.includes("/rating")) {
+          // Held open so the in-flight frame can be observed, which is the only
+          // moment the distinction below exists.
+          await rating;
+          return Response.json(
+            committed({
+              revision: 4,
+              rating: 4,
+              watched_at: WATCHED_AT,
+              watchlisted_at: null,
+            }),
+          );
+        }
+        return Response.json({
+          ...learnedRecommendations,
+          items: learnedRecommendations.items.slice(1),
+        });
+      }),
+    );
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    const panel = await openRatingPanel(user);
+    const chosen = panel.getByRole("button", { name: "4 stars for The Handmaiden" });
+    await user.click(chosen);
+
+    // The row fills to the pressed value while the write is still in flight, so
+    // the press is answered before the API is — but nothing is acknowledged,
+    // because a write that could still fail and roll back must not have been
+    // celebrated. That is the shared control's rule, and this surface inherits
+    // it rather than restating it.
+    await waitFor(() => expect(chosen).toHaveClass("is-filled"));
+    expect(chosen).not.toHaveClass("is-chosen");
+    expect(screen.queryByText(/^You rated /)).not.toBeInTheDocument();
+
+    releaseRating();
+    await screen.findByText(CONFIRMATION);
+    // And the commit ends the panel outright: the collapse-into-a-chip ending
+    // belongs to the surfaces a viewer stays on, not to one that is handing the
+    // page back to the next movie.
+    await waitFor(() => expect(ratingPanel()).not.toBeInTheDocument());
+    expect(screen.queryByText(/^You rated /)).not.toBeInTheDocument();
   });
 
   it("clears the confirmation on its own rather than leaving it standing", async () => {

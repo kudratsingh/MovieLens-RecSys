@@ -24,10 +24,10 @@ import { WhyThis } from "@/components/discover/why-this";
 import type { PreloadedTechnicalEvidence } from "@/components/discover/technical-evidence";
 import { MovieRail } from "@/components/movie/movie-rail";
 import {
-  MovieRatingControl,
   MovieStateControls,
   RECOMMENDATION_CONTROLS,
 } from "@/components/movie/movie-state-controls";
+import { RatingStars } from "@/components/movie/rating-stars";
 import { ResourceProblem, ResourceRegion } from "@/components/ui/resource-region";
 import { EmptyState, PosterSkeleton } from "@/components/ui/resource-states";
 import type {
@@ -1128,7 +1128,16 @@ export function DiscoverExperience({
                 onRate={(value, control) =>
                   void commit(justWatched, ratingAction(value), control, "just-watched")
                 }
-                state={cardStates[justWatched.id] ?? justWatched.state}
+                // Stored and in-flight are handed over separately, the same way
+                // detail hands them over: the row fills the instant a star is
+                // pressed, and the acknowledgement is reserved for a value the
+                // API has actually recorded.
+                pendingRating={
+                  pendingMovieId === justWatched.id
+                    ? (cardStates[justWatched.id]?.rating ?? null)
+                    : null
+                }
+                rating={known[justWatched.id]?.rating ?? justWatched.state.rating}
               />
             ) : null}
 
@@ -1400,16 +1409,42 @@ function QueueEnd({
  * from becoming a second, permanent surface for a decision that is finished —
  * filled-in stars reading "5 out of 5 recorded" at the foot of a page whose
  * featured slot moved on two decisions ago.
+ *
+ * The stars are the shared `RatingStars`, not the compact editor the passing
+ * surfaces use. The rule for which one a surface gets is whether rating is *the*
+ * decision there or an edit alongside others, and this panel exists for exactly
+ * one purpose: its heading is `Rate <title>` and there is nothing else in it. So
+ * it earns the preview fill, the roving tab stop, and the larger targets, and it
+ * stops being a second whole-star control that is free to drift from the one on
+ * a movie's own page.
+ *
+ * What it does *not* take from that control is the acknowledgement. `RatingStars`
+ * celebrates a committed value and then folds into a `You rated N/5` chip, which
+ * is the right end for a surface the viewer stays on — detail, and the Seen
+ * spotlight. Here the commit ends the panel outright and answers in the status
+ * region on the way back to the featured movie, so the sequence never gets a
+ * chance to run: a 640ms celebration in front of a page that is trying to hand
+ * the viewer their next movie would be the delay, not the reward. The optimistic
+ * fill is what answers the press itself.
+ *
+ * It offers no `Clear rating` either. The panel opens unrated and closes on the
+ * first commit, so there is never a stored value here to clear — and unwinding
+ * one is the Library's job on a surface where watched is `final`, which is what
+ * the link above the stars is for.
  */
 function JustWatched({
   movie,
-  state,
+  rating,
+  pendingRating,
   busy,
   libraryHref,
   onRate,
 }: {
   movie: MovieCard;
-  state: MovieDisplayState;
+  /** The stored value, which on this surface is null for the panel's whole life. */
+  rating: number | null;
+  /** The value being written, so the press has an answer before the commit does. */
+  pendingRating: number | null;
   busy: boolean;
   libraryHref: string;
   onRate: (value: number | null, control: HTMLElement) => void;
@@ -1427,13 +1462,14 @@ function JustWatched({
           </Link>
         </p>
       </div>
-      <MovieRatingControl
+      <RatingStars
         busy={busy}
+        className="just-watched-rating"
         idPrefix={`just-watched-${movie.id}`}
         note="Stars are recorded feedback for this persona. The deployed recommender counts any rating as one observed watch, so a 1 and a 5 are the same learned signal today."
         onRate={onRate}
-        rating={state.rating}
-        showRecorded
+        pendingRating={pendingRating}
+        rating={rating}
         title={movie.title}
       />
     </section>

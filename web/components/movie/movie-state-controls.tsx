@@ -396,14 +396,19 @@ export function ratingInputId(idPrefix: string): string {
 }
 
 /**
- * The one rating editor, in the two input shapes the product actually uses.
+ * The compact rating editor, in the two input shapes the product actually uses.
  *
- * Discover and movie detail offer whole stars, which is what a decision surface
- * needs; the Library edits an existing value and offers the half-star precision
- * the stored constraint allows. Both write the same resource and both say the
- * same thing about what a star means, which is the part that has to stay in one
- * place: under ADR 0002 the deployed recommender counts any rating as one
- * observed watch, so a 1 and a 5 are the same learned signal today.
+ * Quick Picks offers whole stars, where one press is a queue decision that
+ * marks watched and rates in a single write; the Library edits an existing
+ * value and offers the half-star precision the stored constraint allows. The
+ * surfaces where rating is the whole point of the moment — a movie's own page,
+ * the Seen spotlight, Discover's `Just marked watched` prompt — use the larger
+ * `RatingStars` instead.
+ *
+ * All of them write the same resource and all of them say the same thing about
+ * what a star means, which is the part that has to stay in one place: under ADR
+ * 0002 the deployed recommender counts any rating as one observed watch, so a 1
+ * and a 5 are the same learned signal today.
  */
 export function MovieRatingControl({
   title,
@@ -414,7 +419,6 @@ export function MovieRatingControl({
   legend = "Your rating",
   clearLabel,
   note,
-  showRecorded = true,
   idPrefix,
   classNames,
 }: {
@@ -428,8 +432,6 @@ export function MovieRatingControl({
   /** Rendered only when a value exists to clear. */
   clearLabel?: string;
   note?: React.ReactNode;
-  /** The recorded-value line. Surfaces that carry their own copy opt out. */
-  showRecorded?: boolean;
   idPrefix?: string;
   classNames?: MovieStateClassNames;
 }) {
@@ -514,11 +516,11 @@ export function MovieRatingControl({
         ))}
         {clear}
       </div>
-      {showRecorded ? (
-        <p aria-live="polite" className="movie-rating-status">
-          {rating ? `${rating} out of 5 recorded` : "Not rated"}
-        </p>
-      ) : null}
+      {/* The compact editor has no acknowledgement of its own, so the recorded
+          value is the only thing that says a press landed. */}
+      <p aria-live="polite" className="movie-rating-status">
+        {rating ? `${rating} out of 5 recorded` : "Not rated"}
+      </p>
       {note ? <p className="movie-rating-note">{note}</p> : null}
     </fieldset>
   );

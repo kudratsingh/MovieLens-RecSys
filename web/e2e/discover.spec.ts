@@ -479,9 +479,12 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
 
   await panel.getByRole("button", { name: /^4 stars for / }).click();
 
-  // 1. The panel leaves rather than standing there with its stars filled in.
+  // 1. The panel leaves rather than standing there with its stars filled in —
+  //    and it takes the shared control's own ending with it, so no `You rated
+  //    4/5` chip is left behind at the foot of the page either.
   await expect(panel).toHaveCount(0);
-  await expect(page.getByText("4 out of 5 recorded")).toHaveCount(0);
+  await expect(page.locator(".rating-star-row")).toHaveCount(0);
+  await expect(page.getByText(/^You rated /)).toHaveCount(0);
 
   // 2. One sentence in its place, in the product's own terms, with the way to
   //    change it still named.
@@ -506,6 +509,47 @@ test("rating a just-watched movie clears the panel and hands the page back", asy
   await expect(watchlist).toBeFocused();
   await expect(watchlist).toBeInViewport({ ratio: 1 });
 
+  const { blocking } = await auditPage(page);
+  expect(describeViolations(blocking), describeViolations(blocking)).toBe("");
+});
+
+test("the rating prompt is the same star control a movie's own page offers", async ({
+  page,
+}) => {
+  await stubMovieStateWrites(page);
+  await page.goto("/discover?demo=learned");
+
+  await page
+    .locator("section.featured-movie")
+    .getByRole("button", { name: "Mark watched" })
+    .click();
+  const panel = page.getByRole("region", { name: /^Rate / });
+  await expect(panel).toBeVisible();
+
+  // The three things the compact editor could not do, at every width the
+  // matrix runs: a preview that fills from the left, one tab stop for the row,
+  // and targets that stay at least 44px even where the glyph shrinks.
+  await panel.getByRole("button", { name: /^4 stars for / }).hover();
+  await expect(panel.getByRole("button", { name: /^1 star for / })).toHaveClass(/is-filled/);
+  await expect(panel.getByRole("button", { name: /^5 stars for / })).not.toHaveClass(
+    /is-filled/,
+  );
+  await expect(panel.getByRole("button", { name: /^1 star for / })).toHaveAttribute(
+    "tabindex",
+    "0",
+  );
+  await expect(panel.getByRole("button", { name: /^2 stars for / })).toHaveAttribute(
+    "tabindex",
+    "-1",
+  );
+
+  const target = await panel.getByRole("button", { name: /^3 stars for / }).boundingBox();
+  expect(target?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(target?.width ?? 0).toBeGreaterThanOrEqual(44);
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+
+  // Audited with the panel open, which is the one state the existing rating
+  // test cannot cover: by the time it audits, the panel has ended itself.
   const { blocking } = await auditPage(page);
   expect(describeViolations(blocking), describeViolations(blocking)).toBe("");
 });
