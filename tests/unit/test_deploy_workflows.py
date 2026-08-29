@@ -416,9 +416,10 @@ def test_the_rollback_target_is_published_as_an_artifact(deploy: dict[str, Any])
     read_back = step_by_name(deploy, "deploy", "Upload the recorded rollback target")
     upload = step_by_name(deploy, "deploy", "Publish the rollback target")
     # Both uploaded even when the release failed: that is the run whose rollback
-    # target somebody actually needs.
-    assert read_back["if"] == "always()"
-    assert upload["if"] == "always()"
+    # target somebody actually needs. `always()` still yields to the host guard,
+    # because a dormant run never opened an SSH agent and has nothing to read.
+    assert read_back["if"] == "always() && steps.configured.outputs.configured == 'true'"
+    assert upload["if"] == "always() && steps.configured.outputs.configured == 'true'"
     assert upload["uses"].startswith("actions/upload-artifact@")
     assert upload["with"]["name"] == "rollback-target"
     # deploy.sh records current→previous before it pulls anything, so `previous`
@@ -604,22 +605,42 @@ def test_the_sentinel_match_rejects_a_partial_verify_run(canary: dict[str, Any])
     assert not matches("not-VERIFY-OK-either")
 
 
-def test_the_canary_is_dormant_only_while_nothing_is_configured(canary: dict[str, Any]) -> None:
-    # The schedule fires before any host exists. An environment carrying none of
-    # the four deploy values makes the run a green no-op with a notice; anything
-    # partially configured must still fail loudly, or a deleted secret would turn
-    # the canary into silence.
-    steps = canary["jobs"]["canary"]["steps"]
-    guard = steps[0]
+@pytest.mark.parametrize("workflow,job", [(DEPLOY_WORKFLOW, "deploy"), (CANARY_WORKFLOW, "canary")])
+def test_the_box_is_reached_only_once_something_is_configured(workflow: Path, job: str) -> None:
+    # Both workflows start firing the moment they land on main — the canary on
+    # its schedule, the deploy on every green CI run — and that is well before a
+    # host exists to reach. A run that goes red on every merge for a deployment
+    # nobody has created yet is how a red deploy stops being read at all, so an
+    # environment carrying none of the four values makes the run a green no-op
+    # with a notice. Anything *partially* configured must still fail loudly, or
+    # a deleted secret would turn releases into silence rather than an error.
+    job_steps = steps(load_workflow(workflow), job)
+    guard = job_steps[0]
     assert guard["id"] == "configured"
+    assert guard["name"] == "Decide whether a production host exists yet"
+
     script = guard["run"]
     for name in ("DEPLOY_HOST", "DEPLOY_USER", "DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"):
         assert f'-z "${{{name}}}"' in script
+    # The two secrets have to be read into this step's own env: a secret is not
+    # legible from the `if` expressions the guard's output then feeds.
+    assert guard["env"]["DEPLOY_SSH_KEY"] == "${{ secrets.DEPLOY_SSH_KEY }}"
+    assert guard["env"]["DEPLOY_KNOWN_HOSTS"] == "${{ secrets.DEPLOY_KNOWN_HOSTS }}"
     # Dormancy is the conjunction of all four being empty, never a disjunction.
     assert script.count("&&") >= 3 and "||" not in script.split("then")[0]
     assert "configured=false" in script and "configured=true" in script
-    gated = [step for step in steps[1:] if step.get("name") != "Close the SSH agent"]
-    for step in gated:
-        assert "steps.configured.outputs.configured == 'true'" in str(
-            step.get("if", "")
-        ), f"step {step.get('name')!r} runs without the host guard"
+    # The notice has to say what to do about it, not just that nothing happened.
+    assert "docs/deployment-runbook.md section 6" in script
+
+    # Every later step, with no exceptions: one that ran anyway would be the
+    # failure the guard exists to prevent. The `always()` and `!cancelled()`
+    # steps carry the guard as a conjunct rather than instead of it — `always()`
+    # alone would run them on a dormant run, against an SSH agent that was never
+    # opened.
+    for step in job_steps[1:]:
+        condition = str(step.get("if", ""))
+        assert (
+            "steps.configured.outputs.configured == 'true'" in condition
+        ), f"{workflow.name}:{job}: step {step.get('name')!r} runs without the host guard"
+        if "always()" in condition or "cancelled()" in condition:
+            assert "&&" in condition
