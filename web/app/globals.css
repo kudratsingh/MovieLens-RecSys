@@ -105,50 +105,71 @@
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-* {
-  box-sizing: border-box;
+/*
+ * Everything that is a *default* belongs in `@layer base`, and the reason is
+ * the whole of finding N7.
+ *
+ * `@import "tailwindcss"` declares `@layer theme, base, components, utilities`,
+ * and an unlayered author rule beats every layered one no matter how weak its
+ * selector. So the element resets that used to sit here — `button, input,
+ * select { color: inherit; font: inherit }` and `a { color: inherit }` — silently
+ * out-ranked every Tailwind utility app-wide: `text-zinc-300` on a button, or
+ * `text-sm` on an input, simply did nothing, and the only way to win was a class
+ * selector or an inline style. That produced a 1.31:1 primary-action label on the
+ * signed-out door and white-on-white controls on `/legacy`, both of which had to
+ * be worked around locally rather than fixed with a utility.
+ *
+ * Those three rules are gone rather than wrapped, because Tailwind's own
+ * preflight already declares them verbatim inside `@layer base` — `a { color:
+ * inherit }`, `button, input, select, … { font: inherit; color: inherit }` and
+ * `* { box-sizing: border-box }`. Re-stating them here bought nothing except the
+ * cascade bug. What is left is what preflight does not cover, and it is layered.
+ *
+ * If you add an element-level default, add it inside this block. An unlayered
+ * one will beat every utility in the app, which is almost never what you want.
+ */
+@layer base {
+  html {
+    background: var(--surface-canvas);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background:
+      linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+      var(--surface-canvas);
+    background-size: 100% 40px;
+    color: var(--text-primary);
+    font-family: var(--font-body), "Helvetica Neue", Helvetica, Arial, sans-serif;
+    margin: 0;
+    min-width: 320px;
+  }
+
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--text-inverse);
+  }
 }
 
-html {
-  background: var(--surface-canvas);
-  scroll-behavior: smooth;
-}
-
-body {
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    var(--surface-canvas);
-  background-size: 100% 40px;
-  color: var(--text-primary);
-  font-family: var(--font-body), "Helvetica Neue", Helvetica, Arial, sans-serif;
-  margin: 0;
-  min-width: 320px;
-}
-
-button,
-input,
-select {
-  color: inherit;
-  font: inherit;
-}
-
-button,
-a {
-  -webkit-tap-highlight-color: transparent;
-}
-
-a {
-  color: inherit;
-}
-
+/*
+ * Deliberately *not* layered, and the one exception to the note above.
+ *
+ * The focus ring is an accessibility guarantee rather than a default, and it is
+ * the only thing standing between a keyboard user and an invisible focus
+ * position. Layered, it would lose to `outline-none` — which is already on the
+ * `/legacy` user-ID input, so moving this into `@layer base` would silently take
+ * that field's focus ring away. Keeping it unlayered means a utility cannot
+ * remove a focus indicator by accident; a surface that genuinely needs its own
+ * ring should style `:focus-visible` itself rather than switch this one off.
+ */
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
-}
-
-::selection {
-  background: var(--accent);
-  color: var(--text-inverse);
 }
 
 .skip-link {

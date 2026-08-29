@@ -4,12 +4,18 @@
  * It was the last surface in the app styled entirely with Tailwind colour
  * utilities, and the 7d cutover put it in the accessibility gate for the first
  * time — which is how three defects surfaced at once. Two were contrast
- * failures, and one of them was structural: `button { color: inherit }` in the
- * base layer out-ranks every Tailwind utility, so the primary action's
- * `text-zinc-950` had never applied and its label rendered at 1.31:1 on amber.
- * A utility that cannot win is not a fix, so the door now uses the same
- * `.card-surface` / `.button-primary` / `.eyebrow` vocabulary as the product
- * it opens, and inherits that vocabulary's contrast guarantees.
+ * failures, and one of them was structural: `button { color: inherit }` was
+ * declared *outside* any cascade layer, which out-ranks every Tailwind utility
+ * however specific, so the primary action's `text-zinc-950` had never applied
+ * and its label rendered at 1.31:1 on amber. (The diagnosis at the time said
+ * "the base layer"; the point is that it was in no layer at all, which is
+ * precisely why it won.)
+ *
+ * That cascade defect is fixed — the resets now sit in `@layer base` and
+ * utilities beat them again — so a utility would work here today. The door
+ * stays on the `.card-surface` / `.button-primary` / `.eyebrow` vocabulary
+ * anyway, because it should look like the product it opens and inherit that
+ * vocabulary's contrast guarantees rather than re-deriving them per class.
  */
 
 .sign-in-door {

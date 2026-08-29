@@ -94,7 +94,7 @@ None of these blocks the gate.
 | **N4** — Library spends the first mobile viewport on identity copy | Precondition delivered (the persona is named in the shell at every width); the layout change itself is deferred |
 | **N5** — Browse restores a stored window instead of re-reading | Deliberate; unchanged |
 | **N6** — the product has no persona picker | Owner decision. The design contract asks for a *labelled* persona, which the shell now delivers at every width; a picker is its own PR, gated behind the `demo-impersonator` role (ADR 0012). The named chips remain on `/legacy` |
-| **N7** — unlayered base rules beat every Tailwind colour utility | Only the interim fix landed. `app/globals.css`'s `button, input, select { color: inherit }` still sits outside any cascade layer and still out-ranks colour utilities app-wide; the `@layer base` fix is its own PR with a full visual-gate re-run |
+| **N7** — unlayered base rules beat every Tailwind colour utility | **Closed 2026-08-29.** The element resets now sit in `@layer base` — they duplicated Tailwind's preflight, so they were deleted rather than wrapped — and colour and type utilities win again app-wide; the `.legacy-on-light` workaround is retired and a white-on-white `Retry` on the movie-detail error boundary is fixed with it. `:focus-visible` stays unlayered on purpose, so no utility can remove a focus ring |
 | **One cross-tenant canary holds only on an empty database** | `test_user_endpoints_never_cross_tenant_boundary[recommendations]` relies on the canary title reaching a top-50 popularity list. Honest in CI, misleading against a seeded database — worth fixing before it is ever pointed at a deployment |
 
 N1, N3, and the three cutover blockers B1–B3 are closed; the sweep pass records
