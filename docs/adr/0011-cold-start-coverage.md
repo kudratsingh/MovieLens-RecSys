@@ -172,11 +172,35 @@ index at all?"* — `_knn is not None and user_id in self._user_to_index` for
 item-item, and the same shape for CF/ALS and the two-tower. A user with a single
 interaction is in that index, so the learned path serves them.
 
-Measured against the contract the harness derives from the threshold, that means
-per-bucket fallback counts of **500 / 0 / 0 / 0** where ADR 0001 implies
-500 / 500 / 500 / 0, and `synth_cold_routing_ok = false` on every candidate-model
-run. Buckets 1 and 3 are the disagreement: users the evaluation protocol calls
-cold, served by the learned path.
+Measured, on the full 25M dataset, with item-item at `K_CANDIDATES = 500`:
+
+| bucket | fallback-served | expected | recall@500 | ndcg@500 |
+|---|---|---|---|---|
+| h0 | 500 | 500 | 0.4760 | 0.0823 |
+| h1 | 0 | 500 | 0.1440 | 0.0264 |
+| h3 | 0 | 500 | 0.2880 | 0.0470 |
+| h10 | 0 | 0 | 0.3900 | 0.0619 |
+
+`synth_cold_routing_ok = false`. Buckets 1 and 3 are the disagreement: users the
+evaluation protocol calls cold, served by the learned path.
+
+The recall column says something the fallback counts alone do not. **A
+1-interaction user scores 0.1440 where the same user routed to the fallback would
+have scored something near h0's 0.4760** — the two buckets differ only in
+history size and routing, since the target distribution is identical across
+buckets by construction (see the target-ordering note above). Serving one watched
+film's cosine neighbours to a user is, on this cohort, roughly three times worse
+than serving them the popular head. h3 recovers to 0.2880 and h10 to 0.3900, a
+monotone climb back toward the fallback but still short of it at ten
+interactions.
+
+Read that with the caveat this ADR's own Risks section insists on: the targets
+are popularity-weighted, so the popularity fallback hits them at the rate
+popularity intersects popularity, and h0 is flattered by construction. The
+comparison that *is* clean is h1 against h0, because those two buckets are
+identical in everything except how many items the user had and which path served
+them. It is evidence for a direction, not a verdict — but it is the first
+evidence there has ever been, which is the point of building the cohort.
 
 Nothing is being quietly repaired here. `expected_fallback_served` derives the
 contract from `COLD_START_THRESHOLD` rather than from whatever a model happens
