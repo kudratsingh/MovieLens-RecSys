@@ -223,6 +223,28 @@ ADR 0001 is amended to say that offline retrieval routes on index membership and
 only the serving path applies the threshold. That decision needs a run of both
 to compare, which is precisely what this cohort now makes cheap.
 
+### The popularity baseline is the control, and it comes out flat
+
+`src/training/popularity.py` logs the same buckets with **no routing predicate**
+— `synth_cold_fallback_served_h*` reads `unmeasured` and no `synth_cold_routing_ok`
+tag is set. That is not an omission: `PopularityModel` *is* the fallback, has no
+learned path to route to, and a fallback count for it would be a tautology.
+
+What it does buy is a control. On the same cohort at `K = 10` it scores h0
+0.0340, h1 0.0420, h3 0.0160, h10 0.0240 — non-monotone, and inside roughly
+±0.008 of each other at the ±1 standard error a Bernoulli mean at n = 500 and
+p ≈ 0.03 carries. A single unpersonalized policy serving every bucket produces
+no trend in history size, which is what it should: the only thing that varies
+across buckets for it is how many of a user's own items the seen-filter removes
+from a ten-item window.
+
+That matters for reading the item-item table above. The buckets are not
+intrinsically unequal in difficulty — if they were, this run would slope too.
+So the 0.4760 → 0.1440 → 0.2880 → 0.3900 profile is a property of retrieval and
+routing rather than of the cohort's construction. (The two runs are at different
+K and their *levels* are not comparable; the claim here is only about the
+presence or absence of a slope within each run.)
+
 ### Ranker end-to-end coverage is included
 
 `synth_cold_recall_at_k_h*` comes out of `src/training/ranker.py` as well as
