@@ -1,11 +1,13 @@
 # Movie-discovery frontend: backend readiness
 
-**Status:** Bundles 0–3 implemented: source audit, Auth.js boundary, durable Library,
-and scalable local catalog/detail. The Bundle 6 backend prerequisite —
-separate positive-history and excluded-ID serving inputs plus audit evidence —
-is implemented (PR #54).
+**Status:** Bundles 0–7 delivered. The source audit, Auth.js boundary, durable
+Library, scalable local catalog/detail, the Bundle 6 serving prerequisite
+(separate positive-history and excluded-ID inputs plus audit evidence, PR #54),
+Quick Picks, and the cutover are all on `main`. The "required before the
+redesign is defensible" list below has since been worked through — each item now
+carries the PR or ADR that closed it.
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
 ## Outcome
 
@@ -239,23 +241,46 @@ recommendation state overlay across a watchlist write and its undo.
 
 ## Platform requirements before broad route fan-out
 
-- Split recommendation, catalog, movie detail, library counts, history, and
-  technical evidence into independent BFF resources with timeouts and local
-  error boundaries.
-- Keep personalized responses `private, no-store`; propagate request IDs; keep
-  access tokens and upstream secrets server-side.
-- Maintain the committed OpenAPI artifact and generated TypeScript types with
-  stable operation IDs, bearer security, constrained schemas, shared errors,
-  and CI drift detection.
-- Move blocking database work off the event loop or adopt async DB access, and
-  shorten transactions around external calls.
-- Add tenant/actor/route-class rate limits with `429` and `Retry-After` at
-  FastAPI, not only the BFF.
-- Add generic request audits with an explicit durability and retention policy.
-- Add bounded-cardinality route, dependency, database-pool, auth, model, Feast,
-  and TMDB metrics plus separate `/healthz` and `/readyz` behavior.
-- Preserve the existing direct recommendation SLO and add a page-shaped load
-  profile for BFF fan-out, catalog paging, Library reads, and mutation/refetch.
+This list was written before the fan-out; every line has since been worked
+through, and each one now records what closed it or why it is still open.
+
+- **Done (Bundle 5A, PR #53).** Split recommendation, catalog, movie detail,
+  library counts, history, and technical evidence into independent BFF resources
+  with timeouts and local error boundaries. `web/lib/resources/` is the one
+  server-owned client, with per-resource timeout budgets and a state model that
+  renders a failed resource without blanking the regions around it.
+- **Done (PRs #53, #54).** Keep personalized responses `private, no-store`;
+  propagate request IDs; keep access tokens and upstream secrets server-side. A
+  caller-supplied bearer is refused at the BFF edge and in the browser reader;
+  `src/serving/request_id.py` adopts and echoes `X-Request-ID` on every response.
+- **Done (Bundle 1, PR #45).** Maintain the committed OpenAPI artifact and
+  generated TypeScript types with stable operation IDs, bearer security,
+  constrained schemas, shared errors, and CI drift detection —
+  `make api-contract-check` and `make web-api-types-check`.
+- **Done, by the first of the two options.** Blocking database work runs off the
+  event loop through `run_in_threadpool` rather than by adopting an async driver;
+  `src/serving/app.py`, `src/serving/audit.py`, and `src/auth/middleware.py` are
+  where that boundary sits.
+- **Done (ADR 0014, `src/serving/ratelimit.py`).** Rate limits with `429` and
+  `Retry-After` at FastAPI rather than only the BFF: a per-`(tenant, subject)`
+  token bucket keyed on the verified token, on by default outside `dev`. Two
+  limits are deliberate and written down in the ADR rather than hidden — the
+  bucket is per worker process, and the limits are global rather than read from
+  the per-tenant quota column, which lands with the Phase 6 tenant-config work.
+- **Open.** Generic request audits with an explicit durability and retention
+  policy. The audit middleware still matches only
+  `/users/{id}/recommendations`; ADR 0012 allows a best-effort or queued policy
+  for the rest only once the durability tradeoff is written down.
+- **Partly done, and partly a recorded decision.** `/healthz` and `/readyz` are
+  separate, with `/readyz` reporting database, JWKS, and both sidecars while
+  gating only on the first two (ADR 0013). A `/metrics` endpoint is
+  **deliberately not added** — ADR 0013 records the omission rather than leaving
+  it to be discovered, and Grafana owns operator views.
+- **Done (Bundle 7b, PR #62).** The direct recommendation p99 gate is untouched
+  and a page-shaped profile was added beside it for BFF fan-out, catalog paging,
+  Library reads, and mutation/refetch (`synthetic/load/pages.js` with its budgets
+  in a separate thresholds module, so a weaker budget cannot be edited into the
+  pinned gate by accident).
 
 ## Catalog coverage rule
 

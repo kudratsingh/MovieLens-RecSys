@@ -86,6 +86,16 @@ The choice of 3001 specifically (not 3002, 5173, etc.) is conventional — `+1` 
 
 - **Build/runtime environment.** Node 20+ is required (Next 16 minimum). Local dev is `npm run dev` on port 3001. Production build is `next build` + `next start`; static export (`output: "export"` in `next.config.ts`) is not viable because the TMDB proxy and any future RSC-fetching route requires a Node runtime. If the project ever needs a deployable demo URL, the deployment target is a Node host (Vercel, Fly.io, or `docker-compose` extension) rather than an S3/CloudFront static bucket.
 
+  _Note (2026-08-29): the deployment question has since been decided, and the
+  third option is the one that was taken. [ADR 0013](../0013-production-deployment-target.md)
+  pins a single Hetzner CX22 running `docker-compose.prod.yml`, where the web
+  app is a standalone Next.js image behind a Caddy edge on the host's private
+  Docker network — not Vercel, not Fly.io. The reasoning above still holds
+  (a Node runtime is required, and static export is not viable); only the named
+  hosts are wrong. The TMDB proxy also moved: it is served by FastAPI, not by a
+  Next.js route handler, so `TMDB_API_KEY` never reaches the web image
+  (see the scope note above)._
+
 - **State management is deferred.** No client-side data-fetching library (TanStack Query, SWR, Redux, Zustand) is added in the scaffold. Server Components + Server Actions + `fetch` cover the Phase 3 baseline surfaces. The decision of whether to add TanStack Query for the Phase 6 champion/challenger view (which has the strongest client-side cache argument — two parallel rec lists against the same impersonated user) gets its own ADR when that surface is built.
 
 - **Authentication / impersonation flow is deferred.** The MovieLens user-ID impersonation pattern (cookie vs URL param vs Server Action with form state) is not decided in this ADR. It earns its own frontend ADR when the user selector lands.

@@ -293,8 +293,8 @@ Revisit this ADR if:
 
 The governing evidence and PASS/HOLD criteria live in:
 
-- [Product discovery](../../frontend/product-discovery.md)
+- [Product discovery](../../frontend/records/product-discovery.md)
 - [Design contracts](../../frontend/design-contracts.md)
 - [Testing strategy](../../frontend/testing-strategy.md)
-- [Baseline evidence](../../frontend/baseline-evidence.md)
+- [Baseline evidence](../../frontend/records/baseline-evidence.md)
 - [Implementation plan](../../frontend/implementation-plan.md)

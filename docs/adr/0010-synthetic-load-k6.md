@@ -811,6 +811,38 @@ assertion:
   collide; locally, run one at a time. Every mutation self-reverts and teardown
   sweeps whatever did not.
 
+#### Note (2026-08-29) — two facts recorded above have since changed
+
+The note above is left as written; both of the things it recorded as gaps were
+closed by later work, and this is where a reader should find that out.
+
+- **Rate limiting is implemented.** ADR 0014 (2026-08-27) added the
+  per-`(tenant, subject)` token bucket in `src/serving/ratelimit.py`, installed
+  between the auth middleware and the audit writer, on by default in every
+  environment except `dev`. "One measured absence" above, and the
+  `Rate-limit behaviour | recorded | recorded` row in the enforcement table, are
+  both superseded: `reliability.py`'s check is `required=True` and asserts the
+  contract rather than describing the behaviour — `X-RateLimit-*` on an admitted
+  response, a `429` carrying `Retry-After`, `X-RateLimit-Remaining: 0` and a JSON
+  `detail` once the bucket is drained, and no third outcome. A target that
+  advertises a bucket it never enforces fails, and so does one that refuses
+  without saying when to come back. What the check still cannot assert is that a
+  limiter is *configured*: ADR 0014 turns it off on a dev stack precisely so the
+  harnesses in this directory can drive one Keycloak identity past any sane
+  per-subject rate, so against the CI target the check records the absence in
+  words rather than inferring over it. The reason it can be required anyway is
+  that the absent branch is a description, not a pass by omission.
+- **The reviewed catalog is no longer mostly poster-less.** "41 of the 48
+  first-page catalog items have no poster" was true of the fixture this note was
+  written against; a committed, idempotent TMDB enrichment (PR #72, 2026-08-28)
+  filled all 120 titles, and `make catalog-verify` keeps them live. The
+  degraded-metadata check was written to survive that and did: when a scan of up
+  to ten catalog pages finds no poster-less title it reports `skipped` with the
+  reason and drops to `required=False`, because there is no live subject to point
+  at. The degraded rendering itself is held by `web/e2e/poster-fallback.spec.ts`
+  and the poster-card unit tests, neither of which needs a poster-less row to
+  exist upstream. No threshold moved in either change.
+
 ## Rationale
 
 1. **Purpose-built for CI/CD load testing is the argument.** k6 was designed by Grafana Labs specifically to fit into the shape non-negotiable #11 is asking for: a scriptable load test with declarative thresholds that a CI job can wait on and fail against. Threshold declarations *are* the pass/fail signal — you write `p(99)<100` in the script and CI stops on breach without a separate assertion harness. Locust's dashboard-first workflow was designed for an operator watching a graph, not for a CI job asserting an inequality; you can bolt CI-shape usage onto Locust with `--headless --check` and post-run parsing, but that's adaptation, not fit.

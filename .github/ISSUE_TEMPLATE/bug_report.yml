@@ -1,0 +1,98 @@
+name: Bug report
+description: Something behaves differently from what the code, an ADR, or a contract says it does.
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is public. Do not paste tokens, `.env.prod` values, or
+        anything from a real deployment's logs that is not already public.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where the behaviour is observed, not necessarily where the fix lands.
+      options:
+        - api (FastAPI endpoints, auth, tenancy)
+        - web (Next.js product surfaces and the BFF)
+        - serving (candidates, ranker, feature reads, the model sidecar)
+        - infra (Compose stacks, images, deploy, CI)
+        - docs (ADRs, runbooks, contracts)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where it happened
+      options:
+        - Local dev stack (docker-compose.yml)
+        - Demo stack (docker-compose.demo.yml)
+        - CI
+        - Production (Hetzner host)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen, and what it says so
+      description: >
+        Cite the contract being violated where one exists — an ADR, the OpenAPI
+        response schema, a documented frontend contract, a non-negotiable in
+        CLAUDE.md. A bug against a written promise is much cheaper to settle
+        than a bug against an expectation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens instead
+      description: Response bodies, status codes, and log lines beat prose.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        The shortest path from a clean checkout. Name the `make` target if one
+        gets there — `make demo-up && make demo-seed` and then the request.
+    validations:
+      required: true
+
+  - type: input
+    id: persona
+    attributes:
+      label: Persona and tenant
+      description: >
+        Which seeded persona and which tenant. Warm and cold personas take
+        different serving paths, so "Cold Start in `demo`" is not the same
+        report as "Action Fan in `demo`".
+      placeholder: "Action Fan / demo"
+
+  - type: input
+    id: request_id
+    attributes:
+      label: X-Request-ID
+      description: >
+        Echoed on every response and stored on the audit row as
+        `correlation_id`, so it is the fastest way to find the exact request.
+      placeholder: "e.g. 4f2c1e90-..."
+
+  - type: input
+    id: ci_run
+    attributes:
+      label: CI run URL
+      description: If this was seen in CI, link the run — and the failing job.
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: >
+        Whether it is intermittent and at what rate, whether it survives a
+        `make demo-reset`, git SHA if it is not `main`.

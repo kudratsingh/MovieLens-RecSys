@@ -1,5 +1,13 @@
 # Bundles 5–7 implementation handoff
 
+> **Record.** Accurate as of 2026-08-21. Bundles 5–7 have since been delivered
+> (PRs #53–#65) and the cutover is done. Superseded by
+> [`implementation-plan.md`](../implementation-plan.md) and
+> [`finish-gate-review.md`](../finish-gate-review.md). Not maintained.
+>
+> Kept because the finish gate is still run against the ten-step journey and the
+> acceptance checklist defined here, and the review cites both by section.
+
 **Status:** Ready for implementation after Bundle 4 merges
 
 **Prepared:** 2026-08-21

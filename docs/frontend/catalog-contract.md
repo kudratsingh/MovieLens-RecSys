@@ -1,8 +1,10 @@
 # Catalog and movie-detail contract
 
-**Status:** Bundle 3 implemented
+**Status:** Live contract. Shipped in Bundle 3 (PR #50) and still what Browse and
+movie detail are held to; the detail endpoint additionally returns the `details`
+payload added in PR #79.
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
 ## Product boundary
 

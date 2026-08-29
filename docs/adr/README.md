@@ -1,5 +1,8 @@
 # Architecture Decision Records
 
+**Last reviewed:** 2026-08-29 — the index below was checked against every ADR's
+own header and notes on that date.
+
 Every significant design choice in this project is written down *before* the code that depends on it lands, so the alternatives get rejected while they are still live options rather than retrofitted as justification. An ADR is a historical record: once accepted, its rationale is not rewritten. When the implementation later diverges from the plan, the ADR gets a short dated *implementation note* under its header, and the original text stays as written.
 
 There are two namespaces. Backend and cross-cutting ADRs live on the flat numeric line in this directory (`docs/adr/NNNN-slug.md`). Frontend ADRs have their own numeric line under [`frontend/`](frontend/), because the frontend is a separate team surface with its own stack and cadence. Numbers are assigned when an ADR is written, in roughly the order decisions land; they are never reused. Two related design documents live outside the ADR line and are not decision records: [`docs/api/README.md`](../api/README.md) holds the generated OpenAPI contract for the authenticated FastAPI surface, and [`docs/frontend/README.md`](../frontend/README.md) holds the frontend product and delivery docs that frontend ADR 0002 points into.
@@ -21,7 +24,7 @@ The standard each ADR is held to: substantive rather than checkbox — typically
 | 0009 | [Feature Store: Feast](0009-feature-store-feast.md) | Feast with Postgres offline and Redis online; `tenant_id` is a join key on every feature view; offline/online parity test runs in CI. | Accepted (see note) | 3 |
 | 0010 | [Synthetic Load Testing: k6](0010-synthetic-load-k6.md) | k6 with Prometheus remote-write; declarative `p(99)<100` threshold is the CI pass/fail gate on the authenticated recommendations path. Dated notes add the measurement-validity rule (quiesce what is not measured, warm every worker first, re-measure a breached window exactly once and only under recorded CPU steal — never a relaxed threshold) and the page-shaped per-step budgets alongside it. | Accepted (see notes) | 3 |
 | 0011 | [Cold-Start Coverage](0011-cold-start-coverage.md) | Fixed-seed synthetic cohort at history sizes 0/1/3/10, popularity-weighted items, isolated in a `synth_cold` tenant, scored per bucket in the eval harness. | Accepted (harness not yet built) | 3 |
-| 0012 | [Browser Identity, Feedback State, and Online Freshness](0012-browser-identity-feedback-and-online-freshness.md) | `/me/...` resources bound to the OIDC subject with persona access behind a `demo-impersonator` role; PKCE browser flow through the Next.js BFF; a forced-RLS `user_movie_state` projection plus an append-only feedback event log; mutations acknowledged only after commit. | Accepted | 3 |
+| 0012 | [Browser Identity, Feedback State, and Online Freshness](0012-browser-identity-feedback-and-online-freshness.md) | `/me/...` resources bound to the OIDC subject with persona access behind a `demo-impersonator` role; PKCE browser flow through the Next.js BFF; a forced-RLS `user_movie_state` projection plus an append-only feedback event log; mutations acknowledged only after commit. | Accepted (see note) | 3 |
 | 0013 | [Production Deployment Target: One Hetzner VPS](0013-production-deployment-target.md) | One Hetzner CX22 running `docker-compose.prod.yml` behind its own Caddy edge, with two public hostnames and everything else on the host's private Docker network; CI publishes SHA-tagged images to GHCR and the box only pulls; a merge to `main` deploys over SSH and rolls back automatically when verification fails; `/readyz` remains a second unauthenticated path and the CI k6 gate remains the SLO's only authority. | Accepted | 3 |
 | 0014 | [Request Rate Limiting](0014-request-rate-limiting.md) | Per-`(tenant, subject)` in-process token bucket keyed on the verified token, never on a client IP; 429 with `X-RateLimit-*`; defaults of 600/minute with a burst of 120 **per worker**, because the rehearsal measured that keep-alive pins one client to one bucket; a Redis-backed shared bucket is the named follow-up. | Accepted | 3 |
 
@@ -31,7 +34,7 @@ Phases map to the plan in [`CLAUDE.md`](../../CLAUDE.md): Phase 1 is baselines a
 
 | # | ADR | Decision in one line | Status |
 |---|---|---|---|
-| 0001 | [Frontend Framework](frontend/0001-frontend-framework.md) | Next.js (App Router) with TypeScript and Tailwind v4; dev server on port 3001 to stay clear of Grafana. | Accepted |
+| 0001 | [Frontend Framework](frontend/0001-frontend-framework.md) | Next.js (App Router) with TypeScript and Tailwind v4; dev server on port 3001 to stay clear of Grafana. | Accepted (see note) |
 | 0002 | [Movie-Discovery Experience and Progressive ML Disclosure](frontend/0002-movie-discovery-experience.md) | Movie discovery is the primary surface, on a route-based information architecture with poster-first interaction; ML evidence sits behind progressive disclosure; supersedes ADR 0001's "no search, no real auth" scope assumptions while leaving its framework choice intact. | Accepted |
 
 ## Reading order
