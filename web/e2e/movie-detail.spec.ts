@@ -21,6 +21,57 @@ const NO_TRAILER = "/ui-preview/movies/103";
 /** No enriched block at all: the page this route rendered before. */
 const PLAIN = "/ui-preview/movies/111";
 
+const EMBED_SRC = "https://www.youtube-nocookie.com/embed/T7kfW4trvUM?autoplay=1&rel=0";
+
+/**
+ * A stand-in for the embed document, once the press has been made.
+ *
+ * Installed only *after* the "nothing has reached a third party yet" assertion has run —
+ * that half is the reason this file exists and it has to face the real network. What comes
+ * after it does not: a real `youtube-nocookie.com` document is several hundred kilobytes of
+ * someone else's JavaScript, loading inside our budget, on a runner already hosting three
+ * browsers, and it can take the focus that Escape depends on into a cross-origin frame.
+ * Interception keeps everything these tests actually assert on — the `src`, the frame, the
+ * request itself — and drops only the dependency on YouTube being up and quick.
+ */
+const STUB_EMBED = '<!doctype html><title>stub embed</title><p id="stub-embed">stub embed</p>';
+
+async function serveTheEmbedOurselves(page: Page): Promise<void> {
+  await page.route(
+    (url) => url.hostname.endsWith("youtube-nocookie.com"),
+    (route) => route.fulfill({ body: STUB_EMBED, contentType: "text/html" }),
+  );
+}
+
+/** The frame holds a loaded document, so what follows is not racing its load. */
+async function trailerHasLoaded(page: Page): Promise<void> {
+  await expect(page.frameLocator("iframe").locator("#stub-embed")).toBeAttached();
+}
+
+/**
+ * The document has stopped moving.
+ *
+ * Opening the trailer puts focus on `Close trailer`, and `html` carries
+ * `scroll-behavior: smooth`, so the press starts an animated scroll — measured at ~470px
+ * over ~300ms at 1440, and at nothing at all on the two smaller viewports, where the
+ * control is already in view. Playwright checks that a target is stable before it computes
+ * a click point, but the pointer event is dispatched a round trip later, which on a loaded
+ * runner is long enough for a moving button to be somewhere else by the time the click
+ * lands. Two consecutive frames at the same offset is the same stability rule Playwright
+ * applies, asked before the press rather than during it.
+ */
+async function scrollingHasSettled(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () =>
+      new Promise<boolean>((resolve) => {
+        const start = window.scrollY;
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(window.scrollY === start)));
+      }),
+    undefined,
+    { polling: 100 },
+  );
+}
+
 async function horizontalOverflow(page: Page): Promise<number> {
   return page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -63,33 +114,58 @@ test("nothing reaches YouTube until the trailer is pressed", async ({ page }) =>
   await expect(page.locator("iframe")).toHaveCount(0);
   expect(thirdParty, "a third-party request was made before the press").toEqual([]);
 
+  // The promise above is recorded, so from here the embed is ours.
+  await serveTheEmbedOurselves(page);
+
   const play = page.getByRole("button", { name: /Play trailer/ });
   await expect(play).toBeVisible();
   await play.click();
 
   const frame = page.locator("iframe");
   await expect(frame).toHaveCount(1);
-  await expect(frame).toHaveAttribute(
-    "src",
-    "https://www.youtube-nocookie.com/embed/T7kfW4trvUM?autoplay=1&rel=0",
-  );
+  await expect(frame).toHaveAttribute("src", EMBED_SRC);
   // A frame with no accessible name is an unlabelled region a reader lands in
   // and cannot identify.
   await expect(frame).toHaveAttribute("title", "Official Trailer — The Handmaiden");
+  // The other half of the same promise: the press does reach the embed host. Without it
+  // the assertion above would still pass if the recorder had quietly stopped seeing
+  // requests at all.
+  expect(
+    thirdParty.filter((url) => url.startsWith("https://www.youtube-nocookie.com/")),
+    "the press should have reached the embed host",
+  ).not.toEqual([]);
+
+  // Two things stand between the press and the close, and neither of them is the close:
+  // the frame's own load, and the scroll that moving focus starts. Both are the trailer's
+  // to spend, so they are spent here rather than inside the next assertion's budget. The
+  // focus check is what orders them — the scroll begins with it, so asking whether the
+  // page has settled any earlier would be asking about a page that had yet to move.
+  const close = page.getByRole("button", { name: "Close trailer" });
+  await trailerHasLoaded(page);
+  await expect(close).toBeFocused();
+  await scrollingHasSettled(page);
 
   // And it puts itself away, returning focus to the control that opened it.
-  await page.getByRole("button", { name: "Close trailer" }).click();
+  await close.click();
   await expect(page.locator("iframe")).toHaveCount(0);
   await expect(play).toBeFocused();
 });
 
 test("the trailer control is keyboard operable and closes on Escape", async ({ page }) => {
+  // Nothing here tests what happens before the press, so the embed is ours from the start.
+  await serveTheEmbedOurselves(page);
   await page.goto(ENRICHED);
+
   const play = page.getByRole("button", { name: /Play trailer/ });
   await play.focus();
   await page.keyboard.press("Enter");
 
   await expect(page.locator("iframe")).toHaveCount(1);
+  await trailerHasLoaded(page);
+  // Escape is handled on the section, so it only closes anything while focus is still in
+  // this document — which is precisely why opening moves it here.
+  await expect(page.getByRole("button", { name: "Close trailer" })).toBeFocused();
+
   await page.keyboard.press("Escape");
   await expect(page.locator("iframe")).toHaveCount(0);
   await expect(play).toBeFocused();
