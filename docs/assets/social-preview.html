@@ -1,0 +1,180 @@
+<!doctype html>
+<!--
+  Source for docs/assets/social-preview.png — the 1280x640 card GitHub shows
+  when the repository is linked from anywhere that unfurls a URL.
+
+  Rendered with the Playwright-managed Chromium at deviceScaleFactor 1:
+
+    node docs/assets/render-social-preview.mjs
+
+  The palette is not decorative. Every colour here is a token lifted verbatim
+  from web/app/globals.css, so the card and the product it advertises are
+  demonstrably the same design: --surface-canvas, --surface-raised,
+  --text-primary/secondary/muted, --accent, --border-subtle, and the same
+  1px warm scanline the app paints on its body. Type is the product's own
+  display serif and body stack. No third-party marks: the stack is set as
+  text, because none of those logos are mine to redistribute.
+
+  GitHub does not accept this file over the API — upload the PNG by hand at
+  Settings -> General -> Social preview.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MovieLens Two-Stage Recommender — social preview</title>
+    <style>
+      :root {
+        --surface-canvas: #0b0a09;
+        --surface-raised: #1a1815;
+        --border-subtle: #2b2823;
+        --text-primary: #f4ede3;
+        --text-secondary: #bdb3a6;
+        --text-muted: #9a9186;
+        --accent: #ee7657;
+        --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        --font-body: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
+        --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        width: 1280px;
+        height: 640px;
+      }
+
+      body {
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          radial-gradient(
+            760px 520px at 88% 8%,
+            rgba(238, 118, 87, 0.16),
+            transparent 68%
+          ),
+          var(--surface-canvas);
+        background-size:
+          100% 3px,
+          auto,
+          auto;
+        color: var(--text-primary);
+        font-family: var(--font-body);
+        -webkit-font-smoothing: antialiased;
+        overflow: hidden;
+      }
+
+      .card {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        padding: 76px 84px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      /* The one coral edge. Reads as the accent rail the product uses for
+         identity, and gives the card a fixed left origin at any crop. Centred
+         rather than inset from top and bottom, so it stays tied to the text
+         block instead of drifting past it. */
+      .card::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        height: 300px;
+        width: 5px;
+        background: var(--accent);
+        border-radius: 0 3px 3px 0;
+      }
+
+      .eyebrow {
+        font-family: var(--font-mono);
+        font-size: 17px;
+        letter-spacing: 0.04em;
+        color: var(--text-muted);
+      }
+
+      h1 {
+        margin-top: 26px;
+        font-family: var(--font-display);
+        font-size: 68px;
+        line-height: 1.06;
+        letter-spacing: -0.012em;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .rule {
+        margin-top: 30px;
+        width: 96px;
+        height: 2px;
+        background: var(--accent);
+        opacity: 0.85;
+      }
+
+      .lede {
+        margin-top: 28px;
+        max-width: 940px;
+        font-size: 25px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+      }
+
+      .lede strong {
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .chips {
+        margin-top: 52px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 11px;
+      }
+
+      .chip {
+        padding: 9px 17px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        background: var(--surface-raised);
+        font-size: 18px;
+        line-height: 1;
+        color: var(--text-muted);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <p class="eyebrow">kudratsingh/MovieLens-RecSys</p>
+
+      <h1>MovieLens Two-Stage Recommender</h1>
+
+      <div class="rule"></div>
+
+      <p class="lede">
+        Multi-tenant, authenticated two-stage recommender — item-item /
+        two-tower candidates, LightGBM ranker,
+        <strong>p99 &lt; 100&nbsp;ms gated in CI</strong>.
+      </p>
+
+      <div class="chips">
+        <span class="chip">FastAPI</span>
+        <span class="chip">Next.js</span>
+        <span class="chip">Postgres RLS</span>
+        <span class="chip">Keycloak</span>
+        <span class="chip">Feast</span>
+        <span class="chip">LightGBM</span>
+        <span class="chip">k6</span>
+        <span class="chip">MLflow</span>
+        <span class="chip">Docker</span>
+      </div>
+    </div>
+  </body>
+</html>
