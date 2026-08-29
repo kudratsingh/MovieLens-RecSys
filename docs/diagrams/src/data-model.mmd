@@ -1,0 +1,181 @@
+%% Sources: src/data/schema.py and alembic/versions/0001..0014. Every column,
+%% type and key below was read from those files. RLS marks a table carrying
+%% ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
+%% tenant_id = current_setting('app.tenant_id', true) on USING and WITH CHECK.
+%% Comments are kept short on purpose: an erDiagram lays entities out side by
+%% side, so a wide third column is what makes the whole picture unreadable at
+%% README width. The prose in docs/architecture.md carries the detail.
+erDiagram
+  direction LR
+  tenants {
+    TEXT id PK
+    TEXT display_name
+    TIMESTAMPTZ created_at
+    NOTE no_rls "shared registry"
+  }
+
+  ratings {
+    TEXT tenant_id FK "RLS"
+    INTEGER userId
+    INTEGER movieId
+    DOUBLE rating
+    BIGINT timestamp "unix s"
+    NOTE no_pk "as imported"
+  }
+
+  tags {
+    TEXT tenant_id FK "RLS"
+    INTEGER userId
+    INTEGER movieId
+    TEXT tag "nullable"
+    BIGINT timestamp
+    NOTE no_pk
+  }
+
+  movies {
+    INTEGER movieId PK
+    VARCHAR title
+    TEXT genres
+    NOTE shared "no tenant_id"
+  }
+
+  links {
+    INTEGER movieId PK
+    VARCHAR imdbId
+    VARCHAR tmdbId
+    NOTE shared "no tenant_id"
+  }
+
+  movie_catalog_metadata {
+    INTEGER movie_id PK
+    TEXT sort_title
+    SMALLINT release_year
+    TEXT poster_url
+    TEXT overview
+    TEXT metadata_source
+    TEXT source_status
+    BOOLEAN visible
+    TIMESTAMPTZ source_updated_at
+    JSONB details "TMDB extras"
+    NOTE shared "no tenant_id"
+  }
+
+  demo_personas {
+    TEXT tenant_id PK "RLS"
+    INTEGER user_id PK
+    TEXT slug UK
+    TEXT display_name
+    TEXT description
+    INTEGER sort_order
+    BOOLEAN synthetic
+  }
+
+  user_movie_state {
+    TEXT tenant_id PK "RLS"
+    BIGINT user_id PK
+    INTEGER movie_id PK
+    TIMESTAMPTZ watched_at
+    NUMERIC rating "half stars"
+    TIMESTAMPTZ rating_updated_at
+    TIMESTAMPTZ watchlisted_at
+    TIMESTAMPTZ dismissed_at
+    BIGINT state_version
+    TIMESTAMPTZ updated_at
+    CHECK rating_implies_watched
+    CHECK watchlist_xor_dismissal
+  }
+
+  user_feedback_events {
+    TEXT tenant_id PK "RLS"
+    UUID event_id PK
+    TEXT actor_user_id "OIDC sub"
+    BIGINT user_id
+    INTEGER movie_id FK
+    TEXT action "9 values"
+    JSONB old_value
+    JSONB new_value
+    BIGINT state_version
+    TEXT outcome
+    TIMESTAMPTZ created_at
+    NOTE append_only
+  }
+
+  user_preferences {
+    TEXT tenant_id PK "RLS"
+    BIGINT user_id PK
+    BOOLEAN feature_watchlisted_titles
+    BIGINT revision
+    TEXT updated_by_actor
+    TIMESTAMPTZ updated_at
+  }
+
+  recommendation_audits {
+    UUID request_id PK
+    TEXT correlation_id "echoed"
+    TEXT tenant_id FK "RLS"
+    TEXT actor_user_id
+    BIGINT user_id
+    TEXT endpoint
+    INTEGER http_status
+    TEXT outcome
+    TEXT policy
+    TEXT reason
+    TEXT fallback_reason
+    TEXT model_version
+    TEXT candidate_version
+    TEXT ranker_version
+    TEXT feature_version
+    JSONB predictions
+    JSONB candidate_sources
+    DOUBLE candidate_latency_ms
+    DOUBLE feature_latency_ms
+    DOUBLE ranker_latency_ms
+    DOUBLE model_latency_ms
+    DOUBLE latency_ms
+    BIGINT input_state_revision
+    TEXT input_state_hash
+    TEXT exclusion_hash
+    INTEGER positive_signal_count
+    INTEGER excluded_count
+    TEXT filter_policy
+    TIMESTAMPTZ feature_event_time
+    TIMESTAMPTZ created_at
+  }
+
+  user_features {
+    TEXT tenant_id PK "admin only"
+    INTEGER user_id PK
+    TIMESTAMPTZ event_timestamp PK
+    BIGINT user_interaction_count
+    DOUBLE user_days_active
+    DOUBLE user_days_since_last_interaction
+  }
+
+  item_features {
+    TEXT tenant_id PK "admin only"
+    INTEGER item_id PK
+    TIMESTAMPTZ event_timestamp PK
+    BIGINT item_popularity_all_time
+    BIGINT item_popularity_30d
+    BIGINT item_popularity_7d
+    DOUBLE item_age_days
+  }
+
+  user_item_features {
+    TEXT tenant_id PK "admin only"
+    INTEGER user_id PK
+    INTEGER item_id PK
+    TIMESTAMPTZ event_timestamp PK
+    DOUBLE user_genre_affinity
+  }
+
+  tenants ||--o{ ratings : scopes
+  tenants ||--o{ tags : scopes
+  tenants ||--o{ demo_personas : scopes
+  tenants ||--o{ user_movie_state : scopes
+  tenants ||--o{ user_feedback_events : scopes
+  tenants ||--o{ user_preferences : scopes
+  tenants ||--o{ recommendation_audits : scopes
+  movies ||--o| movie_catalog_metadata : describes
+  movies ||--o{ user_movie_state : subject
+  movies ||--o{ user_feedback_events : subject

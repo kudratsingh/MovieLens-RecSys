@@ -88,3 +88,18 @@ Concretely:
 - **Postgres query plans degrade under RLS on hot tables.** RLS adds a filter to every query plan, which Postgres usually optimizes as an index scan on `tenant_id` (a hash index on `(tenant_id, other_key)` compound indexes work well). If we observe query-plan blowups — join reorderings that ignore the `tenant_id` filter, unexpectedly slow scans — it would mean the composite index strategy needs work, or specific hot tables should have `tenant_id` as the leading column of their primary key. Not evidence against the ADR; evidence for a Phase 4 performance-tuning task.
 - **Tenant count grows into the hundreds and per-tenant reporting becomes the primary read pattern.** RLS handles the read scale fine, but if the *reporting* layer becomes the bottleneck (aggregate cross-tenant queries dominate CPU), the argument for isolating hot data per-schema strengthens. This ADR does not preclude adding schema-per-tenant *for a specific hot table* as a targeted future change; the base architecture stays RLS.
 - **We ship a bug where a request's `tenant_id` is `NULL` and the API returns 200 with an empty payload.** Would mean the "no tenant configured" case is not being caught before the DB query — the middleware should refuse to dispatch a request that reaches its query stage without a resolved tenant. Fix by promoting the missing-tenant case to an explicit `500` (or `403`) before it can reach a DB call.
+
+## Implementation note — 2026-08-29
+
+The mechanism as built, drawn from `src/auth/middleware.py`, `src/serving/startup_checks.py`,
+`infra/pgbouncer/`, `infra/deploy/provision-roles.sql` and migrations `0001`–`0014`.
+Seven tables carry forced RLS rather than the "tenant configs, interactions"
+sketch above: `ratings`, `tags`, `demo_personas`, `recommendation_audits`,
+`user_movie_state`, `user_feedback_events` and `user_preferences`. `feature_store.*`
+is outside RLS and outside `app_user`'s grants entirely, since online reads go
+through Redis.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/tenancy-and-auth.dark.svg">
+  <img alt="Tenant isolation as implemented: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the seven forced-RLS tables against the deliberately shared ones." src="../diagrams/tenancy-and-auth.svg" width="100%">
+</picture>

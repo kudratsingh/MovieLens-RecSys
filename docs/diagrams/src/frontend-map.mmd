@@ -1,0 +1,57 @@
+%% Sources: web/app/ (pages and route handlers), web/components/shell/app-shell.tsx,
+%% web/lib/navigation.ts, web/lib/resources/ (definitions.ts, state.ts, server.ts,
+%% fixture-gate.ts), web/lib/movie-state/ (actions, mutate, client, committed-store,
+%% announce, focus), web/components/movie/movie-state-controls.tsx,
+%% web/vitest.config.ts, web/playwright.config.ts, web/playwright.ui.config.ts,
+%% web/playwright.perf.config.ts.
+flowchart TB
+  DOOR["/ — the front door<br/>signed out, the sign-in door<br/>signed in, redirect into the product"]
+
+  subgraph SHELL["The five product routes, all under one AppShell"]
+    direction LR
+    DISC["/discover"]
+    BROW["/browse"]
+    DET["/movies/[movieId]"]
+    LIB["/library<br/>Rated · Watchlist · Seen"]
+    QP["/quick-picks"]
+  end
+
+  LEG["/legacy — the pre-redesign dashboard,<br/>retained as the documented rollback, its own shell"]
+  PREV["/ui-preview/* — fixture shells<br/>refused outside a non-production build"]
+
+  DOOR --> SHELL
+  DOOR -.-> LEG
+
+  subgraph BFF["17 BFF route handlers — the browser never holds an API token"]
+    direction TB
+    H1["auth — [...nextauth], actor, logout"]
+    H2["personas"]
+    H3["reads — recommendations · history · catalog<br/>movies/[movieId] · library · taste-profile<br/>audits · features · preferences"]
+    H4["mutations — PUT and DELETE on<br/>movies/{id}/{watched|rating|watchlist|dismissal}<br/>and PUT preferences"]
+    H5["preview fixtures — 404 outside fixture mode"]
+  end
+  SHELL --> BFF
+  LEG --> BFF
+  PREV --> H5
+
+  RES["web/lib/resources/ — the one server-owned client<br/><br/>timeout per resource<br/>recommendations 3 s · history 3 s · taste-profile 3 s<br/>preferences 3 s · movie-detail 4 s · audits 4 s<br/>features 4 s · catalog 5 s · library 5 s<br/><br/>X-Request-ID generated, adopted, echoed<br/>private, no-store on every personalized response<br/>a caller-supplied bearer is refused at the BFF edge<br/>and again in the browser reader"]
+  H3 --> RES
+
+  STATE["One state model, rendered through one region component,<br/>so a failed resource never blanks the regions around it<br/><br/>loading · retry · ready · empty<br/>forbidden · auth-expired · not-found · upstream-error"]
+  RES --> STATE
+
+  WRITE["web/lib/movie-state/ — the one write path<br/>the ADR 0012 transition table, written once<br/>an idempotency key bound to the intent<br/>expected_revision on every request<br/>409 → re-read canonical → replay once at that revision<br/>rollback drops the optimistic patch, announces the restore,<br/>and walks focus back control → row → collection"]
+  H4 --> WRITE
+
+  CTRL["web/components/movie/<br/>movie-state-controls.tsx<br/>one control family, a declared ordered set per surface<br/>Discover · detail · featured · Browse · Library"]
+  SHELL --> CTRL --> WRITE
+
+  API(["FastAPI"])
+  RES --> API
+  WRITE --> API
+
+  TEST["Test layers<br/>Vitest — 38 unit + 22 colocated component specs<br/>Fixture Playwright — 10 specs at 390 / 768 / 1440, parallel<br/>Service-backed journeys — 8 specs, workers: 1,<br/>one persona each, every write reversed<br/>Browser timing — LCP, CLS, time to visible acknowledgement"]
+  API -. "covered by" .-> TEST
+
+  classDef note fill:#00000000,stroke-dasharray:5 4
+  class TEST note

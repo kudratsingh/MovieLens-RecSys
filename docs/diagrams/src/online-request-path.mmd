@@ -1,0 +1,58 @@
+%% Sources: src/serving/app.py (middleware registration), src/serving/request_id.py,
+%% src/auth/middleware.py, src/auth/jwks.py, src/serving/ratelimit.py,
+%% src/serving/audit.py, src/serving/recommendations.py, src/serving/orchestration.py,
+%% src/serving/models.py, src/serving/model_server.py, src/features/online.py.
+%% Latency figures: docs/adr/0010-synthetic-load-k6.md and
+%% docs/production-readiness-review.md.
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant RID as RequestId
+  participant AUTH as Auth
+  participant RL as RateLimit
+  participant AUD as Audit
+  participant CO as Coordinator
+  participant PG as Postgres via pgBouncer
+  participant MS as model-server sidecar
+  participant RD as Redis
+
+  C->>RID: GET /users/{id}/recommendations
+  RID->>RID: adopt X-Request-ID if 1-128 printable ASCII,<br/>otherwise mint a UUID
+
+  RID->>AUTH: dispatch
+  AUTH->>AUTH: RS256 verify against the TTL-cached JWKS
+  AUTH->>AUTH: tenant = realm from the issuer path,<br/>never a client-declared claim
+  AUTH->>AUTH: require aud=movielens-api and an allow-listed azp
+  AUTH->>PG: BEGIN, SET LOCAL app.tenant_id
+  AUTH->>PG: SELECT 1 FROM public.tenants
+  Note over AUTH,PG: A verified realm with no tenant row is a 403,<br/>not a 401 — the token is fine, the tenant is not
+
+  AUTH->>RL: dispatch
+  RL->>RL: token bucket per (tenant, subject) — 600/min, burst 120, per worker
+  Note over RL,AUD: Every response carries X-RateLimit-*.<br/>A refusal is 429 + Retry-After and writes no audit row.
+
+  RL->>AUD: dispatch
+  AUD->>CO: recommend
+  CO->>PG: one UNION ALL read of user_movie_state:<br/>positives (watched, not dismissed)<br/>+ exclusions (dismissals + already seen)
+
+  alt positives < 5
+    CO->>PG: popularity, exclusions applied in SQL
+    Note over CO,PG: serving_policy.name = popularity, learned = false, reason = cold-start
+  else positives >= 5
+    CO->>MS: POST /rank, bearer, 0.5 s timeout
+    MS->>MS: CandidateIndex.retrieve — only dismissals may drop a seed
+    MS->>RD: batched Feast read of 8 features per candidate
+    RD-->>MS: feature matrix + oldest event time
+    MS->>MS: LightGBM scores and orders
+    MS-->>CO: ranked items, seed_count, candidate sources
+    CO->>PG: hydrate metadata, exclusions re-applied
+    CO->>CO: final fail-closed exclusion sweep
+    Note over CO,MS: seed_count > 0 → item-item-cosine+lightgbm, learned = true<br/>seed_count = 0 → popularity-fill+lightgbm, learned = false
+  end
+
+  CO->>PG: INSERT recommendation_audits on the same RLS connection
+  AUTH->>PG: COMMIT
+  Note over AUTH,PG: The commit precedes the response.<br/>No 2xx for an audit row that could still fail to land.
+  AUTH-->>C: 200 with serving_policy, X-Request-ID, X-RateLimit-*
+
+  Note over C,RD: CI gate 2026-08-20 — p50 6.31 ms, p95 14.27 ms, p99 41.30 ms<br/>Production-topology rehearsal 2026-08-27 — p50 6.85 ms, p95 9.47 ms, p99 12.93 ms<br/>SLO — p99 < 100 ms, zero errors, more than 50 requests/second
