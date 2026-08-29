@@ -1,0 +1,35 @@
+%% Sources: src/serving/orchestration.py (the gates, in evaluation order),
+%% src/serving/policy.py (the shared vocabulary), src/serving/models.py,
+%% src/models/artifacts.py (CandidateIndex.retrieve and seed_count),
+%% src/evaluation/protocol.py (COLD_START_THRESHOLD = 5),
+%% infra/model-bundle/manifest.json (candidate artifact_type = item-item-cosine).
+%% Every policy and reason string below is the literal the code emits.
+flowchart TB
+  IN(["GET /users/{id}/recommendations<br/>positives and exclusions read from user_movie_state"])
+
+  G1{"positive_signal_count &lt; 5?"}
+  IN --> G1
+  G1 -- yes --> P1["policy popularity · learned false<br/>fallback_reason cold-start<br/>score_scale tenant-interaction-count"]
+
+  G2{"POST /rank to the sidecar —<br/>timeout, connect error, 401/403/409,<br/>or a contract violation?"}
+  G1 -- no --> G2
+  G2 -- yes --> P2["policy popularity · learned false<br/>fallback_reason model-server-unavailable"]
+
+  G3{"anything left after hydration and<br/>the fail-closed exclusion sweep?"}
+  G2 -- no --> G3
+  G3 -- "no, and the blocked set is non-empty" --> P3["policy popularity · learned false<br/>fallback_reason excluded-id-blocked"]
+  G3 -- "no, and nothing was blocked" --> P4["policy popularity · learned false<br/>fallback_reason empty-learned-result"]
+
+  G4{"seed_count &gt; 0?<br/>the seeds retrieval actually used,<br/>not the ones offered"}
+  G3 -- yes --> G4
+  G4 -- no --> P5["policy popularity-fill+lightgbm · learned false<br/>fallback_reason unseeded-retrieval<br/>score_scale lightgbm-rank-score"]
+  G4 -- yes --> P6["policy item-item-cosine+lightgbm · learned true<br/>fallback_reason null<br/>reason learned-two-stage<br/>score_scale lightgbm-rank-score"]
+
+  NOTE["Every outcome carries filter_policy<br/>watched-and-dismissed-<br/>excluded-v1, and a reason string<br/>that names what happened.<br/><br/>Only dismissals may drop a seed.<br/>Exclusions hide a candidate from the<br/>output; they never shrink the seed set.<br/>A retrieval that no seed reached is<br/>reported as popularity fill, not<br/>borrowed as a learned label."]
+
+  %% One hard-coded coral: a classDef is not theme-aware, and this border has
+  %% to read on white and on #0b0a09 alike.
+  classDef learned stroke:#ee7657,stroke-width:2.5px
+  class P6 learned
+  classDef note fill:#00000000,stroke-dasharray:5 4
+  class NOTE note

@@ -1,15 +1,22 @@
 # Frontend system
 
-**Status:** Bundle 4 visual system, plus the shared movie-state controls and
-write path converged in Bundle 7 (PR 7c)
+**Status:** Current. The Bundle 4 visual system plus the shared movie-state
+controls and write path converged in Bundle 7 (PR #61), and the body below
+carries the product round through PR #85 — the shared `RatingStars` control, the
+featured queue, and the Seen surface.
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-29
 
 This is the system of record for the parts of the frontend that more than one
 route uses: the visual language, the resource state model, the movie-state
 control family, and the write path behind it.
 
 ## Boundary
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/frontend-map.dark.svg">
+  <img alt="The frontend map: the front door and the five product routes under one AppShell, the retained legacy dashboard and the fixture preview shells, the seventeen BFF route handlers, the one server-owned resource client and its state model, the one write path, and the test layers." src="../diagrams/frontend-map.svg" width="100%">
+</picture>
 
 Bundle 4 establishes the reusable frontend language and route ownership. The
 durable Library and scalable catalog contracts are now real in the live

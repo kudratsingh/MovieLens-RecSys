@@ -29,6 +29,7 @@ from src.data.load import load_ratings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K, evaluate
 from src.models.candidates.popularity import PopularityModel
+from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +56,27 @@ def main() -> None:
         split.cutoff,
     )
 
+    # ADR 0011's cold-start cohort joins the training frame here, if this
+    # machine has it. At most 7 000 rows against ~20 M, and none of its users
+    # appear in holdout, so the warm/cold numbers below are unmoved — the
+    # cohort exists to be routed and scored, not to shift an existing metric.
+    train_frame, cohort = synth_cold.prepare(split, logger=logger)
+
     logger.info("Fitting popularity model ...")
     t0 = time.perf_counter()
-    model = PopularityModel().fit(split.train)
+    model = PopularityModel().fit(train_frame)
     fit_seconds = time.perf_counter() - t0
     logger.info("Fit in %.1fs (%d items in ranking)", fit_seconds, len(model.ranking))
 
     logger.info("Recommending top-%d for each holdout user ...", K)
     t1 = time.perf_counter()
     holdout_user_ids = split.holdout["userId"].unique().tolist()
-    recommendations = model.recommend_for_users(holdout_user_ids, k=K)
+    cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
+    recommendations = model.recommend_for_users(holdout_user_ids + cohort_user_ids, k=K)
     recommend_seconds = time.perf_counter() - t1
     logger.info(
         "Recommended for %d users in %.1fs",
-        len(holdout_user_ids),
+        len(holdout_user_ids) + len(cohort_user_ids),
         recommend_seconds,
     )
 
@@ -79,7 +87,18 @@ def main() -> None:
     train_counts = split.train.groupby("userId").size().to_dict()
 
     logger.info("Evaluating ...")
-    result = evaluate(recommendations, holdout, train_counts)
+    # No routing predicate here, deliberately. PopularityModel *is* the
+    # fallback — it has no learned path to route to, so there is no routing
+    # claim to assert and ``synth_cold_fallback_served_h*`` would be a
+    # tautology. What its buckets are for is the bar: a fallback-served user
+    # in any other model's run is being served exactly this policy, so these
+    # per-bucket numbers are what that model's h0/h1/h3 should be read against.
+    result = evaluate(
+        recommendations,
+        holdout,
+        train_counts,
+        synthetic_cold_users=cohort.targets_by_bucket if cohort is not None else None,
+    )
     logger.info(
         "Warm (n=%d): recall@%d=%.4f ndcg@%d=%.4f",
         result.n_warm_users,
@@ -103,6 +122,9 @@ def main() -> None:
         K,
         result.overall.ndcg,
     )
+
+    if cohort is not None:
+        synth_cold.log_summary(result, logger=logger, k=K)
 
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
@@ -141,6 +163,9 @@ def main() -> None:
                 "n_cold_users": result.n_cold_users,
             }
         )
+        if cohort is not None:
+            mlflow.log_params(synth_cold.params(cohort))
+            mlflow.log_metrics(synth_cold.metrics(result, suffix=synth_cold.SUFFIX_AT_K))
     logger.info("MLflow run logged. Done.")
 
 

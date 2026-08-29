@@ -1,5 +1,12 @@
 # Movie-discovery frontend: baseline evidence
 
+> **Record.** Accurate as of 2026-08-21 (baseline revision `c73b967`).
+> Superseded by [`evidence/README.md`](../evidence/README.md), which indexes
+> every capture set including the ones taken after the cutover. Not maintained.
+>
+> This is the *pre-redesign* baseline, captured deliberately so the finish gate
+> had a before to compare against. It is not a picture of the current product.
+
 **Status:** Source audit and authenticated rendered screenshot matrix complete
 
 **Baseline revision:** `c73b967e17ebbba1d31673cbd191d9c1706e6b1d`
@@ -8,7 +15,7 @@
 
 **Capture:** Playwright captured the seeded, bypass-disabled Keycloak demo on
 2026-08-21. The matrix is committed under
-[`docs/frontend/evidence/baseline/`](evidence/baseline/). The authenticated
+[`docs/frontend/evidence/baseline/`](../evidence/baseline/). The authenticated
 wrapper adds actor/logout controls, while the dashboard under evaluation
 remains the pre-redesign rating-first baseline.
 

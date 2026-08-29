@@ -8,8 +8,20 @@
 Auth.js owns authorization code + PKCE, encrypted HttpOnly sessions,
 refresh/logout, and CSRF/origin enforcement; FastAPI pins issuer, audience,
 calling client, registered tenant, and persona role; bypass-disabled Playwright
-and refresh-path tests provide the accepted evidence. Durable multi-state
-feedback and `/me` ownership continue in their dependent bundles.
+and refresh-path tests provide the accepted evidence.
+
+_Updated 2026-08-29:_ durable multi-state feedback landed with Bundle 2
+(PR #48) — migration 0010's forced-RLS `user_movie_state` and append-only
+`user_feedback_events`, with the transition table below written once in
+`web/lib/movie-state/` (PR #61) as the only write path any surface uses.
+**`/me` subject-to-profile ownership remains open**: the product still selects a
+persona explicitly, gated behind the confidential service client or the
+`demo-impersonator` realm role, and it is carried as product-track item (b) in
+CLAUDE.md's remaining-Phase-3 list. One later addition rides on this ADR's
+semantics rather than changing them: the `user_preferences` row added in
+PR #81 (migration 0014) is **presentation only** — it decides what the client
+features, reaches neither retrieval nor the ranker nor the exclusion set, and
+leaves a request's audit unchanged.
 
 ## Context
 

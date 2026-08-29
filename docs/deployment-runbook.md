@@ -21,6 +21,11 @@ A fifth name, `pgbouncer_admin`, is a **pgBouncer-internal identity with no Post
 because the API's boot check opens the pooler's admin console with it. A sixth, `pgbouncer_auth`, *is*
 a real Postgres role and is the one the pooler uses to look up SCRAM verifiers.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/postgres-identities.dark.svg">
+  <img alt="Which Compose service connects as which Postgres identity: the api through pgBouncer's movielens_app alias as app_user, the sidecars and materialization direct as admin_user, release and backup as migrator, provisioning as the superuser, plus the two pgBouncer-internal names." src="diagrams/postgres-identities.svg" width="100%">
+</picture>
+
 ## What is deployed
 
 One Compose project (`movielens-prod`) on one machine. Nine long-lived services — `postgres-app`,
@@ -43,14 +48,21 @@ The images come from GHCR and the box never builds. `docker-compose.prod.yml` ke
 contexts so the same file builds locally for the rehearsal (`make up-prod`), while on the host
 `IMAGE_REPOSITORY` and `IMAGE_TAG` resolve every service to a published image.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/production-topology.dark.svg">
+  <img alt="The production topology: one Hetzner CX22 with only the Caddy edge publishing ports and key-only SSH from GitHub Actions, ten long-lived services on a private network, the jobs profile, and the systemd units for boot, nightly backup and weekly prune." src="diagrams/production-topology.svg" width="100%">
+</picture>
+
 ## 0. Decisions to record before the first deploy
 
 Each row has a default. Replace `☐` with `☑` and a date when you accept it, or write the override in
 place. Deploying with a row still open is how a decision gets made by accident.
 
-Two rows from the Railway draft are gone: D3 (plan tier) has no equivalent, and D6 (how a rollback is
-performed) is answered by `infra/deploy/deploy.sh --rollback`. The remaining numbers are unchanged so
-that older notes still resolve.
+The numbering skips D3 and D6, and that is deliberate. An earlier draft of this table was written
+against a managed-platform hosting shape that was costed and rejected (ADR 0013); its plan-tier row
+(D3) has no equivalent on a machine you rent outright, and its "how is a rollback performed" row (D6)
+is answered outright by `infra/deploy/deploy.sh --rollback`. The remaining numbers are left as they
+were so that older notes still resolve.
 
 | # | Decision | Default | Recorded |
 |---|---|---|---|

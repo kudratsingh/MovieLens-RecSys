@@ -1,0 +1,66 @@
+%% Sources: docs/adr/0013-production-deployment-target.md, docs/deployment-runbook.md,
+%% docker-compose.prod.yml, infra/edge/Caddyfile, infra/host/bootstrap.sh,
+%% infra/host/movielens*.service, infra/host/movielens*.timer, infra/backup/backup.sh,
+%% .github/workflows/deploy-production.yml.
+flowchart TB
+  NOTE["Specified and rehearsed end to end.<br/>The machine is not yet provisioned — 2026-08-29."]
+
+  USER(["Public internet"])
+  GHA(["GitHub Actions"])
+  GHCR[("GHCR<br/>linux/amd64, tagged by commit SHA")]
+  BUCKET[("Off-box object store<br/>a different provider")]
+
+  subgraph BOX["One Hetzner CX22 — 2 vCPU, 4 GB, 40 GB, Ubuntu 24.04, about EUR 4.50/month"]
+    direction TB
+
+    EDGE["edge — Caddy<br/>the only service that publishes ports<br/>PUBLIC_APP_HOST → web:3001<br/>PUBLIC_AUTH_HOST → keycloak:8080<br/>EDGE_TLS=acme on the box,<br/>Caddy's own CA for the laptop rehearsal"]
+
+    subgraph LONG["Ten long-lived services — nine of them publish nothing"]
+      direction TB
+      WEBS["web — Next.js"]
+      APIS["api — FastAPI, 2 workers"]
+      MSRV["model-server — 2 workers<br/>OMP · OPENBLAS · MKL · VECLIB<br/>native threads pinned to 1"]
+      FSRV["feature-server"]
+      KCS["keycloak"]
+      PGBS["pgbouncer — transaction pool"]
+      PGA[("postgres-app")]
+      PGK[("postgres-keycloak")]
+      RDS[("redis — AOF, everysec")]
+    end
+
+    subgraph JOBS["jobs profile — run to completion"]
+      direction TB
+      J1["postgres-provision · keycloak-provision"]
+      J2["release (migrator) · materialize"]
+      J3["verify · canary · loadcheck"]
+      J4["backup · rollback-rehearsal"]
+    end
+
+    SYSD["systemd<br/>movielens.service — brings the stack up at boot<br/>movielens-backup.timer — 04:00 UTC nightly<br/>movielens-prune.timer — Sundays 05:00 UTC"]
+    UFW["ufw — 22, 80 and 443 only,<br/>with a Hetzner Cloud Firewall in front of it"]
+  end
+
+  USER -- "443 and 80" --> EDGE
+  GHA -- "22, key-only SSH,<br/>known_hosts pinned from a secret" --> BOX
+  GHCR -- "images are pulled, never built on the box" --> LONG
+
+  EDGE --> WEBS
+  EDGE --> KCS
+  WEBS --> APIS
+  APIS --> PGBS --> PGA
+  APIS --> KCS
+  APIS --> MSRV
+  APIS --> FSRV
+  MSRV --> RDS
+  MSRV --> PGA
+  FSRV --> RDS
+  KCS --> PGK
+
+  SYSD --> LONG
+  SYSD --> J4
+  J4 -- "pg_dump → age → rclone<br/>7 daily / 4 weekly / 6 monthly" --> BUCKET
+
+  ABSENT["Not in production, deliberately<br/>no MLflow · no Prometheus · no Grafana · no /metrics"]
+
+  classDef note fill:#00000000,stroke-dasharray:5 4
+  class NOTE,ABSENT,UFW note

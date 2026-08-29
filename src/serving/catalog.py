@@ -19,6 +19,7 @@ from sqlalchemy import Connection, bindparam, text
 
 from src.serving.feedback import MovieState
 from src.serving.recommendations import UnknownDemoPersonaError, UnknownMovieError
+from src.serving.sql import escape_like
 
 CatalogSort = Literal["title", "newest", "popular"]
 MetadataSource = Literal["reviewed-fixture", "tmdb-snapshot", "movielens"]
@@ -138,9 +139,9 @@ class CatalogService:
             {
                 "user_id": user_id,
                 "search": (
-                    f"%{_escape_like(normalized.search.lower())}%" if normalized.search else None
+                    f"%{escape_like(normalized.search.lower())}%" if normalized.search else None
                 ),
-                "genre": (f"%|{_escape_like(normalized.genre)}|%" if normalized.genre else None),
+                "genre": (f"%|{escape_like(normalized.genre)}|%" if normalized.genre else None),
                 "year_from": normalized.year_from,
                 "year_to": normalized.year_to,
                 "fetch_limit": normalized.limit + 1,
@@ -445,7 +446,3 @@ def _as_datetime(value: object) -> datetime | None:
 
 def _split_genres(value: str) -> list[str]:
     return [] if not value or value == "(no genres listed)" else value.split("|")
-
-
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

@@ -521,6 +521,84 @@ def test_paging_one_row_at_a_time_reproduces_the_whole_order(sort: str) -> None:
     assert walked == [item.movie_id for item in whole.items]
 
 
+def _rated_connection():
+    """The Seen fixture, with three of the watched-only titles also rated.
+
+    ``release`` and ``tmdb`` order movie facts rather than feedback, so the rows
+    worth having on the Rated tab are the ones whose facts are missing — the
+    title the snapshot has never covered (3) and one of the ways a TMDB score
+    can be absent (7). Both are watched-only in ``_seen_connection``, so without
+    this the Rated tab would not see a single unknown under either sort. Movie 8
+    is deliberately left unrated: the tab condition still has to hold.
+    """
+    connection = _seen_connection()
+    service = FeedbackService()
+    for movie_id, minute in ((3, 80), (5, 90), (7, 100)):
+        _mutate(
+            service, connection, movie_id=movie_id, action="rating_set", minute=minute, rating=3.0
+        )
+    return connection
+
+
+def _rated(service: FeedbackService, connection: object, **overrides: object):
+    return service.library(
+        connection,  # type: ignore[arg-type]
+        user_id=USER,
+        query=LibraryQuery(tab="rated", **overrides),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("sort", "expected"),
+    [
+        ("release", [7, 6, 2, 1, 4, 5, 3]),
+        ("tmdb", [5, 1, 4, 2, 3, 6, 7]),
+    ],
+)
+def test_rated_ranks_by_movie_facts_with_the_unknowns_last(sort: str, expected: list[int]) -> None:
+    """The two orderings the Rated tab now offers, over its own row set.
+
+    Both keys come from the left-joined snapshot rather than from the state
+    row, so they are the two sorts whose answer does not depend on which tab
+    asked. What the tab still decides is *which rows* — movie 8 is watched but
+    unrated and appears under neither sort, while it leads ``release`` on Seen.
+    """
+    connection = _rated_connection()
+    try:
+        page = _rated(FeedbackService(), connection, sort=sort, limit=50)
+    finally:
+        connection.close()
+
+    assert [item.movie_id for item in page.items] == expected
+    assert page.matched == len(expected)
+
+
+@pytest.mark.parametrize("sort", ["release", "tmdb"])
+def test_a_rated_cursor_walks_the_new_sorts_without_a_repeat_or_a_gap(sort: str) -> None:
+    """A ``COALESCE(..., -1)`` sentinel is a real key value, so it pages.
+
+    Worth asserting on this tab specifically: the sentinel ties every unknown
+    row together, and it is the ``movie_id`` half of the keyset predicate that
+    has to break those ties one page at a time.
+    """
+    connection = _rated_connection()
+    service = FeedbackService()
+    try:
+        whole = _rated(service, connection, sort=sort, limit=50)
+        walked: list[int] = []
+        cursor: str | None = None
+        while True:
+            page = _rated(service, connection, sort=sort, limit=1, cursor=cursor)
+            walked.extend(item.movie_id for item in page.items)
+            cursor = page.next_cursor
+            if not page.has_more:
+                break
+    finally:
+        connection.close()
+
+    assert walked == [item.movie_id for item in whole.items]
+
+
 def test_a_cursor_is_refused_by_every_other_view() -> None:
     """The fingerprint covers tab, sort and all four filters, and nothing else.
 
