@@ -431,26 +431,57 @@
   }
 }
 
-@media (max-width: 640px) {
-  /* The two bounds take a row of their own and stack their labels: side by
-     side with the label beside the field, four digits and two words do not fit
-     a 320px screen once the system font is a wide one. */
-  .library-years {
-    display: grid;
-    flex: 1 1 100%;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/*
+ * Below the desk widths the filter row cannot hold a search field worth typing
+ * in, two year bounds and the submit on one line — and it was trying to. The
+ * form never wrapped, and the bounds' labels do not wrap either, so the only
+ * elastic thing in the row was the search input: it collapsed to its own
+ * padding (34px at both 390 and 768) while the submit was pushed 97px past the
+ * form and painted over the genre select beside it.
+ *
+ * The row wraps here instead. The search asks for a width first, which is what
+ * makes the break happen at all, and the bounds stack their labels so the pair
+ * stays as narrow as the four digits it holds and the submit keeps its place
+ * beside them. Nothing below is scoped tighter than this breakpoint: at 1024px
+ * and up all four still fit on one line, which is the layout they were drawn
+ * for.
+ */
+@media (max-width: 1023px) {
+  /* The form is two lines tall here, so the selects beside it line up with the
+     search field they sit next to rather than floating level with the gap
+     between the two. */
+  .library-controls {
+    align-items: flex-start;
   }
 
+  .library-filter {
+    /* Each line sizes to its own content rather than stretching the search
+       field and the button to the height of the tallest control in the form. */
+    align-items: end;
+    flex-wrap: wrap;
+  }
+
+  /*
+   * A basis, not a minimum: `flex: 1` leaves the search the one item in the row
+   * happy to be zero wide, so the line always had somewhere to take space from
+   * and never had to break. Asking for 12rem up front puts the bounds and the
+   * submit on the next line, and the search then grows into the whole line it
+   * is left holding.
+   */
+  .library-search {
+    flex-basis: 12rem;
+  }
+
+  /* Side by side with the label beside the field, four digits and two words do
+     not fit a 320px screen once the system font is a wide one. */
   .library-year {
     align-items: stretch;
     flex-direction: column;
     gap: var(--space-1);
   }
+}
 
-  .library-year-input {
-    width: 100%;
-  }
-
+@media (max-width: 640px) {
   .library-collection-heading {
     align-items: flex-start;
     flex-direction: column;

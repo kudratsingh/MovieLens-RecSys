@@ -26,6 +26,116 @@ async function horizontalOverflow(page: Page) {
   );
 }
 
+/** The form's own controls, then every control in the row it sits in. */
+async function controlRowBoxes(page: Page) {
+  return page.evaluate(() => {
+    const measure = (node: Element, name: string) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        name,
+        x: rect.x,
+        y: rect.y,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+    const label = (node: Element) =>
+      node.id || `${node.tagName.toLowerCase()}.${node.className}`;
+    const form = document.querySelector(".library-filter");
+    if (!form) throw new Error("no filter form on this tab");
+    return {
+      form: measure(form, "form"),
+      wraps: getComputedStyle(form).flexWrap === "wrap",
+      inForm: [...form.querySelectorAll("input, select, button")].map((node) =>
+        measure(node, label(node)),
+      ),
+      row: [
+        ...document.querySelectorAll(
+          ".library-controls input, .library-controls select, .library-controls button",
+        ),
+      ].map((node) => measure(node, label(node))),
+    };
+  });
+}
+
+/**
+ * The filter row's layout promises, at whatever width the caller is at.
+ *
+ * Every one of these was false on the Seen tab before the row learned to wrap:
+ * the search input collapsed to its own padding (34px at 390 and at 768) while
+ * the `Filter` button sat 97px past the form's right edge, painted over the
+ * genre select beside it. None of that overflowed the document, which is why
+ * the 320px sweep never saw it — a control can be unusable, and can cover
+ * another control, entirely inside the page.
+ */
+async function expectFilterRowIsLaidOut(page: Page, at: string) {
+  const { form, wraps, inForm, row } = await controlRowBoxes(page);
+  // Below 1024px the bounds take a line of their own, which is what leaves the
+  // search a usable width; at and above it the row is one line by design.
+  const narrow = (page.viewportSize()?.width ?? 0) < 1024;
+
+  // Half a pixel of tolerance: a fractional layout can round either way.
+  const escaped = inForm.filter(
+    (control) =>
+      control.x < form.x - 0.5 ||
+      control.right > form.right + 0.5 ||
+      control.y < form.y - 0.5 ||
+      control.bottom > form.bottom + 0.5,
+  );
+  expect(
+    escaped.map((control) => control.name).join(", "),
+    `controls outside the form at ${at}`,
+  ).toBe("");
+
+  const overlaps: string[] = [];
+  for (let i = 0; i < row.length; i += 1) {
+    for (let j = i + 1; j < row.length; j += 1) {
+      const [a, b] = [row[i], row[j]];
+      const shared =
+        Math.min(a.right, b.right) - Math.max(a.x, b.x) > 1 &&
+        Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 1;
+      if (shared) overlaps.push(`${a.name} over ${b.name}`);
+    }
+  }
+  expect(overlaps.join(", "), `overlapping controls at ${at}`).toBe("");
+
+  const search = row.find((control) => control.name === "library-search");
+  const submit = inForm.find((control) => control.name.startsWith("button."));
+  // The genre select is Seen's alone, and Seen is the tab with the bounds.
+  const genre = row.find((control) => control.name === "library-genre");
+  // A missing control is a broken fixture rather than a failed promise, so it
+  // stops the run here instead of reading as a layout regression.
+  if (!search || !submit) throw new Error(`no filter row to measure at ${at}`);
+
+  // The field somebody types a title into is never narrower than the select
+  // beside it — the shape the collapse took, and a cheaper thing to assert than
+  // a pixel count that would have to be maintained per width. Narrow widths
+  // only: on the one-line desk layout the search is sized by what the rest of
+  // the row leaves it, so this would be measuring a runner's font rather than
+  // the layout.
+  if (genre && narrow) {
+    expect(
+      search.width,
+      `search (${Math.round(search.width)}px) narrower than the genre select at ${at}`,
+    ).toBeGreaterThanOrEqual(genre.width);
+  }
+  expect(search.height, `search below a 44px target at ${at}`).toBeGreaterThanOrEqual(44);
+  expect(submit.height, `submit below a 44px target at ${at}`).toBeGreaterThanOrEqual(44);
+  expect(submit.width, `submit below a 44px target at ${at}`).toBeGreaterThanOrEqual(44);
+
+  expect(await horizontalOverflow(page), `document overflows at ${at}`).toBeLessThanOrEqual(1);
+
+  // The mechanism behind all of the above, stated once: a row carrying the
+  // bounds has more than one line of controls below 1024px, so a build that
+  // stops wrapping is the regression even on a runner whose fonts happen to
+  // leave it enough room to look fine.
+  if (narrow && row.some((control) => control.name === "library-year-from")) {
+    expect(wraps, `the filter row must be allowed to wrap at ${at}`).toBe(true);
+  }
+}
+
 test("the rated collection reads as a record of the selected persona", async ({ page }) => {
   await openLibrary(page);
 
@@ -268,6 +378,26 @@ test("Seen offers the filters and the rankings the collection can answer", async
   // to — the ordering and the mark read the same field, so they cannot disagree.
   await expect(rows.first()).toContainText("Parasite");
   await expect(rows.first()).toContainText("TMDB 8.5");
+});
+
+test("the Seen filter row holds its shape at every width", async ({ page }, testInfo) => {
+  await openLibrary(page, "/ui-preview/library?tab=history");
+  await expectFilterRowIsLaidOut(page, testInfo.project.name);
+
+  if (testInfo.project.name === "mobile-390") {
+    // The finish gate sweeps 320 for overflow; the row has to hold its shape
+    // there too, and 320 is the width the wrap has the least room to happen in.
+    await page.setViewportSize({ width: 320, height: 640 });
+    await expectFilterRowIsLaidOut(page, "320px");
+  }
+});
+
+test("Rated carries the same row without the bounds Seen adds to it", async ({ page }, testInfo) => {
+  // Rated and Watchlist run the same form minus the year bounds, so they were
+  // never the tab that broke — which is exactly why the check belongs on them
+  // too: the fix is in the shared row, not in a Seen-only rule.
+  await openLibrary(page);
+  await expectFilterRowIsLaidOut(page, `${testInfo.project.name} (rated)`);
 });
 
 test("Rated ranks by the movie's own facts as well as by the star value", async ({

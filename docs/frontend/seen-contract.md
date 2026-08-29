@@ -553,6 +553,26 @@ aspect-reserved box — the backdrop as `1280×720` with `sizes="100vw"`, the sa
 declaration `movie-detail-view.tsx` uses; the poster through `PosterCard`. This
 is what keeps `web/tests/perf`'s reserved-box claim green on `/library`.
 
+### The filter row
+
+Search, the two year bounds and `Filter` are one form; the genre and sort
+selects sit beside it in the same row. **At 1024px and up all four sit on one
+line**, which is the layout they were drawn for. **Below that the form wraps**:
+the search takes the first line at the form's full width, and the bounds — each
+stacking its label over its field, so the pair stays as narrow as the four
+digits it holds — sit on the next line with `Filter` beside them. A width too
+narrow even for that (a wide system font at 320px) breaks once more and puts
+`Filter` on a line of its own rather than pushing it out of the form.
+
+It shipped without that. The form did not wrap, and the bounds' labels do not
+wrap either, so the only elastic thing in the row was the search input: measured
+on the cutover build it was **34px wide at both 390 and 768** — its own padding,
+nothing else — and at 768 the `Filter` button sat **97px past the form's right
+edge**, painted over the genre select. None of it overflowed the document, which
+is why the 320px sweep never saw it. `web/e2e/library-slice.spec.ts` now
+measures the row instead of the page: containment, non-overlap, and a search
+field no narrower than the select beside it.
+
 ### The list
 
 Unchanged except for one addition: a compact `TMDB 8.1` mark beside the existing
@@ -675,7 +695,12 @@ walk, and the taste summary are all as they are today.
   390 / 768 / 1440 with axe — spotlight present, filter and sort controls,
   filtered-empty state, stale-cursor notice, and no page overflow at 320. The
   Rated tab exercises its two added orderings at the same widths, and asserts
-  that the genre and year controls stayed on Seen.
+  that the genre and year controls stayed on Seen. The same file measures the
+  filter row's geometry at 390 / 768 / 1440 and again at 320 — every control
+  inside the form it belongs to, no two controls overlapping, 44px targets, the
+  row allowed to wrap below 1024, and a search field no narrower than the genre
+  select wherever the bounds have a line of their own. It runs on Seen and on
+  Rated, because the row is shared and only Seen's bounds ever overran it.
 - **One service-backed journey** in `web/tests/e2e/`, in the serialized
   `browser-auth-e2e` set (`workers: 1`), owned by **Action Fan (900000101)**:
   sign in through Keycloak as `web/tests/e2e/keycloak.ts` does, open

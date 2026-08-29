@@ -74,6 +74,31 @@ Dark-first is intentional. Every interactive control receives a visible
 `:focus-visible` ring. Primary mobile targets are at least 44 CSS pixels.
 Forced-color and reduced-motion media queries preserve meaning and operation.
 
+### Cascade layers
+
+`globals.css` is layered deliberately. `@import "tailwindcss"` declares
+`@layer theme, base, components, utilities`, and an unlayered author rule beats
+every layered one however weak its selector — so an element-level default
+written outside a layer silently out-ranks every Tailwind utility in the app.
+That was finding N7: `button, input, select { color: inherit; font: inherit }`
+and `a { color: inherit }` sat outside any layer, which made `text-*` — and the
+whole `font` shorthand family, so size, weight, family and line-height too —
+inert on buttons, inputs, selects and links. The only thing that could win was
+a class selector or an inline style, which is why three surfaces carried local
+workarounds instead of a one-class fix.
+
+Those resets are gone rather than wrapped: Tailwind's own preflight already
+declares them verbatim inside `@layer base`, so restating them bought nothing
+except the bug. What preflight does not cover — the page ground, the body type
+ramp, tap-highlight suppression, `::selection` — lives in the file's
+`@layer base` block, and that is where a new element-level default belongs.
+
+The one deliberate exception is `:focus-visible`, which stays unlayered. It is
+an accessibility guarantee rather than a default: layered, it would lose to
+`outline-none`, and a utility would be able to remove a focus indicator by
+accident. A surface that needs its own ring styles `:focus-visible` itself
+rather than switching this one off.
+
 ### Elevation
 
 A cast shadow does very little work on a `#0b0a09` canvas — a dark poster on a

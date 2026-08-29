@@ -694,7 +694,7 @@ export function LibraryExperience({
                 Filter {tabLabel.toLowerCase()} by title
               </label>
               <input
-                className="library-input"
+                className="library-input library-search"
                 id="library-search"
                 onChange={(event) => setQueryDraft(event.target.value)}
                 placeholder={`Filter ${tabLabel.toLowerCase()} by title`}
