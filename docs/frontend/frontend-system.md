@@ -13,6 +13,11 @@ control family, and the write path behind it.
 
 ## Boundary
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/frontend-map.dark.svg">
+  <img alt="The frontend map: the front door and the five product routes under one AppShell, the retained legacy dashboard and the fixture preview shells, the seventeen BFF route handlers, the one server-owned resource client and its state model, the one write path, and the test layers." src="../diagrams/frontend-map.svg" width="100%">
+</picture>
+
 Bundle 4 establishes the reusable frontend language and route ownership. The
 durable Library and scalable catalog contracts are now real in the live
 Bundle 2–3 routes; Bundle 4 deliberately does not replace them before the

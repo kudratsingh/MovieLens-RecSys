@@ -124,7 +124,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -232,6 +232,13 @@ web-e2e:
 
 web-build:
 	cd web && npm run build
+
+# Re-renders docs/diagrams/src/*.mmd into the committed light/dark SVG pairs.
+# Needs web/node_modules (make web-install) and the Playwright Chromium the
+# browser suites already use. The output is deterministic, so a run that
+# changes nothing leaves `git status` clean.
+diagrams:
+	cd web && npm run diagrams
 
 infra-up:
 	docker compose up -d

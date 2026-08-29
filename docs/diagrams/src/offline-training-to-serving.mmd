@@ -1,0 +1,62 @@
+%% Sources: src/data/ingest.py, src/data/split.py, docs/eda.md (split figures),
+%% src/features/, src/features/feast_repo/, src/models/candidates/,
+%% src/models/ranker/lgbm.py, src/evaluation/protocol.py, src/training/demo_artifacts.py,
+%% src/models/artifacts.py, infra/model-bundle/manifest.json, infra/features/Dockerfile,
+%% Makefile (serving-artifacts-check), .github/workflows/ci.yml.
+%% No offline metric values appear here: none are recorded in the repository.
+flowchart TB
+  ML["MovieLens 25M<br/>25,000,095 ratings · 162,541 users<br/>59,047 rated movies · 0.2605% dense"]
+  ING["src/data/ingest.py<br/>Postgres is the source of truth<br/>the dataset is DVC-tracked"]
+  ML --> ING
+
+  SPL["Temporal split — src/data/split.py, ADR 0001<br/>T = 80th-percentile timestamp = 2016-06-25<br/>train t &lt; T, exactly 80.00% of rows<br/>holdout [T, T+28d) — 129,683 rows over 2,641 users<br/>test t &gt;= T+28d · ties go to the later slice"]
+  ING --> SPL
+
+  FI["Point-in-time FeatureIndex<br/>user, item and user-by-item features"]
+  FST[("feature_store —<br/>user_features<br/>item_features<br/>user_item_features<br/>in Postgres, the Feast offline source")]
+  SPL --> FI --> FST
+
+  subgraph CAND["Candidate stage — scored on recall@500"]
+    direction TB
+    C1["popularity baseline"]
+    C2["CF / ALS"]
+    C3["item-item cosine, k=200<br/>the shipped generator"]
+    C4["two-tower + FAISS IVF-Flat"]
+  end
+
+  RANK["LightGBM LambdaRank<br/>scored on NDCG@10<br/>8 ordered features from src/feature_contract.py"]
+  SPL --> CAND
+  FST --> RANK
+  CAND --> RANK
+
+  MLF["MLflow experiments<br/>phase-1-baselines<br/>phase-2-candidates<br/>phase-2-ranker"]
+  CAND -.-> MLF
+  RANK -.-> MLF
+
+  PKG["src/training/<br/>demo_artifacts.py<br/>packages the serving bundle"]
+  C3 --> PKG
+  RANK --> PKG
+
+  MAN["ServingManifest — src/models/artifacts.py<br/>SHA-256 per artifact, tenant_id, ordered feature contract<br/>candidate item-item-cosine / demo-itemitem-v1<br/>ranker lightgbm-lambdarank / demo-lgbm-v1<br/>feature_version feast-phase3-v1"]
+  PKG --> MAN
+
+  COMMIT["Committed at infra/model-bundle/<br/>candidate-index.json · ranker.txt · manifest.json"]
+  MAN --> COMMIT
+
+  IMG["Baked into the features image at build<br/>feast apply runs at build time<br/>CI's serving-artifacts job rebuilds and diffs<br/>against the committed bundle"]
+  COMMIT --> IMG
+
+  GHCR["GHCR — linux/amd64<br/>tagged with the commit SHA<br/>rolling back the model is rolling back the image"]
+  IMG --> GHCR
+
+  MATZ["materialize job<br/>publishes tenant-keyed snapshots"]
+  RDS[("Redis — Feast online store")]
+  FST --> MATZ --> RDS
+
+  SERVE["model-server loads the bundle once at startup,<br/>verifies every SHA-256, warms through a real rank,<br/>and refuses traffic until it is warm"]
+  GHCR --> SERVE
+  RDS --> SERVE
+
+  PAR["Feature parity in CI — tests/feature_parity/<br/>the offline value and the online value<br/>must match for the same key"]
+  FST -.-> PAR
+  RDS -.-> PAR

@@ -1,0 +1,63 @@
+%% Sources: .github/workflows/ci.yml, .github/workflows/deploy-production.yml,
+%% .github/workflows/production-canary.yml, infra/deploy/deploy.sh,
+%% docker-compose.ci-load.yml, tests/unit/test_deploy_workflows.py.
+flowchart TB
+  PR(["Pull request, or a push to main"])
+  PR --> ROOTS
+
+  subgraph CI["CI — 12 jobs"]
+    direction TB
+
+    subgraph ROOTS["Run immediately"]
+      direction TB
+      LINT["lint<br/>ruff · black · mypy<br/>+ the committed OpenAPI contract must not drift"]
+      FE["frontend<br/>generated API types · eslint · tsc<br/>Vitest · fixture Playwright at 390 / 768 / 1440"]
+      BE2E["browser-auth-e2e<br/>bypass-disabled PKCE journeys<br/>+ browser LCP / CLS / acknowledgement timing"]
+      DC["demo-compose<br/>every Compose model resolves<br/>API image under 400 MB<br/>the rendered prod model has no DEV_AUTH_BYPASS"]
+      CP["changed-paths<br/>computes the two path gates"]
+    end
+
+    UT["test<br/>unit suite"]
+    FP["feature-parity<br/>offline value == online value<br/>against live Postgres and Redis"]
+    TI["tenant-isolation<br/>23 cross-tenant canaries<br/>on the real Compose stack"]
+    SL["synthetic-load-smoke<br/>k6, 60 s at 55 arrivals/second<br/>p99 &lt; 100 ms, zero errors, warm traffic must prove learned<br/>Postgres on tmpfs so the runner's disk is not measured<br/>evidence uploaded as an artifact"]
+    SA["serving-artifacts<br/>rebuild the bundle and diff it<br/>path-gated"]
+    RDR["realm-drift<br/>the imported realms match the seeds<br/>path-gated"]
+
+    LINT --> UT
+    UT --> FP
+    UT --> TI
+    UT --> SL
+    UT --> SA
+    CP --> SA
+    CP --> RDR
+  end
+
+  PUB["publish-images<br/>7 images to GHCR — api, features, web,<br/>pgbouncer, keycloak, backup, k6<br/>linux/amd64, tagged &lt;sha&gt; and main<br/>push to main only, after every other job"]
+  CI --> PUB
+
+  GATE{"deploy-production — gate job<br/>re-asserts each CI job by name on that SHA<br/>10 required, 2 path-gated may be skipped"}
+  PUB --> GATE
+  GATE -- "not green" --> STOP["No deploy"]
+
+  DEP["deploy job — environment: production<br/>ssh with a known_hosts pinned from a secret,<br/>never StrictHostKeyChecking=no"]
+  GATE -- green --> DEP
+
+  subgraph REL["infra/deploy/deploy.sh on the box"]
+    direction TB
+    S0["record current → previous"]
+    S1["prod-pull at the SHA"]
+    S2["prod-release — provision, migrate, seed, materialize"]
+    S3["prod-serve — up -d, the one brief outage"]
+    S4["prod-verify"]
+    S0 --> S1 --> S2 --> S3 --> S4
+  end
+  DEP --> REL
+
+  OK(["DEPLOY-OK"])
+  RB["Automatic rollback to .release/previous,<br/>then verify again"]
+  S4 -- pass --> OK
+  S4 -- fail --> RB --> RBOK(["ROLLBACK-OK — the job still fails,<br/>because this commit did not ship"])
+
+  CAN["production-canary — every 30 minutes<br/>runs make prod-verify and requires VERIFY-OK<br/>records p99 with no verdict; the CI k6 gate<br/>remains the SLO's only authority<br/>a green no-op until a host is configured"]
+  OK -.-> CAN
