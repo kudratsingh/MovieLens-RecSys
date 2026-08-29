@@ -232,10 +232,31 @@ test("the first press on a title that already carries state still commits", asyn
     //    in front of us carrying a revision above zero and no flag set.
     await watchlist().click();
     await expect(status).toContainText(/saved to watchlist/);
+    // Pressed without waiting for the decision to finish settling, which is
+    // deliberate: the offer stands from the moment the write commits, and the
+    // re-read behind it runs on for as long as the API takes. A press landing
+    // in that window used to be discarded outright — no status change, no
+    // error, and the watchlist entry still standing — so a slow re-read here
+    // was a flake and a slow one in front of a viewer was a broken button. The
+    // route now takes the press and runs it when the re-read lets it, so this
+    // is the same assertion whichever side of the window the click lands on.
     await page
       .getByRole("button", { name: `Undo saving ${title} to the watchlist` })
       .click();
     await expect(status).toContainText(/is back, and the change was undone/);
+
+    // Announced and durable: the reversal reached the API rather than only the
+    // copy, which is the half a queued press could quietly have skipped.
+    const reversed = await page.evaluate(
+      async ({ userId, movie }) =>
+        (await fetch(`/api/users/${userId}/movies/${movie}`, {
+          cache: "no-store",
+        }).then((response) => response.json())) as {
+          item?: { state?: { watchlisted_at?: string | null } };
+        },
+      { userId: PERSONA_ID, movie: movieId },
+    );
+    expect(reversed.item?.state?.watchlisted_at).toBeNull();
 
     // 2. Come back with an empty relay — a new tab, or simply a viewer who
     //    arrived here without having touched this title in this tab.

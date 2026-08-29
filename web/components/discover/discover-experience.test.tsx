@@ -791,6 +791,107 @@ describe("the featured slot is a queue position, not a projection", () => {
     ).toBeVisible();
   });
 
+  /**
+   * The offer is rendered the moment the write commits, but the decision's own
+   * re-read runs on behind it and `inFlight` covers both — so for the whole of
+   * that window the button was visible, enabled, and did nothing at all. It is
+   * normally tens of milliseconds; on a cold compile it was 41 seconds, five
+   * times the eight the offer stands for. Gating the re-read is what turns a
+   * timing accident into a statement about behaviour.
+   */
+  it("takes an Undo pressed while the decision was still re-reading", async () => {
+    const user = userEvent.setup();
+    let releaseRefresh = () => {};
+    const refreshed = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const writes: { url: string; method: string }[] = [];
+    const fetchImpl = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/movies/")) {
+          writes.push({ url, method: init?.method ?? "GET" });
+          return Response.json(committed());
+        }
+        await refreshed;
+        return Response.json(learnedRecommendations);
+      },
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(/Refreshing recommendations/);
+    const undo = await screen.findByRole("button", { name: /Undo saving/ });
+    await user.click(undo);
+
+    // Heard rather than dropped: the press is acknowledged in the same voice
+    // every other decision on this surface is, and the button stops inviting a
+    // second reversal of one decision while the first is still owed.
+    await screen.findByText("Undoing The Handmaiden…");
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    // Not run yet either. Two writes in flight together would both assert the
+    // revision they started from, which is the rule the queue keeps.
+    expect(writes.filter((write) => write.method === "DELETE")).toEqual([]);
+
+    releaseRefresh();
+
+    // It runs the moment the re-read lets it: once, against the revision the
+    // commit returned, and the cursor comes back with it.
+    await screen.findByText(/The Handmaiden is back, and the change was undone/);
+    expect(writes).toEqual([
+      {
+        url: "/api/users/900000101/movies/101/watchlist?expected_revision=0",
+        method: "PUT",
+      },
+      {
+        url: "/api/users/900000101/movies/101/watchlist?expected_revision=3",
+        method: "DELETE",
+      },
+    ]);
+    expect(
+      screen.getByRole("heading", { level: 1, name: "The Handmaiden" }),
+    ).toBeVisible();
+    // And the reversed decision's own settled sentence never lands in front of
+    // the reversal, which is what it would do if the re-read finished last.
+    expect(screen.queryByText(/saved to watchlist/)).not.toBeInTheDocument();
+  });
+
+  it("puts the offer back when the reversal itself fails", async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/movies/")) {
+          return (init?.method ?? "GET") === "DELETE"
+            ? Response.json({ detail: "the API is down" }, { status: 502 })
+            : Response.json(committed());
+        }
+        return Response.json(learnedRecommendations);
+      },
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+    // Settled first, so this exercises the direct press rather than the queued
+    // one — the two paths meet inside `runUndo` and this is the half the test
+    // above does not reach.
+    await screen.findByText("The Handmaiden saved to watchlist. Next: In the Mood for Love.");
+    await user.click(screen.getByRole("button", { name: /Undo saving/ }));
+
+    await screen.findByText(/was not saved/);
+    // A reversal that did not happen is still owed. The button is an offer
+    // again rather than a control that has quietly stopped meaning anything,
+    // and focus is on it because `aria-disabled` left it able to hold focus.
+    const offer = screen.getByRole("button", { name: /Undo saving/ });
+    expect(offer).toHaveAttribute("aria-disabled", "false");
+    await waitFor(() => expect(offer).toHaveFocus());
+  });
+
   it("offers no bare Undo after a watched decision", async () => {
     const user = userEvent.setup();
     stubStack({
