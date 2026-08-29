@@ -224,19 +224,26 @@ movielens-recsys/
 │                              #   artifacts, realm drift, frontend, compose validation, GHCR image publishing;
 │                              #   plus the SSH deploy workflow and the scheduled production canary
 ├── docs/
+│   ├── README.md              # the docs landing page: reading path for a visitor, map by subject
+│   ├── architecture.md        # public architecture overview (offline + online paths)
+│   ├── diagrams/              # mermaid sources + rendered light/dark SVGs (`make diagrams`)
 │   ├── adr/                   # backend ADRs (flat numeric line) + cross-cutting
 │   │   └── frontend/          # frontend ADRs (own numeric line)
-│   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes
-│   ├── frontend/              # movie-discovery product docs: discovery, design contracts, implementation
-│   │   │                      #   plan, readiness, testing strategy, finish-gate review
-│   │   └── evidence/          # per-bundle screenshot matrices with per-file provenance
+│   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes,
+│   │                          #   plus overview.md — every path/method, auth, headers, worked response
+│   ├── frontend/              # movie-discovery product docs: design contracts, frontend system,
+│   │   │                      #   implementation plan, readiness, surface contracts (catalog, library
+│   │   │                      #   feedback, seen), testing strategy, finish-gate review
+│   │   ├── evidence/          # per-bundle + per-surface screenshot matrices with per-file provenance;
+│   │   │                      #   README.md indexes all 13 sets and says which describe the current build
+│   │   └── records/           # not maintained: product discovery, bundles 5–7 handoff, baseline
+│   │                          #   evidence, and the four dated finish-gate passes verbatim
+│   ├── records/               # not maintained: demo plan, MVP/deployment handoff, serving-fix handoff
 │   ├── eda.md
-│   ├── demo-plan.md           # Phase 3 vertical-slice milestone: bundles, definition of done, walkthrough
 │   ├── demo-runbook.md        # clean-checkout demo startup, seeding, smoke, reset, troubleshooting
 │   ├── deployment-runbook.md  # production: the machine, DNS, host bootstrap, secrets, one-time SQL, the
 │   │                          #   first deploy, verify, rollback, backups + restore drill, housekeeping
-│   ├── production-readiness-review.md  # the pre-deployment gap review and the 14-step rehearsal record
-│   └── progress.md            # session-level progress log (frontend agent's; not authoritative)
+│   └── production-readiness-review.md  # the pre-deployment gap review and the 14-step rehearsal record
 ├── data/                      # DVC-tracked
 ├── notebooks/                 # EDA script (`make eda`); metrics still go through src/evaluation/
 ├── src/
@@ -265,6 +272,7 @@ movielens-recsys/
 │   └── monitoring/            # Phase 5 — drift, dashboards
 ├── pipelines/                 # Phase 4 — Prefect flows
 ├── synthetic/                 # Phase 3+ — synthetic-user harnesses (scoped per job)
+│   ├── README.md              # what each harness proves and the Make targets that run it
 │   ├── load/                  # k6 (ADR 0010): recommendations.js + thresholds.js (the pinned p99 gate),
 │   │                          #   pages.js + page_thresholds.js (page-shaped per-step budgets),
 │   │                          #   run_gate.sh (run, decide, re-measure at most once), summarize.py,
@@ -294,6 +302,7 @@ movielens-recsys/
 │   └── tenant_isolation/      # Phase 3 — cross-tenant leakage canaries (CI, against the real compose
 │                              #   stack); the deployable remote probe lives in synthetic/
 └── infra/                     # images, platform config, and the operational scripts around them
+    ├── README.md              # one line per directory + which compose file / Make target consumes it
     ├── api/                   # FastAPI image + entrypoint dispatching serve | bootstrap | verify
     ├── features/              # Feast + LightGBM sidecar image; bakes the serving bundle and applies the registry
     ├── model-bundle/          # committed candidate-index.json + ranker.txt + manifest.json (baked, SHA-256-pinned)

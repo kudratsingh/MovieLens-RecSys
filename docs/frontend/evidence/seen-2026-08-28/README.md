@@ -8,8 +8,14 @@ exploring as **Action Fan (900000101)**, the persona that owns Library's
 movie-state and rating writes. Cold Start (900000104) is not touched by anything
 here; it read `0/0/0` before and after.
 
-Captured by `scratchpad/seen/seen-qa.spec.ts` against `http://localhost:3001`,
-full-page, on Desktop Chrome.
+Captured against `http://localhost:3001`, full-page, on Desktop Chrome, by a
+one-off Playwright spec that **was not committed** — it lived under a scratch
+directory outside the repository. To re-shoot this set, drive `/library?tab=history`
+on a seeded stack signed in as Action Fan at 1440/768/390 and reproduce the
+filenames listed below; every frame here is reachable through the product with
+no fixtures. A committed, re-runnable capture script for the whole product is
+being added with the `current/` matrix — see the
+[evidence index](../README.md#re-capturing).
 
 | Image | Viewport | What it shows |
 |---|---|---|

@@ -15,7 +15,7 @@
 
 **Capture:** Playwright captured the seeded, bypass-disabled Keycloak demo on
 2026-08-21. The matrix is committed under
-[`docs/frontend/evidence/baseline/`](evidence/baseline/). The authenticated
+[`docs/frontend/evidence/baseline/`](../evidence/baseline/). The authenticated
 wrapper adds actor/logout controls, while the dashboard under evaluation
 remains the pre-redesign rating-first baseline.
 
