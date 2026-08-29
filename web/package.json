@@ -25,7 +25,8 @@
     "evidence:bundle7c": "node scripts/capture-bundle7c-evidence.mjs",
     "evidence:bundle7a": "node scripts/capture-bundle7a-evidence.mjs",
     "evidence:bundle7d": "node scripts/capture-bundle7d-evidence.mjs",
-    "evidence:sweep": "node scripts/capture-sweep-evidence.mjs"
+    "evidence:sweep": "node scripts/capture-sweep-evidence.mjs",
+    "evidence:current": "node scripts/capture-current-evidence.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
