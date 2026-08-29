@@ -96,6 +96,20 @@ def _cohort_frame(seed: int = SYNTH_COLD_SEED) -> pd.DataFrame:
     )
 
 
+def _timestamped_ratings() -> pd.DataFrame:
+    """`_train_ratings` with a spread of timestamps, for tests that need a split.
+
+    The rows are shuffled on a fixed seed before the timestamps are assigned so
+    that the train side of `temporal_split` holds most of the catalog. Assigning
+    them in catalog order would put the whole head of the popularity curve in
+    train and the tail in holdout, which is both unrepresentative and — with a
+    bucket that draws eleven distinct items — close to the edge of usable.
+    """
+    ratings = _train_ratings().sample(frac=1.0, random_state=0).reset_index(drop=True)
+    ratings["timestamp"] = [CUTOFF - 100_000 + index for index in range(len(ratings))]
+    return ratings
+
+
 def _write(frame: pd.DataFrame, path: Path, *, data_version: str = DATA_VERSION) -> None:
     write_cohort(
         frame,
@@ -368,11 +382,7 @@ def test_an_absent_parquet_is_not_an_error(tmp_path: Path) -> None:
 def test_the_cli_generates_from_a_ratings_csv(tmp_path: Path) -> None:
     """The `--ratings-csv` path a machine without a loaded Postgres uses."""
     csv = tmp_path / "ratings.csv"
-    ratings = _train_ratings().copy()
-    # Give the frame a spread of timestamps so temporal_split has a cutoff to
-    # find; the generator only ever sees the train side of it.
-    ratings["timestamp"] = [CUTOFF - 100_000 + index for index in range(len(ratings))]
-    ratings.to_csv(csv, index=False)
+    _timestamped_ratings().to_csv(csv, index=False)
 
     out = tmp_path / "users.parquet"
     assert main(["--out", str(out), "--ratings-csv", str(csv)]) == 0
@@ -544,9 +554,7 @@ def test_prepare_is_the_identity_without_a_cohort(tmp_path: Path, caplog) -> Non
 def test_prepare_attaches_only_history_rows(tmp_path: Path) -> None:
     from src.data.split import temporal_split
 
-    ratings = _train_ratings().copy()
-    ratings["timestamp"] = [CUTOFF - 100_000 + index for index in range(len(ratings))]
-    split = temporal_split(ratings)
+    split = temporal_split(_timestamped_ratings())
 
     path = tmp_path / "users.parquet"
     frame = generate_cohort(
@@ -581,9 +589,7 @@ def test_prepare_attaches_only_history_rows(tmp_path: Path) -> None:
 def test_prepare_refuses_a_cohort_anchored_to_a_different_cutoff(tmp_path: Path) -> None:
     from src.data.split import temporal_split
 
-    ratings = _train_ratings().copy()
-    ratings["timestamp"] = [CUTOFF - 100_000 + index for index in range(len(ratings))]
-    split = temporal_split(ratings)
+    split = temporal_split(_timestamped_ratings())
 
     path = tmp_path / "users.parquet"
     frame = generate_cohort(
