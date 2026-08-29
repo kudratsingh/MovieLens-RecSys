@@ -320,11 +320,13 @@ records a participant-backed pass.
 The boundaries are the load-bearing part. The browser never holds an API token:
 Auth.js runs the real authorization-code-plus-PKCE flow and keeps tokens in an
 encrypted HttpOnly server session, and seventeen BFF route handlers are the only
-things that talk to FastAPI. Behind them, `web/lib/resources/` is the single
-server-owned client — per-resource timeout budgets, `X-Request-ID` generation
-and echo, `private, no-store` on every personalized response, and a
-caller-supplied bearer refused at the BFF edge *and* again in the browser reader
-rather than silently dropped. Its eight-state model renders through one region
+things that talk to FastAPI. Behind them, `web/lib/resources/` is the one
+server-owned client every product route reads through — per-resource timeout
+budgets, `X-Request-ID` generation and echo, `private, no-store` on every
+personalized response, and a caller-supplied bearer refused at the BFF edge
+*and* again in the browser reader rather than silently dropped. The retained
+`/legacy` dashboard's rating route predates that boundary and still calls the
+API directly, which is one of the things retiring `/legacy` closes. Its eight-state model renders through one region
 component, so a resource that fails never blanks the regions around it. Writes
 go through exactly one path, `web/lib/movie-state/`: the transition table
 written once, an idempotency key bound to the intent, `expected_revision` on
