@@ -8,6 +8,13 @@
 # would measure an empty database.
 DEMO_COMPOSE_EXTRA ?=
 DEMO_COMPOSE = docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml $(DEMO_COMPOSE_EXTRA)
+# The same stack with the `load` profile enabled. `up` deliberately uses the
+# plain invocation -- the load generator and its multi-worker API are started
+# by the gate, not by a demo -- but anything that claims to cover the whole
+# project has to name the profile, or Compose does not consider those services
+# to exist: `demo-down` after a load run left `api-load` up and then failed to
+# remove the network it was still attached to.
+DEMO_COMPOSE_ALL = $(DEMO_COMPOSE) --profile load
 K6_VERSION := $(strip $(shell cat infra/ci/k6-version))
 
 # --- Production-mode rehearsal stack ----------------------------------------
@@ -305,11 +312,31 @@ db-migrate-status:
 # --- Repeatable portfolio demo ----------------------------------------------
 # The explicit project name isolates demo volumes from the normal dev stack.
 # `demo-reset` is therefore destructive only to movielens-demo resources.
+#
+# The learned path has two halves, and starting the sidecars needs both: the
+# serving bundle in the artifact volume, and rows in Redis for the tenant those
+# artifacts were trained for. The model server's warm-up refuses to report
+# healthy against an empty online store -- deliberately, because the
+# alternative is ranking every candidate from missing features -- so starting
+# it without the second half buys a 60-second `--wait` timeout and a stack
+# trace where a one-line instruction belongs.
+#
+# DBSIZE is the cheap question (is there anything in the store at all?) rather
+# than the precise one (are there rows for *this* tenant?). Nothing but Feast
+# writes to this Redis, so an empty store is exactly the case a `demo-reset` or
+# a removed volume leaves behind, and the sidecar's own guard still covers the
+# partially-materialized case a key count cannot see. A probe that cannot
+# answer at all falls through to starting the sidecars, which is what this
+# target did before it had a probe.
 demo-up:
 	$(DEMO_COMPOSE) up -d --build --wait --wait-timeout 180 api web keycloak redis
-	@if docker run --rm -v movielens-demo_model_artifacts:/artifacts \
+	@if ! docker run --rm -v movielens-demo_model_artifacts:/artifacts \
 		movielens-recsys/api:demo python -c \
 		"from pathlib import Path; raise SystemExit(not Path('/artifacts/manifest.json').is_file())"; then \
+		echo "No serving bundle yet, so the feature/model sidecars stay down and the API serves the popularity fallback. Run 'make demo-seed' to train and publish one."; \
+	elif [ "$$($(DEMO_COMPOSE) exec -T redis redis-cli DBSIZE | tr -cd '0-9')" = "0" ]; then \
+		echo "The serving bundle is present but the online feature store is empty, so the model sidecar would refuse to boot rather than rank from missing features. Run 'make demo-seed' to materialize it."; \
+	else \
 		$(DEMO_COMPOSE) up -d --wait --wait-timeout 60 feature-server model-server; \
 	fi
 	$(DEMO_COMPOSE) run --rm demo-setup python -m synthetic.smoke.demo --readiness-only --api-url http://api:8000 --web-url http://web:3001 --keycloak-url http://keycloak:8080
@@ -378,15 +405,20 @@ demo-reliability-check:
 		> $(PAGE_RESULTS_DIR)/reliability.json
 
 demo-down:
-	$(DEMO_COMPOSE) down --remove-orphans
+	$(DEMO_COMPOSE_ALL) down --remove-orphans
 
 demo-reset:
-	$(DEMO_COMPOSE) down --volumes --remove-orphans
+	$(DEMO_COMPOSE_ALL) down --volumes --remove-orphans
 	$(MAKE) demo-up
 	$(MAKE) demo-seed
 
+# `api-load` is in the list because the load gate's failure modes are read
+# here: the runbook already sends you to its logs, and a service the profile
+# hides is a service `logs` will not print. Naming a service with no container
+# is quiet, so this is the same output as before on a stack that never ran the
+# gate.
 demo-logs:
-	$(DEMO_COMPOSE) logs --tail=200 api web demo-setup feature-server model-server postgres pgbouncer keycloak redis
+	$(DEMO_COMPOSE_ALL) logs --tail=200 api api-load web demo-setup feature-server model-server postgres pgbouncer keycloak redis
 
 # --- Production ------------------------------------------------------------
 # These targets run the production stack, on the box and on a laptop. The order
