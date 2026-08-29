@@ -1,0 +1,75 @@
+name: Engineering task or follow-up
+description: Work a review, an ADR, or a merged PR deliberately deferred.
+labels: ["type:follow-up"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most issues here are follow-ups: something a PR chose not to do, with a
+        reason. Write down the reason — an unexplained deferral is
+        indistinguishable from an oversight six weeks later.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - api (FastAPI endpoints, auth, tenancy)
+        - web (Next.js product surfaces and the BFF)
+        - serving (candidates, ranker, feature reads, the model sidecar)
+        - infra (Compose stacks, images, deploy, CI)
+        - docs (ADRs, runbooks, contracts)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: Per the phased plan in CLAUDE.md.
+      options:
+        - "3 — serving, auth, multi-tenancy, feature store, load harness"
+        - "4 — orchestration and retraining"
+        - "5 — monitoring and drift"
+        - "6 — A/B testing and shadow deploys"
+        - Cross-cutting or unphased
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing
+      description: The change itself, at the level of modules and behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: origin
+    attributes:
+      label: Where this came from
+      description: >
+        The PR, ADR, review finding, or measurement that surfaced it — and why
+        it was not done then. "Belongs with the Phase 6 tenant-config work" is
+        a reason; "out of scope" on its own is not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      description: >
+        What has to be true, and what would prove it. Name the gate if this
+        needs one: a new test, a threshold, an ADR amendment, regenerated
+        contract files.
+    validations:
+      required: true
+
+  - type: textarea
+    id: blocks
+    attributes:
+      label: What this blocks
+      description: >
+        Issues, phases, or decisions that cannot proceed until this lands.
+        Leave blank if nothing waits on it.

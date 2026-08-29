@@ -7,7 +7,17 @@ Unlike the bundle folders, this one is **complete rather than differential**.
 The sweep changed the write path, the poster pipeline, the catalog's default
 ordering, the shell, and two read models, so no earlier matrix still describes
 any of these routes accurately. The bundle folders remain the record of what
-each bundle changed; this is the record of what the product looks like now.
+each bundle changed; this was the record of what the product looked like on
+2026-08-27.
+
+> **Date-bound (noted 2026-08-29).** This is still the newest *complete* matrix,
+> but it is no longer current for every route: PRs #77, #78, #79, #81, #84 and
+> #85 landed after it. Read it for Browse and the overall shell; for Discover's
+> ranked rail, the movie page and the Library's Seen tab, the per-surface sets
+> [`rail-polish-2026-08-28`](../rail-polish-2026-08-28/README.md),
+> [`movie-detail-2026-08-28`](../movie-detail-2026-08-28/README.md) and
+> [`seen-2026-08-28`](../seen-2026-08-28/README.md) supersede it. See the
+> [evidence index](../README.md#which-sets-describe-the-current-build).
 
 ## Provenance
 

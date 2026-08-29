@@ -1,6 +1,6 @@
 # Bundle 7A finish-gate evidence
 
-The named screenshot matrix for the [finish-gate review](../../finish-gate-review.md),
+The named screenshot matrix for the [finish-gate review](../../records/finish-gate-passes.md),
 captured at 390x844, 768x1024, and 1440x1000.
 
 Every capture is labelled with its provenance, because the two kinds are not

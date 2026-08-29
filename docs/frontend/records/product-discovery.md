@@ -1,5 +1,14 @@
 # Movie-discovery frontend: product discovery
 
+> **Record.** Accurate as of 2026-08-21. The product it proposes has been built.
+> Superseded by [`design-contracts.md`](../design-contracts.md) for what the
+> routes owe a reader and [`implementation-plan.md`](../implementation-plan.md)
+> for what was delivered. Not maintained.
+>
+> Kept because the seven discovery tasks in it are the tasks the finish gate's
+> moderated sessions still run, and because its current-state audit is the honest
+> description of what the redesign was reacting to.
+
 **Status:** Bundle 0 baseline
 
 **Last updated:** 2026-08-21

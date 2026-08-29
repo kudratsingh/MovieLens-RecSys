@@ -1,8 +1,9 @@
 # The Seen experience — Library, History tab
 
-**Status:** contract, ahead of the code
+**Status:** Shipped. Written as a contract ahead of the code and merged with it
+in the same commit (`b62a5b7`, PR #84); it now describes behaviour on `main`.
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
 ## Purpose
 
@@ -604,8 +605,9 @@ walk, and the taste summary are all as they are today.
 
 ### Backend
 
-- **Sorting** (`tests/unit/test_serving_feedback.py`, or a new
-  `tests/unit/test_serving_library_seen.py`): each of the five sorts returns the
+- **Sorting** (`tests/unit/test_serving_feedback.py` — the alternative of a
+  separate `test_serving_library_seen.py` was not taken): each of the five sorts
+  returns the
   documented order over a fixture with deliberate ties; unrated rows land last
   under `rating` and equal ratings break on watched date then movie ID; unknown
   release years land last under `release`; unscored titles land last under
