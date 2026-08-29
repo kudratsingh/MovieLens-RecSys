@@ -4,6 +4,8 @@
 
 **Snapshot taken:** 2026-05-31
 
+**Figures rendered:** 2026-08-29, from the same DVC data version (`c3ce6309f6f0ec347a9e0a662c640021.dir`) and the same SQL aggregations that produced the tables. The prose snapshot below is unchanged — nothing in it was re-measured, and every figure is drawn from the numbers already in the table above it. Re-render with `make eda`; the PNGs are deterministic, so an unchanged database produces unchanged bytes.
+
 ## Headlines
 
 - **Scale:** 25,000,095 ratings, 162,541 users, 59,047 movies ever rated (62,423 in catalog). Sparsity = **0.2605%** — squarely "very sparse," standard recsys territory.
@@ -44,6 +46,8 @@ The 3,376 catalog movies with zero ratings is the **item cold-start** population
 | 4.5 | 2,200,539 | 8.80 |
 | 5.0 | 3,612,474 | 14.45 |
 
+![Half-star rating distribution across all 25,000,095 MovieLens ratings. The mode is 4.0 at 26.56%; 3.0 is second at 19.59%; 0.5 is the rarest at 1.57%.](assets/eda/rating-histogram.png)
+
 Strong positive skew; users overwhelmingly rate things they liked. Implication for label construction:
 
 | Threshold for "positive" | % of ratings |
@@ -79,6 +83,10 @@ Even more skewed than user activity. **Half of all rated movies have ≤6 rating
 - The popularity baseline will be dominated by ~10k blockbuster films (everything above p95).
 - Tail items barely have signal for collaborative filtering. Content features (genres, tags, possibly the `genome-*` CSVs we have on disk but didn't ingest) will likely matter for ranking them — relevant for Phase 2.
 - The p99 (9,943) vs. max (81,491) gap suggests a power-law tail. Worth a log-log plot if we revisit this in Phase 2.
+
+![Rank–frequency plot of ratings per movie on log–log axes. The curve starts almost flat near 81,491 ratings across the first few dozen titles, bends downward through the thousands, crosses the median of 6 ratings at roughly rank 29,500, and falls to a single rating across the last stretch of the catalog.](assets/eda/item-popularity-tail.png)
+
+*That last bullet's log-log plot. Two things it settles. It is **not** a straight line — the head is flatter and the fall steeper than a pure power law, so "power-law tail" above is a loose description of a heavy-tailed curve rather than a fitted claim. And the 3,376 never-rated titles cannot appear on it at all, because zero has no place on a log axis — which is itself the point: they carry no collaborative signal to plot.*
 
 ## 5. Top 10 most-rated movies
 
@@ -130,6 +138,10 @@ T is the timestamp of the 80th-percentile interaction. The SQL `percentile_disc(
 | Test | 4,870,337 | 19.48 |
 | **Total** | **25,000,095** | **100.00** |
 
+![The temporal split shown three ways. In calendar time, train runs 1995-01-09 to the cutoff T on 2016-06-25, the 28-day holdout is a hairline at T, and test runs from 2016-07-23 to 2019-11-21. By share of interactions, train is 80.00%, holdout 0.52% and test 19.48%. Of the 2,641 users evaluated in the holdout, 702 (26.6%) are cold.](assets/eda/temporal-split.png)
+
+*Sections 7–9 in one picture. The three panels are deliberately in different units: the holdout is 28 days out of 25 years, 0.52% of the interactions, and 2,641 users of whom a quarter are cold — no single axis shows all three.*
+
 Train hits 80.00% exactly (down to the row) — the `method="lower"` quantile landed cleanly. Holdout looks tiny as a fraction but is 130k interactions across 2,641 users (next section) — plenty of signal for offline evaluation.
 
 Rating velocity sanity check:
@@ -170,7 +182,10 @@ Rating velocity sanity check:
 
 ```bash
 make infra-up   # if Postgres isn't already running
-make eda        # ~30s; prints the same tables this file is sourced from
+make eda        # prints the same tables this file is sourced from, then
+                # re-renders the three PNGs into docs/assets/eda/
 ```
 
-Every figure here is from `notebooks/eda.py`. SQL-only — no 25M-row pandas frames. The cutoff `percentile_disc(0.8)` in SQL is verified to match `np.quantile(..., method="lower")` in `src/data/split.py`.
+Every figure here is from `notebooks/eda.py`. SQL-only — no 25M-row pandas frames, with the single exception of the rank–frequency series behind the popularity plot (~59k rows, one per rated movie, because a percentile summary cannot show the shape of a tail). The cutoff `percentile_disc(0.8)` in SQL is verified to match `np.quantile(..., method="lower")` in `src/data/split.py`.
+
+The plots are rendered deterministically — Agg backend, fixed figure size and dpi, matplotlib's own bundled DejaVu Sans, and the `Software` PNG tag suppressed — so re-running against an unchanged database reproduces the committed bytes and `git status` stays clean. `make eda` is not in CI: it needs the full 25M-row database, which no runner has.

@@ -232,6 +232,7 @@ movielens-recsys/
 │   │   └── frontend/          # frontend ADRs (own numeric line)
 │   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes,
 │   │                          #   plus overview.md — every path/method, auth, headers, worked response
+│   ├── assets/                # social preview + eda/ — the figures docs/eda.md embeds (`make eda`)
 │   ├── frontend/              # movie-discovery product docs: design contracts, frontend system,
 │   │   │                      #   implementation plan, readiness, surface contracts (catalog, library
 │   │   │                      #   feedback, seen), testing strategy, finish-gate review
@@ -241,6 +242,8 @@ movielens-recsys/
 │   │                          #   evidence, and the four dated finish-gate passes verbatim
 │   ├── records/               # not maintained: demo plan, MVP/deployment handoff, serving-fix handoff
 │   ├── eda.md
+│   ├── results.md             # the measured offline numbers — baselines, candidate stage, ranker,
+│   │                          #   ADR 0011 cold-start coverage; each carries its run, date and machine
 │   ├── demo-runbook.md        # clean-checkout demo startup, seeding, smoke, reset, troubleshooting
 │   ├── deployment-runbook.md  # production: the machine, DNS, host bootstrap, secrets, one-time SQL, the
 │   │                          #   first deploy, verify, rollback, backups + restore drill, housekeeping
