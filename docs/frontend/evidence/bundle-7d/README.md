@@ -20,7 +20,7 @@ becomes once it is rebased. Capturing on the branch's own base would have
 committed pictures of recommendations `main` no longer serves. Running the
 command below after the rebase reproduces these; running it before the rebase
 does not. The reasoning is in the review's
-[§10.10](../../finish-gate-review.md#1010-verified-against-main-after-pr-64).
+[§10.10](../../records/finish-gate-passes.md#1010-verified-against-main-after-pr-64).
 
 ## Capture command
 

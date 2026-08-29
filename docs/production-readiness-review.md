@@ -1,5 +1,12 @@
 # Production readiness review
 
+> **Record.** A review as of 2026-08-27 at `4c74f0c`. The rehearsal it records
+> passed and every defect it found was fixed, but **the machine has not been
+> provisioned**, so nothing described here is running anywhere. It is kept as
+> written because the gap analysis is the reasoning, not a status page.
+> For what to do next, see
+> [`deployment-runbook.md`](deployment-runbook.md) §1–§7.
+
 **Date:** 2026-08-27 · **Reviewed at:** `4c74f0c` (`main`, after PR #68) ·
 **Resolved on:** `feat/production-deployment`
 

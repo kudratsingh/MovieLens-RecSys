@@ -42,7 +42,7 @@ remains coherent and includes the tests and documentation for the behavior it
 changes.
 
 Bundles 5–7 were delivered against
-[the Bundles 5–7 handoff](bundles-5-7-handoff.md), which is now a historical
+[the Bundles 5–7 handoff](records/bundles-5-7-handoff.md), which is now a historical
 record of the state they started from rather than a forward plan. Per-bundle
 progress is recorded in the sections below.
 
@@ -399,7 +399,7 @@ traceable; gesture and non-gesture paths have identical outcomes.
   `/discover`; and Browse, movie detail, and Library render the shared
   `AppShell`, so the two parallel headers are deleted rather than left to
   drift. The re-run gate and its per-criterion verdicts are recorded in
-  [`finish-gate-review.md`](finish-gate-review.md#10-re-run-after-cutover-7d),
+  [the 7D re-run](records/finish-gate-passes.md#10-re-run-after-cutover-7d),
   with the recaptured surfaces in
   [`evidence/bundle-7d/`](evidence/bundle-7d/README.md). Adding `/` to the
   accessibility gate found three defects on the signed-out door — two contrast

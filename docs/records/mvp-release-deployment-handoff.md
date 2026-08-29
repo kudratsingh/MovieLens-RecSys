@@ -1,5 +1,14 @@
 # MVP release and deployment handoff
 
+> **Record.** Accurate as of 2026-08-27 (`4c74f0c`, PR #68). Superseded by
+> [`docs/deployment-runbook.md`](../deployment-runbook.md) and
+> [ADR 0013](../adr/0013-production-deployment-target.md). Not maintained.
+>
+> An owner-to-owner handoff, written to be read once. It carries laptop-local
+> state and the dev-only credentials of the local stack, both labelled as such
+> where they appear. It is kept because it is the clearest record of what was
+> and was not settled on the day the deployment work began.
+
 _Last updated: 2026-08-27 (America/Los_Angeles)_
 
 ## Start here
@@ -9,7 +18,7 @@ remaining release blockers with evidence, and deploy it. Almost everything this
 note used to hand off is now settled.
 
 - **The deployment target is one Hetzner CX22**, not Railway. [ADR
-  0013](adr/0013-production-deployment-target.md) is rewritten for it: the same
+  0013](../adr/0013-production-deployment-target.md) is rewritten for it: the same
   `docker-compose.prod.yml` behind its own Caddy edge, images published to GHCR by
   CI, a deploy over SSH on every merge to `main`, and an automatic rollback when
   verification fails. Cost was the deciding factor — ≈€4.50/month against a
@@ -30,7 +39,7 @@ note used to hand off is now settled.
   `deploy-production.yml` and `production-canary.yml` are the two workflows that
   drive the box.
 - **The rate-limiting question is decided.** [ADR
-  0014](adr/0014-request-rate-limiting.md) carries the measurement the rehearsal
+  0014](../adr/0014-request-rate-limiting.md) carries the measurement the rehearsal
   produced and the numbers that follow from it.
 
 **Nothing is deployed. No server exists yet.** The work left is in
@@ -96,7 +105,7 @@ The rehearsal re-ran the pinned k6 gate at the production topology — productio
 images, baked artifacts, `ENVIRONMENT=production` — and it passed at **p50
 6.85 ms, p95 9.47 ms, p99 12.93 ms**, zero errors and zero dropped iterations.
 
-`docs/release-serving-fix-handoff.md` carries the one question still open: two
+`docs/records/release-serving-fix-handoff.md` carries the one question still open: two
 low-steal CI breaches whose tail was in the shared auth → pooler → audit →
 `fdatasync` path rather than in the ranker, and ADR 0010's rule that the verdict
 comes from the first instrumented runner failure rather than from a laptop.
