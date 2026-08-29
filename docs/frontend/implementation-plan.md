@@ -7,7 +7,7 @@ passes all seven criteria after the cutover and holds only on moderated
 research with real participants; legacy removal waits on that PASS and then
 gets its own PR.
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-29
 
 ## Delivery principle
 
@@ -42,7 +42,7 @@ remains coherent and includes the tests and documentation for the behavior it
 changes.
 
 Bundles 5–7 were delivered against
-[the Bundles 5–7 handoff](bundles-5-7-handoff.md), which is now a historical
+[the Bundles 5–7 handoff](records/bundles-5-7-handoff.md), which is now a historical
 record of the state they started from rather than a forward plan. Per-bundle
 progress is recorded in the sections below.
 
@@ -374,7 +374,8 @@ traceable; gesture and non-gesture paths have identical outcomes.
   progressive-disclosure promises asserted; and a reliability check covering
   request-id traceability into the audit row, readiness, the auth boundary,
   dependency provenance, bounded pages, cursor rejection and degraded metadata.
-  Rate limiting is recorded as not implemented. ADR 0010's page-shaped note
+  Rate limiting was recorded as not implemented at the time; ADR 0014 closed
+  that on 2026-08-27 and the check is now required. ADR 0010's page-shaped note
   carries the budgets and the advisory-versus-enforced split.
 
 - [x] 7a — finish gate: the handoff's ten-step journey run end to end against
@@ -398,7 +399,7 @@ traceable; gesture and non-gesture paths have identical outcomes.
   `/discover`; and Browse, movie detail, and Library render the shared
   `AppShell`, so the two parallel headers are deleted rather than left to
   drift. The re-run gate and its per-criterion verdicts are recorded in
-  [`finish-gate-review.md`](finish-gate-review.md#10-re-run-after-cutover-7d),
+  [the 7D re-run](records/finish-gate-passes.md#10-re-run-after-cutover-7d),
   with the recaptured surfaces in
   [`evidence/bundle-7d/`](evidence/bundle-7d/README.md). Adding `/` to the
   accessibility gate found three defects on the signed-out door — two contrast
@@ -417,9 +418,13 @@ Remaining:
   `/discover` is the authenticated front door, the stale serving-contract panel
   is gone, `/discover` has an inbound link from every authenticated surface,
   and the product shell is promoted onto Browse and movie detail;
-- [ ] a rate-limiting decision — 7b's reliability facts record it as not
-  implemented, so it needs either per-tenant limits against the Phase 3
-  tenant-config row or an ADR that records the omission;
+- [x] a rate-limiting decision — closed by
+  [ADR 0014](../adr/0014-request-rate-limiting.md) and
+  `src/serving/ratelimit.py`: a per-`(tenant, subject)` token bucket keyed on the
+  verified token, on by default outside `dev`, returning `429` with
+  `Retry-After`. 7b's reliability check went from recording an absence to
+  asserting the contract. The per-tenant quota column stays deferred to the
+  Phase 6 tenant-config work, and the ADR says so;
 - [ ] legacy dashboard removal. **Retained.** The cutover moved it behind
   `/legacy` and documented the rollback
   ([`README.md`](README.md#rolling-the-cutover-back)); removing it needs a
@@ -442,7 +447,11 @@ Remaining:
 - Rating-aware ranker labels and online features.
 - SHAP-based user-facing explanations.
 - Calibrated match percentages.
-- Cast, trailers, streaming availability, and social features.
+- ~~Cast, trailers~~ — shipped after this plan was written (PR #79): the detail
+  page carries a tagline, runtime, backdrop, cast row and a click-to-load
+  trailer, from an offline enrichment pass into a `details` JSONB read model, so
+  no page fans out to TMDB per card. Streaming availability and social features
+  remain deferred.
 - Full 62,423-title eager TMDB enrichment.
 - Phase 4 retraining/promotion automation, Phase 5 drift surfaces, and Phase 6
   champion/challenger controls.

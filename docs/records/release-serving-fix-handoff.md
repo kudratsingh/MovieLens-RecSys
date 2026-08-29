@@ -1,5 +1,9 @@
 # Release Serving Fix Handoff
 
+> **Record.** Accurate as of 2026-08-27. Closed by PR #69; the substance now
+> lives in [ADR 0010](../adr/0010-synthetic-load-k6.md)'s 2026-08-26 notes.
+> Not maintained.
+
 Date: 2026-08-27 (America/Los_Angeles)
 
 **Status: closed.** The work this note handed off merged as PR #69
@@ -60,7 +64,7 @@ a single Hetzner CX22 (ADR 0013, rewritten). Three things from this note are
 carried there rather than repeated:
 
 - the cold-worker readiness defect described in
-  `docs/mvp-release-deployment-handoff.md` is closed by warming each model-server
+  `docs/records/mvp-release-deployment-handoff.md` is closed by warming each model-server
   worker inside `lifespan`, with `/healthz` answering 503 until warm;
 - the native-thread pins are part of the production image rather than only the
   demo Compose file;

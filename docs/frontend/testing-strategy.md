@@ -1,8 +1,10 @@
 # Movie-discovery frontend: testing and finish-gate strategy
 
-**Status:** Bundle 0 contract
+**Status:** Live. Written as the Bundle 0 contract and now the standard the
+finish gate is actually run against — see
+[`finish-gate-review.md`](finish-gate-review.md) for the current verdict.
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-29
 
 ## Testing principles
 
@@ -30,7 +32,7 @@ prompting. Identifying the page only as an ML demo is a HOLD.
 
 ### Moderated task protocol
 
-Run the tasks from [product discovery](product-discovery.md) with movie-focused
+Run the tasks from [product discovery](records/product-discovery.md) with movie-focused
 and technical-review participants. Capture:
 
 - completion and abandonment;
@@ -187,7 +189,7 @@ Capture at least 390×844, 768×1024, and 1440×1000.
 
 Each capture uses the same seeded persona, dataset revision, TMDB mode, and
 browser font configuration. Store evidence as specified in
-[baseline evidence](baseline-evidence.md).
+[baseline evidence](records/baseline-evidence.md).
 
 ## Accessibility gate
 

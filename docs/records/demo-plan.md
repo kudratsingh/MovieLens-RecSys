@@ -1,5 +1,16 @@
 # Working Demo Execution Plan
 
+> **Record.** Accurate as of 2026-08-21 (`c25cb69`, PR #45). Superseded by
+> [`docs/demo-runbook.md`](../demo-runbook.md). Not maintained.
+>
+> This is what the Phase 3 vertical slice looked like before it was delivered.
+> Its walkthrough describes the pre-cutover dashboard — "select Action Fan" from
+> a persona picker the shipped product does not have — its checklist predates
+> roughly forty merged pull requests, and its "Phase 7" is not a phase CLAUDE.md
+> has ever had. It is kept because the sequencing argument it makes, and the
+> definition of done it insisted on, are why the demo milestone landed in a
+> defensible order.
+
 ## Purpose
 
 This document turns Phase 3's broad architecture into the shortest defensible
@@ -359,7 +370,7 @@ Explicitly deferred to later phases:
 
 ## Immediate next step
 
-Capture the baseline evidence specified in `docs/frontend/baseline-evidence.md`,
+Capture the baseline evidence specified in `docs/frontend/records/baseline-evidence.md`,
 then review ADR 0012 and implement the identity/feedback correctness foundation
 from `docs/frontend/implementation-plan.md`. Build the movie-discovery vertical
 slices against those contracts and record the final walkthrough from
