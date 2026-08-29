@@ -169,6 +169,43 @@ describe("collections load independently and own their URL state", () => {
     expect(screen.queryByText(/of 12 results/)).not.toBeInTheDocument();
   });
 
+  it("ranks the rated collection by release year and by crowd score", async () => {
+    const { user } = await renderLibrary();
+
+    const sort = screen.getByLabelText("Sort");
+    expect(
+      within(sort).getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "Most recent",
+      "Title",
+      "Highest rated",
+      "Newest release",
+      "Highest TMDB score",
+    ]);
+
+    // Both keys come off the movie rather than off the star value, so the row
+    // that leads each ordering is the one whose printed fact says so.
+    await user.selectOptions(sort, "release");
+    expect(replace).toHaveBeenLastCalledWith(
+      `/library?userId=${DEFAULT_LIBRARY_USER_ID}&sort=release`,
+      { scroll: false },
+    );
+    const byRelease = await screen.findByRole("list", { name: "Rated movies" });
+    expect(within(byRelease).getAllByRole("listitem")[0]).toHaveTextContent(
+      "Decision to Leave",
+    );
+
+    await user.selectOptions(sort, "tmdb");
+    expect(replace).toHaveBeenLastCalledWith(
+      `/library?userId=${DEFAULT_LIBRARY_USER_ID}&sort=tmdb`,
+      { scroll: false },
+    );
+    const byScore = await screen.findByRole("list", { name: "Rated movies" });
+    const leader = within(byScore).getAllByRole("listitem")[0];
+    expect(leader).toHaveTextContent("Parasite");
+    expect(leader).toHaveTextContent("TMDB 8.5");
+  });
+
   it("follows a browser Back to the collection the URL names", async () => {
     const client = createRecordedLibraryClient();
     const reads = vi.spyOn(client, "readLibrary");
