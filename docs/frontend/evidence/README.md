@@ -1,8 +1,9 @@
 # Frontend evidence index
 
-Thirteen capture sets, each committed with the work it documents. This page says
-what each one shows, when it was taken, and — the part that decides whether a
-screenshot means anything — **how** it was captured.
+Fourteen capture sets: one that describes the product as it stands, and thirteen
+that were committed with the work they document. This page says what each one
+shows, when it was taken, and — the part that decides whether a screenshot means
+anything — **how** it was captured.
 
 ## Two kinds of provenance, and why the distinction is kept
 
@@ -22,33 +23,36 @@ claim about the product.
 
 ## Which sets describe the current build
 
-**As of 2026-08-29, no single set is a complete picture of the product.**
+**[`current/`](current/README.md) is the complete picture of the product**, and
+it is the one set to link from anywhere that wants to show what this looks like
+today. Its directory name is stable and the capture overwrites it in place, so a
+link to `current/discover-desktop-1440.png` keeps meaning the current build
+after the next re-shoot — which no dated folder can promise.
 
-`sweep-2026-08-27` is the newest **complete** matrix — five product routes at
-three viewports — but it predates PRs #77, #78, #79, #81, #84 and #85. Since it
-was taken, the ranked rail was re-laid out, the rating prompt gained an ending,
-the movie page gained TMDB details and a trailer, the featured slot gained Skip
-and a preference, the Library's History tab became Seen, and Browse's loading
-reservation changed. Read it for Browse and the overall shell; do not read it
-for Discover's rail, the movie page, or the Library.
+Everything else on this page is history. Each dated set remains the record of
+what a particular bundle or round changed, and is worth reading for that; none
+of them is a claim about the product as it stands. In particular
+`sweep-2026-08-27`, which held this role until 2026-08-29, predates PRs #77,
+#78, #79, #81, #84 and #85 — the re-laid-out ranked rail, the rating prompt's
+ending, the movie page's TMDB details and trailer, the featured slot's Skip and
+preference, the Library's History tab becoming Seen, and Browse's loading
+reservation. Read it as the "before" for those, not as the product.
 
-Three per-surface sets are current **for their surfaces** and nothing else:
+The three per-surface sets from 2026-08-28 keep the same standing: they are
+before/after evidence for one surface each, and `current/` supersedes their
+"after" halves.
 
-| Surface | Current set |
-|---|---|
-| Discover's ranked rail | `rail-polish-2026-08-28` |
-| Movie detail | `movie-detail-2026-08-28` |
-| Library's Seen tab | `seen-2026-08-28` |
-
-A `current/` matrix with a committed capture script is being added separately;
-that PR owns the directory. Until it lands, the table above is how to assemble a
-current picture, and the honest answer to "what does the product look like now"
-is "these four sets, in that order of precedence".
+| Surface | Where the change was argued | Where the surface is now |
+|---|---|---|
+| Discover's ranked rail | `rail-polish-2026-08-28` | `current/discover-*` |
+| Movie detail | `movie-detail-2026-08-28` | `current/movie-detail-*` |
+| Library's Seen tab | `seen-2026-08-28` | `current/library-seen-*` |
 
 ## The sets
 
 | Set | Date | Build | Covers | Provenance |
 |---|---|---|---|---|
+| [`current/`](current/README.md) | Re-shot in place | Whatever `main` was at the last re-shoot; the set's own README names the commit | **The product as it stands**: Discover, Browse, movie detail, Library, Seen, Quick Picks at three viewports, plus the signed-out door and the prediction-audit disclosure. 21 frames | Service-backed, read-only, `npm run evidence:current` |
 | [`baseline/`](baseline/) | 2026-08-21 | `c73b967` (pre-redesign) | The Phase 3 dashboard at three viewports plus API-error and poster-fallback states. 9 frames | Service-backed |
 | [`bundle-4/`](bundle-4/README.md) | 2026-08-21 | Bundle 4 (PR #52) | Route shells and the visual system before any live route consumed it. 8 frames | Fixture-mode |
 | [`bundle-5b/`](bundle-5b/README.md) | 2026-08-21 | Bundle 5B (PR #56) | The full `/discover` state matrix — every policy, disclosure, empty, loading and failure state. 33 frames | Fixture-mode (recorded scenarios through the live route) |
@@ -65,16 +69,32 @@ is "these four sets, in that order of precedence".
 
 ## Re-capturing
 
-Each bundle set has an `npm run evidence:*` script in `web/package.json`
-(`evidence:bundle4` … `evidence:bundle7d`, `evidence:sweep`), and
-`evidence:baseline` captures the pre-redesign matrix. The fixture-mode scripts
-need the app running with `MOVIELENS_UI_FIXTURE_MODE=1`; the service-backed ones
-need `make demo-up && make demo-seed` and read `MOVIELENS_DEMO_URL`.
+`npm run evidence:current` re-shoots the current matrix in place, and is the one
+to run after any change that alters what a product route looks like:
+
+```bash
+make demo-up && make demo-seed && make demo-smoke
+cd web && MOVIELENS_DEMO_URL=http://localhost:3001 npm run evidence:current
+```
+
+It rewrites `current/README.md` from what it observed — the commit, the serving
+policy each persona was served, the catalog's poster coverage, the enrichment
+behind the movie page — so the provenance cannot drift from the pictures. It
+also refuses to ship a frame containing an image that failed to decode, and
+re-encodes any capture over 700 KB.
+
+Each historical set has its own `npm run evidence:*` script in
+`web/package.json` (`evidence:bundle4` … `evidence:bundle7d`,
+`evidence:sweep`), and `evidence:baseline` captures the pre-redesign matrix. The
+fixture-mode scripts need the app running with `MOVIELENS_UI_FIXTURE_MODE=1`;
+the service-backed ones need `make demo-up && make demo-seed` and read
+`MOVIELENS_DEMO_URL`.
 
 The three 2026-08-28 sets were captured by one-off specs that were not committed
 with them — `seen-2026-08-28/README.md` names a path under `scratchpad/` that is
 not in the repository, and the other two were driven by hand. To re-shoot any of
 them today, drive the same routes with a short Playwright spec against a seeded
 stack, at the viewports and filenames the set's README lists; the surfaces are
-all reachable without fixtures. The `current/` matrix PR is where a committed,
-re-runnable capture script for the whole product lands.
+all reachable without fixtures. In practice there is rarely a reason to: they
+are before/after arguments for changes that have landed, and
+`evidence:current` is what keeps a picture of the result honest.

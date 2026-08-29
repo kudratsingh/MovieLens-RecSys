@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 from .metrics import ndcg_at_k, recall_at_k
 
@@ -25,6 +26,24 @@ class UserMetrics:
 
 
 @dataclass
+class SyntheticColdSlice:
+    """One history bucket of ADR 0011's synthetic cold-start cohort.
+
+    ``metrics`` is the bucket's recall and NDCG over its single held-out target
+    per user. ``n_fallback_served`` is the attribution that makes the bucket
+    worth having: how many of its users the model routed to its popularity
+    fallback rather than to its learned path. It is ``None`` when the caller
+    passed no routing predicate — an unmeasured count and a measured zero are
+    very different claims and must not share a representation.
+    """
+
+    history_size: int
+    metrics: UserMetrics
+    n_users: int
+    n_fallback_served: int | None = None
+
+
+@dataclass
 class EvalResult:
     """
     Structured result from a single evaluation run.
@@ -39,6 +58,10 @@ class EvalResult:
     n_warm_users: int
     n_cold_users: int
     k: int = K
+    # ADR 0011's per-bucket cold-start coverage, keyed by history size. Empty
+    # unless the caller passed ``synthetic_cold_users`` — the natural state for
+    # every call site that predates the cohort.
+    synthetic_cold_slices: dict[int, SyntheticColdSlice] = field(default_factory=dict)
 
 
 def evaluate(
@@ -46,6 +69,9 @@ def evaluate(
     holdout: dict[int, set[int]],
     train_interaction_counts: dict[int, int],
     k: int = K,
+    *,
+    synthetic_cold_users: Mapping[int, Mapping[int, set[int]]] | None = None,
+    synthetic_cold_served_by: Callable[[int], bool] | None = None,
 ) -> EvalResult:
     """
     Evaluate a set of recommendations against holdout interactions.
@@ -60,6 +86,18 @@ def evaluate(
                                   recommender end-to-end; callers evaluating the
                                   candidate stage in isolation should pass
                                   ``K_CANDIDATES`` (500) instead.
+        synthetic_cold_users: ADR 0011's cohort as
+                                  ``{history_size: {user_id: {target_item}}}``.
+                                  Scored into ``synthetic_cold_slices`` and
+                                  nowhere else — these users are not in
+                                  ``holdout``, so they never enter the warm,
+                                  cold or overall numbers and cannot move a
+                                  metric anyone is already comparing across runs.
+        synthetic_cold_served_by: predicate answering "did the model's learned
+                                  path serve this user?" — in practice one of the
+                                  models' ``was_served_by_*`` methods. Supplying
+                                  it is what turns the buckets from a recall
+                                  report into a routing assertion.
 
     Returns:
         EvalResult with per-slice and overall metrics, ``k`` stamped on the result
@@ -103,7 +141,46 @@ def evaluate(
         n_warm_users=len(warm_recalls),
         n_cold_users=len(cold_recalls),
         k=k,
+        synthetic_cold_slices=_synthetic_cold_slices(
+            recommendations,
+            synthetic_cold_users,
+            synthetic_cold_served_by,
+            k,
+        ),
     )
+
+
+def _synthetic_cold_slices(
+    recommendations: dict[int, list[int]],
+    synthetic_cold_users: Mapping[int, Mapping[int, set[int]]] | None,
+    served_by: Callable[[int], bool] | None,
+    k: int,
+) -> dict[int, SyntheticColdSlice]:
+    """Score ADR 0011's cohort one history bucket at a time.
+
+    Each user holds out exactly one item, so their recall is 0 or 1 and the
+    bucket mean reads directly as "fraction of users whose target appeared in
+    top-k" — the per-bucket cleanliness the ADR trades per-user signal density
+    for.
+    """
+    slices: dict[int, SyntheticColdSlice] = {}
+    for history_size, targets in sorted((synthetic_cold_users or {}).items()):
+        recalls: list[float] = []
+        ndcgs: list[float] = []
+        fallback_served = 0
+        for user_id, relevant in targets.items():
+            retrieved = recommendations.get(user_id, [])
+            recalls.append(recall_at_k(relevant, retrieved, k))
+            ndcgs.append(ndcg_at_k(relevant, retrieved, k))
+            if served_by is not None and not served_by(user_id):
+                fallback_served += 1
+        slices[history_size] = SyntheticColdSlice(
+            history_size=history_size,
+            metrics=UserMetrics(recall=_mean(recalls), ndcg=_mean(ndcgs)),
+            n_users=len(targets),
+            n_fallback_served=None if served_by is None else fallback_served,
+        )
+    return slices
 
 
 def _mean(values: list[float]) -> float:

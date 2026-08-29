@@ -75,12 +75,14 @@ def test_the_table_records_who_changed_it() -> None:
     assert "user_feedback_events" in source
 
 
-def test_it_is_the_single_migration_head() -> None:
+def test_the_migration_graph_has_not_branched() -> None:
     """The newest migration pins the head; every earlier one pins the invariant.
 
     Two heads is a branch nobody chose, and `alembic upgrade head` refuses to
     run against one — which turns up as a failed deploy rather than as a failed
-    test unless it is checked here.
+    test unless it is checked here. 0014 stopped being the newest when
+    0015_synth_cold_tenant landed, so per that rule this now holds the
+    invariant and `tests/unit/test_synthetic_cold_start.py` names the head.
     """
     revisions: set[str] = set()
     parents: set[str] = set()
@@ -93,4 +95,6 @@ def test_it_is_the_single_migration_head() -> None:
         if down is not None and down.group(1):
             parents.add(down.group(1))
 
-    assert revisions - parents == {"0014_user_preferences"}
+    heads = revisions - parents
+    assert len(heads) == 1, f"the migration graph has branched: {sorted(heads)}"
+    assert "0014_user_preferences" in parents

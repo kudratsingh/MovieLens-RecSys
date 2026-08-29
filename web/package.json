@@ -13,6 +13,7 @@
     "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
     "test:perf": "playwright test --config playwright.perf.config.ts",
     "evidence:baseline": "playwright test tests/e2e/capture-baseline.spec.ts",
+    "diagrams": "node scripts/render-diagrams.mjs",
     "api:types": "openapi-typescript ../docs/api/openapi.json -o lib/api.generated.ts",
     "api:types:check": "node scripts/check-api-types.mjs",
     "test:watch": "vitest",
@@ -25,7 +26,8 @@
     "evidence:bundle7c": "node scripts/capture-bundle7c-evidence.mjs",
     "evidence:bundle7a": "node scripts/capture-bundle7a-evidence.mjs",
     "evidence:bundle7d": "node scripts/capture-bundle7d-evidence.mjs",
-    "evidence:sweep": "node scripts/capture-sweep-evidence.mjs"
+    "evidence:sweep": "node scripts/capture-sweep-evidence.mjs",
+    "evidence:current": "node scripts/capture-current-evidence.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -48,6 +50,7 @@
     "eslint-config-next": "16.2.6",
     "jest-axe": "^10.0.0",
     "jsdom": "^26.1.0",
+    "mermaid": "11.17.2",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
     "typescript": "^5",

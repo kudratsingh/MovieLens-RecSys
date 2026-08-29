@@ -1,0 +1,52 @@
+%% Sources: docs/deployment-runbook.md (the four-identity preamble),
+%% infra/deploy/provision-roles.sql, alembic/versions/0001_tenant_roles.py,
+%% infra/pgbouncer/entrypoint.sh, infra/pgbouncer/pgbouncer.prod.ini.tmpl,
+%% infra/postgres/pgbouncer-auth.sql, docker-compose.prod.yml,
+%% src/serving/startup_checks.py.
+flowchart TB
+  subgraph SVC["Compose services"]
+    direction LR
+    API["api"]
+    MSRV["model-server"]
+    FSRV["feature-server"]
+    MATZ["materialize"]
+    REL["release"]
+    BKP["backup"]
+    PROV["postgres-provision"]
+  end
+
+  A1["pgbouncer alias movielens_app<br/>forces user=app_user"]
+  A2["pgbouncer alias movielens_admin<br/>forces user=admin_user<br/>declared, but no production service<br/>routes through it — the sidecars go direct"]
+
+  APP["app_user<br/>LOGIN, RLS applies<br/><br/>THE ONLY ROLE THAT SERVES A REQUEST.<br/>The API refuses to boot if it holds BYPASSRLS."]
+  ADM["admin_user<br/>LOGIN, BYPASSRLS<br/><br/>Cross-tenant reads and writes,<br/>direct to Postgres,<br/>past the pooler by design."]
+  MIG["migrator<br/>LOGIN, BYPASSRLS<br/><br/>The release job only.<br/>Owns every base table.<br/>The backup needs it too, or the dump<br/>would exit 0 with zero rows."]
+  SU["postgres<br/>SUPERUSER<br/><br/>The one-time provisioning SQL,<br/>and nothing else. It never reaches<br/>a serving container."]
+
+  DB[("postgres-app · movielens")]
+
+  API -- "pgbouncer:6432<br/>dbname movielens_app" --> A1
+  A1 --> APP
+  A2 --> ADM
+
+  MSRV -- "postgres-app:5432" --> ADM
+  FSRV -- "postgres-app:5432" --> ADM
+  MATZ -- "postgres-app:5432" --> ADM
+  REL -- "postgres-app:5432" --> MIG
+  BKP -- "postgres-app:5432" --> MIG
+  PROV -- "postgres-app:5432" --> SU
+
+  APP --> DB
+  ADM --> DB
+  MIG --> DB
+  SU --> DB
+
+  PA["pgbouncer_admin<br/>a pooler-internal name with NO Postgres role.<br/>The API opens the pooler's admin console with it<br/>at boot, to prove the pool mode is transaction."]
+  PU["pgbouncer_auth<br/>a real Postgres role — the SECURITY DEFINER<br/>user_lookup behind the optional auth_query mode.<br/>userlist is the default; it is the mode that works."]
+  API -. "admin console, boot check only" .-> PA
+  PU -.-> DB
+
+  classDef hot stroke:#ee7657,stroke-width:2.5px
+  class APP,A1 hot
+  classDef note fill:#00000000,stroke-dasharray:5 4
+  class PA,PU note

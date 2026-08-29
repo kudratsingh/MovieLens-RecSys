@@ -21,6 +21,11 @@ A fifth name, `pgbouncer_admin`, is a **pgBouncer-internal identity with no Post
 because the API's boot check opens the pooler's admin console with it. A sixth, `pgbouncer_auth`, *is*
 a real Postgres role and is the one the pooler uses to look up SCRAM verifiers.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/postgres-identities.dark.svg">
+  <img alt="Which Compose service connects as which Postgres identity: the api through pgBouncer's movielens_app alias as app_user, the sidecars and materialization direct as admin_user, release and backup as migrator, provisioning as the superuser, plus the two pgBouncer-internal names." src="diagrams/postgres-identities.svg" width="100%">
+</picture>
+
 ## What is deployed
 
 One Compose project (`movielens-prod`) on one machine. Nine long-lived services — `postgres-app`,
@@ -42,6 +47,11 @@ One Compose project (`movielens-prod`) on one machine. Nine long-lived services 
 The images come from GHCR and the box never builds. `docker-compose.prod.yml` keeps its `build:`
 contexts so the same file builds locally for the rehearsal (`make up-prod`), while on the host
 `IMAGE_REPOSITORY` and `IMAGE_TAG` resolve every service to a published image.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/production-topology.dark.svg">
+  <img alt="The production topology: one Hetzner CX22 with only the Caddy edge publishing ports and key-only SSH from GitHub Actions, ten long-lived services on a private network, the jobs profile, and the systemd units for boot, nightly backup and weekly prune." src="diagrams/production-topology.svg" width="100%">
+</picture>
 
 ## 0. Decisions to record before the first deploy
 
