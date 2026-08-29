@@ -40,6 +40,9 @@ If you are here to judge whether the engineering holds up, read in this order.
 9. **[`eda.md`](eda.md)** — the dataset, characterised: scale, sparsity, the
    popularity tail, the temporal split as it lands on real data, and cold-start
    sizing.
+10. **[`results.md`](results.md)** — the measured offline numbers: baselines,
+    candidate stage, ranker and the cold-start cohort, each with its run, date,
+    machine and caveats.
 
 ## By subject
 
@@ -49,6 +52,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`adr/`](adr/README.md) | Backend and cross-cutting ADRs on the flat numeric line; frontend ADRs under [`adr/frontend/`](adr/frontend/) |
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
+| [`results.md`](results.md) | The measured offline results table, every figure with its MLflow run and wall-clock |
 | [`demo-runbook.md`](demo-runbook.md) | Clean-checkout startup, seeding, the walkthrough, the audit and latency proofs, reset, troubleshooting |
 | [`deployment-runbook.md`](deployment-runbook.md) | The machine, DNS, host bootstrap, secrets, the one-time SQL, the first deploy, verify, rollback, backups and the restore drill, and §14's plain list of what the deployment does not do |
 | [`production-readiness-review.md`](production-readiness-review.md) | The pre-deployment gap review and the rehearsal record. A record, banner and all, but a useful one |
