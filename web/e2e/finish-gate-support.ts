@@ -74,6 +74,30 @@ export async function horizontalOverflow(page: Page): Promise<number> {
 }
 
 /**
+ * The document has stopped moving.
+ *
+ * `html` carries `scroll-behavior: smooth`, so a scroll a route starts on the
+ * viewer's behalf — a trailer opening, a decision handing the page back to the
+ * featured movie — is still animating when the next line runs. Two consecutive
+ * frames at the same offset is the stability rule Playwright applies before it
+ * computes a click point, asked here as a wait of its own, for the two callers
+ * that need it: a press aimed at a control that is still travelling, and an
+ * audit whose colour-contrast pass resolves backgrounds by hit-testing and so
+ * wants the viewport to hold still across its run.
+ */
+export async function scrollingHasSettled(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () =>
+      new Promise<boolean>((resolve) => {
+        const start = window.scrollY;
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(window.scrollY === start)));
+      }),
+    undefined,
+    { polling: 100 },
+  );
+}
+
+/**
  * The document outline as a reader hears it.
  *
  * `visually-hidden` headings count — they are headings — but `aria-hidden`
