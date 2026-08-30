@@ -108,6 +108,7 @@ from src.serving.recommendations import (
     UnknownDemoPersonaError,
     UnknownMovieError,
 )
+from src.serving.request_audit import RequestAuditMiddleware, RequestAuditService
 from src.serving.request_id import RequestIdMiddleware
 from src.serving.startup_checks import run_startup_checks
 from src.serving.tenancy import TenantRouter, UnknownTenantError
@@ -144,6 +145,7 @@ _recommendations = RecommendationService()
 _feedback = FeedbackService()
 _preferences = PreferencesService()
 _audits = RecommendationAuditService()
+_request_audits = RequestAuditService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _model_server = ModelServerClient(
     base_url=_settings.model_server_url,
@@ -552,6 +554,34 @@ class RecommendationAuditResponse(BaseModel):
     items: list[RecommendationAuditItem]
 
 
+class RequestAuditItem(BaseModel):
+    request_id: UUID
+    # The X-Request-ID echoed to the caller, same rule as the prediction audit:
+    # it is the join key between this row, the prediction audit for the same
+    # call, and whatever the caller wrote in its own log.
+    correlation_id: str
+    tenant_id: str
+    actor_user_id: str
+    # Null for an authenticated route that addresses no persona.
+    user_id: int | None
+    # The matched route template, never the concrete path.
+    endpoint: str
+    method: str
+    http_status: int
+    outcome: str
+    latency_ms: float
+    # Null on every route today: the ones that run a model write the richer
+    # `recommendation_audits` row instead.
+    model_version: str | None
+    created_at: datetime
+
+
+class RequestAuditResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[RequestAuditItem]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup assertions before accepting traffic. Failure raises
@@ -689,10 +719,23 @@ app.openapi = _openapi_schema  # type: ignore[method-assign]
 # evaluates the last-added middleware first: RequestIdMiddleware resolves the
 # correlation id and owns the response header, AuthMiddleware opens the RLS
 # transaction, the rate limiter charges the verified identity's bucket, then
-# the audit middleware persists before that transaction commits. Request-id
+# the two audit middlewares persist before that transaction commits. Request-id
 # resolution is outermost so even a 401 carries the header the caller can
 # correlate on.
 app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
+# Outside the prediction audit and inside the limiter. Outside, so a
+# recommendation whose handler raised is already a response by the time this
+# sees it and is skipped rather than double-audited; inside, so a throttled
+# request writes nothing at all (ADR 0014). It records every *other*
+# authenticated route on the same RLS-bound transaction — see ADR 0012's
+# 2026-08-29 note for why inline and not queued, and REQUEST_AUDIT_MODE=off for
+# the way back out.
+if _settings.request_audit_mode == "inline":
+    app.add_middleware(
+        RequestAuditMiddleware,
+        audits=_request_audits,
+        engine=_app_engine,
+    )
 # Between auth and the audit writer, and only where it is active. It needs the
 # resolved principal, so it cannot run outside AuthMiddleware; and a throttled
 # request must not reach the audit writer, because it produced no prediction to
@@ -915,6 +958,35 @@ async def recommendation_audits(
         tenant_id=principal.tenant_id,
         user_id=user_id,
         items=[RecommendationAuditItem(**item.__dict__) for item in items],
+    )
+
+
+@app.get(
+    "/users/{user_id}/request-audits",
+    response_model=RequestAuditResponse,
+    operation_id="listRequestAudits",
+)
+async def request_audits(
+    user_id: int,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RequestAuditResponse:
+    """Return newest generic request audits for this persona in this tenant.
+
+    A sibling of ``/audits`` rather than a mode of it: the two tables answer
+    different questions and carry different columns, and overloading one
+    response model with a union would make every client branch on a discriminator
+    to read either. Requests that address no persona (``/whoami``, ``/personas``)
+    are audited but carry a null ``user_id``, so they are not returned here.
+    """
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _request_audits.list_for_user(connection, user_id=user_id, limit=limit)
+    return RequestAuditResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        items=[RequestAuditItem(**item.__dict__) for item in items],
     )
 
 

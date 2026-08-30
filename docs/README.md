@@ -82,9 +82,10 @@ never rewritten, and corrections arrive as dated notes.
 
 Phases 1 and 2 are complete; Phase 3 is in progress. The parts of Phase 3 that
 are still open are listed at the end of the status section in
-[`../CLAUDE.md`](../CLAUDE.md) rather than left to be discovered — cold-start
-cohorts, per-tenant champion routing, generic request audits, the Feast-backed
-training refactor, and the dev/staging Compose split. The deployment is specified
+[`../CLAUDE.md`](../CLAUDE.md) rather than left to be discovered — the offline
+cold-start routing gap the ADR 0011 cohort found, per-tenant champion routing,
+audit retention, the Feast-backed training refactor, and the dev/staging Compose
+split. The deployment is specified
 and rehearsed but the machine does not exist yet, and the frontend finish gate
 holds on participant research.
 

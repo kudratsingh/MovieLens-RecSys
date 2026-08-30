@@ -135,6 +135,10 @@ def tenant_canary_rows() -> Generator[None, None, None]:
             {"user_id": CANARY_USER_ID},
         )
         connection.execute(
+            text("DELETE FROM request_audits WHERE user_id = :user_id"),
+            {"user_id": CANARY_USER_ID},
+        )
+        connection.execute(
             text("DELETE FROM demo_personas " "WHERE user_id IN (987654323, 987654324)")
         )
         connection.execute(
@@ -298,6 +302,10 @@ def tenant_canary_rows() -> Generator[None, None, None]:
         )
         connection.execute(
             text("DELETE FROM recommendation_audits " "WHERE user_id = :user_id"),
+            {"user_id": CANARY_USER_ID},
+        )
+        connection.execute(
+            text("DELETE FROM request_audits WHERE user_id = :user_id"),
             {"user_id": CANARY_USER_ID},
         )
         connection.execute(

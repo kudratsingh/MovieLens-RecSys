@@ -72,8 +72,12 @@ Four pieces of middleware wrap every request, outermost first
    transaction and sets `app.tenant_id` on it.
 3. **RateLimit** applies a token bucket per `(tenant, subject)`. It is installed
    everywhere except `environment == "dev"`.
-4. **Audit** matches exactly one route shape — `GET /users/{id}/recommendations` —
-   and writes the prediction log row.
+4. **Audit** is two middlewares, one per table. The prediction audit matches
+   exactly one route shape — `GET /users/{id}/recommendations` — and writes the
+   prediction log row. The request audit writes an operational row for every
+   *other* authenticated route, on the same transaction; it skips that one route
+   rather than duplicating a richer row into a second table, and it sits inside
+   the limiter so a 429 writes nothing.
 
 The coordinator reads positives and exclusions from `user_movie_state` in a
 single `UNION ALL` round trip, written that way so each side can use its own
@@ -158,7 +162,7 @@ borrowing the learned label.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/tenancy-and-auth.dark.svg">
-  <img alt="Tenant isolation: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the seven forced-RLS tables against the deliberately shared ones." src="diagrams/tenancy-and-auth.svg" width="100%">
+  <img alt="Tenant isolation: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the eight forced-RLS tables against the deliberately shared ones." src="diagrams/tenancy-and-auth.svg" width="100%">
 </picture>
 
 **Auth** is self-hosted Keycloak with one realm per tenant
@@ -271,7 +275,7 @@ committed, so none are quoted here or drawn on any diagram.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/data-model.dark.svg">
-  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model, and the tenant-scoped movie state, feedback events, preferences and prediction audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
+  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model, and the tenant-scoped movie state, feedback events, preferences, prediction audits and request audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
 </picture>
 
 Fourteen migrations, and the shape is worth a paragraph each for the three
@@ -297,6 +301,16 @@ policy and its structured reason, the input-state revision and hash, the
 exclusion hash, the feature event time, and the correlation id. `request_id` is
 the row's own identity and `correlation_id` is the echoed `X-Request-ID`, kept
 separate so a replayed header cannot collide with an existing row's primary key.
+
+**`request_audits`** is the operational log for every other authenticated
+route: tenant, actor subject, the persona the route addressed (null where it
+addresses none), the matched route *template*, method, status, outcome, latency
+and the same correlation id, which is the join key back to the prediction audit
+when both exist for one call. It stores no request body and no query string, so
+a viewer's search terms never reach it, and the template rather than the
+concrete path so one operation cannot fan out into one `endpoint` value per
+persona. Forced RLS and the same `SELECT`-plus-`INSERT` grant as the prediction
+audit, so it is append-only from the request path's point of view.
 
 The `feature_store.*` tables are outside RLS on purpose: `app_user` has no grant
 on them at all, because online reads go through Redis and nothing serving a
@@ -427,10 +441,13 @@ them is drawn on a diagram as though it exists.
 - **`docker-compose.{dev,staging}.yml`.** The production file landed with the
   deployment work and doubles as its own local rehearsal. Dev and staging
   splits remain.
-- **Generic request audits.** The audit middleware matches only the
-  recommendations route. Every other authenticated endpoint writes no audit row,
-  in production too, and the runbook says so plainly rather than letting the
-  non-negotiable's wording read as a description of what is running.
+- **Audit retention, and a tenant-wide audit view.** Every authenticated request
+  now writes a durable row — `recommendation_audits` for the recommendation
+  route, `request_audits` for everything else — but nothing prunes either table,
+  and the only API read is persona-scoped
+  (`GET /users/{user_id}/request-audits`). A tenant-wide operator view belongs
+  to Phase 5's Grafana rather than to a second endpoint here, and the retention
+  question sits with the same one `feature_store.*` has.
 - **Cold-start cohorts.** [ADR 0011](adr/0011-cold-start-coverage.md) specifies a
   fixed-seed synthetic cohort at history sizes 0/1/3/10 scored per bucket. The
   methodology is pinned; the harness is not built. Cold-start *handling* exists

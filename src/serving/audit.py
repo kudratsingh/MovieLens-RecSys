@@ -24,7 +24,7 @@ from src.serving.request_id import REQUEST_ID_ADOPTED_STATE_KEY
 logger = logging.getLogger(__name__)
 
 _RECOMMENDATION_PATH = re.compile(r"^/users/(?P<user_id>-?\d+)/recommendations/?$")
-_RECOMMENDATION_ENDPOINT = "/users/{user_id}/recommendations"
+RECOMMENDATION_ENDPOINT = "/users/{user_id}/recommendations"
 
 
 @dataclass(frozen=True)
@@ -350,7 +350,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         started = time.perf_counter()
-        request_id, correlation_id = _audit_identity(request)
+        request_id, correlation_id = resolve_audit_identity(request)
         request.state.recommendation_audit_context = None
         user_id = int(match.group("user_id"))
         try:
@@ -383,7 +383,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             correlation_id=correlation_id,
             user_id=user_id,
             http_status=response.status_code,
-            outcome=_outcome(response.status_code),
+            outcome=outcome_for_status(response.status_code),
             latency_ms=(time.perf_counter() - started) * 1000,
         )
         return response
@@ -409,7 +409,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             tenant_id=principal.tenant_id,
             actor_user_id=principal.user_id,
             user_id=user_id,
-            endpoint=_RECOMMENDATION_ENDPOINT,
+            endpoint=RECOMMENDATION_ENDPOINT,
             http_status=http_status,
             outcome=outcome,
             latency_ms=latency_ms,
@@ -417,8 +417,12 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
         )
 
 
-def _audit_identity(request: Request) -> tuple[UUID, str]:
+def resolve_audit_identity(request: Request) -> tuple[UUID, str]:
     """Return the audit row's primary key and the caller-visible correlation id.
+
+    Shared with ``src.serving.request_audit``: both audit tables key on a UUID
+    of their own and store the echoed correlation id beside it, and a second
+    copy of this rule would let the two drift.
 
     When we minted the correlation id ourselves it is already a UUID, so the
     two stay identical and an audit remains findable by the id handed back in
@@ -435,7 +439,8 @@ def _audit_identity(request: Request) -> tuple[UUID, str]:
     return UUID(correlation), correlation
 
 
-def _outcome(status_code: int) -> str:
+def outcome_for_status(status_code: int) -> str:
+    """One outcome vocabulary for both audit tables."""
     if status_code < 400:
         return "success"
     if status_code < 500:

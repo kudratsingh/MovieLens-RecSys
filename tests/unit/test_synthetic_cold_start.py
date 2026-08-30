@@ -617,8 +617,8 @@ def test_prepare_refuses_a_cohort_anchored_to_a_different_cutoff(tmp_path: Path)
 MIGRATION = Path("alembic/versions/0015_synth_cold_tenant.py")
 
 
-def test_the_tenant_migration_is_the_linear_head() -> None:
-    """The newest migration names the head; earlier ones only hold the invariant."""
+def test_the_tenant_migration_extends_the_single_linear_head() -> None:
+    """This migration's own link, plus the invariant every migration shares."""
     source = MIGRATION.read_text()
     assert 'revision: str = "0015_synth_cold_tenant"' in source
     assert 'down_revision: str | None = "0014_user_preferences"' in source
@@ -634,7 +634,12 @@ def test_the_tenant_migration_is_the_linear_head() -> None:
         if down is not None and down.group(1):
             parents.add(down.group(1))
 
-    assert revisions - parents == {"0015_synth_cold_tenant"}
+    # One head, whoever holds it — the same rule `test_audit_migration.py`
+    # states. Naming the holder here meant editing this assertion on every
+    # migration that landed afterwards, which proved nothing about this one.
+    heads = revisions - parents
+    assert len(heads) == 1, f"the migration graph has branched: {sorted(heads)}"
+    assert "0015_synth_cold_tenant" in revisions
 
 
 def test_the_tenant_row_is_additive_and_reversible() -> None:

@@ -181,6 +181,7 @@ PERSONA_ROUTES: tuple[PersonaRoute, ...] = (
     PersonaRoute("GET", "/users/{user_id}/recommendations", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/history", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/audits", query="?limit=1"),
+    PersonaRoute("GET", "/users/{user_id}/request-audits", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/features"),
     PersonaRoute("GET", "/users/{user_id}/catalog", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/library", query="?tab=rated&limit=1"),

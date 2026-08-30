@@ -617,9 +617,17 @@ Stated plainly so nobody reads an aspiration as a description of what is running
 
 - **There is no high availability.** One machine, one of everything. A reboot, a full disk or a
   hardware failure is a full outage, and a deploy is a brief one.
-- **Audit coverage is recommendations-only.** `src/serving/audit.py` matches
-  `^/users/(\d+)/recommendations/?$`, so every mutation passes through unaudited. CLAUDE.md's "every
-  authenticated request emits a row" describes the intent, not the deployed system.
+- **Audit coverage is two tables and no retention policy.** Every authenticated request writes a row:
+  `recommendation_audits` for the recommendation route (predictions, features, versions, input
+  digests) and `request_audits` for everything else (tenant, actor, persona, route template, method,
+  status, outcome, latency, correlation id). Both are forced-RLS and both commit before the response.
+  What the deployment does *not* have is pruning — `request_audits` grows by one row per
+  authenticated request forever, the same open question `feature_store.*` has. `REQUEST_AUDIT_MODE=off`
+  turns the generic writer off without a migration if that ever becomes urgent before D8 is settled.
+  Two things the generic table deliberately does not store: request bodies and query strings, so a
+  viewer's search terms never land in it. Rows that address no persona (`/whoami`, `/personas`) carry
+  a null `user_id` and are readable only as `admin_user` — `GET /users/{id}/request-audits` is
+  persona-scoped, and there is no tenant-wide operator view (Grafana's job, Phase 5).
 - **Feature parity has no production form.** `tests/feature_parity/` stays a CI gate; pointing it at
   production would mean giving a runner production database and Redis credentials and letting it
   write demo data.

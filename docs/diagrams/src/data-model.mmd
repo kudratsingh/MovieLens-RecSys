@@ -1,4 +1,4 @@
-%% Sources: src/data/schema.py and alembic/versions/0001..0014. Every column,
+%% Sources: src/data/schema.py and alembic/versions/0001..0017. Every column,
 %% type and key below was read from those files. RLS marks a table carrying
 %% ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
 %% tenant_id = current_setting('app.tenant_id', true) on USING and WITH CHECK.
@@ -142,6 +142,22 @@ erDiagram
     TIMESTAMPTZ created_at
   }
 
+  request_audits {
+    UUID request_id PK
+    TEXT correlation_id "echoed"
+    TEXT tenant_id FK "RLS"
+    TEXT actor_user_id
+    BIGINT user_id "null if none"
+    TEXT endpoint "route template"
+    TEXT method
+    INTEGER http_status
+    TEXT outcome
+    DOUBLE latency_ms
+    TEXT model_version
+    TIMESTAMPTZ created_at
+    NOTE every_other_route
+  }
+
   user_features {
     TEXT tenant_id PK "admin only"
     INTEGER user_id PK
@@ -176,6 +192,7 @@ erDiagram
   tenants ||--o{ user_feedback_events : scopes
   tenants ||--o{ user_preferences : scopes
   tenants ||--o{ recommendation_audits : scopes
+  tenants ||--o{ request_audits : scopes
   movies ||--o| movie_catalog_metadata : describes
   movies ||--o{ user_movie_state : subject
   movies ||--o{ user_feedback_events : subject

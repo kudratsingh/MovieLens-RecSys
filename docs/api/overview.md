@@ -6,7 +6,7 @@ written from it and is here so a reader can see the shape of the service without
 loading a schema browser. Where the two disagree, the schema is right — see
 [`README.md`](README.md) for how it is regenerated and how CI catches drift.
 
-**20 paths, 25 operations.** Two of them are unauthenticated.
+**21 paths, 26 operations.** Two of them are unauthenticated.
 
 ## Authentication
 
@@ -32,6 +32,15 @@ with `SET LOCAL app.tenant_id`, so row-level security is the enforcer of last
 resort rather than application filtering (ADR 0008). The transaction commits
 **before** a successful response is returned, so a 2xx is never issued for a
 write that could still fail to become durable.
+
+**Every authenticated request leaves a durable row.** Recommendations write the
+detailed prediction audit; every other route writes an operational row —
+tenant, actor, persona, matched route template, method, status, outcome,
+latency, correlation id — into a second forced-RLS table. Both are written on
+the request's own transaction, so both commit before the response. Neither
+stores a request body or a query string, and `endpoint` is always the route
+template rather than the concrete path. ADR 0012's 2026-08-29 note is the
+durability argument; `REQUEST_AUDIT_MODE=off` turns the generic writer off.
 
 ## Cross-cutting response conventions
 
@@ -97,7 +106,16 @@ published. A `/metrics` endpoint is deliberately **not** added.
 |---|---|---|
 | `/users/{user_id}/recommendations` | GET | The two-stage path: item-item retrieval, batched Feast/Redis features, LightGBM ranking — or an explicit popularity fallback. `limit` is optional |
 | `/users/{user_id}/audits` | GET | Newest prediction audits visible inside the request tenant: exact ranked items and scores, online feature values, artifact versions, fallback reason, per-stage latencies, and the input-state digests |
+| `/users/{user_id}/request-audits` | GET | Newest generic request audits for this persona: one row per authenticated request to every route *except* recommendations, carrying the matched route template, method, status, outcome, latency and the echoed correlation id |
 | `/users/{user_id}/features` | GET | The tenant-keyed Redis-backed Feast read that online ranking uses — the same values, so an operator can see what the ranker saw |
+
+The two audit resources are siblings, not modes of one endpoint: they read
+different tables with different columns. A recommendation is recorded in
+exactly one of them — the richer one — so "everything this tenant did" is a
+union of the two, joined on `correlation_id`. Both are persona-scoped;
+authenticated requests that address no persona (`/whoami`, `/personas`) are
+audited with a null `user_id` and are readable only to an operator holding the
+`admin_user` role.
 
 ## Catalog and detail
 

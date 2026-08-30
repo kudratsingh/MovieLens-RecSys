@@ -843,6 +843,43 @@ closed by later work, and this is where a reader should find that out.
   and the poster-card unit tests, neither of which needs a poster-less row to
   exist upstream. No threshold moved in either change.
 
+### 2026-08-29 — a durable row on every authenticated request, and where it is measured
+
+Every authenticated endpoint now writes one operational row into `request_audits`
+on the request's own RLS-bound transaction, before the auth middleware commits
+it (migration 0017, `src/serving/request_audit.py`). ADR 0012's 2026-08-29 note
+is the decision and the argument; this is what it means for the measurement, and
+it is narrower than it first looks.
+
+**The pinned gate's own workload does not carry the new row.** `recommendations.js`
+drives `GET /users/{user_id}/recommendations`, and that route is explicitly
+skipped by the new middleware: it already writes the strictly richer
+`recommendation_audits` row, and a second insert there would put another write
+inside the one path with an SLO. So the pinned gate proves the middleware's
+*presence* in the chain is free on the measured path — a `BaseHTTPMiddleware`
+pass-through — and proves nothing at all about the row's cost. Citing a green
+`synthetic-load-smoke` as evidence that the audit is free would be citing a
+measurement that cannot see it.
+
+**Where the row's cost is actually visible.** `synthetic/load/pages.js` — the
+page-shaped per-step budgets from the 2026-08-21 note — is the profile whose
+steps fan out over catalog pages, cursor continuation, Library reads and a
+mutation followed by an immediate read. Those are exactly the requests that gain
+a row, and on a read the marginal cost is not "one more insert on a commit that
+was happening anyway": a read-only transaction writes no WAL and its commit
+flushes nothing, so the insert buys the request its first `fdatasync`. The
+number for that flush is the one the 2026-08-28 section above already had to
+measure — 3.15 ms on the runner whose device was the problem, 0.21 ms on the one
+that was not, near 0.2 ms on tmpfs — and it is the same number, because it is
+the same operation.
+
+**Nothing about the gate moved.** No threshold, arrival rate, workload, traffic
+mix or run length changed, the steal re-measure rule is untouched, the tmpfs
+mount for the CI job is unchanged, and the page-shaped budgets stay advisory
+under the promotion rule the 2026-08-21 note wrote down. The escape hatch, if a
+deployment's storage ever makes the row visible in a percentile that matters, is
+`REQUEST_AUDIT_MODE=off` — a setting, not a threshold.
+
 ## Rationale
 
 1. **Purpose-built for CI/CD load testing is the argument.** k6 was designed by Grafana Labs specifically to fit into the shape non-negotiable #11 is asking for: a scriptable load test with declarative thresholds that a CI job can wait on and fail against. Threshold declarations *are* the pass/fail signal — you write `p(99)<100` in the script and CI stops on breach without a separate assertion harness. Locust's dashboard-first workflow was designed for an operator watching a graph, not for a CI job asserting an inequality; you can bolt CI-shape usage onto Locust with `--headless --check` and post-run parsing, but that's adaptation, not fit.
