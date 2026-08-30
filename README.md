@@ -57,7 +57,7 @@ of this codebase with `ENVIRONMENT != dev`, and every defect it exposed was fixe
 green no-ops until one is configured. See [ADR 0013](docs/adr/0013-production-deployment-target.md)
 and the [deployment runbook](docs/deployment-runbook.md).
 
-Still open in Phase 3: per-tenant champion routing, audit coverage for non-prediction endpoints,
+Still open in Phase 3: per-tenant champion routing, audit retention,
 and the offline routing gap the cold-start cohort found (below). The dev and staging Compose
 environments landed (`make up-dev`, `make up-staging`); staging is a thin overlay on the production
 stack and, like production, has no host yet. The frontend finish gate passes every

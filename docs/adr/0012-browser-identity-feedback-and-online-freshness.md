@@ -404,3 +404,147 @@ If a later ADR wants watchlist state to affect retrieval or ranking, that is a
 serving decision with an offline evaluation behind it, not an extension of this
 one — and it would need the audit vocabulary in `src/serving/policy.py` extended
 to name the new filter rather than reusing `watched-and-dismissed-excluded-v1`.
+
+---
+
+## Note — 2026-08-29: the generic request audit is inline, and what that costs
+
+Appended rather than folded into the sections above: §5's rule has not moved — a
+mutation is acknowledged only after its transaction commits, and a prediction
+audit still commits before the recommendation response. This is the "documented
+separately" that §5 makes a precondition for auditing every *other* endpoint,
+and it records what the measurement actually says, which alternative was
+rejected and on what grounds, and the way back out.
+
+**What was missing.** `recommendation_audits` (migrations 0008 and 0012) is the
+replay record for one route. It exists so "why did this user see that title" has
+an answer after the state has moved on, and it is deliberately heavy: exact
+ranked items and scores, the online feature values behind them, artifact
+versions, the input-state and exclusion digests, per-stage latencies. Every
+other authenticated operation — catalog, movie detail, the Library and Seen
+reads, the eight movie-state mutations, preferences, personas, features, the
+audit reads themselves, `/whoami` — wrote nothing at all. The Phase 3 "Real
+auth" scope and non-negotiable #8 both describe a row per authenticated request;
+`docs/deployment-runbook.md` §14 and `docs/architecture.md` said plainly that
+this was intent rather than description. Migration 0017 and
+`src/serving/request_audit.py` make it description.
+
+**The cost is not a second `fdatasync`; on a read it is the first one.** The
+tempting argument is that the row is free because the request already commits,
+and that argument is half wrong in a way worth writing down. `AuthMiddleware`
+opens `self._engine.begin()` for *every* authenticated request, read included,
+and awaits the commit before returning the response. But a Postgres transaction
+that only reads is assigned no transaction id and writes no WAL, so its commit
+flushes nothing. Adding one insert turns that free commit into a real one. So:
+
+- On the eight movie-state mutations, preferences writes and the rating writes,
+  the WAL flush is already paid for and the marginal cost of the audit is one
+  ~120-byte insert into a table with two right-hand-leaf indexes.
+- On every read, the marginal cost is that insert **plus** one `fdatasync` the
+  request did not previously pay.
+
+ADR 0010's 2026-08-28 note is where the second number comes from, because that
+investigation had to measure exactly this: the same commit cost 3.15 ms on the
+CI runner whose block device was the problem, 0.21 ms on the runner that was
+not, and lands near 0.2 ms on tmpfs. On the production box it is a property of
+that box's disk, which is why `make prod-verify` prints the audit-table
+percentiles as an SLI and the canary runs it every thirty minutes. A read that
+was 4 ms becomes a read that is 4 ms plus whatever that deployment's storage
+charges for one flush; on the Hetzner CX22's NVMe that is sub-millisecond, and
+if it ever stops being, the setting below is how it gets turned off in one
+deploy rather than one migration.
+
+**Alternative (b) — an in-process queue flushed off the request path — was
+rejected on isolation, not on latency.** It is the obvious way to buy the
+telemetry without the flush, and it loses the thing this project is least
+willing to lose. A background flusher holds no request, so it holds no
+principal; to write a tenant-scoped row under forced RLS it must either open one
+transaction per tenant per batch and set `app.tenant_id` from something it
+carried along itself, or hold a role that bypasses RLS. The second is
+disqualifying on its face — non-negotiable #9 makes cross-tenant leakage the
+highest-severity bug class, and an audit table written by a role RLS does not
+apply to is a new way to get it wrong. The first is not much better: it
+re-implements, in a task with no verified token, the one decision ADR 0008
+deliberately put in exactly one place. And the queue buys real loss — a crash
+takes the unflushed batch with it, so the audit an operator reaches for after an
+incident is the one most likely to be missing — plus backpressure, ordering and
+retention questions that a table with no readers yet has not earned. `off` is
+kept as the escape hatch instead, because "write it durably or do not write it"
+is a decision an operator can reason about and "we probably have most of them"
+is not.
+
+**Decision: (a), inline, on the request's own transaction, for reads and
+mutations alike.** The row is written by `RequestAuditMiddleware`, registered
+inside `AuthMiddleware` so it uses `request.state.db` and commits with the
+request, and inside `RateLimitMiddleware` so a throttled request writes nothing
+— ADR 0014's limiter must not turn a burst it is shedding into a write per
+refusal. It is a `BaseHTTPMiddleware` rather than the raw ASGI form
+`RequestIdMiddleware` and the limiter use, and for a reason specific to
+ordering: a raw middleware forwards `http.response.start` the instant the router
+emits it, which releases the outer `call_next` and lets the commit race the
+insert. Holding the response until the row is written is what
+`BaseHTTPMiddleware` already does correctly.
+
+**Recommendations are skipped rather than duplicated.** A recommendation already
+writes a strictly richer row, and a second insert on that route would sit inside
+the one path with a latency SLO for no information gain. The alternative — a
+generic row carrying a pointer to the prediction audit — costs the same insert
+to store a fact the correlation id already carries, since both tables key on it.
+An operator asking "what did this tenant do" unions two tables and joins them on
+`correlation_id`; that is written down here and in `docs/api/overview.md` rather
+than hidden behind a view.
+
+**A failing handler is audited out of band.** If a handler raises,
+`AuthMiddleware` rolls the transaction back, and it must: a mutation that raised
+mid-flight cannot be allowed to become durable because we wanted its audit. So
+that one row is written on a fresh short-lived transaction on the same
+RLS-applied engine, with `app.tenant_id` set from the same verified principal,
+and the original exception is re-raised unchanged. The request's own semantics
+do not move a millimetre; only the audit outlives the rollback. A failure of
+that write is logged and swallowed, because the exception the operator needs is
+the one that broke the request.
+
+**What the row does not carry, and why that is the design.** No request body, no
+headers, no query string. `endpoint` is the matched route template
+(`/users/{user_id}/catalog`), never the concrete path — a concrete path would
+mint one endpoint value per persona and per movie id, and storing `?q=` would
+put whatever a viewer typed into the search box into a durable table. What is
+stored is the shape of the call, not its content: tenant, actor, persona,
+template, method, status, outcome, latency, the echoed correlation id. `/healthz`
+and `/readyz` are not audited — they carry no tenant to scope a forced-RLS row
+to — and neither is a 401, for the same reason.
+
+**Reversible without a migration.** `REQUEST_AUDIT_MODE=inline` (the default)
+installs the middleware; `REQUEST_AUDIT_MODE=off` installs nothing and leaves
+the table in place. There is deliberately no third value: the queued mode is the
+one this note rejects, and offering it as a setting would be offering the
+isolation problem as a runtime choice.
+
+**What measures it, honestly.** CI's `synthetic-load-smoke` remains the SLO's
+only authority, and its pinned workload is the recommendation path — which this
+middleware skips. So what that gate proves about this change is narrower than it
+looks: it proves the middleware's *presence* in the chain costs the measured
+path nothing. The row's own cost shows up in `synthetic/load/pages.js`, whose
+per-step budgets cover catalog pages, Library reads and the
+mutation-plus-immediate-read sequence, and in `synthetic/load/reliability.py`,
+which now has a durable row to trace on every endpoint rather than only on
+recommendations. Saying so is the point: a gate that cannot see a change should
+not be cited as evidence the change was free.
+
+**What is still owed.** Retention. `request_audits` grows by one row per
+authenticated request and nothing prunes it, which is the same open question
+`feature_store.*` has in `docs/deployment-runbook.md` and belongs with it rather
+than with this note. The `model_version` column is null on every route today,
+because the routes that run a model are the ones skipped; Phase 6's per-tenant
+champion routing is what fills it, and `MODEL_VERSION_STATE_KEY` is where a
+handler will put it. And the read endpoint is persona-scoped
+(`GET /users/{user_id}/request-audits`), so rows that address no persona —
+`/whoami`, `/personas` — are written and are readable to an operator holding
+`admin_user`, but are not reachable through the API. A tenant-wide operator view
+is Grafana's job (ADR 0013 keeps admin dashboards out of this frontend), not a
+second endpoint here.
+
+If a later ADR wants this table on the recommendation path after all — one row
+per request everywhere, with the prediction audit reduced to a detail table
+hanging off it — that is a schema decision with a measured p99 behind it, not an
+extension of this one.

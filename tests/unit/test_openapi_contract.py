@@ -44,6 +44,7 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
         "getCurrentActor",
         "recommendMovies",
         "listRecommendationAudits",
+        "listRequestAudits",
         "listRatingHistory",
         "listDemoPersonas",
         "getOnlineUserFeatures",

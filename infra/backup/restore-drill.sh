@@ -409,7 +409,7 @@ stage_assert_schema() {
 stage_assert_content() {
 	local table count entry required
 	local required_tables="public.tenants movies movie_catalog_metadata demo_personas user_movie_state"
-	local reported_tables="ratings user_feedback_events recommendation_audits feature_store.user_features feature_store.item_features feature_store.user_item_features"
+	local reported_tables="ratings user_feedback_events recommendation_audits request_audits feature_store.user_features feature_store.item_features feature_store.user_item_features"
 
 	if [ "$DATABASE" = "keycloak" ]; then
 		required_tables="realm"

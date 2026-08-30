@@ -369,6 +369,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users/{user_id}/request-audits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Request Audits
+         * @description Return newest generic request audits for this persona in this tenant.
+         *
+         *     A sibling of ``/audits`` rather than a mode of it: the two tables answer
+         *     different questions and carry different columns, and overloading one
+         *     response model with a union would make every client branch on a discriminator
+         *     to read either. Requests that address no persona (``/whoami``, ``/personas``)
+         *     are audited but carry a null ``user_id``, so they are not returned here.
+         */
+        get: operations["listRequestAudits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/{user_id}/taste-profile": {
         parameters: {
             query?: never;
@@ -949,6 +975,48 @@ export interface components {
             /** Policy */
             policy: string;
             serving_policy: components["schemas"]["ServingPolicyResponse"];
+            /** Tenant Id */
+            tenant_id: string;
+            /** User Id */
+            user_id: number;
+        };
+        /** RequestAuditItem */
+        RequestAuditItem: {
+            /** Actor User Id */
+            actor_user_id: string;
+            /** Correlation Id */
+            correlation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Endpoint */
+            endpoint: string;
+            /** Http Status */
+            http_status: number;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Method */
+            method: string;
+            /** Model Version */
+            model_version: string | null;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** User Id */
+            user_id: number | null;
+        };
+        /** RequestAuditResponse */
+        RequestAuditResponse: {
+            /** Items */
+            items: components["schemas"]["RequestAuditItem"][];
             /** Tenant Id */
             tenant_id: string;
             /** User Id */
@@ -3239,6 +3307,106 @@ export interface operations {
                 };
             };
             /** @description Idempotency or state revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded for this tenant and subject */
+            429: {
+                headers: {
+                    "Retry-After": components["headers"]["Retry-After"];
+                    "X-RateLimit-Limit": components["headers"]["X-RateLimit-Limit"];
+                    "X-RateLimit-Remaining": components["headers"]["X-RateLimit-Remaining"];
+                    "X-RateLimit-Reset": components["headers"]["X-RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request transaction failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listRequestAudits: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestAuditResponse"];
+                };
+            };
+            /** @description Request parameters are invalid or cursor does not match query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated actor is not authorized */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Requested persona or movie does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idempotency, state revision, or transition conflict */
             409: {
                 headers: {
                     [name: string]: unknown;

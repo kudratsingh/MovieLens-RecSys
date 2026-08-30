@@ -155,6 +155,22 @@ class Settings(BaseSettings):
     # deployment depends on remembering the variable.
     rate_limit_enabled: bool | None = None
 
+    # --- Generic request audits (ADR 0012, 2026-08-29 note) -----------------
+    #
+    # `inline` writes one `request_audits` row per authenticated request on the
+    # request's own RLS-bound transaction, so it commits with the request and
+    # before the response goes out. `off` installs no middleware and leaves the
+    # table alone — the escape hatch if the row ever shows up in the p99 the k6
+    # gate measures, available without a migration or a rollback.
+    #
+    # There is deliberately no third mode. A queued, best-effort writer is the
+    # obvious middle ground and ADR 0012's note argues against it: off the
+    # request path it needs either its own per-tenant transactions or a role
+    # that can bypass RLS, and an audit written by a role RLS does not apply to
+    # is the wrong thing to add to a system whose highest-severity bug class is
+    # cross-tenant leakage.
+    request_audit_mode: Literal["inline", "off"] = "inline"
+
     # --- Movie metadata (TMDB, server-side only) ----------------------------
 
     tmdb_read_access_token: SecretStr | None = None
