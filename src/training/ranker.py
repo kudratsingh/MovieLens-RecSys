@@ -57,6 +57,7 @@ from src.features import FeatureIndex
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
+from src.training import seeds
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,10 @@ PHASE_2_RANKER_EXPERIMENT = "phase-2-ranker"
 RANKER_POSITIVE_WINDOW_DAYS = 30  # sample positives from the last N days of train
 RANKER_POSITIVE_LIMIT = 20_000  # cap training set size for fast iteration
 NEGATIVES_PER_POSITIVE = 20  # each LambdaRank group is 1 positive + N negatives
+# Default only. TRAIN_SEED overrides it — see src/training/seeds.py. The seed
+# reaches three places: which positives are sampled, which negatives fill each
+# LambdaRank group, and LightGBM's own tie-breaking, so it is the whole
+# stochastic surface of this trainer.
 RANKER_SEED = 42
 
 _SECONDS_PER_DAY = 24 * 3600
@@ -210,7 +215,9 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     settings = Settings()
-    rng = np.random.default_rng(RANKER_SEED)
+    seed = seeds.resolve_seed(RANKER_SEED)
+    logger.info("Seed: %d", seed)
+    rng = np.random.default_rng(seed)
 
     logger.info("Loading ratings + movies from Postgres ...")
     engine = create_engine(settings.database_url)
@@ -289,7 +296,7 @@ def main() -> None:
     logger.info("Training set built in %.1fs", build_set_seconds)
 
     logger.info("Fitting LGBMRanker (LambdaRank) ...")
-    config = LGBMRankerConfig(seed=RANKER_SEED)
+    config = LGBMRankerConfig(seed=seed)
     ranker = LGBMRanker(config=config)
     t0 = time.perf_counter()
     ranker.fit(features_df, group_sizes, labels)
@@ -370,9 +377,10 @@ def main() -> None:
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_RANKER_EXPERIMENT)
-    with mlflow.start_run(
-        run_name=routing.run_name_for("lgbm-lambdarank-itemitem-candidates", routing_policy)
-    ):
+    run_name = seeds.run_name_for(
+        routing.run_name_for("lgbm-lambdarank-itemitem-candidates", routing_policy), seed
+    )
+    with mlflow.start_run(run_name=run_name):
         mlflow.set_tags(
             {
                 "model_family": "ranker",
@@ -381,6 +389,7 @@ def main() -> None:
                 "phase": "2",
                 "stage": "ranker",
                 "cold_start_routing_policy": routing_policy,
+                "train_seed": str(seed),
                 # Called out in ADR 0005 Consequences — candidate model
                 # was fit on all of train including the positive window.
                 "candidate_leakage_compromise": "true",

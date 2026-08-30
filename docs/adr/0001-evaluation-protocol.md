@@ -44,10 +44,14 @@ K=10 reflects a realistic number of recommendations shown to a user. Metrics bey
 
 ### Promotion threshold (Phase 4)
 
-- A challenger model is only promoted if it beats the incumbent by ≥ +3% relative NDCG@10 on the holdout.
-- Concretely: challenger must score at least `champion_score * 1.03`.
+*Amended 2026-08-30 — see the note at the bottom of this file for the decision, the
+measurement behind the tolerance, and what it says about the runs already recorded.*
+
+- A challenger model is only promoted if it beats the incumbent by ≥ +3% relative NDCG@10 on the **overall** holdout (`overall_ndcg_at_k`), **and neither the warm nor the cold slice regresses by more than that slice's tolerance**.
+- Concretely: challenger must score at least `champion_score * 1.03` overall, and at least `champion_slice_score * (1 - T_slice)` on each of `warm_ndcg_at_k` and `cold_ndcg_at_k`.
 - 3% filters out retraining noise while remaining achievable for genuine architectural improvements (expected 5–15% gains between major changes).
-- Gate is automated via the evaluation module — never eyeballed.
+- `T_warm` and `T_cold` are the **measured** seed-to-seed noise floor, not a chosen band — the derivation is in the 2026-08-30 note.
+- Gate is automated via the evaluation module — never eyeballed. It is `promotion_decision` in [`src/evaluation/gate.py`](../../src/evaluation/gate.py).
 
 ### Reproducibility
 
@@ -66,7 +70,7 @@ K=10 reflects a realistic number of recommendations shown to a user. Metrics bey
 - All training and evaluation code must import from `src/evaluation/` — no ad-hoc metric computation in notebooks or training scripts.
 - The evaluation module must log cold-user and warm-user metrics separately to MLflow on every run.
 - Any feature using data with timestamp >= T is illegal in training; point-in-time correctness is enforced at the evaluation boundary.
-- The Phase 4 Prefect promotion DAG reads NDCG@10 from MLflow and enforces the +3% gate automatically.
+- The Phase 4 Prefect promotion DAG reads `overall_ndcg_at_k`, `warm_ndcg_at_k` and `cold_ndcg_at_k` from MLflow and enforces the gate automatically — the aggregate's +3% and both slices' non-regression clause, failing on any of the three.
 
 ## Amendment 2026-08-30 — the cold-start threshold is 10, online *and* offline
 
@@ -163,3 +167,139 @@ membership, which is why the opt-out was kept rather than deleted. If online
 engagement on the 5–9 signal band turns out materially worse under popularity
 than the learned path was, that is the same finding arriving from the other
 side, and it is measurable once Phase 6's A/B routing exists.
+
+## 2026-08-30 — amendment: the gate names its slices, and its tolerance is measured
+
+Status stays **Accepted**. Nothing above is retracted. What changes is one
+ambiguous sentence in **Promotion threshold (Phase 4)** — amended in place above,
+with the reasoning, the measurement and the consequences here.
+
+### What was ambiguous
+
+This ADR gates promotion on *"≥ +3% relative NDCG@10 **on the holdout**"* while
+requiring, two sections earlier, that metrics be *"reported separately for cold
+vs. warm users on every eval run — aggregating them hides cold-start failure
+modes."* Those sentences produce one number and three, and the ADR never said
+which the gate reads. For three months that was a hypothetical.
+
+It stopped being one on the first full-dataset comparison
+([`results.md`](../results.md), 2026-08-29). The LightGBM ranker against the
+CF/ALS incumbent read **+10.57% overall, +15.39% cold, −4.16% warm** — so the
+same model was promoted or refused depending on a reading nobody had chosen.
+Worse, the aggregate was carried by the minority: 26.6% of the holdout users hold
+78.6% of its NDCG mass, and had the cold slice merely held flat the aggregate
+would have read **−1.03%**. The gate as written was close to a cold-slice gate
+wearing an aggregate's name — the mirror image of the failure the per-slice
+reporting rule exists to prevent.
+
+[`promotion-gate-slice-decision.md`](../promotion-gate-slice-decision.md) set out
+four readings and recommended (c). The owner took (c) on 2026-08-30.
+
+### The decision
+
+**The gate reads overall NDCG@10 at +3% relative, and refuses any slice that
+regresses beyond that slice's tolerance.** The aggregate stays the headline, so a
+genuine cold-start win is still promotable — which matters in a project that
+spent ADR 0011 and a 2,000-user cohort on cold-start being a first-class outcome.
+A warm regression can still block, so the majority slice cannot be silently
+traded away.
+
+The three readings not taken, and why:
+
+- **Warm only.** Would refuse a challenger that genuinely improved cold-start,
+  the outcome non-negotiable #3 exists for.
+- **Overall only (the status-quo reading).** Ratifies exactly the failure above.
+- **Each slice independently at +3%.** Strictest and simplest, and refuses the
+  cold-start win without letting anyone say so.
+
+The rule is `promotion_decision` in
+[`src/evaluation/gate.py`](../../src/evaluation/gate.py) — a pure function over
+two `EvalResult`s, so a unit test and Phase 4's Prefect task run the same code —
+with a CLI (`make gate CANDIDATE=… INCUMBENT=…`) that reads two MLflow runs. It
+asserts `EvalResult.k` equality on both sides, because comparing a candidate
+stage's recall@500 result with a ranker's NDCG@10 one would answer a question
+nobody asked. A slice the incumbent has no users in, or scored zero in, is
+reported as **not comparable** and does not block: the aggregate clause is a
+positive claim the challenger has to establish, while a slice clause is a
+negative one, and a negative claim that cannot be evaluated has not been
+violated.
+
+### The tolerance, measured
+
+The memo was explicit that a tolerance pinned by taste would be *"a guess wearing
+a number's clothes"*, so it was measured before it was set. CF/ALS and the
+LightGBM ranker were each run three times through the unchanged trainers at seeds
+42, 7 and 13, with nothing else varied
+([`results.md`](../results.md), 2026-08-30 promotion-gate section; `TRAIN_SEED` in
+`src/training/seeds.py`). The popularity baseline and item-item cosine have no
+stochastic component and were not re-run. A re-run at seed 42 reproduced both
+2026-08-29 runs of record on **every** logged metric — 38 and 36 respectively,
+zero differences — so the spread below is seed-to-seed variation and nothing
+else.
+
+Relative range of NDCG@10 across the three seeds:
+
+| Model | Warm | Cold | Overall |
+|---|---:|---:|---:|
+| CF / ALS | 3.12% | 0.04% | 0.75% |
+| LightGBM ranker | **28.68%** | 3.17% | **5.81%** |
+
+**Rule:** the tolerance for a slice is **2× the largest relative range observed on
+that slice, rounded up to the next whole percentage point, floor 0.5%** — 2×
+because the gate reads a difference between two independently seeded runs and so
+carries both runs' noise; rounded up because a three-sample range underestimates
+the true one. That gives **`T_warm` = 58%** and **`T_cold` = 7%**.
+
+### What it says about the run this amendment is about
+
+Under that floor the 2026-08-29 comparison **clears the gate**: the warm
+regression is −4.16% against a 58% tolerance, so it is comfortably *within* the
+noise floor, and the aggregate's +10.57% clears +3%. The gate would promote.
+
+That is not the reassuring answer it looks like. **The reason the warm clause
+does not fire is that it currently cannot**: the ranker's warm NDCG@10 moves by
+28.7% of its own mean when only the seed changes, so no tighter warm tolerance
+could refuse a real regression without also refusing good models at random. Run
+the same challenger-vs-incumbent comparison at each of the three seeds and the
+warm effect reads **−4.16%, −17.24% and +13.59%** — its sign is not determined by
+the data. The 2026-08-29 figure that made this question urgent was a draw from a
+wide distribution.
+
+Two consequences follow, and both are more important than the verdict:
+
+1. **This ADR's +3% is itself inside the ranker's noise.** The threshold was
+   chosen in May on the reasoning that *"noise from retraining randomness alone
+   can exceed 1%"*. On this pipeline the ranker's **overall** NDCG@10 spread is
+   5.81% — nearly six times that, and wider than the threshold the gate applies.
+   **A single seeded run of the ranker cannot establish a +3% aggregate
+   improvement.** Nothing has been promoted on one and nothing should be. The
+   seed-averaged comparison (three runs per model) reads warm −2.76%, cold
+   +13.24%, overall **+9.27%** — which does clear 5.81%, and is the comparison a
+   Phase 4 DAG should be making.
+2. **The floor is a defect to close, not a threshold to live with.** Its cause is
+   `RANKER_POSITIVE_LIMIT = 20,000`: the seed decides which positives are sampled
+   from the trailing window, ~8,600 are dropped for missing the item-item
+   top-500, and ~11,350 LambdaRank groups remain — so a re-seed is a different
+   training set. More seeds are not the cheap fix (the standard error of a
+   three-seed mean is still 8.4% relative); a larger training sample is. On the
+   Phase 3 platform backlog.
+
+Both are now measurable claims rather than suspicions, which is the difference
+this amendment is really making.
+
+### How we would know this is wrong
+
+- **If a challenger with a real, reproducible warm regression is promoted.** The
+  58% tolerance makes that possible today, and it is the known cost of setting
+  the number from measurement instead of taste. The tell would be a promoted
+  model whose warm slice stays down across several seeds. The fix is to reduce
+  the variance and re-derive the tolerance, never to tighten it below what the
+  pipeline can resolve.
+- **If the tolerance never falls.** If the ranker training sample grows and the
+  warm spread stays near 30%, the cause is not sampling and the diagnosis above
+  is wrong. Next suspects would be the 1,939-user warm slice being too small for
+  NDCG@10, or LightGBM's own variance at `num_leaves=63` on ~11k groups.
+- **If the aggregate and the slices never disagree again.** If every future
+  comparison moves all three the same way, the per-slice clause is costing
+  complexity for nothing, and the honest response is to say so and simplify back
+  to (b) — with the 2026-08-29 run recorded as the one time it mattered.

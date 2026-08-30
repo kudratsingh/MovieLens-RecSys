@@ -26,14 +26,20 @@ not finish, this file says so instead of reporting a partial number.
 > 10 would move the warm/cold slicing as well as the routing, so the two are not
 > directly comparable to the rows below and would need their own dated section.
 >
-> **A later session appended to this page.** Everything down to "Caveats worth
+> **Two later sessions appended to this page.** Everything down to "Caveats worth
 > writing down" is the 2026-08-29 measurement and is left exactly as it was
-> written. [The 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
-> at the bottom adds two things that change how one section above should be
+> written. [The first 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
+> adds two things that change how one section above should be
 > read: **the two-tower did run to completion**, so "The two-tower did not run
 > to completion" records that session's outcome, not the model's, and both
 > cold-start routing policies were measured, so "Routing: what the cohort
 > actually measured" now has a counterfactual beside it.
+> [The second](#2026-08-30--the-promotion-gates-noise-floor-measured) re-runs
+> CF/ALS and the ranker at three seeds each and changes how the whole page
+> should be read: **the ranker's warm NDCG@10 moves by 28.7% of its own mean on
+> the seed alone, and its overall NDCG@10 by 5.8% — wider than ADR 0001's +3%
+> promotion threshold.** Every single-run gap on this page smaller than that is
+> a direction and not a result.
 
 ## The machine, and what it was doing at the time
 
@@ -806,13 +812,270 @@ threshold run is named `<base>-threshold-routing` in MLflow and tagged
   CF/ALS is unaffected by it. It would settle nothing the candidate runs have not,
   so it was left for whoever takes the decision. The ranker figures above remain
   the 2026-08-29 run.
-- **No re-seeded runs.** Everything on this page, in both sessions, is one run per
-  cell at seed 42. The 4.16% warm-NDCG question in
+- **No re-seeded runs.** Everything in the first two sessions is one run per cell
+  at seed 42. The 4.16% warm-NDCG question in
   [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) needs a
   noise floor before it can be settled, and that means three to five seeds of the
-  same model. Not done here.
+  same model. Not done here — **done in the session below**, which measured it and
+  found the warm question was inside the floor.
 - **No two-tower re-training at a larger budget.** The loss curve says that is the
   interesting experiment, and ADR 0004's note names it — but changing ADR 0006's
   configuration is a modelling decision with an approval gate
   ([`modeling-roadmap.md`](modeling-roadmap.md)), not something to slip into the
   run that measures the configuration as pinned.
+
+
+## 2026-08-30 — the promotion gate's noise floor, measured
+
+The two sessions above are unchanged. This third one exists because both of them
+ended on the same sentence — *"no re-seeded runs"* — and the promotion gate could
+not be written without them.
+
+[`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) asked which
+slice ADR 0001's gate reads, recommended reading the aggregate with a per-slice
+non-regression clause, and said the clause's tolerance **must be set from measured
+variance rather than judgement**. The owner took that option on 2026-08-30. This
+section is the measurement it depends on, and the gate it produced is
+[`src/evaluation/gate.py`](../src/evaluation/gate.py).
+
+**Measured:** 2026-08-30
+**Dataset, split and cohort:** identical to both sessions above — MovieLens 25M at
+DVC version `c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train
+20,000,075 / holdout 129,683 / test 4,870,337 untouched, 2,641 holdout users
+(1,939 warm, 702 cold). The ADR 0011 cohort was regenerated from scratch in this
+worktree before any run and reproduced the committed DVC md5
+`9e0c978eff3d45f0985e9e0bbe0551d7` and fingerprint `ae4475f0e063…` exactly — a
+third independent confirmation, on a third checkout.
+**Machine:** the same Apple M3 / 16 GiB / macOS 26.5.2 box and library set.
+Postgres 16 in Docker on host port 5433, MLflow on 5001.
+**Routing policy:** index membership — the `main` default — on every run below, so
+these numbers sit on the same axis as the rest of the page.
+**Threads and load:** `nice -n 15`, thread caps of 4, one job at a time. The host
+was quiet for the first five runs (1-minute load average 2.8–3.9 on 8 cores) and
+**heavily loaded for the sixth** — an unrelated workload took the load average to
+39 just as `ranker seed=13` started. As everywhere else on this page the
+wall-clocks are upper bounds; the metrics are not affected, and the reproduction
+check below is what establishes that rather than assuming it.
+
+**What changed in the code.** `TRAIN_SEED` ([`src/training/seeds.py`](../src/training/seeds.py)),
+read by the two trainers that have a stochastic component. Unset it and every
+number in the two sessions above comes back unchanged; the run also keeps the
+MLflow run name those sessions cite, so only a re-seeded run is renamed
+(`<base>-seed<n>`) and tagged `train_seed`.
+
+### Which models have a noise floor at all
+
+Only two, and this is worth stating rather than leaving as an omission:
+
+| Model | Stochastic? | Re-run at three seeds? |
+|---|---|---|
+| Popularity | No — ranks items by training-window count | No. Deterministic by construction |
+| Item-item cosine | No — `CosineRecommender` over a fixed matrix | No. Deterministic by construction |
+| CF / ALS | **Yes** — ALS initialises its factor matrices at random | **Yes**, seeds 42 / 7 / 13 |
+| LightGBM ranker | **Yes** — which positives are sampled, which negatives fill each group, and LightGBM's own tie-breaking | **Yes**, seeds 42 / 7 / 13 |
+
+A seed parameter on a deterministic model would be a knob that changes nothing,
+and "we measured a spread of exactly zero" is not a measurement. The two-tower is
+stochastic too and was not re-seeded here: at ~78 minutes a run, three seeds is
+four hours, and ADR 0004's verdict on it does not turn on a noise floor.
+
+### The check that had to pass first
+
+Before a spread across seeds means anything, a re-run *at the same seed* has to
+reproduce. Both do, exactly:
+
+| Model | Run of record (2026-08-29) | Re-run at seed 42 (2026-08-30) | Logged metrics compared | Differences |
+|---|---|---|---:|---:|
+| CF / ALS | `d961e6d9ba214edb9283266777aebf40` | `ddc2bd983f52402baf14eb8977de1de4` | 38 | **0** |
+| LightGBM ranker | `1d898b02fcc842b6a7283dc6eb9117ad` | `bc4cbcc4e1ba4e02973fb41449e86635` | 36 | **0** |
+
+Every metric MLflow stores, value for value, on a different day in a different
+worktree. The ranker also rebuilt the identical training set — 11,374 groups,
+238,854 rows, 8,626 positives dropped. **So everything below is seed-to-seed
+variation and nothing else.**
+
+### The six runs
+
+NDCG@10, the metric ADR 0001's gate reads:
+
+| Model | Seed | Run id | Warm NDCG@10 | Cold NDCG@10 | Overall NDCG@10 |
+|---|---:|---|---:|---:|---:|
+| CF / ALS | 42 | `ddc2bd983f52402baf14eb8977de1de4` | 0.057850 | 0.487981 | 0.172182 |
+| CF / ALS | 7 | `2a2a21770d744629848dac93e98049bb` | 0.059478 | 0.488002 | 0.173383 |
+| CF / ALS | 13 | `ecd38b19bdb54e029d207e05f674c059` | 0.057657 | 0.488165 | 0.172090 |
+| Ranker | 42 | `bc4cbcc4e1ba4e02973fb41449e86635` | 0.055444 | 0.563104 | 0.190384 |
+| Ranker | 7 | `3509c50fa25247c19ccf769ced6f6213` | **0.049222** | 0.549324 | 0.182153 |
+| Ranker | 13 | `36ada5d9548d497389936b0327df9a47` | **0.065491** | 0.545592 | 0.193106 |
+
+Recall@10 over the same runs, since the gate is not the only reader of this page:
+
+| Model | Seed | Warm recall@10 | Cold recall@10 | Overall recall@10 |
+|---|---:|---:|---:|---:|
+| CF / ALS | 42 | 0.033841 | 0.063780 | 0.041799 |
+| CF / ALS | 7 | 0.034323 | 0.063780 | 0.042153 |
+| CF / ALS | 13 | 0.033333 | 0.063829 | 0.041439 |
+| Ranker | 42 | 0.039422 | 0.079337 | 0.050032 |
+| Ranker | 7 | 0.034207 | 0.081655 | 0.046819 |
+| Ranker | 13 | 0.044944 | 0.076624 | 0.053365 |
+
+Wall-clocks, all upper bounds, with the 1-minute load average each job started at:
+
+| Model | Seed | Load at start | Wall-clock |
+|---|---:|---:|---:|
+| CF / ALS | 42 | 2.83 | 88 s |
+| CF / ALS | 7 | 3.65 | 89 s |
+| CF / ALS | 13 | 2.98 | 88 s |
+| Ranker | 42 | 3.91 | 258 s |
+| Ranker | 7 | 3.75 | 372 s |
+| Ranker | 13 | **39.40** | 499 s |
+
+### The spread
+
+Relative range is `(max − min) / mean`; relative sd is `stdev / mean`. Three
+samples, so both are coarse estimates and the range is the one the tolerance uses.
+
+| Model | Slice | Min | Max | Mean | Range | sd |
+|---|---|---:|---:|---:|---:|---:|
+| CF / ALS | warm | 0.057657 | 0.059478 | 0.058328 | 3.12% | 1.72% |
+| CF / ALS | cold | 0.487981 | 0.488165 | 0.488049 | **0.04%** | 0.02% |
+| CF / ALS | overall | 0.172090 | 0.173383 | 0.172552 | 0.75% | 0.42% |
+| Ranker | warm | 0.049222 | 0.065491 | 0.056719 | **28.68%** | 14.47% |
+| Ranker | cold | 0.545592 | 0.563104 | 0.552673 | 3.17% | 1.67% |
+| Ranker | overall | 0.182153 | 0.193106 | 0.188548 | **5.81%** | 3.02% |
+
+Three things fall out of this table, and the third is the one that matters.
+
+**CF/ALS's cold slice barely moves (0.04%) because it is not really ALS.** 701 of
+the 702 cold users are served by the embedded popularity fallback, which is
+deterministic, so that row is measuring the fallback's stability and not the
+model's. It is the control that says the harness itself contributes no noise.
+
+**The ranker's warm slice moves by 28.68% of its own mean.** Not the model, not
+the data, not the protocol — the seed. The cause is in the trainer's own log:
+the seed decides which ≤20,000 positives are sampled from the trailing 30 days
+(`RANKER_POSITIVE_LIMIT`), roughly 8,600 of those are dropped for missing the
+item-item top-500, and what is left is ~11,350 LambdaRank groups. Seed 42 built
+11,374 groups from 20,000 sampled positives; seed 7 built 11,313. **A re-seed is
+a different training set, not a different tie-break**, which is exactly the kind
+of variation a promotion gate has to be robust to.
+
+**The ranker's *overall* NDCG@10 spread is 5.81% — wider than ADR 0001's own +3%
+promotion threshold.** That is the finding with the longest reach on this page.
+ADR 0001 chose +3% in May with the reasoning *"noise from retraining randomness
+alone can exceed 1%"*; on this pipeline it reaches nearly six times that on the
+aggregate the gate reads. **A single seeded run of the ranker cannot establish a
++3% aggregate improvement.** Nothing has been promoted on one, and nothing
+should be.
+
+### The tolerance, and what it is worth
+
+Stated once and applied mechanically: **the tolerance for a slice is 2× the
+largest relative range observed on that slice, rounded up to the next whole
+percentage point, with a floor of 0.5%.**
+
+- *2× rather than 1×* because the gate reads a difference between two
+  independently seeded runs, so it carries both runs' noise, not one run's.
+- *Rounded up* because a tolerance sitting exactly on an observed maximum will
+  refuse a model for a wobble the next re-seed would have produced — and a range
+  over three samples underestimates the true range in any case.
+- *A 0.5% floor* because anything finer is below the resolution at which this
+  page publishes and compares these numbers.
+
+| Slice | Largest range observed | 2× | **Tolerance** |
+|---|---:|---:|---:|
+| Warm | 28.68% (ranker) | 57.37% | **58%** |
+| Cold | 3.17% (ranker) | 6.34% | **7%** |
+
+Those two numbers are the defaults in
+[`src/evaluation/gate.py`](../src/evaluation/gate.py).
+
+**A 58% warm tolerance is not a view about how much regression is acceptable. It
+is what this pipeline's measurement precision licenses, and saying so is the
+point.** No tighter warm clause could refuse a real regression without also
+refusing good models at random — the very failure a gate exists to avoid. So the
+warm clause is, today, effectively non-binding, and the aggregate clause is doing
+the work. That is a defect in the offline pipeline, recorded rather than dressed
+up.
+
+**More seeds are not the cheap fix.** The standard error of a three-seed mean is
+still 8.4% relative on the ranker's warm slice; averaging enough runs to bring the
+floor under 3% would take on the order of a hundred. The cheap fix is a larger
+ranker training sample — `RANKER_POSITIVE_LIMIT` is 20,000 against a trailing
+window holding far more — and it is now a measurable change rather than a
+preference. Named on the Phase 3 platform backlog.
+
+### What the gate says about the runs already on this page
+
+The comparison the memo was written about — the LightGBM ranker as challenger,
+CF/ALS as incumbent — through `python -m src.evaluation.gate` at the tolerances
+above:
+
+```
+$ make gate CANDIDATE=1d898b02fcc842b6a7283dc6eb9117ad \
+            INCUMBENT=d961e6d9ba214edb9283266777aebf40
+PROMOTE — ndcg@10
+  overall: overall ndcg@10 gained 10.57% (0.172182 → 0.190384) against a required +3.00%
+  warm: warm ndcg@10 regressed 4.16% (0.057850 → 0.055444, n=1939), within the 58.00% tolerance
+  cold: cold ndcg@10 improved 15.39% (0.487981 → 0.563104, n=702)
+```
+
+**It would promote — because the −4.16% warm regression is inside the measured
+floor, by a wide margin.** The memo's option (c) said the verdict would be
+"rejected at any tolerance under 4.16%; promoted above it", and the measurement
+says the floor is thirteen times 4.16%. So the warm regression that made the
+question urgent is, on the evidence, not a result at all.
+
+The clearest way to see that is to run the same comparison seed by seed —
+challenger and incumbent both at 42, both at 7, both at 13:
+
+| Seed pair | Overall | Warm | Cold | Verdict |
+|---:|---:|---:|---:|---|
+| 42 | +10.57% | **−4.16%** | +15.39% | promote |
+| 7 | +5.06% | **−17.24%** | +12.57% | promote |
+| 13 | +12.21% | **+13.59%** | +11.76% | promote |
+
+**The same experiment reports the warm effect as −4%, −17% and +14%. Its sign is
+not determined by the data.** The 2026-08-29 run happened to land in the middle.
+
+Averaging the three runs per model — the comparison a Phase 4 DAG should actually
+be making — gives the most trustworthy reading available today:
+
+| Slice | CF/ALS (mean of 3) | Ranker (mean of 3) | Relative |
+|---|---:|---:|---:|
+| Warm NDCG@10 | 0.058328 | 0.056719 | **−2.76%** |
+| Cold NDCG@10 | 0.488049 | 0.552673 | +13.24% |
+| Overall NDCG@10 | 0.172552 | 0.188548 | **+9.27%** |
+
+Seed-averaged, the warm regression shrinks from −4.16% to −2.76% and the aggregate
+gain from +10.57% to +9.27%. The gate promotes on these too — and here it promotes
+for a reason worth having, since the aggregate's +9.27% is comfortably outside the
+5.81% single-run spread that a one-seed comparison could not clear.
+
+**Nothing has been promoted.** `pipelines/` is still empty, the gate is a library
+and a CLI rather than a DAG, and the served bundle is unchanged. What this section
+establishes is that the gate now has a defensible rule and a measured number, and
+that the number is currently large enough to be a finding in its own right.
+
+### Reproducing this
+
+Same prerequisites as the sections above — Postgres holding the 25M ratings and
+the ADR 0011 parquet present. Then:
+
+```bash
+# Three seeds per stochastic model, one job at a time. Unset TRAIN_SEED is 42,
+# which reproduces the runs of record above metric for metric.
+TRAIN_SEED=42 make train-cf
+TRAIN_SEED=7  make train-cf
+TRAIN_SEED=13 make train-cf
+
+TRAIN_SEED=42 make train-ranker
+TRAIN_SEED=7  make train-ranker
+TRAIN_SEED=13 make train-ranker
+
+# The gate over any two runs. Exit 0 promotes, 1 refuses, 2 declines to decide
+# (two different K values, or a killed run with parameters and no metrics).
+make gate CANDIDATE=<run id> INCUMBENT=<run id>
+```
+
+`TRAIN_SEED` is read by `train-cf` and `train-ranker` only; `train-popularity` and
+`train-itemitem` are deterministic and ignore it.

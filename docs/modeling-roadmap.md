@@ -217,8 +217,10 @@ The system pieces, mapped to the phases that own them:
 - **Build and measure.** Through `src/evaluation/`, logged to MLflow, recorded
   in [`results.md`](results.md) with the run, date, machine and wall-clock.
 - **Promote or not.** The served bundle changes only when the candidate clears
-  the ADR 0001 gate on the slice that ADR names; the outcome is a dated note on
-  the rung's ADR either way.
+  the ADR 0001 gate, which since 2026-08-30 names its slices: overall NDCG@10 at
+  +3% relative **and** no regression in the warm or cold slice beyond that
+  slice's measured seed-to-seed tolerance (`src/evaluation/gate.py`, `make
+  gate`). The outcome is a dated note on the rung's ADR either way.
 
 ## Decision log
 
