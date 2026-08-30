@@ -51,6 +51,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any, Final
 
+from .aggregate import MismatchedResultsError, mean_eval_result
 from .protocol import EvalResult
 
 # ADR 0001's threshold, unchanged by the 2026-08-30 amendment: "3% filters out
@@ -109,49 +110,54 @@ class SliceTolerance:
 
 # --- The measured noise floor -----------------------------------------------
 #
-# Provenance, so this number is never mistaken for a preference. Measured
+# Provenance, so these numbers are never mistaken for a preference. Measured
 # 2026-08-30 on the machine and dataset `docs/results.md` describes (Apple M3,
-# MovieLens 25M at DVC version c3ce6309f6f0ec347a9e0a662c640021.dir, holdout of
-# 1,939 warm and 702 cold users, index-membership routing). CF/ALS and the
-# LightGBM ranker were each run at three seeds — 42, 7 and 13 — with nothing
-# else changed, via `TRAIN_SEED` (see `src/training/seeds.py`). The popularity
-# baseline and item-item cosine have no stochastic component at all and were
-# not re-run: the same inputs produce the same model, so their seed-to-seed
-# spread is exactly zero and measuring it would prove nothing.
+# MovieLens 25M at DVC version c3ce6309f6f0ec347a9e0a662c640021.dir), at
+# `COLD_START_THRESHOLD = 10` under threshold routing — the defaults since
+# ADR 0001's amendment — over a holdout of 1,931 warm and 710 cold users.
+# CF/ALS and the LightGBM ranker were each run at three seeds, 42, 7 and 13,
+# with nothing else changed, via `TRAIN_SEED` (see `src/training/seeds.py`).
+# The popularity baseline and item-item cosine have no stochastic component at
+# all and were not re-run: the same inputs produce the same model, so their
+# seed-to-seed spread is exactly zero and measuring it would prove nothing.
 #
 # Relative spread ((max − min) / mean) of NDCG@10 across those three seeds:
 #
 #     model    slice    min       max       mean      range    sd
-#     CF/ALS   warm     0.057657  0.059478  0.058328   3.12%   1.72%
-#     CF/ALS   cold     0.487981  0.488165  0.488049   0.04%   0.02%
-#     ranker   warm     0.049222  0.065491  0.056719  28.68%  14.47%
-#     ranker   cold     0.545592  0.563104  0.552673   3.17%   1.67%
+#     CF/ALS   warm     0.057572  0.059295  0.058158   2.96%   1.69%
+#     CF/ALS   cold     0.483440  0.483440  0.483440   0.00%   0.00%
+#     ranker   warm     0.069967  0.071150  0.070495   1.68%   0.85%
+#     ranker   cold     0.544948  0.556510  0.549533   2.10%   1.12%
 #
-# The rule: **2× the largest relative range observed on that slice, rounded up
-# to the next whole percentage point, with a floor of 0.5%.** Two rather than
-# one because the gate compares two independently seeded runs, so the
-# difference it reads carries both runs' noise and not one run's; rounding up
-# because a tolerance sitting exactly on an observed maximum will refuse a
-# model for a wobble the next re-seed would have produced; and a 0.5% floor
-# because anything finer is below the resolution at which `docs/results.md`
-# publishes and compares these numbers. That gives warm 58% and cold 7%.
+# The rule is unchanged from the first derivation: **2× the largest relative
+# range observed on that slice, rounded up to the next whole percentage point,
+# with a floor of 0.5%.** Two rather than one because the gate compares two
+# independently seeded runs, so the difference it reads carries both runs'
+# noise and not one run's; rounding up because a tolerance sitting exactly on
+# an observed maximum will refuse a model for a wobble the next re-seed would
+# have produced; and a 0.5% floor because anything finer is below the
+# resolution at which `docs/results.md` publishes these numbers. That gives
+# warm 6% and cold 5%.
 #
-# **A 58% warm tolerance is not a considered view about how much regression is
-# acceptable. It is what the measurement licenses, and it is the finding.**
-# The LightGBM ranker's warm NDCG@10 moves by 28.7% of its own mean when only
-# the seed changes, so no tighter warm clause could refuse a real regression
-# without also refusing good models at random. The cause is visible in the run
-# logs: the seed picks which ≤20,000 training positives are sampled
-# (`RANKER_POSITIVE_LIMIT`), of which ~8,600 are dropped for missing the
-# candidate top-500, leaving ~11,350 LambdaRank groups — so a re-seed is a
-# different training set, not a different tie-break. More seeds do not fix
-# this cheaply: the standard error of a 3-seed mean is still 8.4% relative.
-# A larger training sample would. Until that lands the warm clause is
-# effectively non-binding and the aggregate clause is doing the work, which
-# `docs/results.md`'s 2026-08-30 promotion-gate section says in full — along
-# with the second half of the finding, that the ranker's *overall* NDCG@10
-# spread is 5.81%, wider than ADR 0001's own +3% promotion threshold.
-MEASURED_SLICE_TOLERANCE: Final = SliceTolerance(warm=0.58, cold=0.07)
+# **These replace the warm 58% / cold 7% measured earlier the same day, and the
+# reason they could fall is the point.** That first measurement had the ranker's
+# warm NDCG@10 moving 28.68% of its own mean on the seed alone, because
+# `RANKER_POSITIVE_LIMIT` was 20,000 against a trailing window holding 154,003
+# rows — so the seed was choosing *which* positives the ranker trained on and a
+# re-seed was a different training set. The limit now sits above the window's
+# size (`src/training/sampling.py`), the three seeds build the identical
+# training set (87,794 groups, 1,843,674 rows, to the row), and the warm spread
+# falls to 1.68%. **A 58% warm clause could not have refused any regression a
+# reviewer would care about; a 6% one can.** The derivation, the three sample
+# sizes it is read off, and what the gate then says about the ladder are in
+# `docs/results.md`'s 2026-08-30 sample-size section.
+#
+# One caveat these numbers carry: they describe the pipeline at its *default*
+# sample size. A run made with `RANKER_POSITIVE_LIMIT` set below the trailing
+# window's size is a noisier pipeline and is not covered — every run logs
+# `ranker_positive_limit` and `ranker_positive_limit_binding` so that is
+# checkable rather than assumed.
+MEASURED_SLICE_TOLERANCE: Final = SliceTolerance(warm=0.06, cold=0.05)
 
 DEFAULT_SLICE_TOLERANCE: Final = MEASURED_SLICE_TOLERANCE
 
@@ -514,15 +520,29 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "ADR 0001's promotion gate over two MLflow runs: overall NDCG@k must gain at "
             "least the required relative amount, and neither slice may regress beyond its "
-            "measured tolerance."
+            "measured tolerance. Either side accepts several run ids, in which case the "
+            "gate reads their mean — the right comparison for a model whose metrics move "
+            "with the seed."
         ),
         epilog=(
             f"Exit codes: {_EXIT_PROMOTE} promote, {_EXIT_REFUSE} do not promote, "
             f"{_EXIT_UNDECIDED} could not decide (runs not comparable or not found)."
         ),
     )
-    parser.add_argument("--candidate", required=True, help="MLflow run id of the challenger")
-    parser.add_argument("--incumbent", required=True, help="MLflow run id of the champion")
+    parser.add_argument(
+        "--candidate",
+        required=True,
+        nargs="+",
+        metavar="RUN_ID",
+        help="MLflow run id(s) of the challenger; several are averaged",
+    )
+    parser.add_argument(
+        "--incumbent",
+        required=True,
+        nargs="+",
+        metavar="RUN_ID",
+        help="MLflow run id(s) of the champion; several are averaged",
+    )
     parser.add_argument(
         "--min-relative-gain",
         type=float,
@@ -561,29 +581,39 @@ def main(argv: list[str] | None = None) -> int:
     mlflow.set_tracking_uri(args.tracking_uri or Settings().mlflow_tracking_uri)
     client = mlflow.tracking.MlflowClient()
 
+    def read(run_ids: list[str]) -> EvalResult:
+        return mean_eval_result([eval_result_from_mlflow_run(client.get_run(r)) for r in run_ids])
+
     try:
-        candidate = eval_result_from_mlflow_run(client.get_run(args.candidate))
-        incumbent = eval_result_from_mlflow_run(client.get_run(args.incumbent))
+        candidate = read(args.candidate)
+        incumbent = read(args.incumbent)
         decision = promotion_decision(
             candidate,
             incumbent,
             min_relative_gain=args.min_relative_gain,
             slice_tolerance=SliceTolerance(warm=args.warm_tolerance, cold=args.cold_tolerance),
         )
-    except (GateInputError, RunNotUsableError) as exc:
+    except (GateInputError, MismatchedResultsError, RunNotUsableError) as exc:
         print(f"could not decide: {exc}")
         return _EXIT_UNDECIDED
 
     if args.json:
         payload = decision.to_dict()
-        payload["candidate_run_id"] = args.candidate
-        payload["incumbent_run_id"] = args.incumbent
+        payload["candidate_run_ids"] = args.candidate
+        payload["incumbent_run_ids"] = args.incumbent
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"candidate  {args.candidate}")
-        print(f"incumbent  {args.incumbent}")
+        print(f"candidate  {_describe(args.candidate)}")
+        print(f"incumbent  {_describe(args.incumbent)}")
         print(decision.summary())
     return _EXIT_PROMOTE if decision.promote else _EXIT_REFUSE
+
+
+def _describe(run_ids: list[str]) -> str:
+    """Name the runs behind one side, saying so when it is a mean of several."""
+    if len(run_ids) == 1:
+        return run_ids[0]
+    return f"mean of {len(run_ids)}: " + ", ".join(run_ids)
 
 
 if __name__ == "__main__":  # pragma: no cover - thin CLI wrapper

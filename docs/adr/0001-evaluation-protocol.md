@@ -250,6 +250,18 @@ because the gate reads a difference between two independently seeded runs and so
 carries both runs' noise; rounded up because a three-sample range underestimates
 the true one. That gives **`T_warm` = 58%** and **`T_cold` = 7%**.
 
+> **Superseded later the same day: `T_warm` = 6%, `T_cold` = 5%.** The rule above
+> is unchanged; the measurement it reads is not. `RANKER_POSITIVE_LIMIT` was
+> 20,000 against a trailing window holding 154,003 rows, so the seed was choosing
+> *which* positives the ranker trained on. With the limit above the window's size
+> the three seeds build the identical training set and the ranker's warm range
+> falls from 28.68% to 1.68%, which makes CF/ALS at 2.96% the largest warm range
+> and gives 6%. **The warm clause is now binding rather than decorative**, and
+> the ranker clears the gate against CF/ALS at every seed with the warm slice
+> *improving* ~21%. See
+> [`docs/results.md`](../results.md#2026-08-30--the-rankers-training-sample-and-the-variance-it-was-buying)
+> and [ADR 0005's note](0005-lightgbm-over-neural-ranker.md#note-2026-08-30--the-training-sample-is-the-whole-trailing-window).
+
 ### What it says about the run this amendment is about
 
 Under that floor the 2026-08-29 comparison **clears the gate**: the warm
@@ -287,18 +299,32 @@ Two consequences follow, and both are more important than the verdict:
 Both are now measurable claims rather than suspicions, which is the difference
 this amendment is really making.
 
+> **Both were acted on the same day.** Consequence 2 was the cause and it was
+> closed by raising `RANKER_POSITIVE_LIMIT` above the trailing window's own row
+> count: the three seeds now build the identical training set, the ranker's warm
+> range falls to 1.68% and its overall range to 1.71%, and the tolerances become
+> 6% / 5%. Consequence 1 stands but with room: **+3% is no longer inside the
+> ranker's noise**, and the seed-averaged ranker-vs-CF/ALS comparison reads warm
+> **+21.21%**, cold +13.67%, overall **+15.53%** — promoted at every individual
+> seed too, with the warm sign now determined. Gating on a seed-averaged
+> `EvalResult` remains the right practice and is what `mean_eval_result`
+> (`src/evaluation/aggregate.py`) and `make gate CANDIDATE="<id> <id> <id>"`
+> exist for.
+
 ### How we would know this is wrong
 
 - **If a challenger with a real, reproducible warm regression is promoted.** The
-  58% tolerance makes that possible today, and it is the known cost of setting
-  the number from measurement instead of taste. The tell would be a promoted
-  model whose warm slice stays down across several seeds. The fix is to reduce
-  the variance and re-derive the tolerance, never to tighten it below what the
-  pipeline can resolve.
-- **If the tolerance never falls.** If the ranker training sample grows and the
-  warm spread stays near 30%, the cause is not sampling and the diagnosis above
-  is wrong. Next suspects would be the 1,939-user warm slice being too small for
-  NDCG@10, or LightGBM's own variance at `num_leaves=63` on ~11k groups.
+  58% tolerance made that possible, and it was the known cost of setting the
+  number from measurement instead of taste. The tell would be a promoted model
+  whose warm slice stays down across several seeds. The fix was, as written
+  here, to reduce the variance and re-derive — never to tighten below what the
+  pipeline can resolve — and that is what happened: the tolerance is now 6%,
+  which a real regression would trip.
+- ~~**If the tolerance never falls.**~~ **Answered the same day, and the
+  diagnosis held.** The test was: if the ranker training sample grows and the
+  warm spread stays near 30%, the cause is not sampling. The sample grew from
+  20,000 positives to the whole 154,003-row window and the warm spread fell to
+  **1.68%** — so it was the sampling, and the tolerance fell to 6% / 5%.
 - **If the aggregate and the slices never disagree again.** If every future
   comparison moves all three the same way, the per-slice clause is costing
   complexity for nothing, and the honest response is to say so and simplify back
