@@ -27,6 +27,19 @@ export function upstreamDetail(payload: ResourcePayload): string | null {
   return typeof payload.detail === "string" ? payload.detail : null;
 }
 
+/**
+ * The stable name the API gives a refusal (`ErrorResponse.code`).
+ *
+ * It is absent wherever the status says everything there is to say, so `null`
+ * means "read the status", not "malformed". Its whole reason for existing is
+ * that two statuses on this surface are ambiguous — see
+ * `lib/movie-state/mutate.ts`.
+ */
+export function upstreamCode(payload: ResourcePayload): string | null {
+  if (!isRecord(payload)) return null;
+  return typeof payload.code === "string" && payload.code !== "" ? payload.code : null;
+}
+
 export async function readResourcePayload(
   response: Response,
 ): Promise<ResourcePayload> {

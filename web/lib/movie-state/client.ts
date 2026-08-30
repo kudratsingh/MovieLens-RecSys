@@ -2,8 +2,11 @@
  * The one seam every surface writes movie state through.
  *
  * Two operations, because a canonical write needs both of them: commit the
- * change, and — when the API answers `409` — read back what is actually stored
+ * change, and — when the API turns it away — read back what is actually stored
  * so the control can correct itself instead of asking the viewer to reload.
+ * Both refusals get that read: a `409` because the revision moved, a `422`
+ * because a rule about state was broken, which is the same evidence that what
+ * we rendered is stale. Only the `409` earns a replay.
  *
  * The recovery is completed here rather than in each caller. A recommendation
  * carries no per-item state, so the first press on a Discover or Quick Picks
@@ -88,10 +91,25 @@ export function createBffMovieStateClient(
       const attempt = { ...input, fetchImpl: fetchForCall, idempotencyKey };
 
       const first = await mutateMovieState(attempt);
-      // `refused` leaves here untouched, and that is the point of the split:
-      // a transition the API will not perform is not a stale render, so it
-      // gets no canonical re-read and no replay. Retrying it would only ask
-      // the same rule the same question.
+      if (first.status === "refused") {
+        // Read back, but never replay — that is the point of the split. A rule
+        // asked the same question earns the same answer, so there is nothing
+        // to retry. But the rule the write broke is a rule *about state*, so a
+        // refusal is proof that what this client rendered is not what is
+        // stored: read the record and hand it over, and the caller corrects
+        // its control instead of leaving the viewer looking at something the
+        // API has just contradicted.
+        const canonical = await readCanonicalState(
+          fetchForCall,
+          input.userId,
+          input.movieId,
+        );
+        return {
+          ...first,
+          canonical,
+          corrected: canonical !== null && canonical.revision !== input.expectedRevision,
+        };
+      }
       if (first.status !== "conflict") return first;
 
       const canonical = await readCanonicalState(

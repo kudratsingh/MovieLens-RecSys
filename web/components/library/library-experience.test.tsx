@@ -442,9 +442,9 @@ describe("mutations reconcile canonical state", () => {
   });
 
   it("states the rule, keeps the row, and drops the retry when a transition is refused", async () => {
-    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
-    // It arrives on the same 409 as a stale revision; reported as a conflict it
-    // told the reader the row "changed elsewhere", which nothing had.
+    // One of ADR 0012's rules. It used to arrive on the same 409 as a stale
+    // revision; reported as a conflict it told the reader the row "changed
+    // elsewhere", which nothing had.
     const rule = "a watched movie cannot be added to the watchlist";
     const client = createRecordedLibraryClient();
     const { user } = await renderLibrary({
@@ -469,6 +469,38 @@ describe("mutations reconcile canonical state", () => {
     expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect(rating).toHaveValue("4.5");
+  });
+
+  it("shows what is stored when a refusal proves the row was stale", async () => {
+    // A refusal is a rule about state, so the write path re-reads and hands the
+    // record over. Leaving the row on a rating the API has just contradicted
+    // would keep the reader looking at a number nobody stored — and the live
+    // region has to say the row moved, because a reader who cannot see it
+    // otherwise learns nothing.
+    const rule = "a watched movie cannot be added to the watchlist";
+    const client = createRecordedLibraryClient();
+    const stored = await client.readState(DEFAULT_LIBRARY_USER_ID, 103);
+    const { user } = await renderLibrary({
+      ...client,
+      mutate: () =>
+        Promise.resolve({
+          status: "refused" as const,
+          requestId: "req-refused",
+          detail: rule,
+          canonical: stored ? { ...stored, rating: 2, revision: stored.revision + 4 } : null,
+          corrected: true,
+        }),
+    });
+
+    await user.selectOptions(screen.getByLabelText("Rating for Memories of Murder"), "1");
+
+    expect(await screen.findByText(new RegExp(rule))).toHaveTextContent(
+      "Its current state is shown.",
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Rating for Memories of Murder")).toHaveValue("2"),
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("shows what is stored when the row was written from a stale revision", async () => {

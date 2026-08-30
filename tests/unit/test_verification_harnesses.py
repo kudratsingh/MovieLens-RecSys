@@ -34,14 +34,17 @@ from synthetic.tenant_isolation.remote_canary import (
     REQUIRE_STACK_ENV,
     TENANT_A_USER_ID,
     TENANT_B_PERSONA_ID,
+    TENANT_B_PERSONA_IDS,
     UNROUTABLE_MOVIE_ID,
     UNROUTABLE_USER_ID,
     Actor,
     ActorMisconfiguredError,
     UnreachableTargetError,
     assert_denied_by_design,
+    check_actors_resolve_to_different_tenants,
     check_guard_denies_foreign_actor,
     check_no_foreign_tenant_in_payload,
+    check_sentinel_is_visible_to_its_owner,
     live_stack_required,
     main,
     mint_token,
@@ -176,6 +179,152 @@ def test_payload_check_accepts_a_denial_but_not_a_server_error() -> None:
         )
     assert not any(finding.passed for finding in errored)
     assert errored[0].detail == "the target neither answered nor denied"
+
+
+# --------------------------------------------------------------------------
+# The controls: two tenants, one of which has rows worth hiding
+#
+# Every finding above is an absence, and an absence over an empty tenant is not
+# isolation (issue #75). These two checks are what stop the deployed canary
+# reporting a pass for a boundary nothing tried to cross.
+# --------------------------------------------------------------------------
+
+
+def _persona_page(*user_ids: int, tenant_id: str = "demo") -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "items": [
+            {"user_id": user_id, "slug": f"p{user_id}", "display_name": "P", "description": ""}
+            for user_id in user_ids
+        ],
+    }
+
+
+def test_the_positive_control_passes_when_tenant_b_holds_its_sentinel_personas() -> None:
+    page = _persona_page(*TENANT_B_PERSONA_IDS)
+    with _client(lambda request: httpx.Response(200, json=page)) as client:
+        findings = check_sentinel_is_visible_to_its_owner(
+            client, api_url="http://api.test", token="t", tenant_id="demo"
+        )
+    assert [finding.passed for finding in findings] == [True]
+    assert "do exist" in findings[0].detail
+
+
+def test_the_positive_control_fails_when_there_is_nothing_to_leak() -> None:
+    """The exact shape of the vacuity: tenant B answers, and answers empty."""
+    with _client(lambda request: httpx.Response(200, json=_persona_page())) as client:
+        findings = check_sentinel_is_visible_to_its_owner(
+            client, api_url="http://api.test", token="t", tenant_id="demo"
+        )
+    assert not any(finding.passed for finding in findings)
+    assert "consistent with there being nothing to leak" in findings[0].detail
+
+
+def test_the_positive_control_fails_when_tenant_b_cannot_read_its_own_personas() -> None:
+    with _client(lambda request: httpx.Response(403, json={"detail": "nope"})) as client:
+        findings = check_sentinel_is_visible_to_its_owner(
+            client, api_url="http://api.test", token="t", tenant_id="demo"
+        )
+    assert not any(finding.passed for finding in findings)
+    assert findings[0].status == 403
+
+
+def test_the_positive_control_still_reports_a_leak_inside_its_own_page() -> None:
+    """The control reads a payload, so it checks the payload it read."""
+    page = _persona_page(*TENANT_B_PERSONA_IDS)
+    page["items"][0]["tenant_id"] = "default"
+    with _client(lambda request: httpx.Response(200, json=page)) as client:
+        findings = check_sentinel_is_visible_to_its_owner(
+            client, api_url="http://api.test", token="t", tenant_id="demo"
+        )
+    assert not any(finding.passed for finding in findings)
+    assert "['default']" in findings[0].detail
+
+
+def _whoami_client(by_token: dict[str, httpx.Response]) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        return by_token[token]
+
+    return _client(handler)
+
+
+_ACTOR_A = Actor("default", "movielens-verify", "s", "isolation", "pw")
+_ACTOR_B = Actor("demo", "movielens-verify", "s", "verify", "pw")
+
+
+def test_the_actor_control_passes_when_the_two_realms_resolve_to_two_tenants() -> None:
+    with _whoami_client(
+        {
+            "a": httpx.Response(200, json={"tenant_id": "default", "realm": "default"}),
+            "b": httpx.Response(200, json={"tenant_id": "demo", "realm": "demo"}),
+        }
+    ) as client:
+        findings = check_actors_resolve_to_different_tenants(
+            client,
+            api_url="http://api.test",
+            token_a="a",
+            token_b="b",
+            actor_a=_ACTOR_A,
+            actor_b=_ACTOR_B,
+        )
+    assert all(finding.passed for finding in findings)
+
+
+def test_the_actor_control_fails_when_both_actors_land_in_one_tenant() -> None:
+    """A run comparing a tenant with itself would report a wall of 200s as a leak."""
+    same = httpx.Response(200, json={"tenant_id": "demo"})
+    with _whoami_client({"a": same, "b": same}) as client:
+        findings = check_actors_resolve_to_different_tenants(
+            client,
+            api_url="http://api.test",
+            token_a="a",
+            token_b="b",
+            actor_a=Actor("demo", "movielens-verify", "s", "isolation", "pw"),
+            actor_b=_ACTOR_B,
+        )
+    assert not all(finding.passed for finding in findings)
+    assert any("compared a tenant with itself" in finding.detail for finding in findings)
+
+
+def test_the_actor_control_fails_when_an_actor_is_not_an_authenticated_caller() -> None:
+    with _whoami_client(
+        {
+            "a": httpx.Response(401, text="invalid token"),
+            "b": httpx.Response(200, json={"tenant_id": "demo"}),
+        }
+    ) as client:
+        findings = check_actors_resolve_to_different_tenants(
+            client,
+            api_url="http://api.test",
+            token_a="a",
+            token_b="b",
+            actor_a=_ACTOR_A,
+            actor_b=_ACTOR_B,
+        )
+    assert [finding.passed for finding in findings] == [False, True]
+    assert "not an authenticated caller" in findings[0].detail
+
+
+def test_the_actor_control_fails_when_tenant_a_is_told_about_tenant_bs_personas() -> None:
+    with _whoami_client(
+        {
+            "a": httpx.Response(
+                200, json={"tenant_id": "default", "selected_persona": TENANT_B_PERSONA_ID}
+            ),
+            "b": httpx.Response(200, json={"tenant_id": "demo"}),
+        }
+    ) as client:
+        findings = check_actors_resolve_to_different_tenants(
+            client,
+            api_url="http://api.test",
+            token_a="a",
+            token_b="b",
+            actor_a=_ACTOR_A,
+            actor_b=_ACTOR_B,
+        )
+    assert [finding.passed for finding in findings] == [False, True]
+    assert str(TENANT_B_PERSONA_ID) in findings[0].detail
 
 
 # --------------------------------------------------------------------------

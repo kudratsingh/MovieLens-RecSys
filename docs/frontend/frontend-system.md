@@ -53,6 +53,36 @@ fourth navigation slot, and the deck's full-height composition already reserved
 the header's `5rem`. What it gained is the four landmarks and the one exit every
 other route has.
 
+**The shell's footer carries the TMDB notice**, and carries it unconditionally.
+It used to appear only where a route passed `legacyHref`, which meant the
+`/ui-preview` shells and fixture-mode Discover rendered no footer at all — and
+the attribution TMDB's terms require for their images lived in exactly one place
+in the app, `components/legacy/recommendation-demo.tsx`, on the pre-redesign
+dashboard that is scheduled for retirement. Retiring it would have deleted the
+only copy, on a product where every card on every route is a TMDB poster.
+
+The mark, the link and the required sentence are one component,
+`components/ui/tmdb-attribution.tsx`, and the sentence is a constant rather than
+three hand-maintained strings. Two placements render it and they are not
+interchangeable:
+
+| Placement | Copy | Why it is there |
+|---|---|---|
+| `AppShell` footer, every product route | The required sentence alone | The product-wide notice. Below the fold by construction, and its bottom padding clears the fixed mobile navigation |
+| Movie detail, under the enriched block | Prefixed `Details from TMDB.` | Scoped to the fields it covers, which is what the design contract asks for and which it says explicitly does **not** stand in for the shell-level one |
+
+The signed-out door renders no shell, so it carries a third copy ruled off at the
+foot of the sign-in card. That one is not discharging an obligation — the door
+shows no TMDB artwork — it is there because a required line present on every page
+but the front one is the shape of gap that produced this work.
+
+`--text-muted` is the role, at 6.38:1 on the canvas under the footer and 6.08:1
+on the card. `e2e/tmdb-attribution.spec.ts` asserts the notice on all five
+product routes plus the live route and the door, at 390/768/1440 and again at
+320, measures that contrast in the browser, and checks that the phone's fixed
+bottom navigation does not land on top of the notice once the document is
+scrolled to its foot.
+
 ## Visual contract
 
 Semantic CSS variables in `web/app/globals.css` cover:
@@ -224,9 +254,11 @@ npm run test:e2e:ui
 
 Vitest covers poster fallback and image failure, keyboard-operable state,
 drawer focus/Escape restoration, independent resource failure, tab semantics,
-and axe checks. Playwright renders all five route shells at 390×844, 768×1024, and
-1440×1000, asserts their movie-first headings and named navigation, checks page
-overflow, and verifies evidence failure isolation.
+the TMDB notice's exact wording and link, and axe checks. Playwright renders all
+five route shells at 390×844, 768×1024, and 1440×1000, asserts their movie-first
+headings and named navigation, checks page overflow, verifies evidence failure
+isolation, and holds the TMDB notice to the whole matrix in
+`e2e/tmdb-attribution.spec.ts`.
 
 Visual evidence and its capture instructions live in
 [`evidence/bundle-4`](evidence/bundle-4/README.md), and the re-captured
@@ -483,6 +515,19 @@ control reports intent (MovieStateAction)
   conflict is raised before any feedback event is written, and because both
   attempts carry the same idempotency key, so a lost response replays the stored
   result rather than applying it twice.
+- **A refusal is corrected too, but never replayed.** A `422` with
+  `code: transition_refused` is a rule rather than a race — ADR 0012's table
+  forbids the result, nothing was written, and asking again earns the same
+  answer, so there is no replay and no `Try again`. It still triggers the
+  canonical re-read, because the rule that was broken is a rule *about state*:
+  a refusal is proof that what the control rendered is not what is stored. The
+  record comes back on the result as `canonical`, with `corrected` set when it
+  differs from the revision the refused write asserted, and the live region
+  then adds "Its current state is shown." — a control that changes under a
+  reader without saying so is the accessibility failure the region exists to
+  prevent. The API's own sentence is repeated verbatim as the reason; nothing
+  here tells the viewer to reload. The two used to share `409` and be told
+  apart by matching that sentence with regular expressions (issue #74).
 - **One intent, one key.** A retry of the same intent replays the original
   commit rather than writing a second feedback event. `Try again` in the Library
   and a re-pressed control in `useMovieState` both rely on that.

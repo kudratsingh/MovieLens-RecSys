@@ -51,8 +51,9 @@ export type QuickPickCommitOutcome =
       /** A revision conflict; the canonical state has been re-read. */
       conflict?: boolean;
       /**
-       * The API declined the transition itself. Nothing was written and
-       * nothing was re-read, so a second press cannot change the answer.
+       * The API declined the transition itself. Nothing was written, so a
+       * second press cannot change the answer — but the canonical record has
+       * been re-read, because the rule that was broken is a rule about state.
        */
       refused?: boolean;
     };
@@ -83,10 +84,11 @@ export function quickPickFailureCopy(
   if (result.status === "refused") {
     // The API's own sentence, because it names the rule this decision would
     // have broken and no copy written here could say it more precisely. It is
-    // deliberately not offered as something to try again: nothing changed
-    // anywhere, so a second press asks the same rule the same question.
+    // deliberately not offered as something to try again: nothing was stored,
+    // so a second press asks the same rule the same question.
     const reason = result.detail.trim();
-    return `That decision was not recorded. ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+    const shown = result.corrected ? " Its current state is shown." : "";
+    return `That decision was not recorded. ${/[.!?]$/.test(reason) ? reason : `${reason}.`}${shown}`;
   }
   switch (result.failure.status) {
     case "auth-expired":
@@ -210,10 +212,13 @@ export function createLiveQuickPickTransport(options: {
         return { ok: false, message: quickPickFailureCopy(result), conflict: true };
       }
       if (result.status === "refused") {
-        // A rule rather than a race, so there is no canonical record to adopt
-        // and no revision to move on from — the write never happened. The
-        // intent keeps its key: no feedback event was written, so a re-press is
-        // still the same decision rather than a second one.
+        // A rule rather than a race, so nothing was written and nothing is
+        // replayed. The write path still re-read the record — a rule about
+        // state that this press did not expect means the revision this deck
+        // holds is stale — so adopt it and the next press asserts a real one.
+        // The intent keeps its key: no feedback event was written, so a
+        // re-press is still the same decision rather than a second one.
+        if (result.canonical) adopt(result.canonical);
         return { ok: false, message: quickPickFailureCopy(result), refused: true };
       }
       return { ok: false, message: quickPickFailureCopy(result) };

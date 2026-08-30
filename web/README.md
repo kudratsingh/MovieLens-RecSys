@@ -99,9 +99,11 @@ through here. Before Bundle 7c there were copies, and they had already diverged.
   response treated as truth.
 - `client.ts` — the seam. On a `409` it re-reads the canonical record and
   **replays the same intent with the same key**, which is why a first press on a
-  title that already carries state now commits instead of being discarded.
-  A `409` that is a *transition refusal* rather than a conflict is rendered
-  verbatim as a note, with no retry.
+  title that already carries state now commits instead of being discarded. A
+  `422` with `code: transition_refused` is a rule rather than a race: it earns
+  the same re-read — being refused by a rule about state proves the control was
+  rendering something stale — but never a replay, and it is announced in the
+  API's own words as a note with no retry.
 - `committed-store.ts` — a tab-local relay of committed states, so a write on
   movie detail is the revision Discover's next write asserts.
 - `announce.ts`, `focus.ts` — one vocabulary for what a write did, and where
@@ -143,6 +145,21 @@ npm run test:perf           # browser timing — needs the seeded demo stack
 reverses its own writes; `persona-hygiene` asserts the run left Cold Start at
 zero positive signals, because that persona is the only proof of the fallback
 path.
+
+### Formatting
+
+`npm run format:check` (and `npm run format` to apply) runs Prettier against
+`.prettierrc` — `printWidth: 100`, defaults otherwise — with `.prettierignore`
+covering build output and the generated `lib/api.generated.ts`, whose formatting
+belongs to `openapi-typescript`.
+
+It is **not** in CI, and it does not pass today: 173 files differ, at every print
+width tried (80 through 100). The cause is not a wrong setting — the tree is
+hand-wrapped tighter than Prettier joins, so Prettier's fix is mostly to *pull
+lines back together*, e.g. `export function displayState(state: MovieState | null
+| undefined): MovieDisplayState` onto one line. Adopting it is a whole-tree
+reformat and belongs in its own commit, where the diff can be read as what it is;
+until then the config exists so the question is measurable rather than open.
 
 `scripts/` holds `check-api-types.mjs` (the drift check) and the
 `capture-*-evidence.mjs` scripts behind `npm run evidence:*`, which write the

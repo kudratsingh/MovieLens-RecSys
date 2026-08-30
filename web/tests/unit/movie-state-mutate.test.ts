@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  isTransitionRefusal,
+  IDEMPOTENCY_CONFLICT,
   mutateMovieState,
   newIdempotencyKey,
   movieStatePath,
+  REVISION_CONFLICT,
+  TRANSITION_REFUSED,
 } from "@/lib/movie-state/mutate";
 import { movieState } from "./resource-fixtures";
 
@@ -148,44 +150,85 @@ describe("committing a movie-state mutation", () => {
 });
 
 /**
- * The API documents one `409` for three conditions, so the client tells them
- * apart by body. Every string below is quoted verbatim from the error it is
- * raised with in `src/serving/feedback.py`; if one of them is reworded there
- * without this list moving, this is the test that says so.
+ * A refusal and a race are different events with different recoveries, and the
+ * API now says which is which in `ErrorResponse.code`: `transition_refused` on
+ * a `422`, `revision_conflict` or `idempotency_conflict` on a `409`.
+ *
+ * This suite used to assert the six *sentences* the server raises, because the
+ * client told the two apart by matching them (issue #74). Nothing here quotes
+ * server prose any more — that was the defect, not the coverage.
  */
 describe("telling a transition refusal apart from a concurrency conflict", () => {
-  // `StateRevisionConflictError` and `IdempotencyConflictError`.
-  const CONCURRENCY = [
-    "state revision 3 is stale; current revision is 5",
-    "idempotency key was already used for another mutation",
-    "idempotency key was already used with a different rating",
-  ];
-
-  // `InvalidStateTransitionError`, the three product rules it states.
-  const REFUSALS = [
-    "a watched movie cannot be added to the watchlist",
-    "undo dismissal before adding this movie to watchlist",
-    "rating_set requires a rating",
-  ];
-
-  it.each(CONCURRENCY)("treats %j as a conflict the write path can recover", async (detail) => {
+  it("reads a coded refusal as a refusal", async () => {
+    const detail = "a watched movie cannot be added to the watchlist";
     const result = await mutateMovieState({
       ...baseInput,
-      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
-    });
-
-    expect(result).toMatchObject({ status: "conflict", detail });
-    expect(isTransitionRefusal(detail)).toBe(false);
-  });
-
-  it.each(REFUSALS)("treats %j as a refusal that carries its own sentence", async (detail) => {
-    const result = await mutateMovieState({
-      ...baseInput,
-      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
+      fetchImpl: stubFetch(jsonResponse({ detail, code: TRANSITION_REFUSED }, 422)),
     });
 
     expect(result).toMatchObject({ status: "refused", detail });
-    expect(isTransitionRefusal(detail)).toBe(true);
+  });
+
+  it.each([REVISION_CONFLICT, IDEMPOTENCY_CONFLICT])(
+    "reads %s as a conflict the write path can recover",
+    async (code) => {
+      const detail = "a sentence the server is free to reword tomorrow";
+      const result = await mutateMovieState({
+        ...baseInput,
+        fetchImpl: stubFetch(jsonResponse({ detail, code }, 409)),
+      });
+
+      expect(result).toMatchObject({ status: "conflict", detail });
+    },
+  );
+
+  it("trusts the code over the status when the two disagree", async () => {
+    // Not a shape the API produces. It is asserted because the code is the
+    // contract: were a refusal ever to move to another status, no branch here
+    // should need editing to keep telling the truth.
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail: "no", code: TRANSITION_REFUSED }, 409)),
+    });
+
+    expect(result.status).toBe("refused");
+  });
+
+  it("falls back to the status for a body carrying no code", async () => {
+    const conflict = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail: "state revision 3 is stale" }, 409)),
+    });
+    const refusal = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse({ detail: "that is not allowed" }, 422)),
+    });
+
+    expect(conflict.status).toBe("conflict");
+    expect(refusal.status).toBe("refused");
+  });
+
+  it("never shows a request-validation 422 as a product rule", async () => {
+    // FastAPI answers a malformed request on the refusal's status, with
+    // `detail` as a list of field errors and no code. Rendering that as the
+    // reason a decision was declined would blame the viewer for our own
+    // defect, so it falls through to the generic failure mapping.
+    const validation = {
+      detail: [
+        {
+          loc: ["body", "rating"],
+          msg: "Input should be less than or equal to 5",
+          type: "less_than_equal",
+        },
+      ],
+    };
+    const result = await mutateMovieState({
+      ...baseInput,
+      fetchImpl: stubFetch(jsonResponse(validation, 422)),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" && result.failure.reason).toBe("bad-request");
   });
 
   it("keeps a 409 with nothing readable in it a conflict", async () => {
@@ -196,21 +239,18 @@ describe("telling a transition refusal apart from a concurrency conflict", () =>
     });
 
     expect(result).toMatchObject({ status: "conflict", detail: null });
-    expect(isTransitionRefusal(null)).toBe(false);
-    expect(isTransitionRefusal("   ")).toBe(false);
   });
 
-  it("reads an unrecognised 409 as a refusal rather than inventing a race", async () => {
-    // The safer direction to be wrong in: an unknown rule shown in the API's
-    // own words is honest, while an unknown rule shown as "changed somewhere
-    // else" is a claim about state nobody touched.
-    const detail = "this persona cannot be written to during a replay window";
+  it("does not strand a coded refusal that arrived with no sentence", async () => {
+    // A refusal is announced in the API's own words, so one with nothing to
+    // say is a malformed response rather than a rule to render with a blank
+    // reason. It reports as a failure.
     const result = await mutateMovieState({
       ...baseInput,
-      fetchImpl: stubFetch(jsonResponse({ detail }, 409)),
+      fetchImpl: stubFetch(jsonResponse({ code: TRANSITION_REFUSED }, 422)),
     });
 
-    expect(result).toMatchObject({ status: "refused", detail });
+    expect(result.status).toBe("failed");
   });
 });
 

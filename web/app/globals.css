@@ -321,6 +321,44 @@
   height: 1px;
 }
 
+/*
+ * The TMDB notice, wherever it sits.
+ *
+ * Here rather than beside one component because two surfaces render it and
+ * neither owns it — the product shell on every authenticated route, and the
+ * signed-out door, which imports only `sign-in.css`. `.skip-link` above is the
+ * same case: page chrome that belongs to the app rather than to a route.
+ *
+ * `--text-muted` is deliberate: the quietest role that still clears 4.5:1
+ * against every surface it lands on — 6.38:1 on the canvas under the shell
+ * footer, 6.08:1 on the card at the foot of the signed-out door. The line is
+ * meant to recede, not to disappear; the mark beside it is an image and
+ * carries its own alt.
+ */
+.tmdb-attribution {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  gap: 0.4rem 0.75rem;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 52rem;
+}
+
+/* The mark is the whole link, so it carries the touch target itself. */
+.tmdb-attribution a {
+  align-items: center;
+  display: inline-flex;
+  min-height: 2.75rem;
+}
+
+.tmdb-attribution img {
+  display: block;
+  height: auto;
+}
+
 .visually-hidden {
   height: 1px;
   margin: -1px;

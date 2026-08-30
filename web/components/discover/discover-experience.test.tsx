@@ -373,18 +373,19 @@ describe("a committed action refreshes recommendations before it says so", () =>
   it("states the rule when the API refuses the transition, and offers no retry", async () => {
     const user = userEvent.setup();
     const calls: string[] = [];
-    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
-    // It shares the 409 with a stale revision, and this route used to report it
-    // as "changed somewhere else before this saved" — untrue, since nothing
-    // changed anywhere — and spend a re-read plus a replay proving it.
+    // A refusal in the shape the API answers it: 422 with its own code. It used
+    // to share the 409 with a stale revision, and this route reported it as
+    // "changed somewhere else before this saved" — untrue, since nothing
+    // changed anywhere — and spent a replay proving it.
     const rule = "a watched movie cannot be added to the watchlist";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       calls.push(url);
       if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
       if (url.includes("/watchlist")) {
-        return Response.json({ detail: rule }, { status: 409 });
+        return Response.json({ detail: rule, code: "transition_refused" }, { status: 422 });
       }
+      if (/\/movies\/\d+$/.test(url)) return Response.json(detailWithWatchlist);
       return Response.json(learnedRecommendations);
     });
     vi.stubGlobal("fetch", fetchImpl);
@@ -394,10 +395,50 @@ describe("a committed action refreshes recommendations before it says so", () =>
 
     await screen.findByText(new RegExp(rule));
     expect(screen.queryByText(/changed somewhere else/)).not.toBeInTheDocument();
-    // One attempt, no replay, and no canonical read behind it.
+    // One attempt and no replay: the read behind it is the correction, not a
+    // retry, and a rule asked twice answers the same way.
     expect(calls.filter((url) => url.includes("/watchlist"))).toHaveLength(1);
-    expect(calls.some((url) => /\/movies\/\d+$/.test(url))).toBe(false);
-    // The queue did not move and the control fell back to its committed value.
+    expect(calls.filter((url) => /\/movies\/\d+$/.test(url))).toHaveLength(1);
+    // The record that came back said watchlisted, so the control now shows
+    // what is stored — and the sentence says the control moved, because a
+    // reader who cannot see it has no other way to learn that it did.
+    await screen.findByText(/current state is shown/);
+    const control = await featuredRegion().findByRole("button", { name: "In watchlist" });
+    expect(control).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("says nothing about a correction when the record confirms what was shown", async () => {
+    // The other half of the split: a rule that stands on its own, with the
+    // control already on the revision the record is at. Nothing moved under
+    // the reader, so nothing claims it did.
+    const user = userEvent.setup();
+    const rule = "undo dismissal before adding this movie to watchlist";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/api/auth/csrf")) return Response.json({ csrfToken: "token" });
+        if (url.includes("/watchlist")) {
+          return Response.json({ detail: rule, code: "transition_refused" }, { status: 422 });
+        }
+        if (/\/movies\/\d+$/.test(url)) {
+          return Response.json({
+            ...detailWithWatchlist,
+            item: {
+              ...detailWithWatchlist.item,
+              state: { ...committed().state, revision: 0, watchlisted_at: null },
+            },
+          });
+        }
+        return Response.json(learnedRecommendations);
+      }),
+    );
+
+    renderDiscover(readyState("recommendations", learnedRecommendations, REQUEST_ID));
+    await user.click(featuredRegion().getByRole("button", { name: "Watchlist" }));
+
+    await screen.findByText(new RegExp(rule));
+    expect(screen.queryByText(/current state is shown/)).not.toBeInTheDocument();
     const control = featuredRegion().getByRole("button", { name: "Watchlist" });
     expect(control).toHaveAttribute("aria-pressed", "false");
   });
