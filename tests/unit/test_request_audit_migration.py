@@ -18,7 +18,7 @@ def test_the_migration_follows_the_tenant_champion_columns() -> None:
     source = _MIGRATION.read_text()
 
     assert 'revision: str = "0017_request_audits"' in source
-    assert 'down_revision: str | None = "0016_tenant_champion_columns"' in source
+    assert 'down_revision: str | None = "0015_synth_cold_tenant"' in source
 
 
 def test_the_table_carries_the_columns_the_non_negotiable_names() -> None:
