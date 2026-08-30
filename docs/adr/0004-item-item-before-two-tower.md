@@ -47,3 +47,77 @@ Item-item is **not** thrown away once two-tower lands. Both remain valid candida
 - **Promotion gate.** The two-tower has to beat item-item's recall@K_candidates on holdout by a defined threshold to be promoted to champion candidate generator. The threshold itself is decided when the two-tower lands (it depends on item-item's actual number); ADR 0003 already established that per-stage promotion gates are stage-local, and ADR 0001 already established the comparison protocol.
 - **Cold-start.** Item-item has the same cold-user problem as CF — a user with zero training history has no co-occurrence signal. The popularity fallback established in ADR 0001 / PR #14 lifts unchanged: cold users get popularity-stage candidates regardless of which candidate model is champion. The item-item module embeds the fallback the same way `CFModel` does; the two-tower will too.
 - **Deferred to future ADRs in this lineage.** The two-tower's embedding dimension, negative-sampling strategy, and ANN library choice each touch their own tradeoffs and earn their own ADRs when the two-tower lands. ADR 0005 (LightGBM over neural ranker) is the next in the Phase 2 queue, independent of this decision.
+
+## 2026-08-30 — measurement note: the comparison this ADR set up, run on the full dataset
+
+Status stays **Accepted**; nothing above is retracted, and the decision this ADR
+took — item-item first — is unchanged either way. What follows is the number the
+Consequences section deferred, and what it settles.
+
+### What was deferred, and what it now reads
+
+The **Promotion gate** bullet above says the two-tower "has to beat item-item's
+recall@K_candidates on holdout by a defined threshold", and leaves the threshold
+open because "it depends on item-item's actual number". Both models have now been
+run to completion on MovieLens 25M through the same harness, same split, same
+seed, and the numbers are in [`results.md`](../results.md)'s 2026-08-30 section.
+
+| Warm slice, 1,939 users, K_CANDIDATES = 500 | Item-item | Two-tower | Relative |
+|---|---:|---:|---:|
+| recall@500 | **0.400144** | 0.046581 | **−88.36%** |
+| NDCG@500 | **0.139240** | 0.014575 | **−89.53%** |
+
+MLflow runs `ab1fe49dc21e4c07abc15775fd0cd12d` (item-item, 19.7 s fit) and
+`5628ab0b24c448a78c6f93440e6360b1` (two-tower, 4,687.9 s fit, 3 epochs over
+19,867,692 (history, positive) pairs), both in `phase-2-candidates`, both routing
+on index membership so the model is the only difference.
+
+**The threshold never had to be pinned to settle this.** The challenger reaches
+11.6% of the incumbent's warm recall@500 — it does not clear zero, let alone
+ADR 0001's house rule of +3% relative. **Item-item remains the champion candidate
+generator.** For calibration: drawing 500 of the 34,461 train items uniformly at
+random gives an expected recall@500 of 0.014509, so the two-tower is at 3.21×
+random and item-item at 27.6×.
+
+Pinning the threshold's exact value is still owed and is deliberately not done
+here — this comparison did not need it, and a number chosen to fit a result it
+cannot change is worth less than one chosen on its own terms. Under ADR 0001's
++3% relative rule it would be **warm recall@500 ≥ 0.412148**, which is the figure
+a future challenger should expect to be held to.
+
+### What the result is, and is not, evidence for
+
+The loss curve is the part worth recording. Mean sampled-softmax loss by epoch was
+**10.3542 → 10.2726 → 10.2718** — the second epoch bought 0.08 and the third
+bought 0.0008. The model converged, in the sense that it stopped moving, but it
+converged somewhere that retrieves barely better than chance. Three epochs at
+`lr=1e-3` over ~14,600 steps with 16,384 sampled negatives is a thin training
+budget, and it was chosen in [ADR 0006](0006-two-tower-retrieval-architecture.md)
+before anyone had run it at this scale.
+
+So this is a measurement of **two-tower v1 as configured**, not a finding about
+learned retrieval versus co-occurrence. Reading it as the latter would be exactly
+the mistake rationale #1 of this ADR was written to prevent, run backwards.
+
+What it *is* evidence for is that rationale #1 was right. A warm recall@500 of
+0.0466 reported on its own would have read as a real number — as that rationale
+put it, "'recall@500 = 0.41' reads as a real number but tells you nothing" — and
+only the zero-parameter baseline sitting beside it makes it legible as a failure.
+The baseline earned its keep on its first real use.
+
+### Consequences
+
+- **Item-item stays champion.** The served bundle (`infra/model-bundle/`) is
+  unchanged; it was never going to change on this result, but it is worth saying
+  that nothing was promoted.
+- **`docs/modeling-roadmap.md`'s Rung 1 is not skippable on the stated
+  condition.** Its skip clause is "the full-dataset two-tower v1 already clears
+  ADR 0004's threshold". It does not. Whether Rung 1 (hard negatives, item side
+  features) or a plain training-budget sweep is the right next move on the
+  two-tower is a rung decision for the owner, and the roadmap's approval gate
+  applies.
+- **The cheapest next experiment is not on the ladder at all.** Before any
+  architectural change, the two-tower deserves a run with more epochs and a
+  learning-rate sweep, because a loss that flattens after one epoch is a
+  hyperparameter symptom before it is a model one. That is a re-measurement of
+  this ADR's own comparison, not a new rung.

@@ -33,6 +33,7 @@ from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
+from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
 from synthetic.cold_start import harness as synth_cold
 
@@ -72,25 +73,38 @@ def main() -> None:
     # cohort exists to be routed and scored, not to shift an existing metric.
     train_frame, cohort = synth_cold.prepare(split, logger=logger)
 
+    # Default is the index-membership routing this model has always used;
+    # SYNTH_COLD_ROUTING=threshold is the opt-in experiment behind
+    # docs/cold-start-routing-decision.md.
+    routing_policy = routing.resolve_policy()
+    logger.info("Cold-start routing policy: %s", routing_policy)
+
     config = TwoTowerConfig()
-    model = TwoTowerModel(config=config)
+    model = TwoTowerModel(
+        config=config,
+        cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD),
+    )
 
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
-    with mlflow.start_run(run_name="twotower-sampled-softmax"):
+    with mlflow.start_run(
+        run_name=routing.run_name_for("twotower-sampled-softmax", routing_policy)
+    ):
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
                 "model_type": "two_tower",
                 "phase": "2",
                 "stage": "candidate",
+                "cold_start_routing_policy": routing_policy,
             }
         )
         mlflow.log_params(
             {
                 "k_candidates": K_CANDIDATES,
                 "cold_start_threshold": COLD_START_THRESHOLD,
+                "cold_start_routing_policy": routing_policy,
                 "cutoff_timestamp": split.cutoff,
                 "holdout_end_timestamp": split.holdout_end,
                 "n_train_rows": len(split.train),

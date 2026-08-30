@@ -54,6 +54,7 @@ from src.data.load import load_ratings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, K, evaluate
 from src.features import FeatureIndex
+from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
 from synthetic.cold_start import harness as synth_cold
@@ -233,9 +234,19 @@ def main() -> None:
     # cohort exists to be routed and scored, not to shift an existing metric.
     train_frame, cohort = synth_cold.prepare(split, logger=logger)
 
+    # Default is the index-membership routing the candidate model has always
+    # used; SYNTH_COLD_ROUTING=threshold is the opt-in experiment behind
+    # docs/cold-start-routing-decision.md. It reaches the ranker through its
+    # candidate stage, so a threshold run changes both the candidates the
+    # ranker is trained on and the ones it is scored over.
+    routing_policy = routing.resolve_policy()
+    logger.info("Cold-start routing policy: %s", routing_policy)
+
     logger.info("Fitting candidate model (item-item cosine) ...")
     t0 = time.perf_counter()
-    candidate_model = ItemItemModel().fit(train_frame)
+    candidate_model = ItemItemModel(
+        cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD)
+    ).fit(train_frame)
     candidate_fit_seconds = time.perf_counter() - t0
     logger.info("Candidate fit in %.1fs", candidate_fit_seconds)
 
@@ -359,7 +370,9 @@ def main() -> None:
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_RANKER_EXPERIMENT)
-    with mlflow.start_run(run_name="lgbm-lambdarank-itemitem-candidates"):
+    with mlflow.start_run(
+        run_name=routing.run_name_for("lgbm-lambdarank-itemitem-candidates", routing_policy)
+    ):
         mlflow.set_tags(
             {
                 "model_family": "ranker",
@@ -367,6 +380,7 @@ def main() -> None:
                 "candidate_model": "itemitem_cosine",
                 "phase": "2",
                 "stage": "ranker",
+                "cold_start_routing_policy": routing_policy,
                 # Called out in ADR 0005 Consequences — candidate model
                 # was fit on all of train including the positive window.
                 "candidate_leakage_compromise": "true",
@@ -377,6 +391,7 @@ def main() -> None:
                 "k_final": K,
                 "k_candidates": K_CANDIDATES,
                 "cold_start_threshold": COLD_START_THRESHOLD,
+                "cold_start_routing_policy": routing_policy,
                 "cutoff_timestamp": split.cutoff,
                 "holdout_end_timestamp": split.holdout_end,
                 "n_train_rows": len(split.train),

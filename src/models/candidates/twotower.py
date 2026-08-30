@@ -36,6 +36,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias
 from torch import nn
 
+from . import routing
 from .popularity import PopularityModel
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,11 @@ class TwoTowerModel:
     """
 
     config: TwoTowerConfig = field(default_factory=TwoTowerConfig)
+
+    # Opt-in, non-default: where the learned path stops. None keeps the
+    # index-membership rule this model has always used; an int applies
+    # ADR 0001's threshold instead. See src/models/candidates/routing.py.
+    cold_start_threshold: int | None = None
 
     # Populated by fit:
     _item_tower: ItemTower | None = None
@@ -415,14 +421,21 @@ class TwoTowerModel:
     def was_served_by_twotower(self, user_id: int) -> bool:
         """Predicate: would ``recommend(user_id, …)`` go through the tower or popularity?
 
-        True iff the tower is fitted and the user has any training history.
-        Mirrors the routing condition in ``recommend`` exactly so training
-        can attribute metrics to the right policy without re-deriving the
-        predicate — same pattern CFModel and ItemItemModel established.
+        By default: true iff the tower is fitted and the user has any training
+        history. ``recommend`` already calls this rather than restating the
+        condition, so the two cannot drift — which matters now that the
+        condition has a second form. With ``cold_start_threshold`` set, index
+        membership is necessary but no longer sufficient: the user also needs
+        that many distinct training items.
         """
-        return (
-            self._item_tower is not None
-            and self._faiss_index is not None
-            and user_id in self._user_history
-            and len(self._user_history[user_id]) > 0
+        if (
+            self._item_tower is None
+            or self._faiss_index is None
+            or user_id not in self._user_history
+            or len(self._user_history[user_id]) == 0
+        ):
+            return False
+        return routing.learned_path_serves(
+            history_size=len(self._popularity.user_history.get(user_id, ())),
+            cold_start_threshold=self.cold_start_threshold,
         )
