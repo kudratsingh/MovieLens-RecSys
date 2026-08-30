@@ -7,8 +7,11 @@ directly comparable in MLflow. Differences from itemitem.py:
 
   1. The model is a learned two-tower per ADR 0006 (PyTorch modules trained
      with sampled softmax + log-uniform correction, FAISS retrieval).
-  2. Per-epoch loss is streamed to MLflow via the ``on_epoch`` callback the
-     model class accepts.
+  2. Per-epoch loss *and* per-epoch warm recall are streamed to MLflow via
+     the ``on_epoch`` callback the model class accepts. The loss curve alone
+     says the model stopped moving; only recall says whether where it
+     stopped is any good, and the 2026-08-30 v1 run needed both to be read
+     together before anyone could tell which.
   3. Per-policy attribution splits holdout users into two-tower-served
      (warm) vs popularity-fallback-served (cold), mirroring the PR #17
      pattern extended to item-item in PR #19.
@@ -17,6 +20,18 @@ Runs land in the same ``phase-2-candidates`` experiment as item-item so
 the two candidate generators sit on the same recall@K_CANDIDATES axis in
 one MLflow view — the direct comparison ADR 0004's promotion gate requires.
 
+**Every hyperparameter is env-driven** through ``TwoTowerConfig.from_env``
+(``TWOTOWER_LEARNING_RATE``, ``TWOTOWER_EPOCHS``, ``TWOTOWER_NUM_SAMPLED``,
+``TWOTOWER_LOGIT_TEMPERATURE``, …). Unset means ADR 0006's default, so
+``make train-twotower`` with a clean environment still reproduces the run
+already recorded in ``docs/results.md``. Two further variables belong to the
+run rather than the model:
+
+  ``TWOTOWER_USER_SAMPLE_FRACTION``  a seeded fraction of users to keep, for
+      cheap pilot runs. 1.0 (the default) is the full dataset.
+  ``TWOTOWER_RUN_LABEL``  appended to the MLflow run name so a sweep cell is
+      identifiable without reading its params.
+
 Run with ``make train-twotower`` (or ``python -m src.training.twotower``)
 from project root. Requires Postgres and MLflow reachable per ``Settings``.
 """
@@ -24,9 +39,13 @@ from project root. Requires Postgres and MLflow reachable per ``Settings``.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections.abc import Mapping
 
 import mlflow
+import numpy as np
+import pandas as pd
 from sqlalchemy import create_engine
 
 from src.config import Settings
@@ -44,18 +63,80 @@ logger = logging.getLogger(__name__)
 # operator can't spray runs into the wrong experiment via env var.
 PHASE_2_EXPERIMENT = "phase-2-candidates"
 
+SAMPLE_FRACTION_ENV_VAR = "TWOTOWER_USER_SAMPLE_FRACTION"
+RUN_LABEL_ENV_VAR = "TWOTOWER_RUN_LABEL"
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-    settings = Settings()
 
-    logger.info("Loading ratings from Postgres ...")
-    engine = create_engine(settings.database_url)
-    ratings = load_ratings(engine)
-    logger.info("Loaded %s ratings", f"{len(ratings):,}")
+def subsample_users(
+    ratings: pd.DataFrame,
+    fraction: float,
+    seed: int,
+) -> pd.DataFrame:
+    """Keep every interaction of a seeded random subset of users.
+
+    Users rather than rows: the user tower is a mean-pool over a history, so
+    thinning rows would shorten every history and change the thing being
+    measured. Thinning users leaves each surviving history exactly as long as
+    it was, which is what makes a pilot's loss curve mean the same thing as
+    the full run's.
+
+    Deterministic given ``(fraction, seed)`` — the user ids are sorted before
+    the draw, so the subset does not depend on row order in Postgres.
+    """
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"{SAMPLE_FRACTION_ENV_VAR} must be in (0, 1], got {fraction}")
+    if fraction == 1.0:
+        return ratings
+
+    user_ids = np.sort(ratings["userId"].unique())
+    n_keep = max(1, int(round(len(user_ids) * fraction)))
+    rng = np.random.default_rng(seed)
+    keep = rng.choice(user_ids, size=n_keep, replace=False)
+    return ratings[ratings["userId"].isin(set(keep.tolist()))].reset_index(drop=True)
+
+
+def resolve_sample_fraction(env: Mapping[str, str] | None = None) -> float:
+    raw = (env if env is not None else os.environ).get(SAMPLE_FRACTION_ENV_VAR, "").strip()
+    return 1.0 if not raw else float(raw)
+
+
+def run_name_for(policy: str, label: str) -> str:
+    """MLflow run name: the historical name, plus policy and sweep labels.
+
+    The default policy with no label keeps the exact name
+    ``docs/results.md`` already cites, so the runs on that page stay
+    findable by the name it gives them.
+    """
+    name = routing.run_name_for("twotower-sampled-softmax", policy)
+    return f"{name}-{label}" if label else name
+
+
+def run_once(
+    ratings: pd.DataFrame,
+    config: TwoTowerConfig,
+    *,
+    sample_fraction: float = 1.0,
+    run_label: str = "",
+    routing_policy: str | None = None,
+) -> None:
+    """One MLflow run: split, fit, recommend, evaluate, log.
+
+    Takes the ratings frame rather than reading it so a sweep can pay the
+    25 M-row ``read_sql`` once and spend the rest of its budget training.
+    """
+    policy = routing.resolve_policy() if routing_policy is None else routing_policy
+    logger.info("Cold-start routing policy: %s", policy)
+
+    if sample_fraction != 1.0:
+        before_users = ratings["userId"].nunique()
+        ratings = subsample_users(ratings, sample_fraction, config.seed)
+        logger.info(
+            "Pilot subsample at fraction %.4f: %s of %s users kept, %s rows",
+            sample_fraction,
+            f"{ratings['userId'].nunique():,}",
+            f"{before_users:,}",
+            f"{len(ratings):,}",
+        )
 
     logger.info("Splitting on time per ADR 0001 ...")
     split = temporal_split(ratings)
@@ -71,78 +152,108 @@ def main() -> None:
     # machine has it. At most 7 000 rows against ~20 M, and none of its users
     # appear in holdout, so the warm/cold numbers below are unmoved — the
     # cohort exists to be routed and scored, not to shift an existing metric.
-    train_frame, cohort = synth_cold.prepare(split, logger=logger)
+    #
+    # A subsampled run skips it: the parquet is anchored to the full split's
+    # cutoff and `prepare` rightly refuses to attach itself to a different
+    # one. A pilot is a comparison against its own siblings, so it loses
+    # nothing it needs.
+    if sample_fraction == 1.0:
+        train_frame, cohort = synth_cold.prepare(split, logger=logger)
+    else:
+        train_frame, cohort = split.train, None
+        logger.info("Subsampled run: ADR 0011 cohort not attached (it is cutoff-anchored)")
 
-    # Default is the index-membership routing this model has always used;
-    # SYNTH_COLD_ROUTING=threshold is the opt-in experiment behind
-    # docs/cold-start-routing-decision.md.
-    routing_policy = routing.resolve_policy()
-    logger.info("Cold-start routing policy: %s", routing_policy)
-
-    config = TwoTowerConfig()
     model = TwoTowerModel(
         config=config,
-        cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD),
+        cold_start_threshold=routing.cold_start_threshold_for(policy, COLD_START_THRESHOLD),
     )
 
-    logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
-    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    # Eval inputs are built before the fit so the per-epoch callback can score
+    # recall without rebuilding them every epoch.
+    holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
+    # Counts come from the real train slice, not the cohort-attached frame:
+    # the warm/cold partition is over holdout users, and no synthetic user
+    # is ever looked up in it.
+    train_counts = split.train.groupby("userId").size().to_dict()
+    holdout_user_ids = split.holdout["userId"].unique().tolist()
+
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
-    with mlflow.start_run(
-        run_name=routing.run_name_for("twotower-sampled-softmax", routing_policy)
-    ):
+    with mlflow.start_run(run_name=run_name_for(policy, run_label)):
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
                 "model_type": "two_tower",
                 "phase": "2",
                 "stage": "candidate",
-                "cold_start_routing_policy": routing_policy,
+                "cold_start_routing_policy": policy,
+                "sweep_label": run_label,
             }
         )
         mlflow.log_params(
             {
                 "k_candidates": K_CANDIDATES,
                 "cold_start_threshold": COLD_START_THRESHOLD,
-                "cold_start_routing_policy": routing_policy,
+                "cold_start_routing_policy": policy,
                 "cutoff_timestamp": split.cutoff,
                 "holdout_end_timestamp": split.holdout_end,
                 "n_train_rows": len(split.train),
                 "n_holdout_rows": len(split.holdout),
-                "embedding_dim": config.embedding_dim,
-                "history_window": config.history_window,
-                "batch_size": config.batch_size,
-                "num_sampled": config.num_sampled,
-                "epochs": config.epochs,
-                "learning_rate": config.learning_rate,
-                "faiss_nlist": config.faiss_nlist,
-                "faiss_nprobe": config.faiss_nprobe,
-                "seed": config.seed,
+                "user_sample_fraction": sample_fraction,
+                "run_label": run_label,
+                **config.as_params(),
             }
         )
 
         logger.info("Fitting two-tower model ...")
         t0 = time.perf_counter()
+        # Mid-training scoring is not fitting; it is subtracted so fit_seconds
+        # stays comparable with runs made before this callback existed.
+        epoch_eval_seconds = 0.0
+        epochs_run = 0
 
         def _log_epoch(epoch: int, mean_loss: float) -> None:
-            # Per-epoch loss so a run's convergence curve is inspectable in
-            # MLflow — useful for spotting a diverging run early or noticing
-            # that 3 epochs was actually already at a plateau.
+            nonlocal epoch_eval_seconds, epochs_run
+            epochs_run = epoch
             mlflow.log_metric("train_loss", mean_loss, step=epoch)
 
+            t_eval = time.perf_counter()
+            model.build_index()
+            epoch_recs = model.recommend_for_users(holdout_user_ids, k=K_CANDIDATES)
+            epoch_result = evaluate(epoch_recs, holdout, train_counts, k=K_CANDIDATES)
+            spread = model.embedding_spread()
+            epoch_eval_seconds += time.perf_counter() - t_eval
+            mlflow.log_metrics(
+                {
+                    "epoch_warm_recall_at_k_candidates": epoch_result.warm.recall,
+                    "epoch_overall_recall_at_k_candidates": epoch_result.overall.recall,
+                    **{f"epoch_{name}": value for name, value in spread.items()},
+                },
+                step=epoch,
+            )
+            logger.info(
+                "Epoch %d: loss=%.4f warm_recall@%d=%.4f item_cos_mean=%.4f item_cos_std=%.4f",
+                epoch,
+                mean_loss,
+                K_CANDIDATES,
+                epoch_result.warm.recall,
+                spread.get("item_cosine_mean", float("nan")),
+                spread.get("item_cosine_std", float("nan")),
+            )
+
         model.fit(train_frame, on_epoch=_log_epoch)
-        fit_seconds = time.perf_counter() - t0
+        fit_seconds = time.perf_counter() - t0 - epoch_eval_seconds
         logger.info(
-            "Fit in %.1fs (%d users x %d items, %d epochs)",
+            "Fit in %.1fs (%d users x %d items, %d of %d epochs; %.1fs of per-epoch eval excluded)",
             fit_seconds,
             len(model._user_history),
             len(model._index_to_item),
+            epochs_run,
             config.epochs,
+            epoch_eval_seconds,
         )
 
         logger.info("Recommending top-%d for each holdout user ...", K_CANDIDATES)
         t1 = time.perf_counter()
-        holdout_user_ids = split.holdout["userId"].unique().tolist()
         cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
         recommendations = model.recommend_for_users(
             holdout_user_ids + cohort_user_ids, k=K_CANDIDATES
@@ -153,13 +264,6 @@ def main() -> None:
             len(holdout_user_ids) + len(cohort_user_ids),
             recommend_seconds,
         )
-
-        logger.info("Building eval inputs ...")
-        holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
-        # Counts come from the real train slice, not the cohort-attached frame:
-        # the warm/cold partition is over holdout users, and no synthetic user
-        # is ever looked up in it.
-        train_counts = split.train.groupby("userId").size().to_dict()
 
         logger.info("Evaluating at K_CANDIDATES=%d ...", K_CANDIDATES)
         result = evaluate(
@@ -232,6 +336,7 @@ def main() -> None:
                 "n_items_in_train": len(model._index_to_item),
                 "fit_seconds": round(fit_seconds, 1),
                 "recommend_seconds": round(recommend_seconds, 1),
+                "epochs_run": epochs_run,
             }
         )
         mlflow.log_metrics(
@@ -264,7 +369,47 @@ def main() -> None:
             mlflow.set_tag(
                 synth_cold.ROUTING_TAG, str(synth_cold.routing_is_correct(result)).lower()
             )
+
+
+def load_inputs(settings: Settings) -> pd.DataFrame:
+    logger.info("Loading ratings from Postgres ...")
+    engine = create_engine(settings.database_url)
+    ratings = load_ratings(engine)
+    logger.info("Loaded %s ratings", f"{len(ratings):,}")
+    return ratings
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    settings = Settings()
+    ratings = load_inputs(settings)
+
+    config = TwoTowerConfig.from_env()
+    logger.info("Config: %s", config)
+
+    logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    run_once(
+        ratings,
+        config,
+        sample_fraction=resolve_sample_fraction(),
+        run_label=os.environ.get(RUN_LABEL_ENV_VAR, "").strip(),
+    )
     logger.info("MLflow run logged. Done.")
+
+
+__all__ = [
+    "PHASE_2_EXPERIMENT",
+    "load_inputs",
+    "main",
+    "resolve_sample_fraction",
+    "run_name_for",
+    "run_once",
+    "subsample_users",
+]
 
 
 if __name__ == "__main__":

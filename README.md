@@ -162,9 +162,16 @@ from a 154,003-row window; trained on the whole window it beats CF/ALS by **+21.
 overall, seed-averaged and at every individual seed**, and
 [ADR 0001](docs/adr/0001-evaluation-protocol.md)'s gate — which since 2026-08-30 reads overall
 NDCG@10 at +3% with a measured per-slice non-regression clause — promotes it. Item-item's top-500
-still holds only 57.0% of the ranker's training positives. The two-tower did not finish a
-90-minute CPU budget, so [ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s comparison on the
-full dataset stays open with 0.4001 as the number to beat. On the synthetic cold-start cohort,
+still holds only 57.0% of the ranker's training positives. The two-tower has since run to
+completion and lost — warm recall@500 **0.0466** against item-item's 0.4001, and against **0.2310**
+for the popularity list it carries inside itself as its own cold-start fallback — so
+[ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s gate is not cleared and item-item stays
+champion. A [learning-rate and budget sweep](docs/results.md#2026-08-30-fourth-session--the-two-towers-learning-rate-and-budget-swept)
+of 12 pilot cells and two full-dataset runs closed the hyper-parameter explanation rather than the
+model: the learning rate was already right to within a decade either side, eight epochs score below
+three, and v1's flat loss curve was not convergence but a model with no range left to speak in —
+its final loss of 10.2718 is worse than `ln(1 + 16,384) = 9.7041`, the loss of a model that emits
+the identical logit for every candidate. On the synthetic cold-start cohort,
 item-item at history sizes 0/1/3/10 scores recall@500 0.4760 / 0.1440 / 0.2880 / 0.3900 with
 `synth_cold_routing_ok = false`
 ([ADR 0011, 2026-08-29 note](docs/adr/0011-cold-start-coverage.md)).

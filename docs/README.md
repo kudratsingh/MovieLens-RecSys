@@ -59,6 +59,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
 | [`results.md`](results.md) | The measured offline results table, every figure with its MLflow run and wall-clock |
+| [`experiments/`](experiments/) | The committed grids a swept result was produced from, so a table in `results.md` is reproducible from an artifact rather than from a diff |
 | [`cold-start-routing-decision.md`](cold-start-routing-decision.md) | Both cold-start routing policies measured side by side, and the ADR 0001 decision the numbers put to the owner |
 | [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) | Which holdout slice the +3% promotion gate reads, and what each option would have said about the ranker |
 | [`demo-runbook.md`](demo-runbook.md) | Clean-checkout startup, seeding, the walkthrough, the audit and latency proofs, reset, troubleshooting |

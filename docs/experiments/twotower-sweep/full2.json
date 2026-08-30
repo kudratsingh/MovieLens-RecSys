@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "The second full-dataset cell, resized to the day's remaining budget after",
+    "the budget run in full.json turned out to cost 21-26 minutes per epoch and",
+    "to use all eight of them. Four epochs: the third is the like-for-like",
+    "against v1's three, and the per-epoch curve keeps it, while the fourth is",
+    "one more than v1 ever got.",
+    "",
+    "This is the run docs/results.md reports as lr1e-2-t0.05-4ep: warm",
+    "recall@500 0.0591, the best two-tower number measured on this project, and",
+    "still 3.9x below the popularity fallback's 0.2310 on the same users."
+  ],
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "lr1e-2-t0.05-4ep",
+      "learning_rate": 0.01,
+      "logit_temperature": 0.05,
+      "epochs": 4
+    }
+  ]
+}

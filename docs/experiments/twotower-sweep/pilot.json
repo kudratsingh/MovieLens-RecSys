@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Pilot grid for the 2026-08-30 two-tower learning-rate and budget sweep.",
+    "6% of users, drawn by seed 42, so every cell trains and scores on the same",
+    "people and only the configuration differs. Cells are ordered by how much",
+    "they matter rather than by how they tabulate: the first four answer the",
+    "question the sweep was opened for, so a pilot cut short for budget still",
+    "answers it. Anything a cell does not name takes ADR 0006's default."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    {"label": "lr1e-3-t1.0", "learning_rate": 0.001, "logit_temperature": 1.0},
+    {"label": "lr1e-3-t0.05", "learning_rate": 0.001, "logit_temperature": 0.05},
+    {"label": "lr1e-2-t1.0", "learning_rate": 0.01, "logit_temperature": 1.0},
+    {"label": "lr1e-4-t1.0", "learning_rate": 0.0001, "logit_temperature": 1.0},
+    {"label": "lr1e-3-t0.1", "learning_rate": 0.001, "logit_temperature": 0.1},
+    {"label": "lr1e-2-t0.05", "learning_rate": 0.01, "logit_temperature": 0.05},
+    {"label": "lr1e-4-t0.05", "learning_rate": 0.0001, "logit_temperature": 0.05},
+    {"label": "lr1e-2-t0.1", "learning_rate": 0.01, "logit_temperature": 0.1},
+    {"label": "lr1e-4-t0.1", "learning_rate": 0.0001, "logit_temperature": 0.1},
+    {"label": "lr1e-3-t1.0-nopos", "learning_rate": 0.001, "logit_temperature": 1.0, "correct_positive_logit": false},
+    {"label": "lr1e-3-t0.05-neg4096", "learning_rate": 0.001, "logit_temperature": 0.05, "num_sampled": 4096},
+    {"label": "lr1e-3-t0.05-exact", "learning_rate": 0.001, "logit_temperature": 0.05, "faiss_exact": true}
+  ]
+}
