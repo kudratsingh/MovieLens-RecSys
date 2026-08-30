@@ -53,6 +53,67 @@ contexts so the same file builds locally for the rehearsal (`make up-prod`), whi
   <img alt="The production topology: one Hetzner CX22 with only the Caddy edge publishing ports and key-only SSH from GitHub Actions, ten long-lived services on a private network, the jobs profile, and the systemd units for boot, nightly backup and weekly prune." src="diagrams/production-topology.svg" width="100%">
 </picture>
 
+## Staging
+
+Numbered sections start below; this one is context, because the first question anyone asks about a
+runbook like this is whether there is somewhere to try it first. There is.
+
+**Staging is `docker-compose.prod.yml` with `docker-compose.staging.yml` layered on it** — a
+different Compose project (`movielens-staging`), `ENVIRONMENT=staging` on the eight services that
+construct `Settings()`, and its own `.env.staging`. Nothing else differs, deliberately: hostnames,
+every credential, the certificate issuer and the image tag all travel in the env file, exactly the
+way the box and the laptop rehearsal already differ from each other.
+
+```bash
+cp infra/deploy/staging.env.example .env.staging   # then fill in every REPLACE_ME__
+chmod 0600 .env.staging
+make up-staging        # build the images from this checkout, then start the stores
+make staging-release   # roles, realms, migrations, the persona seed, materialization
+make staging-serve     # the serving tier, held until the sidecar is warm rather than listening
+make staging-verify    # the post-deploy matrix, then the reliability suite
+make staging-reset     # throw it away; the next rehearsal starts from empty volumes
+```
+
+`make staging-pull IMAGE_TAG=<40-character sha>` replaces the build step when the images should come
+from GHCR — which is the mode worth using before a release, because the artifact staging rehearses is
+then the artifact the box will run.
+
+**What staging is for:** rehearsing a release end to end before a merge to `main` deploys it. The
+release order, the release jobs, the migrations, the Keycloak provisioning and the whole verify
+matrix are the production ones. When a release is going to fail, this is where it should.
+
+**What staging deliberately is not:**
+
+- **Not a second production.** There is no staging deploy workflow, no staging canary, no scheduled
+  staging backup and no staging entry in the deploy gate. `deploy.sh` is production's, and there is
+  no `staging-deploy` target — exercising the deployment's operational path against the environment
+  that is allowed to be broken teaches the wrong thing about both.
+- **Not a relaxed environment.** Every guard in `src/config.py` is written `environment != "dev"`, so
+  `staging` refuses the auth bypass, refuses the checked-in model-server token, refuses the
+  checked-in pgBouncer password and runs the ADR 0014 rate limiter — all of it exactly as production
+  does. A staging build that relaxed a production guard would rehearse a system nobody deploys.
+- **Not a host that exists.** Nothing is deployed to staging either; today it runs on a laptop, from
+  this checkout, with `EDGE_TLS=internal` and `staging.app.localtest.me` / `staging.auth.localtest.me`
+  hostnames that resolve to 127.0.0.1 with no DNS. Pointing it at a second box is two hostnames and
+  `EDGE_TLS=acme` in `.env.staging` and nothing else — but until somebody does that, this is a local
+  environment and the documents should not imply otherwise.
+
+Two practical notes:
+
+- **Staging and the production rehearsal cannot run at the same time on one machine.** Both bind 80
+  and 443, and those ports are not really adjustable — the public origins carry no port, and
+  Keycloak's issuer and Auth.js's callback URL are built from them. `make prod-down` before
+  `make up-staging`, and the reverse. The volumes are separate, so neither loses state to the other.
+- **Trust the edge before you use a browser.** Staging defaults to Caddy's own CA, so
+  `make staging-edge-ca > /tmp/staging-root.crt` and add that root, or expect a certificate warning
+  on every page. The containers already read the same root from the shared `edge_ca` volume.
+
+The dev environment is the other side of this: `make up-dev` starts `docker-compose.yml` +
+`docker-compose.demo.yml` — the stores, a Keycloak with dev credentials, and the application layer at
+`ENVIRONMENT=dev` over the reviewed 120-title fixture. It is the only environment where the auth
+bypass is permitted at all, and it is documented in [`demo-runbook.md`](demo-runbook.md). There is
+deliberately no `docker-compose.dev.yml`; `tests/unit/test_prod_compose.py` records why.
+
 ## 0. Decisions to record before the first deploy
 
 Each row has a default. Replace `☐` with `☑` and a date when you accept it, or write the override in

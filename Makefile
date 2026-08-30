@@ -31,6 +31,27 @@ PROD_COMPOSE = docker compose -p movielens-prod -f docker-compose.prod.yml --env
 # `build` and `down` have to be told.
 PROD_COMPOSE_ALL = $(PROD_COMPOSE) --profile jobs
 
+# --- Staging ----------------------------------------------------------------
+# The same production file with docker-compose.staging.yml layered on top: a
+# different Compose project and ENVIRONMENT=staging on the eight services that
+# construct Settings(), and nothing else. The file order matters -- the overlay
+# is second so its `name` and its environment overrides win -- and the project
+# name is passed on the command line as well, so a hand-typed invocation in the
+# wrong order still cannot address movielens-prod's volumes.
+#
+# Staging deliberately gets a fraction of production's targets. It rehearses a
+# release: pull, release, serve, verify, and the disposal that makes the next
+# rehearsal start from empty volumes. Deploys, rollbacks, backups, the rollback
+# rehearsal and the advisory load run belong to the box, and adding them here
+# would invite someone to run the deployment's operational path against the
+# throwaway environment. The Compose services still exist behind the `jobs`
+# profile for anyone who genuinely needs one by hand.
+STAGING_ENV_FILE ?= .env.staging
+STAGING_COMPOSE = docker compose -p movielens-staging \
+	-f docker-compose.prod.yml -f docker-compose.staging.yml \
+	--env-file $(STAGING_ENV_FILE)
+STAGING_COMPOSE_ALL = $(STAGING_COMPOSE) --profile jobs
+
 # Where the load gate leaves its evidence: the k6 summary, the raw sample
 # stream, the per-second latency table, and container CPU snapshots from either
 # side of the measured window. CI uploads it whether the gate passed or failed,
@@ -131,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -308,6 +329,28 @@ db-migrate-down:
 
 db-migrate-status:
 	alembic current
+
+# --- Dev --------------------------------------------------------------------
+# The dev environment's entry point, and deliberately an alias rather than a
+# third Compose file.
+#
+# The multi-environment plan names docker-compose.{dev,staging,prod}.yml, but
+# the dev stack already exists and already *is* two files: docker-compose.yml is
+# the stores and a Keycloak with dev credentials, docker-compose.demo.yml is the
+# application layer at ENVIRONMENT=dev over the reviewed 120-title fixture --
+# which is the "smaller dataset snapshot in dev" the plan asks for. A
+# docker-compose.dev.yml would have exactly one job left: turning DEV_AUTH_BYPASS
+# on, which docker-compose.demo.yml explicitly sets to "false" so the browser
+# journeys and the load gate run against real Keycloak tokens. Flipping it in an
+# overlay on the same project would give one stack two auth behaviours depending
+# on which target last ran, and Settings() already refuses the bypass outside
+# dev on every service anyway.
+#
+# So: one dev stack, two files, and a name for it. `make up-dev` starts it;
+# `make demo-seed` fills it. tests/unit/test_prod_compose.py holds the decision
+# in place -- if a docker-compose.dev.yml ever appears, that test fails and asks
+# whoever added it to revisit this comment rather than inherit it.
+up-dev: demo-up
 
 # --- Repeatable portfolio demo ----------------------------------------------
 # The explicit project name isolates demo volumes from the normal dev stack.
@@ -612,6 +655,114 @@ prod-down: prod-env-guard
 prod-reset: prod-env-guard
 	$(PROD_COMPOSE_ALL) down --volumes --remove-orphans
 	$(MAKE) up-prod
+
+# --- Staging ----------------------------------------------------------------
+# One environment removed from production: the same compose file, the same
+# images, the same release order, a different project and a different set of
+# secrets. What it is for is rehearsing a release before `main` auto-deploys.
+# What it is not is a second production -- there is no staging deploy workflow,
+# no staging canary and no scheduled staging backup, and the absence of each is
+# deliberate. See docs/deployment-runbook.md's "Staging" section.
+#
+# The usual sequence on a laptop:
+#
+#   cp infra/deploy/staging.env.example .env.staging   # then fill it in
+#   make up-staging        # build the images from this checkout, start the stores
+#   make staging-release   # roles, realms, migrations, seed, materialization
+#   make staging-serve     # the serving tier
+#   make staging-verify    # the post-deploy matrix
+#
+# On a staging host that pulls from GHCR, `make staging-pull IMAGE_TAG=<sha>`
+# replaces the build step in `up-staging`.
+
+# Same shape and same reason as prod-env-guard: every secret is generated, so
+# there is no default file to fall back on, and failing here beats failing four
+# services later on an interpolation error.
+staging-env-guard:
+	@test -f $(STAGING_ENV_FILE) || { \
+		echo "$(STAGING_ENV_FILE) is missing."; \
+		echo "  cp infra/deploy/staging.env.example $(STAGING_ENV_FILE)"; \
+		echo "  then replace every REPLACE_ME__ value with:"; \
+		echo "    python -c \"import secrets; print(secrets.token_urlsafe(48))\""; \
+		exit 1; }
+
+# The laptop entry point, mirroring up-prod: build every image from this
+# checkout, then bring the stores up. A staging host that pulls published images
+# runs `staging-pull` instead of this.
+up-staging: staging-env-guard
+	$(STAGING_COMPOSE_ALL) build
+	$(MAKE) staging-stores
+
+# The data tier and identity, with the one-time role provisioning in between --
+# the release jobs cannot run until Postgres has the roles migration 0001
+# expects and pgBouncer can authenticate against them.
+staging-stores: staging-env-guard
+	$(STAGING_COMPOSE) up -d --wait --wait-timeout 240 postgres-app postgres-keycloak redis edge
+	$(STAGING_COMPOSE) run --rm -T postgres-provision
+	$(STAGING_COMPOSE) up -d --wait --wait-timeout 300 pgbouncer keycloak
+
+# Every image at whatever IMAGE_TAG is in the environment, then the assertion
+# that they are all here: without it a failed pull would be quietly repaired by
+# `up` building from whatever checkout this machine happens to have, which is
+# the one thing a rehearsal of a published artifact must not do.
+staging-pull: staging-env-guard
+	$(STAGING_COMPOSE_ALL) pull
+	@for image in $$($(STAGING_COMPOSE_ALL) config --images | sort -u); do \
+		docker image inspect "$$image" >/dev/null 2>&1 || { \
+			echo "missing after pull: $$image"; exit 1; }; \
+	done
+	@echo "all images present at IMAGE_TAG=$${IMAGE_TAG:-main}"
+
+# Everything a release does to state and nothing that serves traffic, in the
+# order the steps depend on each other: roles, realms, migrations, seed, feature
+# materialization. The same order prod-release runs, because rehearsing a
+# different order rehearses nothing.
+staging-release: staging-env-guard
+	$(MAKE) staging-stores
+	$(STAGING_COMPOSE) run --rm -T keycloak-provision
+	$(STAGING_COMPOSE) run --rm -T release
+	$(STAGING_COMPOSE) run --rm -T materialize
+
+# The serving tier. `--wait` holds until every container is healthy, which for
+# the model sidecar means warm rather than merely listening.
+staging-serve: staging-env-guard
+	$(STAGING_COMPOSE) up -d --wait --wait-timeout 300 feature-server model-server api web
+
+# The post-deploy matrix, then the non-latency reliability suite -- the same two
+# stages prod-verify runs, with the same cooldown between them, because both
+# authenticate as `verify` and share one ADR 0014 token bucket.
+staging-verify: staging-env-guard
+	$(STAGING_COMPOSE) run --rm -T verify
+	@echo "waiting $(PROD_VERIFY_COOLDOWN_SECONDS)s for the verify subject's rate-limit bucket to refill"
+	@sleep $(PROD_VERIFY_COOLDOWN_SECONDS)
+	$(STAGING_COMPOSE) run --rm -T verify sh -c \
+		'exec python -m synthetic.load.reliability \
+			--api-url "$$API_URL" --keycloak-url "$$KEYCLOAK_URL" \
+			--realm "$$VERIFY_REALM" --client-id "$$VERIFY_CLIENT_ID" \
+			--client-secret "$$VERIFY_CLIENT_SECRET" \
+			--username "$$VERIFY_USERNAME" --password "$$VERIFY_PASSWORD"'
+
+# The edge's own CA root. More necessary here than in production: staging
+# defaults to EDGE_TLS=internal, so a browser or a curl reaching the staging
+# hostnames needs this to trust anything the edge serves.
+staging-edge-ca: staging-env-guard
+	@$(STAGING_COMPOSE) exec -T edge cat /edge-ca/root.crt
+
+staging-logs: staging-env-guard
+	$(STAGING_COMPOSE) logs --tail=200 edge web api model-server feature-server \
+		keycloak pgbouncer postgres-app postgres-keycloak redis
+
+staging-down: staging-env-guard
+	$(STAGING_COMPOSE_ALL) down --remove-orphans
+
+# Destructive to movielens-staging only -- different project, different volumes
+# from both movielens-prod and movielens-demo. This is the state every staging
+# rehearsal should start from: the release sequence has to work from empty
+# volumes with no manual priming, and a stack that was hand-repaired once no
+# longer proves that.
+staging-reset: staging-env-guard
+	$(STAGING_COMPOSE_ALL) down --volumes --remove-orphans
+	$(MAKE) up-staging
 
 # --- Keycloak realms --------------------------------------------------------
 # Dumps the current live realm state (from the running Keycloak container)
