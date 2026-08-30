@@ -191,6 +191,15 @@ prediction, candidate/ranker/feature versions, and the separate candidate,
 feature, ranker, model, and total latency fields. Cold Start records
 `popularity`, `fallback_reason: cold-start`, and no fabricated ranker features.
 
+That is the *prediction* audit, and it covers one route. Every other
+authenticated request writes an operational row into `request_audits` on the
+same transaction — tenant, actor, persona, the matched route template, method,
+status, outcome, latency and the same correlation id — readable at
+`GET /users/{user_id}/request-audits`. It is the table to open when the
+question is "what did this persona's session actually call", and the
+correlation id is what joins a row there to the prediction audit for the same
+click. Neither table stores a request body or a query string.
+
 Run the authenticated smoke gate:
 
 ```bash
