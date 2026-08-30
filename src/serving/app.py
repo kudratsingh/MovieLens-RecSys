@@ -49,12 +49,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import Connection, Engine, create_engine, text
 from starlette.concurrency import run_in_threadpool
@@ -77,10 +78,9 @@ from src.serving.catalog import (
 from src.serving.features import FeatureServerClient
 from src.serving.feedback import (
     FeedbackAction,
+    FeedbackMutationError,
     FeedbackService,
-    IdempotencyConflictError,
     InvalidLibraryCursorError,
-    InvalidStateTransitionError,
     LibraryPage,
     LibraryQuery,
     MovieState,
@@ -206,8 +206,18 @@ class RecommendationItem(BaseModel):
     state: MovieStateResponse | None
 
 
+# `detail` is prose — it is what a client shows a person, and it may be reworded
+# at any time. `code` is the stable name a client branches on, and it is present
+# wherever one status covers more than one condition a caller has to tell apart:
+# the mutation surface's 409 (two different races) and its 422 (a refused
+# transition, which shares the status with FastAPI's own validation error).
+# Where the status is unambiguous the field is absent, so a client reads the
+# code first and falls back to the status.
 class ErrorResponse(BaseModel):
+    """The body every deliberate 4xx on this surface renders."""
+
     detail: str
+    code: str | None = None
 
 
 class ReadinessResponse(BaseModel):
@@ -623,6 +633,77 @@ _RATE_LIMIT_RESPONSE_HEADERS: dict[str, Any] = {
 }
 
 
+class CodedHTTPException(HTTPException):
+    """An ``HTTPException`` that also carries the machine-readable ``code``.
+
+    Starlette dispatches on the exception's own class before walking its bases,
+    so registering a handler for this subclass is what puts ``code`` in the body
+    without touching how every other ``HTTPException`` on the surface renders.
+    """
+
+    def __init__(self, *, status_code: int, detail: str, code: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+
+
+@app.exception_handler(CodedHTTPException)
+async def _coded_http_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Render ``{"detail": ..., "code": ...}`` for a coded refusal."""
+    coded = cast(CodedHTTPException, exc)
+    return JSONResponse(
+        {"detail": coded.detail, "code": coded.code},
+        status_code=coded.status_code,
+    )
+
+
+def _coded_error(exc: FeedbackMutationError) -> CodedHTTPException:
+    """Map a feedback mutation refusal onto its documented status and code.
+
+    The mapping lives on the exception classes rather than here, so a route
+    cannot answer one of them with a status the contract does not document.
+    """
+    return CodedHTTPException(
+        status_code=exc.http_status,
+        detail=str(exc),
+        code=exc.code,
+    )
+
+
+# Both bodies a mutation's 422 can carry, spelled out because declaring the
+# status at all suppresses the entry FastAPI would otherwise generate for its
+# own validation error — and dropping that would leave a client parsing an
+# undocumented shape. The two are told apart by `code`, and by `detail` being a
+# string rather than a list of validation errors.
+_MUTATION_RESPONSES: dict[int | str, dict[str, Any]] = {
+    409: {
+        "model": ErrorResponse,
+        "description": (
+            "Stale `expected_revision` (`code: revision_conflict`) or an "
+            "`Idempotency-Key` already used for a different mutation "
+            "(`code: idempotency_conflict`). Both are races: re-read the "
+            "canonical state and replay the same intent against it"
+        ),
+    },
+    422: {
+        "description": (
+            "The transition is refused by ADR 0012's state table "
+            "(`code: transition_refused`, `detail` a sentence naming the rule); "
+            "or the request failed validation (`detail` a list of errors, no `code`)"
+        ),
+        "content": {
+            "application/json": {
+                "schema": {
+                    "anyOf": [
+                        {"$ref": "#/components/schemas/ErrorResponse"},
+                        {"$ref": "#/components/schemas/HTTPValidationError"},
+                    ]
+                }
+            }
+        },
+    },
+}
+
+
 def _openapi_schema() -> dict[str, Any]:
     if app.openapi_schema is not None:
         return app.openapi_schema
@@ -639,11 +720,27 @@ def _openapi_schema() -> dict[str, Any]:
         "bearerFormat": "JWT",
         "description": "Keycloak access token with aud=movielens-api",
     }
+    # Most operations reference this as a bare `$ref` below rather than through
+    # a route's `model=`, so the component has to exist whether or not any route
+    # declared it. Written out rather than taken from the model because `code`
+    # is *omitted* from an uncoded error rather than sent as null, and a Pydantic
+    # default of None publishes the opposite — a required, nullable field.
     components.setdefault("schemas", {})["ErrorResponse"] = {
         "type": "object",
         "title": "ErrorResponse",
         "required": ["detail"],
-        "properties": {"detail": {"type": "string"}},
+        "properties": {
+            "detail": {"type": "string", "title": "Detail"},
+            "code": {
+                "type": "string",
+                "title": "Code",
+                "description": (
+                    "Stable machine-readable name for this refusal. Present wherever one "
+                    "status covers more than one condition; absent otherwise, so read the "
+                    "code first and fall back to the status."
+                ),
+            },
+        },
     }
     components.setdefault("headers", {}).update(_RATE_LIMIT_HEADER_COMPONENTS)
     for path, path_item in schema.get("paths", {}).items():
@@ -662,7 +759,11 @@ def _openapi_schema() -> dict[str, Any]:
                 ("401", "Missing or invalid access token"),
                 ("403", "Authenticated actor is not authorized"),
                 ("404", "Requested persona or movie does not exist"),
-                ("409", "Idempotency, state revision, or transition conflict"),
+                # A transition refusal used to hide here too, which left a
+                # client splitting three conditions by reading the sentence in
+                # `detail`. It is a 422 with `code: transition_refused` now, and
+                # the two that remain are races that carry codes of their own.
+                ("409", "Idempotency or state revision conflict"),
                 ("429", "Rate limit exceeded for this tenant and subject"),
                 ("500", "Request transaction failed"),
             ):
@@ -1212,6 +1313,16 @@ async def user_preferences(user_id: int, request: Request) -> UserPreferencesRes
     "/users/{user_id}/preferences",
     response_model=UserPreferencesMutationResponse,
     operation_id="setUserPreferences",
+    responses={
+        409: {
+            "model": ErrorResponse,
+            "description": (
+                "Stale `expected_revision` (`code: revision_conflict`). This "
+                "resource has no idempotency key and no transition table, so "
+                "it is the only condition on the status"
+            ),
+        }
+    },
 )
 async def set_user_preferences(
     user_id: int,
@@ -1242,7 +1353,9 @@ async def set_user_preferences(
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except StateRevisionConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Same exception, same code as the movie-state writes raise: a client
+        # that recognises one recognises the other.
+        raise _coded_error(exc) from exc
     return UserPreferencesMutationResponse(
         outcome=result.outcome,
         preferences=_preferences_response(result.preferences),
@@ -1253,6 +1366,7 @@ async def set_user_preferences(
     "/users/{user_id}/movies/{movie_id}/watched",
     response_model=FeedbackMutationResponse,
     operation_id="setMovieWatched",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_watched(
     user_id: int,
@@ -1275,6 +1389,7 @@ async def set_watched(
     "/users/{user_id}/movies/{movie_id}/watched",
     response_model=FeedbackMutationResponse,
     operation_id="removeMovieFromHistory",
+    responses=_MUTATION_RESPONSES,
 )
 async def remove_from_history(
     user_id: int,
@@ -1297,6 +1412,7 @@ async def remove_from_history(
     "/users/{user_id}/movies/{movie_id}/rating",
     response_model=FeedbackMutationResponse,
     operation_id="setMovieStateRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_state_rating(
     user_id: int,
@@ -1321,6 +1437,7 @@ async def set_state_rating(
     "/users/{user_id}/movies/{movie_id}/rating",
     response_model=FeedbackMutationResponse,
     operation_id="deleteMovieStateRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_state_rating(
     user_id: int,
@@ -1343,6 +1460,7 @@ async def delete_state_rating(
     "/users/{user_id}/movies/{movie_id}/watchlist",
     response_model=FeedbackMutationResponse,
     operation_id="addMovieToWatchlist",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_watchlist(
     user_id: int,
@@ -1365,6 +1483,7 @@ async def set_watchlist(
     "/users/{user_id}/movies/{movie_id}/watchlist",
     response_model=FeedbackMutationResponse,
     operation_id="removeMovieFromWatchlist",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_watchlist(
     user_id: int,
@@ -1387,6 +1506,7 @@ async def delete_watchlist(
     "/users/{user_id}/movies/{movie_id}/dismissal",
     response_model=FeedbackMutationResponse,
     operation_id="dismissMovie",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_dismissal(
     user_id: int,
@@ -1409,6 +1529,7 @@ async def set_dismissal(
     "/users/{user_id}/movies/{movie_id}/dismissal",
     response_model=FeedbackMutationResponse,
     operation_id="undoMovieDismissal",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_dismissal(
     user_id: int,
@@ -1431,6 +1552,7 @@ async def delete_dismissal(
     "/users/{user_id}/ratings/{movie_id}",
     response_model=RatingMutationResponse,
     operation_id="setMovieRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def rate_movie(
     user_id: int,
@@ -1458,6 +1580,11 @@ async def rate_movie(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UnknownMovieError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FeedbackMutationError as exc:
+        # The same state machine sits behind this shape, so it answers with the
+        # same statuses and codes. It had been answering 500: this endpoint
+        # predates the state machine and never caught its refusals at all.
+        raise _coded_error(exc) from exc
     return RatingMutationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -1469,6 +1596,7 @@ async def rate_movie(
     "/users/{user_id}/ratings",
     response_model=RatingMutationResponse,
     operation_id="resetDemoRatings",
+    responses=_MUTATION_RESPONSES,
 )
 async def reset_ratings(user_id: int, request: Request) -> RatingMutationResponse:
     """Compatibility bulk rating clear; watched history is preserved."""
@@ -1492,16 +1620,22 @@ async def reset_ratings(user_id: int, request: Request) -> RatingMutationRespons
         )
     ]
     for movie_id in movie_ids:
-        await run_in_threadpool(
-            _feedback.mutate,
-            connection,
-            tenant_id=principal.tenant_id,
-            actor_user_id=principal.user_id,
-            user_id=user_id,
-            movie_id=movie_id,
-            action="rating_deleted",
-            request_id=uuid4(),
-        )
+        try:
+            await run_in_threadpool(
+                _feedback.mutate,
+                connection,
+                tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                user_id=user_id,
+                movie_id=movie_id,
+                action="rating_deleted",
+                request_id=uuid4(),
+            )
+        except FeedbackMutationError as exc:
+            # `rating_deleted` refuses nothing today, so this is a guard rather
+            # than a live path — but a bulk clear that hit one it could not
+            # apply used to answer 500 for a state the caller could act on.
+            raise _coded_error(exc) from exc
     return RatingMutationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -1538,12 +1672,11 @@ async def _feedback_mutation(
         )
     except (UnknownDemoPersonaError, UnknownMovieError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (
-        StateRevisionConflictError,
-        IdempotencyConflictError,
-        InvalidStateTransitionError,
-    ) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FeedbackMutationError as exc:
+        # One clause for all three, because the status and the code belong to
+        # the exception rather than to the route: a refusal is a 422 here and a
+        # 422 on the compatibility endpoints below, and neither can drift.
+        raise _coded_error(exc) from exc
     return _mutation_response(result)
 
 

@@ -263,7 +263,9 @@ function decisionOutcome(
   result: Exclude<MovieStateMutationResult, { status: "committed" }>,
 ): MovieStateOutcome {
   if (result.status === "conflict") return { kind: "conflict" };
-  if (result.status === "refused") return { kind: "refused", detail: result.detail };
+  if (result.status === "refused") {
+    return { kind: "refused", detail: result.detail, corrected: result.corrected };
+  }
   return { kind: "failed", failure: result.failure };
 }
 
@@ -721,6 +723,11 @@ export function DiscoverExperience({
         // issued — the stored key belongs to a revision that is gone.
         if (result.canonical) adopt([result.canonical]);
         intent.current = null;
+      } else if (result.status === "refused") {
+        // A rule about state, so the record the write path read back is what
+        // the card should be showing. The intent keeps its key: nothing was
+        // written, so a re-press is the same decision rather than a second one.
+        if (result.canonical) adopt([result.canonical]);
       }
       setFlow({
         kind: "error",
@@ -895,7 +902,9 @@ export function DiscoverExperience({
     setPendingMovieId(null);
     inFlight.current = false;
     if (result.status !== "committed") {
-      if (result.status === "conflict" && result.canonical) adopt([result.canonical]);
+      // A conflict re-read the record and a refusal did too, so either one can
+      // hand back the truth; only the conflict earned a replay on the way.
+      if (result.status !== "failed" && result.canonical) adopt([result.canonical]);
       setFlow({
         kind: "error",
         message: movieStateAnnouncement(decisionOutcome(result), {

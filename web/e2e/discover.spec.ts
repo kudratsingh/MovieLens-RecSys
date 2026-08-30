@@ -769,6 +769,101 @@ test("with featuring off, a saved title keeps its rail card and loses the slot",
   expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
 });
 
+/**
+ * What the movie-detail read answers while a refusal is being corrected: the
+ * same title, already watched, at a revision above the one the write asserted.
+ * It is the shape `isMovieDetailResponse` requires, because the resource
+ * boundary drops anything else and the correction would silently not happen.
+ */
+const WATCHED_DETAIL = {
+  tenant_id: "demo",
+  user_id: 900000101,
+  item: {
+    movie_id: 101,
+    title: "The Handmaiden (2016)",
+    genres: ["Thriller", "Drama"],
+    interaction_count: 812,
+    metadata_source: "reviewed-fixture",
+    source_status: "complete",
+    release_year: 2016,
+    overview: null,
+    poster_url: null,
+    tmdb_id: null,
+    details: null,
+    state: {
+      movie_id: 101,
+      user_id: 900000101,
+      tenant_id: "demo",
+      revision: 9,
+      updated_at: WATCHED_AT,
+      rating: null,
+      rating_updated_at: null,
+      watched_at: WATCHED_AT,
+      watchlisted_at: null,
+      dismissed_at: null,
+    },
+  },
+};
+
+test("a refused transition corrects the card and says so, without asking for a reload", async ({
+  page,
+}) => {
+  // The refusal as the API answers it: `422` with `code: transition_refused`,
+  // never the `409` that means somebody committed first. The client used to
+  // tell the two apart by matching the sentence in `detail` (issue #74).
+  const writes: string[] = [];
+  await page.route(
+    (url) => url.pathname === "/api/auth/csrf",
+    (route) => route.fulfill({ json: { csrfToken: "fixture-csrf-token" } }),
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/watchlist"),
+    (route) => {
+      writes.push(route.request().method());
+      return route.fulfill({
+        status: 422,
+        json: {
+          detail: "a watched movie cannot be added to the watchlist",
+          code: "transition_refused",
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) => /\/movies\/\d+$/.test(url.pathname),
+    (route) => route.fulfill({ json: WATCHED_DETAIL }),
+  );
+
+  await page.goto("/discover?demo=learned");
+  const featured = page.getByRole("region", { name: HANDMAIDEN });
+  await featured.getByRole("button", { name: "Watchlist" }).click();
+
+  const status = page.locator("#discover-status");
+  await expect(status).toContainText("a watched movie cannot be added to the watchlist");
+  // The correction is announced rather than left to be noticed: the card is
+  // about to look different, and a reader who cannot see it needs telling.
+  await expect(status).toContainText("Its current state is shown.");
+  // None of the three things a refusal must never say.
+  await expect(status).not.toContainText("changed somewhere else");
+  await expect(status).not.toContainText(/reload/i);
+  await expect(status).not.toContainText(/try again/i);
+
+  // The record said watched, so the card says watched: the correction is
+  // visible and not only announced. The optimistic frame is gone too — the
+  // watchlist control claims nothing it did not get.
+  await expect(featured.getByRole("button", { name: "Watched" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(featured.getByRole("button", { name: "Watchlist" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  // One attempt: a rule asked twice answers the same way.
+  expect(writes).toEqual(["PUT"]);
+  expect(await pageOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 test("`Why this?` says what never comes back and what still can", async ({ page }) => {
   await page.goto("/discover?demo=watchlist-held-back");
 

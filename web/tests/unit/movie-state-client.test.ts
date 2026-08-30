@@ -324,19 +324,80 @@ describe("a stale revision is corrected rather than discarded", () => {
 });
 
 describe("a transition the API refuses is not a race", () => {
-  it("reports the refusal without a canonical read or a replay", async () => {
-    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
-    // The API answers this on the same 409 as a stale revision, and the older
-    // client mapped both to `conflict` — so a viewer who pressed `Watchlist`
-    // on a title they had already watched was told it "changed somewhere else
-    // before this saved", and the client spent a read plus a replay proving
-    // otherwise.
-    const detail = "a watched movie cannot be added to the watchlist";
-    const seen: string[] = [];
-    const fetchImpl = vi.fn(async (url: string) => {
+  /** A refusal, in the shape the API answers it: 422 plus its own code. */
+  function refusingFetch(seen: string[], detail: string) {
+    return vi.fn(async (url: string) => {
       seen.push(url);
       if (url === "/api/auth/csrf") return jsonResponse(CSRF);
-      return jsonResponse({ detail }, { status: 409 });
+      if (url.includes("/watchlist")) {
+        return jsonResponse({ detail, code: "transition_refused" }, { status: 422 });
+      }
+      return jsonResponse(movieDetailResponse);
+    }) as unknown as typeof fetch;
+  }
+
+  const REFUSAL = "a watched movie cannot be added to the watchlist";
+
+  it("reads the record back but never replays the intent", async () => {
+    // The client used to map every 409 to `conflict`, so a viewer who pressed
+    // `Watchlist` on a title they had already watched was told it "changed
+    // somewhere else before this saved" and the client spent a read plus a
+    // replay proving otherwise. The replay is what a rule can never earn: it
+    // would ask the same rule the same question. The *read* it does earn —
+    // being refused by a rule about state is proof this client's picture of
+    // that state is wrong.
+    const seen: string[] = [];
+
+    const result = await createBffMovieStateClient(refusingFetch(seen, REFUSAL)).mutate({
+      ...MUTATION,
+      resource: "watchlist",
+      method: "PUT",
+      rating: undefined,
+    });
+
+    expect(result).toMatchObject({ status: "refused", detail: REFUSAL });
+    // One write attempt — the read behind it is the correction, not a retry.
+    expect(seen.filter((url) => url.includes("/watchlist"))).toHaveLength(1);
+    expect(seen.some((url) => /\/movies\/\d+$/.test(url))).toBe(true);
+  });
+
+  it("hands back the record it read, and says whether it moved anything", async () => {
+    const stored = movieDetailResponse.item.state;
+    const seen: string[] = [];
+    const client = createBffMovieStateClient(refusingFetch(seen, REFUSAL));
+
+    const stale = await client.mutate({
+      ...MUTATION,
+      resource: "watchlist",
+      method: "PUT",
+      rating: undefined,
+      expectedRevision: 0,
+    });
+    const current = await client.mutate({
+      ...MUTATION,
+      resource: "watchlist",
+      method: "PUT",
+      rating: undefined,
+      expectedRevision: stored?.revision ?? 0,
+    });
+
+    // Asserted against a revision that is not the stored one: the control was
+    // showing something stale and the caller has to be told so it can correct
+    // itself and announce that it did.
+    expect(stale).toMatchObject({ status: "refused", corrected: true });
+    expect(stale.status === "refused" && stale.canonical?.revision).toBe(stored?.revision);
+    // Same press against the current revision: the rule stands on its own and
+    // nothing on screen changed, so there is nothing to announce a change of.
+    expect(current).toMatchObject({ status: "refused", corrected: false });
+  });
+
+  it("reports the refusal plainly when the record cannot be read back", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === "/api/auth/csrf") return jsonResponse(CSRF);
+      if (url.includes("/watchlist")) {
+        return jsonResponse({ detail: REFUSAL, code: "transition_refused" }, { status: 422 });
+      }
+      return jsonResponse({ detail: "gone" }, { status: 502 });
     }) as unknown as typeof fetch;
 
     const result = await createBffMovieStateClient(fetchImpl).mutate({
@@ -346,10 +407,7 @@ describe("a transition the API refuses is not a race", () => {
       rating: undefined,
     });
 
-    expect(result).toMatchObject({ status: "refused", detail });
-    // One write attempt, and no canonical read behind it.
-    expect(seen.filter((url) => url.includes("/watchlist"))).toHaveLength(1);
-    expect(seen.some((url) => /\/movies\/\d+$/.test(url))).toBe(false);
+    expect(result).toMatchObject({ status: "refused", canonical: null, corrected: false });
   });
 });
 

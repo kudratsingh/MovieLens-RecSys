@@ -316,7 +316,13 @@
       },
       "ErrorResponse": {
         "properties": {
+          "code": {
+            "description": "Stable machine-readable name for this refusal. Present wherever one status covers more than one condition; absent otherwise, so read the code first and fall back to the status.",
+            "title": "Code",
+            "type": "string"
+          },
           "detail": {
+            "title": "Detail",
             "type": "string"
           }
         },
@@ -1990,7 +1996,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "429": {
             "content": {
@@ -2150,7 +2156,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -2393,7 +2399,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -2522,7 +2528,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -2663,7 +2669,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -2923,7 +2929,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -3061,7 +3067,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -3232,17 +3238,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -3401,17 +3414,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -3572,17 +3592,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -3751,17 +3778,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -3897,7 +3931,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -4068,17 +4102,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -4237,17 +4278,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -4408,17 +4456,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -4577,17 +4632,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -4706,7 +4768,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -4860,7 +4922,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`). This resource has no idempotency key and no transition table, so it is the only condition on the status"
           },
           "422": {
             "content": {
@@ -4989,17 +5051,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -5137,17 +5206,24 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`)"
           },
           "429": {
             "content": {
@@ -5278,7 +5354,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -5407,7 +5483,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {
@@ -5525,7 +5601,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "429": {
             "content": {
