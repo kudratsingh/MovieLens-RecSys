@@ -18,9 +18,21 @@ the rating write path, ``DELETE /users/{id}/ratings``, and
 ``/users/{id}/taste-profile``. Every new endpoint gains coverage here —
 the test's job is to be the tenant-isolation gate every serving PR passes
 through in CI.
+
+**Every "not in the other tenant's response" assertion is paired.** On its own
+that assertion is satisfied by a system with no data in it, which is how the
+recommendation control came to pass on CI's empty database and fail on a seeded
+one (issue #75). So each read below is made twice, once per tenant, and the
+same string that must be absent from one response has to be *present* in the
+other: the sentinel is the caller's own, and the read that would have carried a
+leak is demonstrably the read that carries the caller's own rows. What proves
+the row exists at all, and that only the policy is hiding it, is one layer down
+in ``test_rls_is_engaged.py``.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,13 +46,20 @@ from tests.tenant_isolation.conftest import (
     DEFAULT_HISTORY_TITLE,
     DEFAULT_PERSONA_NAME,
     DEFAULT_RECOMMENDATION_TITLE,
+    DEFAULT_TENANT,
     DEMO_CANARY_POSTER_URL,
     DEMO_DETAIL_MOVIE_ID,
     DEMO_DETAIL_TRAILER_KEY,
     DEMO_HISTORY_TITLE,
     DEMO_PERSONA_NAME,
     DEMO_RECOMMENDATION_TITLE,
+    DEMO_TENANT,
     NO_DETAIL_MOVIE_ID,
+    SEEDED_DEMO_PERSONA_IDS,
+    TENANT_PAIRS,
+    TENANTS,
+    DatabaseState,
+    TenantCanary,
     TokenMinter,
 )
 
@@ -51,6 +70,32 @@ def client() -> TestClient:
     checks + engine construction + middleware wire-up)."""
     with TestClient(app) as c:
         yield c
+
+
+@dataclass(frozen=True)
+class SentinelRead:
+    """One authenticated read, addressed to whichever tenant is making it."""
+
+    name: str
+    template: str
+
+    def path(self, tenant: TenantCanary) -> str:
+        return self.template.format(
+            canary_user=CANARY_USER_ID, persona_user_id=tenant.persona_user_id
+        )
+
+
+# One read per read model that can carry a tenant-owned string: the persona
+# registry, the history join over `ratings`, the popularity ranking the
+# fallback produces, and the Library's own view of `user_movie_state`. Each
+# tenant asks the same question about its own rows, so the pair of answers is
+# both halves of the control.
+SENTINEL_READS = (
+    SentinelRead("personas", "/personas"),
+    SentinelRead("history", "/users/{canary_user}/history"),
+    SentinelRead("recommendations", "/users/{canary_user}/recommendations?limit=50"),
+    SentinelRead("library-seen", "/users/{persona_user_id}/library?tab=history"),
+)
 
 
 def test_healthz_needs_no_auth(client: TestClient) -> None:
@@ -125,7 +170,15 @@ def test_user_endpoints_never_cross_tenant_boundary(
     mint_token: TokenMinter,
     endpoint: str,
 ) -> None:
-    """The same user lookup must be scoped independently for each tenant."""
+    """The same user lookup must be scoped independently for each tenant.
+
+    Both presence assertions hold in either database state now: history reads
+    the caller's own state rows directly, and the recommendation canary is
+    seeded past whatever the tenant's most-interacted title happens to be
+    (``POPULARITY_HEADROOM``). Before that it was seeded with one rating and
+    was on the first page only while nothing else was — the failure issue #75
+    recorded on the seeded demo database.
+    """
     default_token = mint_token("default", "alice", "alice")
     demo_token = mint_token("demo", "demo", "demo")
     query = "?limit=50" if endpoint == "recommendations" else ""
@@ -151,7 +204,106 @@ def test_user_endpoints_never_cross_tenant_boundary(
         assert DEFAULT_HISTORY_TITLE in default_response.text
         assert DEMO_HISTORY_TITLE in demo_response.text
     else:
+        assert DEFAULT_RECOMMENDATION_TITLE in default_response.text
         assert DEMO_RECOMMENDATION_TITLE in demo_response.text
+
+
+@pytest.mark.parametrize("read", SENTINEL_READS, ids=lambda read: read.name)
+def test_a_read_carries_its_callers_sentinel_and_never_the_other_tenants(
+    client: TestClient, mint_token: TokenMinter, read: SentinelRead
+) -> None:
+    """The positive control and the isolation assertion, in one statement.
+
+    Each tenant makes the same read against its own rows. Its own sentinel has
+    to come back — so this read model does surface tenant-owned strings, and a
+    leak would have been visible here — and the other tenant's sentinel must
+    not, though it exists at that moment in a row of the same table.
+
+    Neither half means much alone. "The demo sentinel was absent" is trivially
+    true of an empty database; "the default sentinel was present" says nothing
+    about isolation. Asserted together on the same endpoint, in the same run,
+    they are the pair issue #75 found missing.
+    """
+    for owner, other in TENANT_PAIRS:
+        token = mint_token(owner.realm, owner.username, owner.password)
+        response = client.get(read.path(owner), headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["tenant_id"] == owner.tenant_id
+        assert owner.sentinel in response.text, (
+            f"{read.name} did not return tenant {owner.tenant_id!r}'s own sentinel, so the "
+            "absence of the other tenant's sentinel below proves nothing"
+        )
+        assert other.sentinel not in response.text, (
+            f"{read.name} returned tenant {other.tenant_id!r}'s sentinel to tenant "
+            f"{owner.tenant_id!r}: {response.text}"
+        )
+
+
+def test_the_recommendation_canary_tops_its_own_tenants_ranking(
+    client: TestClient, mint_token: TokenMinter, database_state: DatabaseState
+) -> None:
+    """Rank 1, in both database shapes, for the reason the fixture arranged.
+
+    The popularity fallback orders by interaction count inside the tenant, so
+    what "on the first page" means depends on what else that tenant holds.
+    Rank 1 does not: the canary is seeded past the incumbent top either way.
+    The list around it is what differs, and the two branches say so — a tenant
+    with no catalog of its own has nothing else to rank, one with a catalog
+    ranks it behind the canary rather than instead of it.
+    """
+    for owner, other in TENANT_PAIRS:
+        token = mint_token(owner.realm, owner.username, owner.password)
+        response = client.get(
+            f"/users/{CANARY_USER_ID}/recommendations?limit=50",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        ranked = [item["movie_id"] for item in response.json()["items"]]
+        assert ranked[:1] == [owner.recommendation_movie_id]
+        assert other.recommendation_movie_id not in ranked
+        if database_state.has_catalog(owner):
+            # The case the old control could not survive: a real catalog the
+            # canary has to out-rank rather than be alone in.
+            assert len(ranked) > 1
+        else:
+            # Migrations and no seed for this tenant: the canary rows are the
+            # whole of it. The caller's own history title is already seen.
+            assert ranked == [owner.recommendation_movie_id]
+
+
+def test_the_persona_list_a_caller_receives_is_only_ever_its_own_tenants(
+    client: TestClient, mint_token: TokenMinter, database_state: DatabaseState
+) -> None:
+    """``/personas`` is a whole-tenant read, so it is the clearest place to
+    watch the seeded rows the canaries do not own.
+
+    The walkthrough personas live in ``demo`` and only there. On a seeded
+    database that makes them a second, independent sentinel — rows this suite
+    did not write, which the default tenant must never be shown. On an empty
+    database there are none, and the assertion available instead is exact:
+    each tenant sees its own canary persona and nothing else.
+    """
+    listings = {}
+    for tenant in TENANTS:
+        token = mint_token(tenant.realm, tenant.username, tenant.password)
+        response = client.get("/personas", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+        assert response.json()["tenant_id"] == tenant.tenant_id
+        listings[tenant.tenant_id] = {item["user_id"] for item in response.json()["items"]}
+
+    for owner, other in TENANT_PAIRS:
+        assert owner.persona_user_id in listings[owner.tenant_id]
+        assert other.persona_user_id not in listings[owner.tenant_id]
+
+    seeded = set(SEEDED_DEMO_PERSONA_IDS)
+    if database_state.seeded_personas:
+        assert seeded <= listings["demo"]
+        assert not seeded & listings["default"]
+    else:
+        assert listings["demo"] == {DEMO_TENANT.persona_user_id}
+        assert listings["default"] == {DEFAULT_TENANT.persona_user_id}
 
 
 def test_persona_endpoint_never_crosses_tenant_boundary(

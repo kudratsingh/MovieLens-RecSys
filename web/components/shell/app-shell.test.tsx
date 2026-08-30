@@ -142,6 +142,38 @@ describe("the authenticated product shell", () => {
     expect(screen.queryByRole("link", { name: "Legacy dashboard" })).not.toBeInTheDocument();
   });
 
+  /**
+   * The TMDB notice.
+   *
+   * It lived only on `/legacy` until this, so the five product routes showed
+   * TMDB posters, backdrops, scores and cast with no attribution anywhere —
+   * and retiring the dashboard would have removed the app's only copy. Putting
+   * it in the shell is what makes it a property of the product; asserting it
+   * here is what stops the next shell edit from dropping it.
+   */
+  it("carries the TMDB notice for every route that renders it", () => {
+    renderShell();
+
+    const footer = screen.getByRole("contentinfo");
+    expect(footer).toHaveTextContent(
+      "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+    );
+    expect(within(footer).getByRole("link", { name: "TMDB" })).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org",
+    );
+  });
+
+  it("keeps the notice where there is no legacy link to hang a footer on", () => {
+    // The footer used to exist only when a route passed `legacyHref`, which is
+    // exactly the case the fixture preview and fixture-mode Discover do not.
+    renderShell({ fixtureMode: true, legacyHref: undefined });
+
+    expect(screen.getByRole("contentinfo")).toHaveTextContent(
+      "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+    );
+  });
+
   it("gives every route one main landmark and a skip link into it", () => {
     // Quick Picks rendered outside this shell until the sweep, so it had
     // neither. Asserting them here is what makes them a property of the

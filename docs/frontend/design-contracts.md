@@ -53,6 +53,15 @@ private account. In portfolio persona mode, use copy such as
 `Exploring as Action Fan` and show the actor/session separately. Persona
 switching outside local development requires an explicit impersonation role.
 
+### Shell footer
+
+The TMDB mark, a link to themoviedb.org, and the required non-endorsement
+sentence, on every route the shell wraps. This is the product-wide attribution,
+so it is a property of the shell rather than of whichever route happens to show
+the most TMDB artwork, and it is not conditional on anything. It sits below the
+fold — `.app-page` reserves a viewport — and clears the fixed bottom navigation
+on small screens; the legacy-dashboard link joins it where a route offers one.
+
 ### Shared content hierarchy
 
 1. Movie or movie collection relevant to the route.
@@ -430,7 +439,9 @@ or Escape, returning focus to the plate. The promise is asserted two ways in
 
 **Attribution.** A `Details from TMDB` line, with the TMDB mark and the required
 non-endorsement sentence, sits with the enriched fields it covers. It is scoped
-to those fields and does not stand in for shell-level attribution.
+to those fields and does not stand in for the shell-level attribution, which
+this page carries in the footer like every other route. Both render the same
+component; only the `lead` differs.
 
 ### Rating
 

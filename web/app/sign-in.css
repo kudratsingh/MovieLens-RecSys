@@ -96,3 +96,14 @@
   color: var(--text-muted);
   font-size: 0.8rem;
 }
+
+/*
+ * The door has no shell and therefore no footer, so the notice sits at the foot
+ * of the card instead. Ruled off rather than merely spaced: it is the one thing
+ * on this page that is not about signing in.
+ */
+.sign-in-card .tmdb-attribution {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+}

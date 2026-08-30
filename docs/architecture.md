@@ -8,10 +8,13 @@ comes back with an explicit statement of which policy served it, and a durable
 audit row is committed before the answer is sent. A Next.js product sits on top
 of the same authenticated API any other client would use.
 
-The interesting part of this project is not the model. It is the engineering
-around it: the isolation boundary, the feature-freshness contract, the artifact
-pinning, the latency gate, and the deployment. Those are what this document
-describes.
+This document describes the engineering around the models — the isolation
+boundary, the feature-freshness contract, the artifact pinning, the latency gate,
+and the deployment — because that is what makes them usable by a real person.
+The models are the project's main line of work: the current two-stage stack is
+documented in ADRs 0003–0006 and measured in [`results.md`](results.md), and the
+modeling track continues past it toward sequence models with transformer
+encoders once the Phase 3 harness is closed.
 
 **What is running right now: nothing.** The production target is specified,
 built and rehearsed end to end — one Hetzner CX22 running `docker-compose.prod.yml`

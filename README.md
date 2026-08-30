@@ -9,13 +9,19 @@ A multi-tenant, authenticated two-stage recommender on MovieLens 25M: item-item 
 
 <img alt="Discover at 1440px, signed in as Demo Walkthrough and exploring as the Drama Fan persona: a featured recommendation labelled RANKED BY THE LEARNED MODEL, rank 1, with Open movie, Watchlist, Mark watched and Not for me controls, the Why this? disclosure closed beneath them, and the ranked rail beginning below." src="docs/frontend/evidence/current/discover-desktop-1440.png" width="100%">
 
-The modeling here is deliberately ordinary. What is not is everything around it: the tenant boundary
-the database enforces rather than the application, the feature-freshness contract, the SHA-256-pinned
-serving bundle, the latency gate that measures the service instead of the CI runner, and a serving
-contract that reports when the learned path did *not* run rather than quietly taking credit for the
-fallback. The point is the engineering around the model, not the leaderboard. Every significant
-decision is written down before the code that depends on it lands — sixteen ADRs, each with its
-alternatives analyzed and the signals that would reopen it.
+Two tracks share this repository, and the models are the reason it exists. The modeling track starts
+from the baselines the field measures against and builds the two-stage architecture the way production
+recommenders are built — item-item retrieval, a two-tower with FAISS, a LightGBM LambdaRank ranker today
+— and keeps moving toward what the industry ships now: sequence models with transformer encoders are
+the next step ([the modeling roadmap](docs/modeling-roadmap.md) is the ladder, rung by rung, each
+needing approval before it starts). The engineering track is what makes those models usable by a real person rather than a
+notebook: the tenant boundary the database enforces rather than the application, the feature-freshness
+contract, the SHA-256-pinned serving bundle, the latency gate that measures the service instead of the
+CI runner, and a serving contract that reports when the learned path did *not* run rather than quietly
+taking credit for the fallback. Phase 3 is the engineering track's turn — the harness that makes the
+product and the API real — and the modeling track resumes as the main line of work once it closes.
+Every significant decision, model choices included, is written down before the code that depends on it
+lands — sixteen ADRs, each with its alternatives analyzed and the signals that would reopen it.
 
 ## What is real today
 
@@ -257,14 +263,15 @@ docs/           architecture, ADRs, API contract, frontend, runbooks, EDA      �
 Read in this order:
 
 1. [`docs/architecture.md`](docs/architecture.md) — the system on one page, with ten rendered diagrams
-2. [`docs/adr/README.md`](docs/adr/README.md) — every decision, its alternatives, and what would reopen it
-3. [`docs/api/overview.md`](docs/api/overview.md) — every endpoint, and the committed OpenAPI contract beside it
-4. [`docs/demo-runbook.md`](docs/demo-runbook.md) — running the whole stack from a clean checkout
-5. [`docs/frontend/README.md`](docs/frontend/README.md) — the product docs, and the [finish gate](docs/frontend/finish-gate-review.md)
-6. [`docs/production-readiness-review.md`](docs/production-readiness-review.md) — the gap review and the 14-step rehearsal record
-7. [`docs/deployment-runbook.md`](docs/deployment-runbook.md) — the machine, DNS, secrets, first deploy, rollback, backups
-8. [`docs/eda.md`](docs/eda.md) — MovieLens 25M: scale, sparsity, the long tail, the split as applied
-9. [`docs/records/`](docs/records/) — dated documents kept for their reasoning and **not maintained**
+2. [`docs/modeling-roadmap.md`](docs/modeling-roadmap.md) — the model ladder: where the models are, the rungs from here to a Netflix-class stack, which need approval next
+3. [`docs/adr/README.md`](docs/adr/README.md) — every decision, its alternatives, and what would reopen it
+4. [`docs/api/overview.md`](docs/api/overview.md) — every endpoint, and the committed OpenAPI contract beside it
+5. [`docs/demo-runbook.md`](docs/demo-runbook.md) — running the whole stack from a clean checkout
+6. [`docs/frontend/README.md`](docs/frontend/README.md) — the product docs, and the [finish gate](docs/frontend/finish-gate-review.md)
+7. [`docs/production-readiness-review.md`](docs/production-readiness-review.md) — the gap review and the 14-step rehearsal record
+8. [`docs/deployment-runbook.md`](docs/deployment-runbook.md) — the machine, DNS, secrets, first deploy, rollback, backups
+9. [`docs/eda.md`](docs/eda.md) — MovieLens 25M: scale, sparsity, the long tail, the split as applied
+10. [`docs/records/`](docs/records/) — dated documents kept for their reasoning and **not maintained**
 
 ## Development
 

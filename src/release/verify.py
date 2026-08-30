@@ -460,17 +460,21 @@ def check_tenant_isolation(run: VerifyRun) -> CheckResult:
                 for failure in report["failures"]
             )
         )
+    sentinels = report.get("sentinel_persona_ids", [])
     return CheckResult(
         "V-6",
         "tenant isolation",
         True,
         f"{report['routes_probed']} persona routes refused for realm "
         f"{report['tenant_a']!r}, and no foreign tenant's rows in realm "
-        f"{report['tenant_b']!r}'s payloads",
+        f"{report['tenant_b']!r}'s payloads, with sentinel personas "
+        f"{sentinels} standing in realm {report['tenant_b']!r} — so the absences "
+        "are isolation rather than an empty tenant",
         {
             "tenant_a": report["tenant_a"],
             "tenant_b": report["tenant_b"],
             "routes_probed": report["routes_probed"],
+            "sentinel_persona_ids": sentinels,
         },
     )
 
