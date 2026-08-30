@@ -9,13 +9,18 @@ A multi-tenant, authenticated two-stage recommender on MovieLens 25M: item-item 
 
 <img alt="Discover at 1440px, signed in as Demo Walkthrough and exploring as the Drama Fan persona: a featured recommendation labelled RANKED BY THE LEARNED MODEL, rank 1, with Open movie, Watchlist, Mark watched and Not for me controls, the Why this? disclosure closed beneath them, and the ranked rail beginning below." src="docs/frontend/evidence/current/discover-desktop-1440.png" width="100%">
 
-The modeling here is deliberately ordinary. What is not is everything around it: the tenant boundary
-the database enforces rather than the application, the feature-freshness contract, the SHA-256-pinned
-serving bundle, the latency gate that measures the service instead of the CI runner, and a serving
-contract that reports when the learned path did *not* run rather than quietly taking credit for the
-fallback. The point is the engineering around the model, not the leaderboard. Every significant
-decision is written down before the code that depends on it lands — sixteen ADRs, each with its
-alternatives analyzed and the signals that would reopen it.
+Two tracks share this repository, and the models are the reason it exists. The modeling track starts
+from the baselines the field measures against and builds the two-stage architecture the way production
+recommenders are built — item-item retrieval, a two-tower with FAISS, a LightGBM LambdaRank ranker today
+— and keeps moving toward what the industry ships now: sequence models with transformer encoders are
+the next step. The engineering track is what makes those models usable by a real person rather than a
+notebook: the tenant boundary the database enforces rather than the application, the feature-freshness
+contract, the SHA-256-pinned serving bundle, the latency gate that measures the service instead of the
+CI runner, and a serving contract that reports when the learned path did *not* run rather than quietly
+taking credit for the fallback. Phase 3 is the engineering track's turn — the harness that makes the
+product and the API real — and the modeling track resumes as the main line of work once it closes.
+Every significant decision, model choices included, is written down before the code that depends on it
+lands — sixteen ADRs, each with its alternatives analyzed and the signals that would reopen it.
 
 ## What is real today
 
