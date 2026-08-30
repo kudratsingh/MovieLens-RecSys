@@ -1,0 +1,15 @@
+# Phase 2 — Two-stage architecture, offline (code-complete)
+
+> Moved out of `CLAUDE.md` on 2026-08-30 so the instruction file stays short; this folder is the full ledger and `CLAUDE.md`'s "Current status" is its summary. Update both when something lands: the ledger with the detail, the summary only when the shape of the project changes.
+
+Two-stage architecture (offline). The top-level choice is pinned by ADR 0003. Status:
+
+- ✅ **ADR 0004 (item-item before two-tower)** — merged (PR #18). Pins item-item as the zero-learned-parameters baseline the two-tower has to beat.
+- ✅ **ADR 0005 (LightGBM over neural ranker)** — pins ranker family, LambdaRank objective, and the training-data construction rule (positives from train's trailing window, candidate-model-sampled negatives, per-(user,timestamp) LambdaRank groups). Bundled with the ranker code.
+- ✅ **Item-item similarity candidate generator** (`src/models/candidates/itemitem.py`, PR #19) — `implicit.nearest_neighbours.CosineRecommender` with `k_neighbors=200`, same embedded popularity fallback CFModel established. Runs land in the new MLflow experiment `phase-2-candidates`.
+- ✅ **Per-stage evaluation in the harness** (PR #19) — `src/evaluation/protocol.py` exposes `K_CANDIDATES = 500` and an optional `k` parameter on `evaluate()`. `EvalResult.k` is stamped on every result so downstream consumers can't confuse a candidate-stage `recall@500` with a recommender-end-to-end `recall@10`.
+- ✅ **Two-tower candidate generator** (PyTorch, PR #24) — history-based user tower (mean-pool over last N=50 items, no per-user-id embedding), id-only item tower, embedding dim 64, sampled softmax with log-uniform negative correction (Yi et al. 2019), FAISS-CPU IVF-Flat ANN index over cosine-normalized item embeddings, embedded popularity fallback for zero-history users. Ships with **ADR 0006 — Two-tower retrieval architecture** in the same PR. Runs land in `phase-2-candidates` alongside item-item so ADR 0004's promotion gate can compare them directly.
+- ✅ **Feature module** (`src/features/`) — point-in-time-correct user / item / user×item features (interaction count, days-active, popularity windows, item age, genre affinity). `FeatureIndex` precomputes per-user and per-item sorted timestamps so per-query lookup is O(log n) via `bisect`. Point-in-time correctness enforced by a strict-equality canary test on a hand-built fixture. Provisional home until Phase 3 introduces Feast.
+- ✅ **LightGBM ranker** (`src/models/ranker/lgbm.py`) — LambdaRank booster scored against NDCG@10 per ADR 0001. `LGBMRanker.rank_candidates(...)` is the end-to-end re-ranking shape Phase 3's serving handler will call. Runs land in a new `phase-2-ranker` MLflow experiment; per-feature importances logged for a Phase 4 SHAP explainer to build on.
+
+Phase 2 stayed all-offline — no FastAPI, no Redis online store, no Feast. Those open with Phase 3.

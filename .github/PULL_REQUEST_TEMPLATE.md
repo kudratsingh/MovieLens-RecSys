@@ -43,4 +43,4 @@
 - [ ] No secrets, tokens, or real credentials in the diff — this repository is public
 - [ ] Migrations are additive only; production never runs a destructive one
 - [ ] `docs/api/openapi.json` and `web/lib/api.generated.ts` regenerated if the API surface moved
-- [ ] CLAUDE.md status updated if this changes scope or closes a tracked item
+- [ ] `docs/status/` ledger updated if this changes scope or closes a tracked item (and CLAUDE.md's short status if the shape changed)

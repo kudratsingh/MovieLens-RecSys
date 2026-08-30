@@ -10,7 +10,8 @@ page is the map.
 If you are here to judge whether the engineering holds up, read in this order.
 
 1. **[`../README.md`](../README.md)** — what the project is, the stack, and the
-   current phase.
+   current phase. The detailed ledger behind "current phase" is
+   [`status/`](status/README.md).
 2. **[`architecture.md`](architecture.md)** — the system in one document: the
    offline and online paths, and how the pieces fit. Diagram sources and
    rendered SVGs are in [`diagrams/`](diagrams/).
@@ -52,6 +53,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | Document | What it holds |
 |---|---|
 | [`architecture.md`](architecture.md) | The system overview, with diagrams |
+| [`status/`](status/README.md) | The project ledger: per-phase detail, remaining work per track, the long-form current step |
 | [`modeling-roadmap.md`](modeling-roadmap.md) | The model ladder and its decision log — every rung needs approval before it starts |
 | [`adr/`](adr/README.md) | Backend and cross-cutting ADRs on the flat numeric line; frontend ADRs under [`adr/frontend/`](adr/frontend/) |
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
