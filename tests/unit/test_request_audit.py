@@ -8,9 +8,11 @@ auth middleware commits it.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -23,6 +25,7 @@ from sqlalchemy import Connection, Engine
 from src.serving.audit import RECOMMENDATION_ENDPOINT
 from src.serving.ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from src.serving.request_audit import (
+    RECOMMENDATION_OWNED_ENDPOINTS,
     UNMATCHED_ENDPOINT,
     RequestAuditMiddleware,
     RequestAuditRecord,
@@ -331,6 +334,21 @@ def test_recommendations_are_left_to_the_prediction_audit() -> None:
     # `RecommendationAuditMiddleware`. A second insert here would sit inside the
     # p99 the k6 gate measures and duplicate what is already stored.
     assert recorder.calls == []
+
+
+def test_every_skipped_endpoint_names_a_route_that_exists() -> None:
+    """The skip is keyed on a route template, so it has to name a real route.
+
+    If the recommendation route were ever renamed and this constant were not,
+    the generic middleware would quietly start writing a second row on the one
+    path that has a latency SLO, and no other test would notice — the skip
+    would simply stop matching. Reading the committed contract is what makes
+    that a failure rather than a silent regression.
+    """
+    schema = json.loads(Path("docs/api/openapi.json").read_text())
+
+    for endpoint in RECOMMENDATION_OWNED_ENDPOINTS:
+        assert endpoint in schema["paths"], f"{endpoint} is not a route in the committed contract"
 
 
 def test_a_throttled_request_writes_no_audit() -> None:
