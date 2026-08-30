@@ -547,6 +547,13 @@ services:
       MODEL_SERVER_TIMEOUT_SECONDS: "0.5"
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
       FEAST_FEATURE_SERVER_URL: http://feature-server:6566
+      # The API's one Redis client: the shared rate-limit bucket (ADR 0014),
+      # which is what makes RATE_LIMIT_REQUESTS_PER_MINUTE describe the
+      # service rather than one of its API_WORKERS. Same derivation from
+      # REDIS_PASSWORD as x-feast-store's copy, and this service already
+      # waited on redis's healthcheck before it held the variable. Feature
+      # reads are still the sidecar's; nothing else here speaks to Redis.
+      REDIS_CONNECTION_STRING: redis:6379,password=${REDIS_PASSWORD:?generate one with secrets.token_urlsafe(48)}
       # No ADMIN_USER_* (the BYPASSRLS engine is gone; app_user already holds
       # SELECT on public.tenants), no POSTGRES_* (the migrator DSN lives only
       # on release), no TMDB token (no TMDB route exists), and above all no

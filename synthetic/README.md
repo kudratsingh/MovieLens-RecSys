@@ -70,11 +70,22 @@ record rather than a failure; and rate limiting.
 The rate-limit check is required and asserts the contract a client codes
 against — `X-RateLimit-*` on an admitted response, and a `429` with
 `Retry-After`, `X-RateLimit-Remaining: 0` and a JSON `detail` once the bucket is
-drained, with no third outcome. What it cannot assert is that a limiter is
-*configured*: ADR 0014 turns the bucket off on a dev stack precisely so the
-harnesses here can drive one Keycloak identity past any sane per-subject rate.
-Against that target the check records the absence in words and names the fact
-that every deployed environment should show the enforced branch instead.
+drained, with no third outcome. Since the shared bucket landed (ADR 0014's
+2026-08-29 note) it also asserts there is exactly *one* bucket behind the
+service rather than one per worker: no more than one bucket's worth admitted
+before the first refusal, and a concurrent burst of brand-new connections
+refused afterwards, because a reconnect that buys a fresh allowance is what a
+per-worker bucket looks like from outside. Both bounds are arithmetic against
+the capacity and refill the `429` itself advertised, so a deployment that
+changes `RATE_LIMIT_*` changes nothing here; `--rate-limit-probe-requests` and
+`--rate-limit-shared-probe-connections` are the two knobs for a target that
+needs a wider window or no reconnect sweep.
+
+What the check cannot assert is that a limiter is *configured*: ADR 0014 turns
+the bucket off on a dev stack precisely so the harnesses here can drive one
+Keycloak identity past any sane per-subject rate. Against that target the check
+records the absence in words and names the fact that every deployed environment
+should show the enforced branch instead.
 
 The degraded-metadata check is the one place a `skipped` is correct: the catalog
 is now 120/120 postered, so it scans up to ten pages for a poster-less title and,

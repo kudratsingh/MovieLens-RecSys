@@ -28,9 +28,11 @@ minted. Recommendation audits store it alongside their own row identity.
 
 Every authenticated response also carries the ``X-RateLimit-*`` view of the
 calling ``(tenant, subject)`` token bucket, and a caller that empties it gets
-a 429 with ``Retry-After`` (ADR 0014). The limiter is installed everywhere
-except a dev box, where the synthetic-load harnesses deliberately drive one
-Keycloak identity far past any sane per-subject rate.
+a 429 with ``Retry-After`` (ADR 0014). The bucket lives in Redis and is shared
+by every worker, so the configured rate describes the service rather than one
+process; ``/readyz`` reports which backend is in force. The limiter is
+installed everywhere except a dev box, where the synthetic-load harnesses
+deliberately drive one Keycloak identity far past any sane per-subject rate.
 
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
@@ -101,8 +103,9 @@ from src.serving.ratelimit import (
     REMAINING_HEADER,
     RESET_HEADER,
     RETRY_AFTER_HEADER,
+    RateLimitBackendState,
     RateLimitMiddleware,
-    TokenBucketLimiter,
+    build_rate_limiter,
 )
 from src.serving.recommendations import (
     RecommendationService,
@@ -161,15 +164,16 @@ _model_server = ModelServerClient(
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _catalog = CatalogService()
 
-# One bucket set per worker process (ADR 0014). Built unconditionally so its
+# The token bucket every authenticated request is charged against (ADR 0014).
+# `redis` by default, which is one bucket per (tenant, subject) shared by every
+# worker; `memory` keeps it in this process and Settings refuses that outside
+# dev without an explicit acknowledgement. Built unconditionally so its
 # configuration is validated at import even where the middleware is not
 # installed — a deployment should learn about a nonsensical RATE_LIMIT_BURST
 # from a boot failure, not from the first request after someone turns the
-# limiter on.
-_rate_limiter = TokenBucketLimiter(
-    requests_per_minute=_settings.rate_limit_requests_per_minute,
-    burst=_settings.rate_limit_burst,
-)
+# limiter on. Building the Redis client opens no connection; the first charged
+# request does.
+_rate_limiter = build_rate_limiter(_settings)
 
 # Deliberately not the serving clients: their timeouts are latency budgets for a
 # user-facing request, and a probe that reports "unavailable" because a sidecar
@@ -233,7 +237,8 @@ class ReadinessResponse(BaseModel):
 
     ``database`` and ``jwks`` decide the status code because they are the
     dependencies this process cannot serve a single authenticated request
-    without. The two sidecars are reported rather than gated — see the handler.
+    without. The two sidecars and the rate-limit bucket are reported rather
+    than gated — see the handler.
     """
 
     status: Literal["ready", "not-ready"]
@@ -241,6 +246,13 @@ class ReadinessResponse(BaseModel):
     jwks: Literal["ok", "error"]
     model_server: Literal["ok", "unavailable"]
     feature_server: Literal["ok", "unavailable"]
+    # Which bucket this worker is charging, as it is behaving rather than as it
+    # is configured: `shared` is the Redis bucket every worker meets,
+    # `in-process` is the per-worker approximation, `degraded` is the shared
+    # bucket failing open onto the per-worker one, and `disabled` is a stack
+    # where ADR 0014 turns the limiter off. Never gates readiness — a limiter
+    # is backpressure, not an auth boundary.
+    rate_limit: RateLimitBackendState
 
 
 class ServingPolicyResponse(BaseModel):
@@ -589,10 +601,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     run_startup_checks(settings=_settings, app_engine=_app_engine)
     logger.info(
-        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s",
+        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s backend=%s",
         _settings.environment,
         _settings.dev_auth_bypass,
         _rate_limiter.describe() if _settings.rate_limit_active else "disabled",
+        _settings.rate_limit_backend if _settings.rate_limit_active else "none",
     )
     yield
     await _feature_server.aclose()
@@ -609,11 +622,13 @@ API_DESCRIPTION = (
     "for the calling `(tenant, subject)` token bucket; exhausting it answers "
     "429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). "
     "`/healthz` and `/readyz` are exempt and carry no such headers.\n\n"
-    "The bucket lives in the worker process that served the request, so a "
-    "service running N uvicorn workers admits up to N times the configured "
-    "rate and `X-RateLimit-Remaining` is not monotonic across a sequence of "
-    "requests from one client. Treat the headers as a per-worker view of one "
-    "caller's allowance, not as a cluster-wide quota."
+    "One bucket per `(tenant, subject)` is shared by every worker of the "
+    "service, so the configured rate is what one caller gets however many "
+    "processes answer and `X-RateLimit-Remaining` counts down across a "
+    "sequence of requests. A deployment that has deliberately selected the "
+    "in-process backend keeps a bucket per worker instead, in which case the "
+    "headers are a per-worker view and `Remaining` is not monotonic; "
+    "`/readyz` reports which of the two is in force."
 )
 
 app = FastAPI(
@@ -941,11 +956,18 @@ async def readyz(response: Response) -> ReadinessResponse:
     # — and a popularity-serving API beats no API. Whether the learned path is
     # genuinely learned is the post-deploy verification's question; this
     # endpoint only makes a degraded sidecar visible without reading logs.
-    database, jwks_state, model_server, feature_server = await asyncio.gather(
+    #
+    # The rate-limit bucket is reported on the same terms and for a sharper
+    # reason: a Redis it cannot reach makes it fail open onto the per-worker
+    # bucket, which is a real weakening of a promise the response headers keep
+    # making — and one that leaves no other trace, since a 429 writes no audit
+    # row and the deployed API runs with --no-access-log.
+    database, jwks_state, model_server, feature_server, rate_limit = await asyncio.gather(
         run_in_threadpool(_probe_database, _app_engine),
         run_in_threadpool(_probe_jwks, _jwks, _settings.model_tenant_id),
         _probe_sidecar("model-server", _settings.model_server_url, "/healthz"),
         _probe_sidecar("feature-server", _settings.feast_feature_server_url, "/health"),
+        _probe_rate_limit(),
     )
     ready = database == "ok" and jwks_state == "ok"
     if not ready:
@@ -956,6 +978,7 @@ async def readyz(response: Response) -> ReadinessResponse:
         jwks=jwks_state,
         model_server=model_server,
         feature_server=feature_server,
+        rate_limit=rate_limit,
     )
 
 
@@ -1800,6 +1823,19 @@ def _probe_jwks(jwks: JwksCache, realm: str) -> Literal["ok", "error"]:
         logger.warning("Readiness probe: JWKS for realm=%s is not fetchable", realm, exc_info=True)
         return "error"
     return "ok"
+
+
+async def _probe_rate_limit() -> RateLimitBackendState:
+    """Report which bucket this worker is actually charging.
+
+    ``disabled`` is answered here rather than by the limiter because the
+    limiter object exists on every stack — it is built at import so a bad
+    ``RATE_LIMIT_BURST`` fails the boot — while the middleware is installed
+    only where ADR 0014 turns it on.
+    """
+    if not _settings.rate_limit_active:
+        return "disabled"
+    return await _rate_limiter.report()
 
 
 async def _probe_sidecar(name: str, base_url: str, path: str) -> Literal["ok", "unavailable"]:

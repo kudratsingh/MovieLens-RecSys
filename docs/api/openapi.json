@@ -1253,7 +1253,7 @@
         "type": "object"
       },
       "ReadinessResponse": {
-        "description": "What a deploy gate reads off ``/readyz``.\n\n``database`` and ``jwks`` decide the status code because they are the\ndependencies this process cannot serve a single authenticated request\nwithout. The two sidecars are reported rather than gated \u2014 see the handler.",
+        "description": "What a deploy gate reads off ``/readyz``.\n\n``database`` and ``jwks`` decide the status code because they are the\ndependencies this process cannot serve a single authenticated request\nwithout. The two sidecars and the rate-limit bucket are reported rather\nthan gated \u2014 see the handler.",
         "properties": {
           "database": {
             "enum": [
@@ -1287,6 +1287,16 @@
             "title": "Model Server",
             "type": "string"
           },
+          "rate_limit": {
+            "enum": [
+              "shared",
+              "in-process",
+              "degraded",
+              "disabled"
+            ],
+            "title": "Rate Limit",
+            "type": "string"
+          },
           "status": {
             "enum": [
               "ready",
@@ -1301,7 +1311,8 @@
           "database",
           "jwks",
           "model_server",
-          "feature_server"
+          "feature_server",
+          "rate_limit"
         ],
         "title": "ReadinessResponse",
         "type": "object"
@@ -1937,7 +1948,7 @@
     }
   },
   "info": {
-    "description": "Two-stage recommender service (candidate \u2192 ranker) per CLAUDE.md.\n\nEvery authenticated response carries `X-RateLimit-Limit` (the bucket's capacity, i.e. the largest instantaneous burst), `X-RateLimit-Remaining` and `X-RateLimit-Reset` (whole seconds until the bucket is full again) for the calling `(tenant, subject)` token bucket; exhausting it answers 429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). `/healthz` and `/readyz` are exempt and carry no such headers.\n\nThe bucket lives in the worker process that served the request, so a service running N uvicorn workers admits up to N times the configured rate and `X-RateLimit-Remaining` is not monotonic across a sequence of requests from one client. Treat the headers as a per-worker view of one caller's allowance, not as a cluster-wide quota.",
+    "description": "Two-stage recommender service (candidate \u2192 ranker) per CLAUDE.md.\n\nEvery authenticated response carries `X-RateLimit-Limit` (the bucket's capacity, i.e. the largest instantaneous burst), `X-RateLimit-Remaining` and `X-RateLimit-Reset` (whole seconds until the bucket is full again) for the calling `(tenant, subject)` token bucket; exhausting it answers 429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). `/healthz` and `/readyz` are exempt and carry no such headers.\n\nOne bucket per `(tenant, subject)` is shared by every worker of the service, so the configured rate is what one caller gets however many processes answer and `X-RateLimit-Remaining` counts down across a sequence of requests. A deployment that has deliberately selected the in-process backend keeps a bucket per worker instead, in which case the headers are a per-worker view and `Remaining` is not monotonic; `/readyz` reports which of the two is in force.",
     "title": "MovieLens Recommender API",
     "version": "0.1.0"
   },
