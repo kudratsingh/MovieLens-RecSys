@@ -234,8 +234,8 @@ a Redis-backed shared bucket is the named follow-up.
 
   The second half changed. Staging landed as a thin overlay on
   `docker-compose.prod.yml` — a different Compose project and
-  `ENVIRONMENT=staging` on the eight services that construct `Settings()`, and
-  nothing else — rather than as a third environment with its own topology,
+  `ENVIRONMENT=staging` on the eight services that carry an environment label,
+  and nothing else — rather than as a third environment with its own topology,
   which is what this finding was arguing against. What that buys over running
   the production rehearsal directly is a separate project and separate volumes,
   so a rehearsal can be reset without touching the production stack's state,

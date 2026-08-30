@@ -34,10 +34,10 @@ PROD_COMPOSE_ALL = $(PROD_COMPOSE) --profile jobs
 # --- Staging ----------------------------------------------------------------
 # The same production file with docker-compose.staging.yml layered on top: a
 # different Compose project and ENVIRONMENT=staging on the eight services that
-# construct Settings(), and nothing else. The file order matters -- the overlay
-# is second so its `name` and its environment overrides win -- and the project
-# name is passed on the command line as well, so a hand-typed invocation in the
-# wrong order still cannot address movielens-prod's volumes.
+# carry an environment label, and nothing else. The file order matters -- the
+# overlay is second so its `name` and its environment overrides win -- and the
+# project name is passed on the command line as well, so a hand-typed invocation
+# in the wrong order still cannot address movielens-prod's volumes.
 #
 # Staging deliberately gets a fraction of production's targets. It rehearses a
 # release: pull, release, serve, verify, and the disposal that makes the next

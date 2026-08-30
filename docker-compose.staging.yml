@@ -22,7 +22,8 @@
 #
 #   * the Compose project, so the containers, networks and volumes are a
 #     separate set and `staging-reset` can never touch movielens-prod's data;
-#   * ENVIRONMENT, on the eight services that construct Settings(), so a
+#   * ENVIRONMENT, on the eight services that carry it -- the seven that
+#     construct Settings() and the Feast server, which does not read it -- so a
 #     container, a log line and an operator can all answer "which deployment is
 #     this?" without inferring it from a hostname.
 #
@@ -49,7 +50,8 @@
 name: movielens-staging
 
 services:
-  # The eight services that build Settings() at import or at boot. Compose
+  # The eight services production gives an environment label: the seven that
+  # build Settings() at import or at boot, plus feature-server. Compose
   # merges `environment` mappings key by key, so each of these replaces exactly
   # one variable and inherits the rest of its service definition -- including
   # the *-db, *-feast-store and *-keycloak-client anchors, which resolve inside

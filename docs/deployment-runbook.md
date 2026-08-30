@@ -59,8 +59,9 @@ Numbered sections start below; this one is context, because the first question a
 runbook like this is whether there is somewhere to try it first. There is.
 
 **Staging is `docker-compose.prod.yml` with `docker-compose.staging.yml` layered on it** — a
-different Compose project (`movielens-staging`), `ENVIRONMENT=staging` on the eight services that
-construct `Settings()`, and its own `.env.staging`. Nothing else differs, deliberately: hostnames,
+different Compose project (`movielens-staging`), `ENVIRONMENT=staging` on the eight services
+production gives an environment label (the seven that construct `Settings()`, plus the Feast
+server), and its own `.env.staging`. Nothing else differs, deliberately: hostnames,
 every credential, the certificate issuer and the image tag all travel in the env file, exactly the
 way the box and the laptop rehearsal already differ from each other.
 

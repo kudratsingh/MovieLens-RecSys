@@ -702,10 +702,19 @@ def test_every_production_labelled_service_is_relabelled_for_staging() -> None:
     Compose would turn into a new, image-less service rather than an error.
     """
     assert set(STAGING_SERVICES) == PRODUCTION_LABELLED_SERVICES
-    # Sanity: the derived set is the eight services that build Settings() plus
-    # the Feast server, which carries the label for consistency rather than
-    # because it reads it.
+    # Sanity on the derived set, which is eight services: the seven that build
+    # Settings(), plus the Feast server -- which carries the label for
+    # consistency rather than because anything in it reads the value.
     assert PRODUCTION_LABELLED_SERVICES == SETTINGS_BUILDING_SERVICES | {"feature-server"}
+    # The count is quoted as prose in the staging compose file's header, the
+    # Makefile, docs/deployment-runbook.md and the readiness review. It is not a
+    # constraint on the topology -- add a service and change the number -- but a
+    # number nothing checks is a number that goes quietly wrong.
+    assert len(PRODUCTION_LABELLED_SERVICES) == 8, (
+        "the environment-labelled service count moved; the staging compose header, "
+        "the Makefile's staging section, docs/deployment-runbook.md's Staging section "
+        "and docs/production-readiness-review.md all say 'eight'"
+    )
 
 
 @pytest.mark.parametrize("variable", FORBIDDEN_VARIABLES)
