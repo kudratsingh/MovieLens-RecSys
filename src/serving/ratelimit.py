@@ -530,10 +530,16 @@ class SharedTokenBucket:
                     effective.ttl_seconds,
                 ],
             )
+            # Inside the try with the call: a reply this cannot read is a
+            # limiter that is not working, and the answer to that is the same
+            # fail-open as an unreachable Redis. A 500 on the way to deciding
+            # whether to allow a request would be the limiter taking down the
+            # thing it exists to protect.
+            decision = _decision(allowed=bool(int(allowed)), tokens=float(tokens), policy=effective)
         except Exception as exc:  # noqa: BLE001 - see the fail-open note above
             self._record_fail_open(exc)
             return self._fallback.acquire(key, effective)
-        return _decision(allowed=bool(int(allowed)), tokens=float(tokens), policy=effective)
+        return decision
 
     async def report(self) -> RateLimitBackendState:
         """Reported to ``/readyz``; never gates it, never raises.

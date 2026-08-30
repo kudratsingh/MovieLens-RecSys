@@ -457,6 +457,33 @@ async def test_a_redis_failure_falls_back_to_the_in_process_bucket() -> None:
     assert broken.calls == 4
 
 
+async def test_a_reply_the_client_cannot_read_fails_open_rather_than_500ing() -> None:
+    """A limiter that takes down the thing it protects has stopped being a
+    limiter. An unreadable reply means it is not working, and the answer to
+    that is the same fail-open as an unreachable Redis — so the parsing lives
+    inside the same guarded block as the call."""
+
+    class _Garbled:
+        def register_script(self, script: str) -> Any:
+            async def run(keys: Any = (), args: Any = ()) -> Any:
+                return ["not-a-number", "nor-this"]
+
+            return run
+
+        async def ping(self) -> bool:
+            return True
+
+    limiter = SharedTokenBucket(
+        redis_client=_Garbled(),  # type: ignore[arg-type]
+        requests_per_minute=120,
+        burst=1,
+    )
+
+    assert (await limiter.charge(KEY)).allowed is True
+    assert (await limiter.charge(KEY)).allowed is False
+    assert limiter.fail_open_total == 2
+
+
 async def test_a_timed_out_redis_fails_open_the_same_way() -> None:
     """Unreachable and unresponsive are the same answer to the only question
     the middleware is asking, and both have to be caught: a ``TimeoutError``
