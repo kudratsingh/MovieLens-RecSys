@@ -1,25 +1,28 @@
 {
   "_comment": [
     "Full-dataset runs for the 2026-08-30 two-tower sweep, chosen from the",
-    "pilot in pilot.json. Two cells, each answering one of the two hypotheses",
-    "the pilot left open at full scale.",
+    "pilot in pilot.json.",
     "",
-    "1. budget-8ep is ADR 0006's configuration exactly, run for up to eight",
+    "1. budget-8ep is ADR 0006's configuration exactly, given up to eight",
     "   epochs instead of three with early stopping on a loss plateau. It",
-    "   answers 'was three epochs too little?' directly, and because the",
-    "   config and seed are v1's, its first three epoch losses must reproduce",
-    "   v1's 10.3542 -> 10.2726 -> 10.2718 exactly. That doubles as the",
-    "   full-dataset check that this PR's memory rewrite moved no number.",
+    "   answers 'was three epochs too little?' directly. Because the config",
+    "   and the seed are v1's, its first three epoch losses reproduce v1's",
+    "   10.3542 -> 10.2726 -> 10.2718 exactly, which doubles as the check",
+    "   that this PR's memory rewrite moved no number. It ran all eight and",
+    "   ended at warm recall@500 0.0451, below the three-epoch 0.0466.",
     "",
-    "2. t0.1-5ep holds the learning rate at the default and gives the model",
-    "   room to speak: at temperature 0.1 the pilot's loss drops below",
-    "   ln(1 + 16384) = 9.7041 -- the loss of a model with no opinion at all,",
-    "   which v1 never reached -- and keeps falling. It answers whether an",
-    "   objective the model can actually fit produces retrieval that works.",
+    "2. lr1e-2-t0.05-8ep was launched and then stopped about a minute in,",
+    "   before its first epoch, once cell 1 turned out to cost 21-26 minutes",
+    "   per epoch and to run all eight of them: eight more would not have fit",
+    "   in the day. Its MLflow run is marked KILLED and nothing was measured",
+    "   and then discarded. It was relaunched at four epochs from full2.json,",
+    "   which is the run docs/results.md reports.",
     "",
     "Early stopping uses min_delta 1e-4 rather than something larger on",
     "purpose: v1's third epoch improved by 0.0008, and a threshold above that",
-    "would stop the budget run at exactly the point it exists to get past."
+    "would have stopped the budget run at exactly the point it exists to get",
+    "past. In the event it never fired at all — the loss kept creeping down in",
+    "the fourth decimal for all eight epochs."
   ],
   "sample_fraction": 1.0,
   "cells": [
@@ -30,9 +33,10 @@
       "early_stopping_min_delta": 0.0001
     },
     {
-      "label": "t0.1-5ep",
-      "logit_temperature": 0.1,
-      "epochs": 5,
+      "label": "lr1e-2-t0.05-8ep",
+      "learning_rate": 0.01,
+      "logit_temperature": 0.05,
+      "epochs": 8,
       "early_stopping_patience": 2,
       "early_stopping_min_delta": 0.0001
     }

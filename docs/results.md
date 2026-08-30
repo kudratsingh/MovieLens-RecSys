@@ -10,14 +10,21 @@ not finish, this file says so instead of reporting a partial number.
 **Cold-start cohort:** ADR 0011 `v1`, md5 `9e0c978eff3d45f0985e9e0bbe0551d7`, fingerprint `ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2`
 **Evaluation:** every metric comes from [`src/evaluation/`](../src/evaluation/) — the trainers were run, nothing was computed by hand (non-negotiable #5)
 
-> **A later session appended to this page.** Everything down to "Caveats worth
+> **Later sessions appended to this page.** Everything down to "Caveats worth
 > writing down" is the 2026-08-29 measurement and is left exactly as it was
 > written. [The 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
-> at the bottom adds two things that change how one section above should be
+> adds two things that change how one section above should be
 > read: **the two-tower did run to completion**, so "The two-tower did not run
 > to completion" records that session's outcome, not the model's, and both
 > cold-start routing policies were measured, so "Routing: what the cohort
 > actually measured" now has a counterfactual beside it.
+>
+> [A second 2026-08-30 session](#2026-08-30-second-session--the-learning-rate-and-budget-sweep)
+> at the bottom runs the learning-rate and budget sweep the first one said was
+> the cheapest next experiment. It changes how that session's two-tower result
+> should be read — **not the number, which stands, but its cause.** The flat
+> loss curve there was not a model that had finished learning, and the sweep
+> says what it was instead.
 
 ## The machine, and what it was doing at the time
 
@@ -795,3 +802,625 @@ threshold run is named `<base>-threshold-routing` in MLflow and tagged
   configuration is a modelling decision with an approval gate
   ([`modeling-roadmap.md`](modeling-roadmap.md)), not something to slip into the
   run that measures the configuration as pinned.
+
+## 2026-08-30, second session — the learning-rate and budget sweep
+
+The [session above](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
+measured two-tower v1 at ADR 0006's configuration and found warm recall@500 of
+0.0466 against item-item's 0.4001, on a loss curve — 10.3542 → 10.2726 →
+10.2718 — that stopped moving after one epoch. It said, in as many words, that
+this was "a hyperparameter symptom before it is an architectural one" and that
+the cheapest next experiment was a training-budget and learning-rate sweep.
+This is that sweep, and its last bullet — "no two-tower re-training at a larger
+budget" — is what this section closes.
+
+**No architecture changed.** The towers, the loss family, the sampler, the
+retrieval index and the routing are ADR 0006's, and every default in
+`TwoTowerConfig` is still the value that ADR pins.
+
+**Measured:** 2026-08-30
+**Dataset, split and cohort:** identical to both sessions above — MovieLens 25M
+at DVC version `c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train
+20,000,075 / holdout 129,683 / test 4,870,337 untouched, 2,641 holdout users
+(1,939 warm, 702 cold), ADR 0011 cohort `v1` attached to every full-dataset run.
+**Threshold regime:** this section sits under the banner at the top of the page
+with everything above it. It was measured on `main` at `a5f8d20` — *before*
+[#119](https://github.com/kudratsingh/MovieLens-RecSys/pull/119) raised
+`COLD_START_THRESHOLD` from 5 to 10 and made ADR 0001's threshold the default
+offline routing rule — so warm/cold slicing is at 5, routing is index
+membership, and the slice is 1,939 warm / 702 cold. That is deliberate rather
+than incidental: the sweep's entire method is comparison against v1, item-item
+and popularity, and all three are on this regime. Reproducing these numbers on
+current `main` needs `SYNTH_COLD_ROUTING=index` *and* the threshold back at 5;
+re-running at 10 moves the slicing and the served population together and would
+need its own dated section. The MLflow run names here carry a sweep label
+rather than a policy suffix, which under the pre-#119 convention means index
+routing.
+**Machine:** the same Apple M3 / 8 cores / 16 GiB / macOS 26.5.2 (25F84) box,
+Python 3.11.16, numpy 2.4.6, pandas 2.3.3, torch 2.13.0, faiss-cpu 1.15.0,
+MLflow client 3.15.1, Postgres 16 in Docker on host port 5433, MLflow on 5001.
+**Load:** the host was shared throughout and its 1-minute load average, sampled every
+two minutes across the whole 5½-hour session, ran **2.04 to 41.09 with a mean
+of 4.49 over 161 samples** on 8 cores. The spike is one unrelated workload
+between roughly 06:45 and 07:00 that also drove swap to 12.4 GB of 13.3; it
+lands inside the pilot and is visible in two of its cell wall-clocks. The
+full-dataset runs were made at a load average between 3 and 6.
+Every job ran under `nice -n 15` at one thread on `OMP_NUM_THREADS`,
+`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and `VECLIB_MAXIMUM_THREADS`, one at
+a time, never concurrently. The wall-clocks are upper bounds, as on every
+session above.
+**Cohort determinism, checked a third time:** this worktree had only the DVC
+pointer, so the parquet was regenerated from scratch before any full-dataset
+run and reproduced the recorded md5 `9e0c978eff3d45f0985e9e0bbe0551d7`, its
+45,337-byte size and the fingerprint `ae4475f0e063…` exactly. That is now three
+independent confirmations of ADR 0011's determinism claim on three checkouts.
+
+### What was parameterised, and what was not
+
+Every `TwoTowerConfig` field is now readable from a `TWOTOWER_*` environment
+variable, and the whole config is logged to MLflow, so each run below is
+reproducible from its own params rather than from a diff. **No default moved.**
+A unit test (`test_adr_0006_defaults_are_unchanged`) asserts each one against
+ADR 0006, so a future edit has to be deliberate.
+
+Four fields are new. Three are conveniences at their v1-equivalent values —
+`early_stopping_patience = 0` (v1 always ran exactly `epochs` passes),
+`faiss_exact = False` (ADR 0006 pins IVF-Flat, and deliberately: its
+Alternatives section rejects exact search at eval time precisely so the offline
+number carries IVF's approximation loss), and `correct_positive_logit = True`
+(what v1 did). The fourth is the one worth reading carefully.
+
+**`logit_temperature`, default 1.0 — v1's implicit value.** ADR 0006 pins two
+things that interact and never names the constant that reconciles them. Both
+towers are L2-normalized, so a raw logit is a cosine bounded to `[-1, 1]`: two
+nats of range, total, for the model to express a preference in. The log-uniform
+correction then subtracts `log P(item)` from that logit, and measured over the
+real train split's 34,461 items with ADR 0006's own sampler those corrections
+run from **2.713 nats** for the most-watched title to **12.794** for a title
+seen once — **a 10.081-nat spread of fixed, unlearnable offset sitting on top
+of a two-nat signal.** A temperature divides the cosine before the correction
+is applied, and is the standard way every cosine-similarity two-tower makes the
+learned part competitive with the prior. It is a hyper-parameter of the loss,
+not a change of architecture; at τ = 1.0 the arithmetic is bit-identical to
+v1's, which a test also asserts.
+
+### The pilot: 6% of users, chosen by seed
+
+Twelve configurations at 78 minutes each does not fit in a day, so the orders of
+magnitude were found on a subsample first. The subsample keeps **every
+interaction of 6% of users** (9,752 of 162,541, drawn at seed 42), not 6% of
+rows: the user tower is a mean-pool over a history, so thinning rows would
+shorten every history and the pilot would be measuring a different model.
+Splitting that subsample on time by the same rule gives train 1,213,918 /
+holdout 7,528, 1,205,602 training pairs, 8,316 users and 19,005 items — and a
+warm slice of **116 users**, which is the pilot's main limitation and is
+returned to below. Every cell trains and scores on the same people; only the
+configuration differs. The grid is committed at
+[`docs/experiments/twotower-sweep/pilot.json`](experiments/twotower-sweep/pilot.json).
+
+The pilot is worth trusting for one specific reason: **its v1 cell reproduces
+v1's pathology.** At ADR 0006's configuration the subsample scores warm
+recall@500 of 0.0463 after one epoch against the full run's 0.0466 — the same
+number at 6% of the data.
+
+Three reference lines on the pilot's own 116 warm users, measured through the
+same `src/evaluation/` call the cells use, so the two-tower numbers have
+something to be a fraction *of*:
+
+| Reference on the pilot subsample | Warm recall@500 | Warm NDCG@500 | × chance |
+|---|---:|---:|---:|
+| Chance — 500 of 19,005 items drawn uniformly | 0.026309 | — | 1.00× |
+| **Popularity** — the two-tower's own embedded fallback | **0.1974** | 0.0721 | 7.50× |
+| **Item-item cosine** — the reigning champion | **0.3619** | 0.1301 | 13.76× |
+
+Item-item scores 0.3619 here against 0.4001 on the full dataset, so the
+subsample is a slightly harder version of the same problem rather than a
+different one. On the full dataset chance is 500 / 34,461 = **0.014509**;
+item-item sits at 27.6× it and two-tower v1 sat at 3.21×.
+
+All twelve cells, three epochs each, same 116 warm users. The last three sit
+outside the learning-rate × temperature grid and are discussed separately below.
+`× chance` is against the pilot's 0.026309.
+
+| Cell | lr | τ | negatives | Warm recall@500 | × chance | Warm NDCG@500 | Final loss |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `lr1e-4-t1.0` | 1e-4 | 1.0 | 16,384 | 0.0392 | 1.49× | 0.0119 | 10.7418 |
+| `lr1e-3-t1.0` — **ADR 0006 as written** | 1e-3 | 1.0 | 16,384 | 0.0443 | 1.68× | 0.0137 | 10.0212 |
+| `lr1e-2-t1.0` | 1e-2 | 1.0 | 16,384 | 0.0459 | 1.74× | 0.0141 | 9.9432 |
+| `lr1e-4-t0.1` | 1e-4 | 0.1 | 16,384 | 0.0518 | 1.97× | 0.0141 | 9.7127 |
+| `lr1e-3-t0.1` | 1e-3 | 0.1 | 16,384 | 0.0413 | 1.57× | 0.0149 | 8.5407 |
+| `lr1e-2-t0.1` | 1e-2 | 0.1 | 16,384 | 0.0495 | 1.88× | 0.0178 | **8.2335** |
+| `lr1e-4-t0.05` | 1e-4 | 0.05 | 16,384 | 0.0448 | 1.70× | 0.0134 | 10.5740 |
+| `lr1e-3-t0.05` | 1e-3 | 0.05 | 16,384 | 0.0406 | 1.54× | 0.0137 | 8.8088 |
+| `lr1e-2-t0.05` | 1e-2 | 0.05 | 16,384 | **0.0520** | **1.98×** | 0.0182 | 8.3082 |
+| `lr1e-3-t1.0-nopos` — negatives corrected only | 1e-3 | 1.0 | 16,384 | 0.0443 | 1.68× | 0.0137 | 18.4928 |
+| `lr1e-3-t0.05-neg4096` | 1e-3 | 0.05 | 4,096 | 0.0480 | 1.83× | 0.0156 | 7.4720 \* |
+| `lr1e-3-t0.05-exact` — exact retrieval | 1e-3 | 0.05 | 16,384 | 0.0432 | 1.64× | 0.0144 | 8.8088 |
+
+\* Not comparable with the column: with 4,096 negatives the no-opinion loss is
+`ln(4,097) = 8.3180` rather than `ln(16,385) = 9.7041`, so that cell's 7.4720
+is 0.85 nats under *its* floor, where `lr1e-2-t0.1`'s 8.2335 is 1.47 under
+*its* one.
+
+The curves, since a final number hides the thing worth seeing:
+
+| Cell | Loss per epoch | Warm recall@500 per epoch |
+|---|---|---|
+| `lr1e-3-t1.0` | 10.5581 → 10.1168 → 10.0212 | 0.0463 → 0.0453 → 0.0443 |
+| `lr1e-3-t0.05` | 10.4800 → 9.1271 → 8.8088 | 0.0479 → 0.0455 → 0.0406 |
+| `lr1e-2-t1.0` | 10.0702 → 9.9483 → 9.9432 | 0.0418 → 0.0488 → 0.0459 |
+| `lr1e-4-t1.0` | 11.0532 → 10.9029 → 10.7418 | 0.0206 → 0.0333 → 0.0392 |
+| `lr1e-3-t0.1` | 9.6159 → 8.7463 → 8.5407 | 0.0470 → 0.0432 → 0.0413 |
+| `lr1e-2-t0.05` | 9.1203 → 8.4276 → 8.3082 | 0.0451 → 0.0498 → 0.0520 |
+| `lr1e-4-t0.05` | 13.4743 → 11.5506 → 10.5740 | 0.0306 → 0.0425 → 0.0448 |
+| `lr1e-2-t0.1` | 8.7120 → 8.3112 → 8.2335 | 0.0488 → 0.0518 → 0.0495 |
+| `lr1e-4-t0.1` | 11.4941 → 10.3662 → 9.7127 | 0.0269 → 0.0404 → 0.0518 |
+| `lr1e-3-t1.0-nopos` | 19.0297 → 18.5886 → 18.4928 | 0.0477 → 0.0451 → 0.0443 |
+| `lr1e-3-t0.05-neg4096` | 9.1584 → 7.7790 → 7.4720 | 0.0423 → 0.0388 → 0.0480 |
+| `lr1e-3-t0.05-exact` | 10.4800 → 9.1271 → 8.8088 | 0.0419 → 0.0434 → 0.0432 |
+
+MLflow run ids, in the order above:
+`425d5b96` (`lr1e-3-t1.0`), `f55e543f`, `a0f48c0a`, `dee1f211`, `6a35f8688`,
+`bed3da94`, `58f3cfc0`, `e53cfa58`, `be91e8df`, `fbf5ed66`, `72a482de`,
+`36b4c216` — all in `phase-2-candidates`, tagged `sweep_label` and
+`user_sample_fraction = 0.06`.
+
+### What the pilot found
+
+The nine cells of the learning-rate × temperature grid land in a band from
+**0.0392 to 0.0520** — 1.49× to 1.98× the chance line — while their final
+losses span **2.5 nats**, from 8.2335 to 10.7418. Popularity, on the same 116
+users with the same already-seen filter, is at 0.1974. **The best cell in the
+grid retrieves 3.8× worse than the popularity list this model carries inside
+itself as its cold-start fallback, and 7.0× worse than item-item.**
+
+Read as a grid, warm recall@500 after three epochs:
+
+| lr \ τ | **1.0** (ADR 0006) | **0.1** | **0.05** |
+|---|---:|---:|---:|
+| **1e-4** | 0.0392 | 0.0518 | 0.0448 |
+| **1e-3** (ADR 0006) | 0.0443 | 0.0413 | 0.0406 |
+| **1e-2** | 0.0459 | 0.0495 | 0.0520 |
+
+Three readings, in the order the sweep was opened to test them.
+
+**1. The learning rate was never the problem.** At ADR 0006's τ = 1.0, a decade
+below the default gives 0.0392 and a decade above gives 0.0459, against the
+default's 0.0443 — a spread of 0.007 on a 116-user slice, which is inside what
+that slice can resolve. Nothing in the row is a fix, and the default was
+already in the right order of magnitude. **That closes the first of the three
+hypotheses,** and it is the one the sweep was named for.
+
+**2. v1's loss was worse than emitting no opinion at all.** With 16,384 sampled
+negatives, a model that gives every candidate the identical logit scores
+`ln(16,385) = 9.7041`. **No cell at τ = 1.0 ever got under that line at any
+learning rate** — the best was 9.9432 — and v1's own full-dataset final loss was
+10.2718. Every cell at τ ≤ 0.1 and lr ≥ 1e-3 got under it on the first or
+second epoch. That is the ADR 0006 arithmetic showing up as a measurement: an
+L2-normalized cosine gives the model two nats to speak in, the log-uniform
+correction spans 10.081 across the real catalog, and at τ = 1.0 the model is
+outvoted five to one by a prior it cannot argue with. **So the flat loss curve
+in the first 2026-08-30 session was not a model that had finished learning. It
+was a model with no room left to say anything.**
+
+**3. Giving it room fixes the loss and does not fix retrieval.** This is the
+finding worth the sweep, and it is visible twice. Across the grid, 2.5 nats of
+objective buys at most 0.013 of recall and leaves every cell in the same band.
+Within a cell it is starker: at lr = 1e-3, τ = 0.05 the loss falls hard and
+never plateaus — 10.4800 → 9.1271 → 8.8088, still descending when the budget
+ran out — while warm recall@500 **falls with it**, 0.0479 → 0.0455 → 0.0406.
+The model is not stuck and it is not under-trained. It is optimizing its
+objective successfully and retrieving no better, or worse, for it. Spending
+more epochs on that buys more of the same, which is what the full-dataset runs
+below went and checked.
+
+Two cells sit at the top of the band — `lr1e-2-t0.05` at 0.0520 and
+`lr1e-4-t0.1` at 0.0518 — and they have nothing in common but their position in
+the table, which is the clearest evidence available that the ordering *inside*
+this band is noise and not signal. `lr1e-2-t0.05` was taken to the full dataset
+anyway, on the only grounds available: it has the band's best final value *and*
+was still climbing on its last epoch (0.0451 → 0.0498 → 0.0520) rather than
+falling as its loss improved, which is the strongest claim to more epochs any
+cell here has.
+
+### Three cells outside the grid
+
+Each answers a question the grid could not, and none of them moves the band.
+
+**`lr1e-3-t1.0-nopos` — ADR 0006's literal wording.** That ADR says "each
+*negative's* logit is corrected"; the code corrects the positive's too, which
+is what TensorFlow's `sampled_softmax_loss` does. Turning the positive
+correction off costs **8.5 nats** — 19.0297 → 18.5886 → 18.4928 against
+10.5581 → 10.1168 → 10.0212 — because a positive with no boost has to out-score
+negatives that got between 2.7 and 12.8 nats of one for free. So the code's
+reading is the better one, and the ADR's wording is what should change. **Both
+cells finish at warm recall@500 of 0.0443, identical to four decimal places.**
+Eight and a half nats of objective, and retrieval did not move at all.
+
+**`lr1e-3-t0.05-neg4096` — a quarter of the negatives.** ADR 0006 pins
+`num_sampled = 4 × batch_size`. At 4,096 the same three epochs cost **66.6 s
+against 210** — the `(B, S)` logit matrix is essentially the entire cost of this
+model, so a quarter of the negatives is a quarter of the arithmetic, and the
+budget lever is a real one. Its loss lands at 7.4720, but against a different
+floor: the no-opinion line for 4,096 negatives is `ln(4,097) = 8.3180`, not
+9.7041, so the two losses compare only as distances from their own floors.
+Warm recall@500 finishes at 0.0480 — the same band. **The cheap budget exists,
+and buys nothing to spend it on.**
+
+**`lr1e-3-t0.05-exact` — no ANN approximation at all.** The one cell that is a
+validity check on every other number here rather than an experiment. ADR 0006
+chose IVF-Flat at `nprobe = 10` over exact search deliberately, so that the
+offline recall would carry the approximation loss that serving will carry — but
+it asserted ">0.95 recall vs exact" without measuring it on these embeddings,
+and at `nlist = 100` a query sees about a tenth of the catalog. If IVF were
+quietly discarding the neighbours the towers had actually learned, every recall
+number on this page would be understated and the verdict would be wrong.
+It is not. The exact cell trains identically — its per-epoch losses are
+bit-identical to its IVF twin's, 10.4800 → 9.1271 → 8.8088, which is also a
+free determinism check — and finishes at warm recall@500 of **0.0432 against
+the IVF twin's 0.0406**. Exact search was *lower* than IVF at the first two
+epochs (0.0419 vs 0.0479, 0.0434 vs 0.0455) and higher at the third, which is
+what a difference smaller than the slice's noise looks like. **Removing the
+approximation entirely moves warm recall by less than 0.003 and leaves the
+model 4.6× below popularity.** ADR 0006's IVF choice is exonerated, and every
+recall number on this page is a measurement of the embeddings.
+
+### The full-dataset runs
+
+Two configurations went to the full 20,000,075-row training frame, chosen from
+the pilot and committed at
+[`docs/experiments/twotower-sweep/full.json`](experiments/twotower-sweep/full.json):
+
+- **`budget-8ep`** — ADR 0006's configuration exactly, given up to eight epochs
+  instead of three with early stopping on a loss plateau (patience 2, min-delta
+  1e-4; the min-delta is deliberately below v1's third-epoch improvement of
+  0.0008, so the run cannot stop at the point it exists to get past). This is
+  the *budget* half of the question, asked at the configuration the question
+  was asked about. Because the config and the seed are v1's, **its first three
+  epoch losses have to reproduce v1's 10.3542 → 10.2726 → 10.2718 exactly**, so
+  the run doubles as the check that this PR's memory rewrite moved no number.
+- **`lr1e-2-t0.05-8ep`** — the best cell in the pilot (0.0520) and one of the
+  few whose recall was still climbing on its last epoch, given the same eight.
+  If any combination of learning rate and budget can move this architecture,
+  this is where it shows.
+
+First, the reference lines the candidate-stage table above never had. Popularity
+had only ever been scored at K = 10 on this page; here it is at
+K_CANDIDATES = 500, on the same 1,939 warm holdout users, through the same
+`src/evaluation/` call, with the same already-seen filter applied:
+
+| Full dataset, 1,939 warm holdout users | Warm recall@500 | Warm NDCG@500 | × chance |
+|---|---:|---:|---:|
+| Chance — 500 of 34,461 items drawn uniformly | 0.014509 | — | 1.00× |
+| **Two-tower v1** (ADR 0006, 3 epochs) | 0.0466 | 0.0146 | 3.21× |
+| **Popularity** — the two-tower's own embedded fallback | **0.2310** | 0.0867 | **15.92×** |
+| **Item-item cosine** — the champion | **0.4001** | 0.1393 | **27.58×** |
+
+**That table is the sweep's context in four rows.** Two-tower v1 does not sit
+somewhere between popularity and item-item, which is where a working-but-weaker
+retriever would sit. It sits between *chance* and popularity, nearly five times
+below the fallback list it carries inside itself for cold users. The item-item
+row here was recomputed for this section and reproduces the recorded run to
+four decimal places (0.4001, 0.1393), which is the check that these reference
+lines were measured the same way as everything else on the page.
+
+| Full dataset, 1,939 warm holdout users | lr | τ | Epochs | Warm recall@500 | × chance | Warm NDCG@500 | Final loss | Fit |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Two-tower v1 (first 2026-08-30 session) | 1e-3 | 1.0 | 3 | 0.0466 | 3.21× | 0.0146 | 10.2718 | 4,687.9 s |
+| **`budget-8ep`** | 1e-3 | 1.0 | **8** | 0.0451 | 3.11× | 0.0143 | 10.2707 | 10,847.0 s |
+| **`lr1e-2-t0.05-4ep`** | 1e-2 | 0.05 | 4 | **0.0591** | **4.07×** | **0.0193** | **8.1262** | 5,458.3 s |
+| **Popularity** — the embedded fallback | — | — | — | **0.2310** | **15.92×** | 0.0867 | — | 5.9 s |
+| **Item-item cosine** — the champion | — | — | — | **0.4001** | **27.58×** | 0.1393 | — | 19.7 s |
+
+Per-epoch, which is where the answers are:
+
+| Run | Loss per epoch | Warm recall@500 per epoch |
+|---|---|---|
+| `budget-8ep` | 10.3542 → 10.2726 → 10.2718 → 10.2712 → 10.2711 → 10.2708 → 10.2704 → 10.2707 | 0.0453 → 0.0448 → **0.0466** → 0.0458 → 0.0463 → 0.0453 → 0.0456 → 0.0451 |
+| `lr1e-2-t0.05-4ep` | 8.3171 → 8.1715 → 8.1424 → 8.1262 | **0.0613** → 0.0576 → 0.0583 → 0.0591 |
+
+MLflow: `ae4269c71a73415b9de30b2c703a69b4` and `751fdbeedf8542989d9b015551f6dae7`,
+both in `phase-2-candidates`, both with the ADR 0011 cohort attached at
+fingerprint `ae4475f0e063…`.
+
+#### The refactor moved no number, and this is the proof
+
+`budget-8ep` is v1's configuration and v1's seed, so its first three epochs have
+to be v1's. They are: **10.3542 → 10.2726 → 10.2718**, matching the recorded run
+digit for digit, and its **warm recall@500 at epoch 3 is 0.0466** against v1's
+0.04658. Three epoch losses and a recall, over 19,867,692 training pairs, all
+identical. The batch-gather and int32-pair-array rewrites in this PR are
+therefore purely a memory and speed change, and every comparison on this page
+between a swept run and v1 compares configurations rather than code. Resident
+set during the fit was about **2 GB**, against a v1 shape that put roughly 8 GB
+of Python list objects plus a second 8 GB permuted tensor on a 16 GB laptop.
+
+#### Was three epochs too little? No — eight is slightly worse
+
+Epochs 4 through 8 cost **6,159 more seconds of fit** — an hour and three
+quarters — and bought **0.0011 nats**: 10.2718 down to 10.2707, with the eighth
+epoch actually *worse* than the seventh. Early stopping never fired, and not
+because the model was still learning: the loss kept creeping down in the fourth
+decimal, so a patience-2 rule at min-delta 1e-4 never saw two consecutive
+non-improvements. Having nowhere useful to go is a different thing from having
+somewhere to go slowly.
+
+Warm recall@500 across those eight epochs reads
+0.0453 / 0.0448 / **0.0466** / 0.0458 / 0.0463 / 0.0453 / 0.0456 / **0.0451** —
+a range of 0.0018 with no trend in it, and the eight-epoch model is *worse* than
+the three-epoch one, 3.11× chance against 3.21×. **The training budget was not
+the problem, and this is the run that says so at full scale rather than by
+extrapolation from a subsample.**
+
+#### The temperature is worth something, and nothing like enough
+
+`lr1e-2-t0.05-4ep` is the best two-tower number this project has measured:
+**warm recall@500 0.0591 against v1's 0.0466 (+26.8%) and warm NDCG@500 0.0193
+against 0.0146 (+32.2%)**, at 4.07× chance rather than 3.21×. Its loss reaches
+**8.1262**, more than 1.5 nats under the `ln(16,385) = 9.7041` line that v1
+never got below at all. The objective is fixed; the fix is real and it is
+measurable at full scale.
+
+And it changes nothing that matters. **0.0591 is 3.9× below the 0.2310 that the
+popularity list this model embeds as its own cold-start fallback scores on the
+same 1,939 users, and 6.8× below item-item's 0.4001.** The improvement moves the
+model from "far worse than its own fallback" to "far worse than its own
+fallback".
+
+The per-epoch curve also repeats the pilot's shape at full scale: recall peaks
+at **epoch 1** (0.0613) and then settles lower (0.0576 → 0.0583 → 0.0591) while
+the loss falls monotonically. The best retrieval this configuration produced was
+after a single pass, before the objective had been optimized properly.
+
+#### What the embedding-spread metric shows
+
+The two full runs fail in visibly different geometries, which is the clearest
+argument that the problem is the shape rather than the settings.
+
+| Run | Mean pairwise item cosine | Std |
+|---|---|---|
+| `budget-8ep` (τ = 1.0) | 0.130 → 0.136 → 0.135 → 0.135 → 0.138 → 0.138 → 0.138 → 0.138 | 0.737 → 0.732 → 0.732 → 0.733 → 0.730 → 0.731 → 0.731 → 0.731 |
+| `lr1e-2-t0.05-4ep` (τ = 0.05) | 0.426 → 0.416 → 0.409 → 0.406 | 0.132 → 0.130 → 0.129 → 0.128 |
+
+For scale, 64-dimensional random unit vectors have a pairwise-cosine mean near 0
+and a standard deviation near `1/√64 = 0.125`. **At τ = 1.0 the catalogue
+spreads across a very wide angular range (std 0.73, six times random) around a
+near-zero mean** — strongly anisotropic, packed along a few dominant directions.
+**At τ = 0.05 it does the opposite: a narrow cone (std 0.128, essentially the
+random value) around a mean cosine of 0.41** — every item pointing broadly the
+same way, which is the representation-collapse shape contrastive training is
+known for.
+
+In both cases the geometry is settled within the first epoch and barely moves
+afterwards: eight epochs at τ = 1.0 change the mean by 0.008 and the standard
+deviation by 0.006. **Two very different degenerate geometries, one bad
+retrieval number each, and neither of them is something a learning rate or an
+epoch count reaches.**
+
+#### ADR 0011 cold-start coverage
+
+Both runs carried the cohort (2,000 users, 7,000 history rows, fingerprint
+`ae4475f0e063…`):
+
+| Run | Bucket | Users | recall@500 | NDCG@500 | Fallback-served | Expected |
+|---|---|---:|---:|---:|---:|---:|
+| `budget-8ep` | h0 | 500 | 0.4760 | 0.0823 | 500 | 500 |
+| `budget-8ep` | h1 | 500 | 0.1040 | 0.0140 | 0 | 500 |
+| `budget-8ep` | h3 | 500 | 0.1320 | 0.0201 | 0 | 500 |
+| `budget-8ep` | h10 | 500 | 0.1260 | 0.0174 | 0 | 0 |
+| `lr1e-2-t0.05-4ep` | h0 | 500 | 0.4760 | 0.0823 | 500 | 500 |
+| `lr1e-2-t0.05-4ep` | h1 | 500 | 0.0940 | 0.0124 | 0 | 500 |
+| `lr1e-2-t0.05-4ep` | h3 | 500 | 0.1000 | 0.0136 | 0 | 500 |
+| `lr1e-2-t0.05-4ep` | h10 | 500 | 0.1240 | 0.0169 | 0 | 0 |
+
+`synth_cold_routing_ok` is **false** for both, exactly as for every
+index-routing run above and for the same reason: under index membership a user
+with one training interaction is in the index, so h1 and h3 take the learned
+path where ADR 0001's threshold says they should take the fallback. That is the
+mismatch [#119](https://github.com/kudratsingh/MovieLens-RecSys/pull/119) went
+on to close; these runs predate it.
+
+Two rows are worth reading anyway. **h0 is 0.4760 in both runs, identical to
+item-item's h0** — all three are the popularity fallback doing the same thing,
+which is the check that the buckets are wired correctly. And h1 / h3 / h10 at
+0.1040 / 0.1320 / 0.1260 and 0.0940 / 0.1000 / 0.1240 sit far below item-item's
+0.1440 / 0.2880 / 0.3900 on the same buckets — and the temperature run, which
+is the better model on the natural holdout, is the *worse* one here.
+**Everywhere the two-tower's learned path actually runs, it loses.**
+
+### The verdict
+
+**No configuration in this sweep beats item-item's warm recall@500 of 0.4001,
+and none comes close. ADR 0004's promotion gate is not cleared — the two-tower
+does not beat item-item at all, so no threshold that ADR could plausibly have
+named is in question — and item-item remains the champion candidate generator.**
+Nothing was promoted. That is the same verdict the first 2026-08-30 session
+reached; what is new is that it now rests on fourteen runs across three decades
+of learning rate, three temperatures, two negative-sample counts, both readings
+of the correction, both retrieval indexes and up to eight epochs, rather than
+on one run at one configuration.
+
+The three hypotheses the sweep was opened to separate now have separate
+answers.
+
+**"A wrong learning rate" — no.** At ADR 0006's τ = 1.0, `lr ∈ {1e-4, 1e-3,
+1e-2}` gives warm recall@500 of 0.0392 / 0.0443 / 0.0459. A decade either side
+of the default moves the metric by less than 0.007 on a 116-user slice — inside
+what that slice resolves — and all three sit between 1.5× and 1.8× chance. The
+default was already in the right order of magnitude.
+
+**"Too little training" — no, and this is the useful part.** v1's loss did not
+flatten because the model had converged. It flattened because it had **run out
+of range to speak in.** ADR 0006 pins L2-normalized towers, so a logit is a
+cosine two nats wide, and a log-uniform correction, which measures 10.081 nats
+wide across the real train split — and it names no temperature to reconcile
+them. The proof that this is what happened is that **v1's final loss, 10.2718,
+is worse than `ln(1 + 16,384) = 9.7041`, the loss of a model that emits the
+identical logit for every candidate**; no cell at τ = 1.0 ever got under that
+line at any learning rate. Restoring the range with a temperature does exactly
+what the diagnosis predicts — at τ = 0.05 the full-dataset loss reaches 8.1262,
+more than 1.5 nats under that line — **and retrieval follows only a little
+way.** That run is the best two-tower number this project has: warm recall@500
+**0.0591 against v1's 0.0466, +26.8%**, and NDCG@500 0.0193 against 0.0146.
+It is a real gain on a real fix, and it moves the model from 3.21× chance to
+4.07× — against popularity's 15.92× and item-item's 27.58×. More
+epochs buy a little more loss and no more recall, which the eight-epoch
+full-dataset run at ADR 0006's own configuration then confirmed directly:
+epochs 4 through 8 bought 0.0011 nats over an hour and three quarters of extra
+fit, and left warm recall@500 at **0.0451 against the third epoch's 0.0466.**
+Nearly three times v1's budget made the model very slightly worse.
+
+**"The architecture as specified is weak on this data" — this is what is
+left.** The sweep drove the training objective down by as much as 8.5 nats
+(`nopos` → v1) and by 2.1 nats between the two full-dataset runs, and bought
+warm recall@500 of 0.0591 where the popularity fallback scores 0.2310. Two cells make the point without any interpretation
+needed: turning off the positive correction changes the loss by 8.5 nats and
+leaves warm recall and NDCG **identical to four decimal places**; and replacing
+IVF-Flat with exact search — the one thing that could have meant every number
+here was understated — moves recall by 0.0026. Meanwhile, on the full dataset,
+**the popularity list this model embeds as its own cold-start fallback scores
+0.2310 against v1's 0.0466**, and item-item scores 0.4001.
+
+So, plainly, as the honest input to the next decision: **the two-tower as ADR
+0006 specifies it does not beat item-item on MovieLens 25M at any learning rate
+or budget this sweep could afford — and at its best swept configuration it
+still retrieves 3.9× worse than the popularity list it carries inside itself
+as its own cold-start fallback.** The failure is not explained by the
+learning rate, and it is not explained by the training budget. The one
+configuration change that is clearly right on its own terms — a temperature,
+which repairs an objective that was provably worse than silence — is proposed
+as a new default in [ADR 0006's note](adr/0006-two-tower-retrieval-architecture.md),
+because a model should be able to fit its own loss whatever else is true of it.
+**It is not proposed as a route to clearing ADR 0004's gate, because it is not
+one.** What to do about a two-tower that behaves this way is a modelling
+decision with an approval gate, and it belongs to the owner, not to this page.
+
+### Runs and wall-clocks for this session
+
+| Job | What | Fit | Wall-clock |
+|---|---|---:|---:|
+| Pilot sweep | 12 cells at 6% of users, one MLflow run each, one 25M-row read shared | 65.9 – 596.0 s per cell | **2,973 s** (49 min 33 s) |
+| Full-dataset references | popularity + item-item at `K_CANDIDATES = 500`, for the table above | — | 89 s |
+| `budget-8ep` | ADR 0006's config, full dataset, all 8 epochs run | **10,847.0 s** | 10,861.8 s |
+| `lr1e-2-t0.05-4ep` | best pilot cell, full dataset, 4 epochs | **5,458.3 s** | 5,466.1 s |
+
+The pilot's 2,973 s covers all twelve cells *and* the single 60.1-second
+`read_sql` they share — which is the whole reason the sweep runner exists,
+since twelve separate `make train-twotower` invocations would have paid that
+read twelve times.
+
+**The per-cell spread is contention, not configuration.** `lr1e-3-t1.0` fit in
+234.0 s and `lr1e-3-t0.05` in 596.0 s doing the identical shape of work, because
+an unrelated workload on the same laptop took the 1-minute load average from
+2.04 to 41.09 during the second one. Same caveat as every session above: these
+are upper bounds, not benchmarks. **The metrics are unaffected** — they are
+seed-deterministic, and the sweep produced its own proof of that, since
+`lr1e-3-t0.05` and `lr1e-3-t0.05-exact` differ only in retrieval index and
+logged bit-identical per-epoch losses (10.4800 → 9.1271 → 8.8088).
+
+The one row where a wall-clock says something about the model rather than the
+laptop is `lr1e-3-t0.05-neg4096` at **65.9 s against its 16,384-negative twin's
+596.0** (or 210-ish uncontended): the `(B, S)` logit matrix is essentially the
+entire cost of training this model, so `num_sampled` is the budget dial, and a
+quarter of the negatives is roughly a quarter of the arithmetic. It buys
+nothing in recall — see the diagnostics above — but it is the lever to reach
+for if a future rung wants more epochs per hour.
+
+Two more notes on cost, since they are the difference between this sweep being
+affordable and not. The memory rewrite in this PR (batch gather instead of a
+permuted copy; a preallocated int32 pair array instead of 19.9M Python lists)
+took the full-dataset fit's resident set to **about 2 GB**, against a v1 shape
+that put roughly 8 GB of list objects and a second 8 GB permuted tensor on a
+16 GB laptop. And the per-epoch recall scoring this PR adds costs a fraction of
+a second per epoch on the pilot and a few seconds on the full dataset; it is
+excluded from every `fit` figure above, so these remain comparable with the
+runs made before it existed.
+
+**One run is in the experiment and is not in the table above.**
+`53b0d41e478a421691c9d5b574031732`, named
+`twotower-sampled-softmax-lr1e-2-t0.05-8ep`, is marked `KILLED`. The
+full-dataset grid was launched with its second cell at eight epochs; when the
+first cell turned out to cost 21–26 minutes per epoch and ran all eight, eight
+more would not have fitted in the day. It was stopped about a minute into its
+fit — before its first epoch — and relaunched at four epochs as
+`lr1e-2-t0.05-4ep`, so nothing was measured and then discarded. It is listed
+here rather than quietly dropped, on the same principle the 2026-08-30 session
+above applies to its own abandoned attempts.
+
+### Reproducing this session
+
+Same prerequisites as the sessions above — Postgres holding the 25M ratings,
+and the ADR 0011 parquet present (`make synth-cold-cohort` regenerates it
+deterministically if a checkout has only the DVC pointer). Every hyperparameter
+is an environment variable now, and both grids are committed, so every cell is
+reproducible from its own MLflow params:
+
+```bash
+# The pilot: 12 cells at 6% of users, one MLflow run each.
+OMP_NUM_THREADS=1 python -m src.training.twotower_sweep \
+    docs/experiments/twotower-sweep/pilot.json
+
+# The full-dataset runs. full.json's second cell was stopped for budget and
+# relaunched from full2.json at four epochs; both files say so.
+OMP_NUM_THREADS=1 python -m src.training.twotower_sweep \
+    docs/experiments/twotower-sweep/full.json
+OMP_NUM_THREADS=1 python -m src.training.twotower_sweep \
+    docs/experiments/twotower-sweep/full2.json
+
+# Any single configuration, without a grid. This is v1 exactly:
+OMP_NUM_THREADS=1 make train-twotower
+
+# ...and this is v1 with room to speak:
+TWOTOWER_LOGIT_TEMPERATURE=0.1 OMP_NUM_THREADS=1 make train-twotower
+```
+
+`TwoTowerConfig.from_env` reads `TWOTOWER_EMBEDDING_DIM`,
+`TWOTOWER_HISTORY_WINDOW`, `TWOTOWER_BATCH_SIZE`, `TWOTOWER_NUM_SAMPLED`,
+`TWOTOWER_EPOCHS`, `TWOTOWER_LEARNING_RATE`, `TWOTOWER_LOGIT_TEMPERATURE`,
+`TWOTOWER_CORRECT_POSITIVE_LOGIT`, `TWOTOWER_EARLY_STOPPING_PATIENCE`,
+`TWOTOWER_EARLY_STOPPING_MIN_DELTA`, `TWOTOWER_FAISS_NLIST`,
+`TWOTOWER_FAISS_NPROBE`, `TWOTOWER_FAISS_EXACT` and `TWOTOWER_SEED`. An unset
+or empty variable takes ADR 0006's default, so a clean environment reproduces
+the run this page has always reported. Two more belong to the run rather than
+the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
+`TWOTOWER_RUN_LABEL` (the suffix on the MLflow run name).
+
+### What was not run, and why
+
+- **One seed per cell, again.** Everything here is seed 42, and the pilot's
+  116-user warm slice carries real noise: a spread of ±0.005 between two
+  two-tower cells is not a result, and the ordering *within* the two-tower
+  family should not be read as one. The conclusions below rest on differences
+  of 4× to 10×, which no plausible noise floor closes. The noise-floor work the
+  previous session named is still owed.
+- **No embedding-dimension or history-window sweep.** ADR 0006 defers both to a
+  future ADR, and neither is a candidate explanation for a model that loses to
+  its own popularity fallback. Both are cheap to run now that the trainer is
+  env-driven; neither was run here.
+- **No hard negatives, no side features, no attention.** All three are Rung 1
+  in [`modeling-roadmap.md`](modeling-roadmap.md), and all three are
+  architecture. This sweep was a hyperparameter and budget experiment and
+  stayed one.
+- **No re-run of item-item, CF or the ranker.** None of them changed. The
+  item-item and popularity reference lines above were computed on the pilot
+  subsample and on the full dataset through `src/evaluation/` for this section,
+  because the candidate-stage table above had no popularity row at
+  K_CANDIDATES = 500 to compare a candidate generator against.
+- - **Dropped for budget: a full-dataset run at τ = 0.1 and the default learning
+  rate.** That cell had the pilot's best loss at ADR 0006's *own* learning rate,
+  and it is the minimal one-parameter change a new default would be — so it is
+  the configuration the ADR note's proposal would most like to have measured at
+  scale. The day held two full runs at roughly two hours each; the slots went to
+  the budget question at ADR 0006's exact configuration, and to the pilot's
+  best-scoring cell. The proposal therefore rests on the pilot for its choice of
+  τ and on the full runs for its claim about what a temperature does and does
+  not buy, and the note says so.
+- **Dropped for budget: a full-dataset exact-retrieval run.** The pilot's answer
+  — 0.0432 exact against 0.0406 IVF, a difference of 0.0026 against a gap to
+  popularity of 4.6× — was decisive enough not to spend another two hours
+  confirming it at scale.
+- **The ADR 0011 cohort is not attached to any pilot cell.** The parquet is
+  anchored to the full split's cutoff and `synth_cold.prepare` rightly refuses to
+  attach itself to a different one, so a subsampled run skips it and says so in
+  its log. Every full-dataset run has it, and the per-bucket table above is from
+  those.

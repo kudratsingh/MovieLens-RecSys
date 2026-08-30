@@ -387,7 +387,7 @@ def test_a_collapsed_embedding_table_is_visible_in_the_spread() -> None:
     assert collapsed["item_cosine_std"] == pytest.approx(0.0, abs=1e-5)
 
 
-@pytest.mark.parametrize("name", ["pilot", "full"])
+@pytest.mark.parametrize("name", ["pilot", "full", "full2"])
 def test_committed_grids_parse(name: str) -> None:
     """The grids that produced the numbers in docs/results.md are committed;
     they have to stay loadable by the runner that consumed them."""
