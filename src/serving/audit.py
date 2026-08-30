@@ -23,7 +23,13 @@ from src.serving.request_id import REQUEST_ID_ADOPTED_STATE_KEY
 
 logger = logging.getLogger(__name__)
 
-_RECOMMENDATION_PATH = re.compile(r"^/users/(?P<user_id>-?\d+)/recommendations/?$")
+# Public because `src.serving.request_audit` skips whatever this middleware
+# owns, and it has to skip on the same terms. The route template is what the
+# generic audit records, but the *path* pattern is what this middleware matches
+# on — and the two disagree on a trailing slash, which the router answers with a
+# redirect and no matched route. A second copy of either would let the two
+# audits both claim one request.
+RECOMMENDATION_PATH = re.compile(r"^/users/(?P<user_id>-?\d+)/recommendations/?$")
 RECOMMENDATION_ENDPOINT = "/users/{user_id}/recommendations"
 
 
@@ -345,7 +351,7 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        match = _RECOMMENDATION_PATH.match(request.url.path)
+        match = RECOMMENDATION_PATH.match(request.url.path)
         if request.method != "GET" or match is None:
             return await call_next(request)
 

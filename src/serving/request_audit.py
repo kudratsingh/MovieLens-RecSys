@@ -36,6 +36,7 @@ correctly, so this uses it, exactly as ``RecommendationAuditMiddleware`` does.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ from starlette.types import ASGIApp
 from src.auth.middleware import UNAUTHENTICATED_PATHS
 from src.serving.audit import (
     RECOMMENDATION_ENDPOINT,
+    RECOMMENDATION_PATH,
     outcome_for_status,
     resolve_audit_identity,
 )
@@ -71,6 +73,14 @@ UNMATCHED_ENDPOINT = "<unmatched>"
 # request traffic for a tenant unions two tables, and the join key — the
 # correlation id — is on both.
 RECOMMENDATION_OWNED_ENDPOINTS: frozenset[str] = frozenset({RECOMMENDATION_ENDPOINT})
+
+# The same ownership, expressed the other way, because a route template is not
+# always available. `/users/42/recommendations/` matches no route at all — the
+# router answers it with a redirect and never sets `scope["route"]` — so the
+# template check above sees `<unmatched>` while the prediction audit's own regex
+# still matches and writes its row. Checking the path too is what keeps "one
+# request, one audit table" true rather than true-on-the-canonical-path.
+RECOMMENDATION_OWNED_PATHS: tuple[re.Pattern[str], ...] = (RECOMMENDATION_PATH,)
 
 # Where a handler may leave a model version for the audit to pick up. Nothing
 # writes it today: the endpoints that run a model are the ones skipped above.
@@ -239,12 +249,16 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
         audits: RequestAuditService,
         engine: Engine,
         skip_endpoints: frozenset[str] = RECOMMENDATION_OWNED_ENDPOINTS,
+        skip_paths: tuple[re.Pattern[str], ...] = RECOMMENDATION_OWNED_PATHS,
         exempt_paths: frozenset[str] = UNAUTHENTICATED_PATHS,
     ) -> None:
         super().__init__(app)
         self._audits = audits
+        # Deliberately *not* the engine the request runs on — see
+        # `_insert_on_a_fresh_transaction`.
         self._engine = engine
         self._skip_endpoints = skip_endpoints
+        self._skip_paths = skip_paths
         # The same frozenset the auth middleware, the limiter and the OpenAPI
         # generator use: an unauthenticated probe carries no tenant to key a
         # forced-RLS row on, so there is nothing to write even in principle.
@@ -298,7 +312,9 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
         # worth recording beyond what the auth log already carries.
         if getattr(request.state, "principal", None) is None:
             return False
-        return _endpoint_template(request) not in self._skip_endpoints
+        if _endpoint_template(request) in self._skip_endpoints:
+            return False
+        return not any(pattern.match(request.url.path) for pattern in self._skip_paths)
 
     def _record(
         self,
@@ -360,6 +376,20 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
         http_status: int,
         latency_ms: float,
     ) -> None:
+        """Write the row on a connection the failing request is not holding.
+
+        The engine here is a small pool of its own, not the one serving
+        requests, and that separation is the whole point. The failing request
+        still holds its own connection until ``AuthMiddleware`` unwinds, so
+        borrowing from the same pool means a burst of simultaneous failures —
+        a bug in a shared helper, a dependency going down — can check out every
+        connection and then block waiting for one more that nobody can release.
+        The default ``pool_timeout`` is thirty seconds, and these waits sit on
+        the shared thread pool, so what should be a fast 500 becomes a stalled
+        worker. On its own small pool with a short timeout the worst case is a
+        dropped audit and a log line, which is the right thing to lose while
+        the service is already failing.
+        """
         with self._engine.begin() as connection:
             connection.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
             self._record(
