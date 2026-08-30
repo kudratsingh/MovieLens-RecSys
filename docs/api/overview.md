@@ -62,11 +62,17 @@ collide with an existing row.
 Exhausting the bucket answers `429` with `Retry-After` (whole seconds, never
 `0`) and an `ErrorResponse` body naming the policy. The bucket is keyed on
 `(tenant_id, sub)` from the verified token — never on a client address, because
-behind the edge every request arrives from a proxy. It lives **in the worker
-process**, so a service running N uvicorn workers admits up to N times the
-configured rate for one subject and `Remaining` is not monotonic across a
-sequence of requests from one client. Treat the headers as one worker's view of
-one caller's allowance, not a cluster-wide quota. `/healthz` and `/readyz` are
+behind the edge every request arrives from a proxy — and it lives **in Redis**,
+one bucket per `(tenant, subject)` charged by an atomic Lua script. Every
+uvicorn worker meets the same bucket, so the configured rate is what one caller
+gets however many processes answer, `Remaining` counts down across a sequence
+of requests, and reconnecting buys no fresh allowance. A deployment that has
+deliberately selected the in-process backend (`RATE_LIMIT_BACKEND=memory`,
+which `Settings` refuses outside dev without an explicit acknowledgement) keeps
+a bucket per worker instead, and then the headers are one worker's view and
+`Remaining` is not monotonic. `/readyz` reports which of the two is in force,
+and reports `degraded` when the shared bucket is failing open onto the
+per-worker one because Redis is unreachable. `/healthz` and `/readyz` are
 exempt and carry no such headers.
 
 **Shared error responses.** `401` missing or invalid token · `403` actor not
@@ -107,7 +113,7 @@ copy inside an error body would be a second source of truth for the same row.
 | Path | Method | Purpose |
 |---|---|---|
 | `/healthz` | GET | Liveness. Deliberately does not touch the database — `pool_pre_ping` covers connectivity, and a probe that fails on a transient database blip takes a healthy service out of rotation |
-| `/readyz` | GET | Readiness for a deploy gate. Reports `database`, `jwks`, `model_server` and `feature_server`; **only the first two decide the status code**, because they are what a single authenticated request cannot be served without. `503` when not ready |
+| `/readyz` | GET | Readiness for a deploy gate. Reports `database`, `jwks`, `model_server`, `feature_server` and `rate_limit` (`shared` / `in-process` / `degraded` / `disabled`); **only the first two decide the status code**, because they are what a single authenticated request cannot be served without. `503` when not ready |
 
 `/readyz` is the second unauthenticated path and was added deliberately, with
 the widening of non-negotiable #10's wording recorded in ADR 0013 rather than

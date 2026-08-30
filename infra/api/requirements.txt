@@ -16,5 +16,10 @@ prometheus-client==0.26.0
 psycopg2-binary==2.9.12
 pydantic-settings==2.15.0
 pyjwt[crypto]==2.13.0
+# The shared rate-limit bucket (ADR 0014) is the API's only Redis client: one
+# EVALSHA per authenticated request against the online store Redis. The
+# feature store's own reads still go through the sidecar, so this is the
+# client and not Feast.
+redis==7.4.1
 sqlalchemy==2.0.52
 uvicorn[standard]==0.52.4

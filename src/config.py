@@ -132,19 +132,38 @@ class Settings(BaseSettings):
     #
     # Per-(tenant, subject) token bucket in front of every authenticated route.
     # `burst` is the bucket's capacity — the largest instantaneous burst one
-    # subject can spend — and `requests_per_minute` is the refill rate. The
-    # bucket lives in the worker process, so these are per-worker numbers.
+    # subject can spend — and `requests_per_minute` is the refill rate.
     #
-    # They are not per-worker numbers divided by the worker count either, which
-    # is what the first pair (120/30) assumed: keep-alive pins a connection to
-    # one worker, so a single client draws on one bucket while the others sit
-    # idle. The production-mode rehearsal measured that plainly — one subject
-    # at 5 req/s against 4 workers × 120/min had 37.9% of 301 requests refused,
-    # against a nominal aggregate ceiling of 480/min. The defaults now describe
-    # what one worker will actually admit from one client; ADR 0014 has the
-    # arithmetic and names the Redis-backed shared bucket as the real fix.
+    # The pair was chosen when the bucket lived in the worker process and
+    # therefore described one worker's allowance for one client: the
+    # production-mode rehearsal measured one subject at 5 req/s against
+    # 4 workers × 120/min having 37.9% of 301 requests refused, because
+    # keep-alive pins a connection to one worker. With the shared bucket
+    # (RATE_LIMIT_BACKEND=redis) the same numbers describe the whole service,
+    # and they stay where they are rather than dropping: the production canary
+    # offers 300/minute sustained from one subject, so 600 is the 2× headroom
+    # that measurement earned. Lowering them is its own measured decision.
     rate_limit_requests_per_minute: int = Field(default=600, gt=0)
     rate_limit_burst: int = Field(default=120, gt=0)
+    # Where the bucket lives. `redis` is one bucket per (tenant, subject)
+    # shared by every worker, charged with an atomic Lua script against the
+    # Redis the online feature store already runs — the limit then means what
+    # it says however many processes answer. `memory` is the in-process bucket:
+    # an N-worker service running it admits up to N times the configured rate
+    # in aggregate and a pinned client meets one Nth of it, so the constructor
+    # below refuses it outside dev unless the deployment says so in writing.
+    rate_limit_backend: Literal["redis", "memory"] = "redis"
+    # The acknowledgement that unlocks `memory` outside dev. Deliberately not a
+    # thing anyone sets by accident: the honest reading of the flag's name is
+    # "I know this service's limit is per worker".
+    rate_limit_allow_in_process_bucket: bool = False
+    # The shared bucket sits in front of a path with a p99 SLO, so a Redis that
+    # has stopped answering must cost a request a timeout it can afford. At
+    # this budget a dead Redis adds 50 ms to the affected requests and they
+    # then fall back to the in-process bucket; a sub-millisecond hop on the
+    # host's own Docker network never comes close to it.
+    rate_limit_redis_timeout_seconds: float = Field(default=0.05, gt=0)
+    rate_limit_redis_max_connections: int = Field(default=16, gt=0)
     # Tri-state on purpose. Unset means "on everywhere except a dev box", which
     # is what keeps the synthetic-load harnesses honest: they authenticate as a
     # single Keycloak user (the demo realm has exactly one) and drive 55–600
@@ -274,4 +293,27 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "the default pgBouncer admin password is only permitted in development; "
                 "set PGBOUNCER_ADMIN_PASSWORD for this environment"
+            )
+        # ADR 0014's honesty rule, and the one guard the rate limiter has.
+        # `rate_limit_enabled` is deliberately *not* guarded — an operator has
+        # to be able to turn the limiter off during an incident — but a
+        # limiter that is on while quietly admitting `workers × limit` is a
+        # different thing: it advertises `X-RateLimit-Limit` numbers that no
+        # client can plan against, and it is the state this deployment
+        # measured 37.9% of one subject's canary requests being refused in.
+        # Choosing it stays possible; choosing it by omission does not.
+        if (
+            self.environment != "dev"
+            and self.rate_limit_active
+            and self.rate_limit_backend == "memory"
+            and not self.rate_limit_allow_in_process_bucket
+        ):
+            raise RuntimeError(
+                f"RATE_LIMIT_BACKEND=memory keeps the token bucket in each uvicorn worker, so "
+                f"this service would admit up to API_WORKERS times "
+                f"{self.rate_limit_requests_per_minute} requests/minute for one subject while "
+                f"advertising the single figure. Refusing to construct Settings with "
+                f"environment={self.environment!r}. Use the shared Redis bucket, or set "
+                f"RATE_LIMIT_ALLOW_IN_PROCESS_BUCKET=true to accept the per-worker limit "
+                f"deliberately."
             )

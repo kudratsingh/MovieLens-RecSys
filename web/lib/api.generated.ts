@@ -830,7 +830,8 @@ export interface components {
          *
          *     ``database`` and ``jwks`` decide the status code because they are the
          *     dependencies this process cannot serve a single authenticated request
-         *     without. The two sidecars are reported rather than gated — see the handler.
+         *     without. The two sidecars and the rate-limit bucket are reported rather
+         *     than gated — see the handler.
          */
         ReadinessResponse: {
             /**
@@ -853,6 +854,11 @@ export interface components {
              * @enum {string}
              */
             model_server: "ok" | "unavailable";
+            /**
+             * Rate Limit
+             * @enum {string}
+             */
+            rate_limit: "shared" | "in-process" | "degraded" | "disabled";
             /**
              * Status
              * @enum {string}

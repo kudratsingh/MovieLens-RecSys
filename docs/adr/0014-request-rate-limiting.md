@@ -1,7 +1,7 @@
 # ADR 0014 — Request Rate Limiting
 
 **Status:** Accepted
-**Date:** 2026-08-27 (the mechanism was decided on 2026-08-26; the numbers below are the ones the production-mode rehearsal measured the next day, and they are not the ones this ADR was first written with)
+**Date:** 2026-08-27 (the mechanism was decided on 2026-08-26; the numbers below are the ones the production-mode rehearsal measured the next day, and they are not the ones this ADR was first written with). **Amended 2026-08-29** — the shared bucket this ADR named as the follow-up is now the implementation; the note at the end of this file is where that is recorded, and the body above it is left as it was written so the sequencing stays readable.
 
 ## Context
 
@@ -154,30 +154,96 @@ What the limiter does with the columns, exactly:
 - **A tenant with both columns NULL charges the global limiter**, unchanged and
   unallocated. A deployment that sets no quota behaves precisely as it did
   before this migration, which is the state every tenant is in today.
-- **A tenant with either column set gets its own bucket set**, at
-  `COALESCE(column, global setting)` — each column falls back on its own, so
+- **A tenant with either column set is charged at
+  `COALESCE(column, global setting)`** — each column falls back on its own, so
   lowering one tenant's sustained rate does not require restating a burst that
   was already right. `ck_tenants_rate_limit_positive` refuses a zero or negative
   quota in the database, because a bucket that refuses every request is an
   outage written as configuration.
 - **A changed quota takes effect without a restart**, within the router's TTL.
-  The numbers are part of the limiter's cache key, so a change builds a new
-  bucket set and drops the old one — which hands the affected subjects a full
-  bucket once. That is the direction to err in: a config change should not
-  retroactively refuse a caller who was inside the old limit.
 - **The `429` body names the tenant's policy**, not the global one, so a
   refusal stays diagnosable from a client's log alone.
 
-**Everything else in this ADR is unchanged, including the part that matters
-most.** The buckets are still per worker whoever configured the numbers, so a
-four-worker service still admits `workers × limit` for one subject, and the
-Redis-backed shared bucket is still the named follow-up rather than a
-hypothetical upgrade path. Per-tenant limits make the number *expressible* per
-tenant; they do not make it exact. The trigger for the shared bucket is
-unchanged too: the first replica.
+**What is not fixed by this note is the part that matters most.** The buckets
+are still per worker whoever configured the numbers, so a four-worker service
+still admits `workers × limit` for one subject, and the Redis-backed shared
+bucket is still the named follow-up rather than a hypothetical upgrade path.
+Per-tenant limits make the number *expressible* per tenant; they do not make it
+exact. *(That follow-up landed the next day — see the 2026-08-30 note below,
+which also changes how a quota change behaves: the numbers are arguments to the
+bucket rather than the key of a cached limiter, so a change no longer rebuilds
+anything and no longer hands the affected subjects a full bucket.)*
 
 One entry in "How we'd know we're wrong" above can now be read as satisfied
 rather than pending — "the first time the answer to 'what is this tenant's
 quota?' is not 'the same as everyone's', the `Settings`-sourced limits are wrong
 and the `public.tenants` column is due". The column is there; the `Settings`
 values are what a row with no override means.
+
+## 2026-08-30 — the shared bucket lands, and the follow-up closes
+
+Everything above is left as it was written. This note records what changed, because the sequencing is the interesting part: the ADR shipped an approximation, named exactly what was wrong with it, and the next unit of work removed it.
+
+### What the per-worker bucket actually cost
+
+The Alternatives section called a Redis-backed shared bucket "the correct answer" and deferred it for one reason — a network round trip on a path with a p99 SLO — and then the rehearsal added a second, sharper one. The measurement is in the Context above: one subject at 5 arrivals/second against four workers at 120/minute had **37.9% of 301 requests refused**, against a nominal aggregate ceiling of 480/minute for an offered 300. The response at the time was to raise the defaults 5×, which made the canary pass and left the limit meaning something no client could reason about: `X-RateLimit-Limit: 120` on a service that would admit anywhere between 120 and 480 depending on how a caller's connections happened to land.
+
+That is the state this follow-up closes. **One bucket per `(tenant, subject)` now lives in Redis and is charged by a single atomic Lua script, so every uvicorn worker — and every replica, if there is ever more than one — meets the same bucket.** `src/serving/ratelimit.py` holds both implementations; `RATE_LIMIT_BACKEND` selects between them and defaults to `redis`.
+
+### The script, and why each line of it is where it is
+
+```
+KEYS[1]  tenant:<tenant_id>:ratelimit:<sub>
+ARGV     capacity, refill_per_second, cost, ttl_seconds
+returns  {allowed, tokens_left}
+```
+
+- **One round trip, one decision.** The read, the refill, the charge and the write happen with nothing interleaved. Two workers charging the same subject in the same instant spend two tokens, not the same one twice — which a read-modify-write from Python could only promise with a second round trip and a lock.
+- **The clock is Redis's own `TIME`, never the caller's.** Four workers on one box agree closely enough that it would usually not matter; a caller on another host with a drifting clock could otherwise refill its own bucket by claiming time had passed, which is a limiter that can be argued out of its limit. `TIME` is non-deterministic and was therefore forbidden inside a verbatim-replicated script — Redis has replicated scripts by their effects since 5.0, so this is allowed on every version this deployment can run on. A negative elapsed (a failover onto a replica whose clock is behind) is treated as no time at all rather than as a debt the caller has to pay off.
+- **The key sits under the tenant prefix the tenant router already produces.** `tenant:<id>:ratelimit:<sub>`, so a tenant's rate-limit state lives in the same namespace as the rest of its Redis state and a `KEYS tenant:demo:*` sweep finds all of it. `ratelimit.py` deliberately imports no database driver, so it cannot import the router that spells that prefix; a unit test asserts the two spellings agree instead.
+- **The TTL is one full refill plus a minute.** A key idle for longer than `capacity / refill` has refilled to capacity, at which point it is indistinguishable from a key that never existed, so expiring it changes no future decision. That replaces the in-process map's 4 096-bucket ceiling and its fullest-first eviction sweep entirely: Redis expires idle keys, and there is nothing left for an eviction policy to get wrong. The sweep survives only in the fallback.
+- **Tokens are written back as a string.** A bucket holding 119.4 tokens must not round to 119 on every write, or a caller loses a fraction of a token per request and the configured rate is quietly not the served rate.
+- **`EVALSHA` with a `SCRIPT LOAD` fallback**, through redis-py's `register_script`. A Redis restart, a failover onto a replica with a cold script cache, or an operator's `SCRIPT FLUSH` must not turn every request into a 500; the script is idempotent to re-load, and a unit test flushes the cache mid-run to prove the fallback fires.
+
+The header arithmetic — `Remaining` floored, `Reset` as whole seconds to a full bucket, `Retry-After` never `0` — is computed once in Python from the token count either backend returns, rather than twice. That is deliberate: the shared bucket falls back to the in-process one *mid-request*, so a sequence of responses can be served by both, and a client must not be able to tell which answered from the numbers alone.
+
+### Fail open, and why that is the right trade here
+
+**Any Redis error — unreachable, timed out, a script that will not load — charges the in-process bucket for that request instead, and the request carries on.**
+
+The argument for failing closed is real: a limiter that evaporates in an incident is a limiter that is absent in the incident. The argument against it is stronger for this service. A limiter is backpressure, not an auth boundary — nothing about correctness or isolation depends on it, and non-negotiable #9's tenant boundary is RLS, not this. Failing closed would make an unreachable Redis a total outage for a service that can otherwise still serve popularity fallbacks, and it would be the only place in this API where an infrastructure failure is fatal rather than degrading: the sidecars degrade, the feature store degrades, TMDB degrades. A limiter should not be the exception.
+
+What makes it defensible rather than merely convenient is that the fallback is a *real bucket*, carrying the same policy, and not an unconditional yes. The guarantee weakens from "the service admits N" to "each worker admits N" — which is precisely the state this ADR shipped in and survived for a release. That is a bounded, understood degradation rather than an unbounded one.
+
+Three things keep it from being silent:
+
+- **`/readyz` reports it.** The response gained a `rate_limit` field — `shared`, `in-process`, `degraded`, or `disabled` — reported and never gating, on the same terms as the two sidecars. A recent fail-open answers `degraded` without asking Redis anything, because the traffic already answered the question; with no recent failure the probe pings, so a worker that has taken no traffic since boot still reports its dependency rather than its configuration. It does not gate for the same reason the limiter fails open: a deploy that stalls because Redis blinked trades a bounded weakening for an outage.
+- **One log line per window, with the count it stands for.** Under a Redis outage at load, a warning per request would bury the incident it is reporting; the line is emitted at most every thirty seconds and carries how many requests it represents plus the running total.
+- **`reliability.py` catches it from outside.** Its rate-limit check now fails when the service behaves as though it has more than one bucket, and the failure message names both causes — a `memory` backend, or a shared bucket that is failing open.
+
+The honest limitation: nothing yet counts fail-open events into a metric anyone watches. That is the same gap this ADR already records for `429`s themselves, and it has the same answer — Phase 5's `/metrics` work.
+
+### The one guard `Settings` gained
+
+`RATE_LIMIT_BACKEND=memory` outside `dev` is refused at construction unless `RATE_LIMIT_ALLOW_IN_PROCESS_BUCKET=true` is also set.
+
+The Risks section above explains why `rate_limit_enabled` is deliberately *not* guarded: an operator has to be able to turn the limiter off during an incident, and a guard that refuses `false` in production would refuse the escape hatch at the moment it is needed. The backend is a different question. A limiter that is *on* while admitting `workers × limit` publishes an `X-RateLimit-Limit` no client can plan against — that is not an off switch, it is a wrong answer. Choosing it stays possible, and the flag's name is the acknowledgement; choosing it by omission does not.
+
+### What did not change
+
+- **The limits stay at 600/minute with a burst of 120.** Issue #70 suggested they could now drop "back toward 120/min", and they could — but not to that number: the production canary offers 300/minute sustained from one subject, and against a single shared bucket refilling at 2 tokens a second that would be refused for most of the run. What the shared bucket buys is that 600 now means 600 for the service rather than somewhere between 600 and 2 400; the aggregate ceiling for one subject has in fact *tightened* by the worker count. Lowering the number is a separate decision that wants its own measurement, and the `prod-canary` row of the table above is the measurement it needs.
+- **The key, the headers, the 429 body, the exemptions and the middleware position.** Same `(tenant_id, sub)` from the verified token, same three headers, same `Retry-After`, same `UNAUTHENTICATED_PATHS` exemption, same slot between `AuthMiddleware` and the audit writer. A client cannot tell this change happened except that the numbers now add up.
+- **The per-tenant quotas the note above added.** They arrived a day earlier against the per-worker bucket and are unchanged in meaning: `COALESCE(column, global)` per column, resolved from the tenant router's cached row through the resolver `src/serving/app.py` injects, with the `429` naming that tenant's policy. What changed is the mechanism underneath them, and for the better. A tenant's numbers are now an argument to the Lua script rather than the cache key of a `TokenBucketLimiter` the middleware kept per tenant, so the per-tenant limiter map and its lock are gone, a tenant with a quota costs no second bucket set, and — the part worth stating — **a quota change no longer hands the affected subjects a full bucket.** The token count lives in Redis and the script clamps it to whatever capacity the request arrives with: lowering a quota discards the surplus at once, and raising one lets the bucket refill *toward* the new capacity instead of filling it. The previous note called the free bucket "the direction to err in"; it is better not to have to err, for the same reason the in-process map evicts fullest-first rather than least-recently-used — whatever a config change does, it must not become a route around the limit for the caller who was just refused.
+- **"What limit applies" is still resolved in exactly one place**, now `RateLimitMiddleware._policy_for`. Phase 6's routing work injects a different resolver there and touches neither the bucket arithmetic nor the header rendering.
+
+### Two things measured on the way
+
+- **redis-py's default retry policy is three attempts behind an exponential backoff with a one-second base.** A *refused* connection — which returns instantly — was measured taking **6.7 seconds per call** before the client gave up and the request could fail open. That is sixty-seven times the whole p99 budget, spent inside a middleware whose entire promise is that it costs one round trip. The client is built with `Retry(NoBackoff(), retries=0)` and a 50 ms socket and connect timeout; the same measurement then costs **0.2 ms**. This is the kind of default that is invisible until the day it matters, which is exactly the day it must not cost anything.
+- **The script's own cost is about half a millisecond over a bare `PING` on the same connection.** Measured from a laptop through Docker Desktop's port forward — not the deployed path, where it is a hop on the host's private Docker network — the bare `PING` ran p50 0.66 ms / p99 7.24 ms and the full charge p50 1.17 ms / p99 28.66 ms over 300 samples each. The jitter is the transport, not the bucket. The number that matters is the delta, and it is small; the number that would matter more is the one from the deployed host, which the production canary will produce.
+
+### How we'd know this is wrong
+
+- **`/readyz` reports `rate_limit: degraded` for anything but a moment.** The limiter is then per worker with extra steps, and the question is why Redis is unreachable from a container on the same bridge network as the one the online store already serves.
+- **`reliability.py`'s new bounds fail on a deployment nobody changed.** Either the arithmetic is too tight — it derives its allowance from the service's own `X-RateLimit-Reset`, so a rounding assumption is the first place to look — or the service really did hand out more than one bucket's worth, which is the finding it exists for.
+- **The round trip shows up in the p99.** The CI gate cannot see this — `api-load` runs with the limiter off, deliberately, so the gate measures the service rather than the rig — so the signal is the production canary's recorded p99 moving with no other change. If it does, the answer is not to remove the limiter but to look at what a `SCRIPT` call costs on that box next to the `fdatasync` the audit row already pays.
+- **A worker restart stops forgiving.** The old bucket lived in process memory, so a deploy handed every caller a fresh burst; the Consequences above say so twice. It does not any more — a Redis-held bucket survives the deploy. That is the correct behaviour and it is also a behaviour change: if a deploy ever appears to leave a caller throttled, that is why, and the bucket refills at the configured rate exactly as it would have.

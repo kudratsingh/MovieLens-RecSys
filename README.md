@@ -125,6 +125,7 @@ response that is not correct, or fewer than 50 requests/second**. The thresholds
 | CI Postgres data directory moved to tmpfs ([PR #80](https://github.com/kudratsingh/MovieLens-RecSys/pull/80)) | 2026-08-28 | p99 230.74 ms → **24.41 ms**; WAL sync 3.15 → 0.21 ms per commit |
 | The same gate at the production topology | 2026-08-27 | p50 6.85 ms · p95 9.47 ms · p99 12.93 ms, zero errors, zero dropped iterations |
 | Rate limiter at its first defaults (120/min, burst 30) | 2026-08-27 | **37.9% of 301 requests refused** — keep-alive pins one client to one worker's bucket; defaults are now 600/min, burst 120 |
+| The bucket moved into Redis, shared by every worker ([issue #70](https://github.com/kudratsingh/MovieLens-RecSys/issues/70)) | 2026-08-29 | One atomic `EVALSHA` per authenticated request; the limit now describes the service rather than one process, and an unreachable Redis costs **0.2 ms** and falls back rather than the 6.7 s redis-py's default retries spent first |
 
 Sources: [ADR 0010](docs/adr/0010-synthetic-load-k6.md) (the first three),
 [the readiness review's R-14](docs/production-readiness-review.md), and
@@ -223,7 +224,7 @@ is still owed.
 | [0011](docs/adr/0011-cold-start-coverage.md) | Fixed-seed synthetic cohorts at history sizes 0/1/3/10, scored per bucket |
 | [0012](docs/adr/0012-browser-identity-feedback-and-online-freshness.md) | Actor separated from demo persona, durable movie state, commit before acknowledgement |
 | [0013](docs/adr/0013-production-deployment-target.md) | One Hetzner CX22 running the same Compose file the rehearsal runs; cost is the deciding factor and says so |
-| [0014](docs/adr/0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket on the verified token, never on a client IP; per-worker, and honest about it |
+| [0014](docs/adr/0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket on the verified token, never on a client IP; one bucket in Redis for every worker, failing open onto a per-worker one |
 | [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js App Router with TypeScript and Tailwind |
 | [frontend/0002](docs/adr/frontend/0002-movie-discovery-experience.md) | Poster-first discovery with ML evidence behind progressive disclosure |
 
