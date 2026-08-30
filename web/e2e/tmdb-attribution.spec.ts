@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { auditPage, describeViolations, scrollingHasSettled } from "./finish-gate-support";
+import { auditPage, describeViolations } from "./finish-gate-support";
 
 /**
  * The TMDB notice is a property of the product, not of one route.
@@ -44,19 +44,49 @@ const ALL_SURFACES = [...PRODUCT_ROUTES, DOOR];
 
 type Box = { bottom: number; height: number; left: number; right: number; top: number };
 
+type Measurement = {
+  /** The document was scrolled as far as a reader can take it. */
+  atEnd: boolean;
+  innerHeight: number;
+  navigation: Box | null;
+  notice: Box;
+};
+
 /**
  * Where the notice sits relative to the viewport, and the fixed bottom
  * navigation it must not sit under.
  *
- * Both rectangles are read in one `evaluate` rather than through two
- * `boundingBox()` calls. Discover re-renders after hydration, and a Playwright
- * element handle resolved just before that returns `null` for its box once the
- * node it points at has been replaced — a staleness failure that reads exactly
- * like a missing notice.
+ * Everything happens inside one `evaluate`, and `scroll` decides whether that
+ * evaluate first takes the document to its foot. Three separate reasons:
+ *
+ * Both rectangles come from one round trip because Discover re-renders after
+ * hydration, and a Playwright element handle resolved just before that returns
+ * `null` for its box once the node it points at has been replaced — a staleness
+ * failure that reads exactly like a missing notice.
+ *
+ * The scroll belongs in the same evaluate as the read. Scrolling from one call
+ * and measuring from the next is the race this file shipped with: a route whose
+ * posters are still arriving is not yet as tall as it will be, so a scroll aimed
+ * at `scrollHeight` lands at the foot of a document that then grows underneath
+ * it, and the next call measures a notice thousands of pixels below the fold.
+ * The loop below re-scrolls until the height it scrolled to is the height it
+ * arrives at, and reports whether it got there.
+ *
+ * And it scrolls the *document* to its end rather than calling
+ * `scrollIntoView({ block: "end" })` on the notice, which looks like the more
+ * direct expression of "put it on screen" and is wrong here: that aligns the
+ * notice's bottom edge with the viewport's, parking it underneath the fixed
+ * navigation by construction and defeating the footer padding this check exists
+ * to measure. The reader's real worst case is the foot of the document, where
+ * that padding is what holds the notice clear.
  */
-async function geometry(page: Page): Promise<{ navigation: Box | null; notice: Box }> {
+async function geometry(
+  page: Page,
+  { scroll = false }: { scroll?: boolean } = {},
+): Promise<Measurement> {
   await expect(page.locator(".tmdb-attribution")).toBeVisible();
-  const measured = await page.evaluate(() => {
+  const measured = await page.evaluate(async (shouldScroll) => {
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const read = (node: Element | null): Box | null => {
       if (!node) return null;
       const rect = node.getBoundingClientRect();
@@ -68,13 +98,37 @@ async function geometry(page: Page): Promise<{ navigation: Box | null; notice: B
         top: rect.top,
       };
     };
-    const notice = read(document.querySelector(".tmdb-attribution"));
+    const scrolledToEnd = () =>
+      window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1;
+
+    const notice = document.querySelector(".tmdb-attribution");
     if (!notice) return null;
+
+    let atEnd = !shouldScroll;
+    if (shouldScroll) {
+      for (let pass = 0; pass < 12; pass += 1) {
+        const height = document.documentElement.scrollHeight;
+        // `instant` because `html` carries `scroll-behavior: smooth`; two frames
+        // because the scroll and the layout it causes land on separate ones.
+        window.scrollTo({ behavior: "instant", top: height });
+        await frame();
+        await frame();
+        atEnd = scrolledToEnd();
+        // Settled only when the scroll reached the foot *and* the document is
+        // still the height it was aimed at.
+        if (atEnd && document.documentElement.scrollHeight === height) break;
+      }
+    }
+
+    const box = read(notice);
+    if (!box) return null;
     return {
+      atEnd,
+      innerHeight: window.innerHeight,
       navigation: read(document.querySelector('nav[aria-label="Primary mobile"]')),
-      notice,
+      notice: box,
     };
-  });
+  }, scroll);
 
   expect(measured, "the TMDB notice is not laid out").not.toBeNull();
   return measured!;
@@ -113,38 +167,30 @@ test("the product routes keep the notice clear of the mobile bottom navigation",
   const collisions: string[] = [];
   for (const path of PRODUCT_ROUTES) {
     await page.goto(path);
+
     // The notice is the last thing on the page, so the collision — if there is
-    // one — only exists once the document is scrolled all the way down.
-    //
-    // Re-scrolled on every poll rather than once: a route whose posters are
-    // still arriving is not yet as tall as it will be, so a single scroll aimed
-    // at `scrollHeight` lands at the foot of a document that then grows under
-    // it — which on Discover means it lands at 0 and the check silently
-    // measures the top of the page. `instant` because `html` carries
-    // `scroll-behavior: smooth`.
+    // one — only exists at the foot of the document. Polled on top of the
+    // in-page settle loop because a route can still be growing when that loop
+    // gives up, and the clearance is judged only from a measurement that
+    // reached the end and put the notice inside the viewport.
+    let measured!: Measurement;
     await expect
       .poll(
         async () => {
-          await page.evaluate(() =>
-            window.scrollTo({ behavior: "instant", top: document.documentElement.scrollHeight }),
+          measured = await geometry(page, { scroll: true });
+          return (
+            measured.atEnd &&
+            measured.notice.bottom <= measured.innerHeight &&
+            measured.navigation !== null
           );
-          await scrollingHasSettled(page);
-          return page.evaluate(() => {
-            const document_ = document.documentElement;
-            const furthest = document_.scrollHeight - window.innerHeight;
-            return furthest > 0 && Math.abs(window.scrollY - furthest) < 2;
-          });
         },
-        { message: `${path} never reached the foot of the document` },
+        { message: `${path} never settled at the foot of the document`, timeout: 15_000 },
       )
       .toBe(true);
 
-    const { navigation, notice } = await geometry(page);
-    expect(navigation, `${path}: no bottom navigation`).not.toBeNull();
-
-    if (notice.bottom > navigation!.top) {
+    if (measured.notice.bottom > measured.navigation!.top) {
       collisions.push(
-        `${path}: notice ends at ${notice.bottom}, navigation starts at ${navigation!.top}`,
+        `${path}: notice ends at ${measured.notice.bottom}, navigation starts at ${measured.navigation!.top}`,
       );
     }
   }
