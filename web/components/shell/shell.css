@@ -255,27 +255,37 @@
 }
 
 /*
- * The legacy dashboard link.
+ * The page foot: the TMDB notice, and the legacy dashboard link where a route
+ * offers one.
  *
  * Below the fold by construction — `.app-page` reserves a full viewport — so
- * the rollback stays reachable without competing with the movie decision the
- * route exists for. It clears the fixed bottom navigation on small screens.
+ * neither competes with the movie decision the route exists for. The bottom
+ * padding is what clears the fixed bottom navigation on small screens, and it
+ * has to survive the footer growing a second row: the notice is the last thing
+ * on the page, and a phone that parks the navigation on top of it would hide
+ * the one line the product is required to show.
  */
 .shell-footer {
-  align-items: baseline;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-muted);
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   font-size: 0.75rem;
-  gap: 0.35rem 0.75rem;
+  gap: var(--space-3);
   margin: 0 auto;
   max-width: 94rem;
   padding: var(--space-4) clamp(1rem, 4vw, 4rem) 6rem;
   width: 100%;
 }
 
-.shell-footer a {
+.shell-footer-legacy {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+}
+
+.shell-footer-legacy a {
   color: var(--text-secondary);
   font-weight: 650;
   min-height: 2.75rem;
