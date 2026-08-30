@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { auth, signIn } from "@/auth";
+import { TmdbAttribution } from "@/components/ui/tmdb-attribution";
 import { frontDoorHref, safeSignInReturn, signInDestination } from "@/lib/navigation";
 import "./sign-in.css";
 
@@ -102,6 +103,15 @@ function SignInPage({
           Demo environment: use the seeded walkthrough account. The selected MovieLens persona
           is separate from the signed-in actor.
         </p>
+        {/*
+          The door shows no TMDB artwork of its own, so this is not the notice
+          discharging an obligation — the shell's is. It is here because this is
+          the product's only unauthenticated page and the one surface a reviewer
+          reaches without signing in, and a required notice that is present on
+          every page but the front one is the kind of gap that produced this
+          work in the first place.
+        */}
+        <TmdbAttribution />
       </section>
     </main>
   );
