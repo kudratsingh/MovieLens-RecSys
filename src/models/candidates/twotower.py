@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import faiss
@@ -42,10 +43,36 @@ from .popularity import PopularityModel
 logger = logging.getLogger(__name__)
 
 
+def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
+    raw = env.get(key, "").strip()
+    return default if not raw else int(raw)
+
+
+def _env_float(env: Mapping[str, str], key: str, default: float) -> float:
+    raw = env.get(key, "").strip()
+    return default if not raw else float(raw)
+
+
+def _env_bool(env: Mapping[str, str], key: str, default: bool) -> bool:
+    raw = env.get(key, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{key}={raw!r} is not a boolean")
+
+
 @dataclass
 class TwoTowerConfig:
     """Hyperparameters. Every field is logged as an MLflow param by the
     training script so a future sweep is a pure config change.
+
+    Every default on this class is ADR 0006's configuration, which is what
+    the 2026-08-30 v1 run measured. :meth:`from_env` is the only way a run
+    departs from them, so a run's MLflow params are a complete description
+    of what produced it.
     """
 
     embedding_dim: int = 64
@@ -56,13 +83,76 @@ class TwoTowerConfig:
     num_sampled: int = 16384
     epochs: int = 3
     learning_rate: float = 1e-3
+    # Divides the cosine similarity before the log-uniform correction is
+    # applied. 1.0 is v1's behaviour — ADR 0006 pins L2-normalized towers and
+    # a logQ correction but never names a temperature, so v1 ran at an
+    # implicit 1.0. That matters because both towers are unit-normalized, so
+    # the learnable part of a logit is bounded to [-1, 1] while the
+    # correction term spans roughly ten nats; at 1.0 the popularity prior
+    # simply outranks anything the embeddings can say. See ADR 0006's
+    # 2026-08-30 sweep note.
+    logit_temperature: float = 1.0
+    # Whether the positive's logit gets the same -log P correction the
+    # negatives get. True is v1's behaviour and matches TensorFlow's
+    # `sampled_softmax_loss`, which corrects the true logit by its expected
+    # sample count; ADR 0006's own wording says "each negative's logit",
+    # so the flag exists to let the sweep measure the difference rather
+    # than argue about which reading was meant.
+    correct_positive_logit: bool = True
+    # Epochs to keep going after the best mean loss seen so far. 0 disables
+    # early stopping entirely, which is v1's behaviour (it always ran
+    # exactly `epochs` passes).
+    early_stopping_patience: int = 0
+    # How much a loss has to improve to count as an improvement at all.
+    early_stopping_min_delta: float = 1e-4
     # FAISS IVF-Flat tuning. nlist = sqrt(n_items) rounded is the FAISS
     # rule-of-thumb; MovieLens has ~62 k items so 100 is under the
     # recommended range but keeps train time bounded and matches what the
     # ADR pins as a defensible starting point.
     faiss_nlist: int = 100
     faiss_nprobe: int = 10
+    # Replace IVF-Flat with exact inner-product search. Off by default —
+    # ADR 0006 pins IVF-Flat as the shape that ships. The switch exists so a
+    # run can separate "the embeddings are bad" from "the ANN index is
+    # losing neighbours", which are indistinguishable from a recall number.
+    faiss_exact: bool = False
     seed: int = 42
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> TwoTowerConfig:
+        """Build a config from ``TWOTOWER_*`` environment variables.
+
+        An unset or empty variable takes the ADR 0006 default above, so an
+        operator who sets nothing gets exactly the run that is already
+        recorded in ``docs/results.md``.
+        """
+        e = env if env is not None else os.environ
+        return cls(
+            embedding_dim=_env_int(e, "TWOTOWER_EMBEDDING_DIM", cls.embedding_dim),
+            history_window=_env_int(e, "TWOTOWER_HISTORY_WINDOW", cls.history_window),
+            batch_size=_env_int(e, "TWOTOWER_BATCH_SIZE", cls.batch_size),
+            num_sampled=_env_int(e, "TWOTOWER_NUM_SAMPLED", cls.num_sampled),
+            epochs=_env_int(e, "TWOTOWER_EPOCHS", cls.epochs),
+            learning_rate=_env_float(e, "TWOTOWER_LEARNING_RATE", cls.learning_rate),
+            logit_temperature=_env_float(e, "TWOTOWER_LOGIT_TEMPERATURE", cls.logit_temperature),
+            correct_positive_logit=_env_bool(
+                e, "TWOTOWER_CORRECT_POSITIVE_LOGIT", cls.correct_positive_logit
+            ),
+            early_stopping_patience=_env_int(
+                e, "TWOTOWER_EARLY_STOPPING_PATIENCE", cls.early_stopping_patience
+            ),
+            early_stopping_min_delta=_env_float(
+                e, "TWOTOWER_EARLY_STOPPING_MIN_DELTA", cls.early_stopping_min_delta
+            ),
+            faiss_nlist=_env_int(e, "TWOTOWER_FAISS_NLIST", cls.faiss_nlist),
+            faiss_nprobe=_env_int(e, "TWOTOWER_FAISS_NPROBE", cls.faiss_nprobe),
+            faiss_exact=_env_bool(e, "TWOTOWER_FAISS_EXACT", cls.faiss_exact),
+            seed=_env_int(e, "TWOTOWER_SEED", cls.seed),
+        )
+
+    def as_params(self) -> dict[str, str | int | float | bool]:
+        """Every field, flat, for ``mlflow.log_params``."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 
 class ItemTower(nn.Module):
@@ -224,17 +314,26 @@ class TwoTowerModel:
         self._item_tower = ItemTower(n_items=n_items, embedding_dim=self.config.embedding_dim)
         optimizer = torch.optim.Adam(self._item_tower.parameters(), lr=self.config.learning_rate)
 
+        best_loss = math.inf
+        epochs_since_best = 0
+
         for epoch in range(self.config.epochs):
             perm = torch.randperm(n_examples)
-            history_shuf = history_tensor[perm]
-            positive_shuf = positive_tensor[perm]
 
             epoch_loss = 0.0
             n_batches = 0
             for start in range(0, n_examples, self.config.batch_size):
                 end = start + self.config.batch_size
-                history_batch = history_shuf[start:end]
-                positive_batch = positive_shuf[start:end]
+                # Gather the batch straight out of the unshuffled tensors.
+                # `A[perm][start:end]` and `A[perm[start:end]]` are the same
+                # rows in the same order, but the first materializes a whole
+                # second copy of a (19.9 M, 50) tensor every epoch — about
+                # 4 GB that this machine does not have spare. The pairs are
+                # stored as int32 for the same reason and cast per batch,
+                # since `nn.Embedding` wants int64 indices.
+                rows = perm[start:end]
+                history_batch = history_tensor[rows].long()
+                positive_batch = positive_tensor[rows].long()
 
                 loss = self._compute_loss(
                     history_batch=history_batch,
@@ -258,9 +357,42 @@ class TwoTowerModel:
             if on_epoch is not None:
                 on_epoch(epoch + 1, mean_loss)
 
+            # Early stopping on a loss plateau. Off by default (patience 0),
+            # which is what v1 did — it always ran exactly `epochs` passes.
+            if self.config.early_stopping_patience > 0:
+                if mean_loss < best_loss - self.config.early_stopping_min_delta:
+                    best_loss = mean_loss
+                    epochs_since_best = 0
+                else:
+                    epochs_since_best += 1
+                    if epochs_since_best >= self.config.early_stopping_patience:
+                        logger.info(
+                            "Early stop after epoch %d: %d epoch(s) without a %.1e "
+                            "improvement on best loss %.4f",
+                            epoch + 1,
+                            epochs_since_best,
+                            self.config.early_stopping_min_delta,
+                            best_loss,
+                        )
+                        break
+
         # ---- FAISS index ----
-        self._build_faiss_index(n_items)
+        self.build_index()
         return self
+
+    def build_index(self) -> None:
+        """(Re)build the retrieval index over the current item embeddings.
+
+        Public because the training script calls it between epochs to score
+        recall mid-run — a loss curve says the model stopped moving, but only
+        recall says whether where it stopped is any good. Each call constructs
+        a fresh FAISS index and trains it from scratch at FAISS's default
+        clustering seed, so an intermediate call cannot perturb the final
+        index: the result is a function of the embeddings alone.
+        """
+        if self._item_tower is None:
+            return
+        self._build_faiss_index(len(self._index_to_item))
 
     def _build_training_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Materialize the (history, positive) tensors from ``_user_history``.
@@ -268,20 +400,30 @@ class TwoTowerModel:
         History is padded with 0 on the *left* so the last N slots are the
         most-recent items — mean-pool doesn't care about position, but a
         left-pad keeps the invariant readable in tests.
+
+        Filled into a preallocated int32 array rather than accumulated as
+        lists of Python ints. On the full 25 M split that is 19.9 M rows of
+        50 columns: as a list-of-lists it is roughly 9 GB of list objects
+        before the tensor is even built, and this machine has 16 GB. The
+        rows and their order are identical either way.
         """
         n = self.config.history_window
-        histories: list[list[int]] = []
-        positives: list[int] = []
+        total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
+        histories = np.zeros((total, n), dtype=np.int32)
+        positives = np.empty(total, dtype=np.int32)
+
+        row = 0
         for hist in self._user_history.values():
-            for i in range(1, len(hist)):
-                window = hist[max(0, i - n) : i]
-                # Left-pad to N.
-                pad = [0] * (n - len(window))
-                histories.append(pad + window)
-                positives.append(hist[i])
-        history_tensor = torch.tensor(histories, dtype=torch.long)
-        positive_tensor = torch.tensor(positives, dtype=torch.long)
-        return history_tensor, positive_tensor
+            dense = np.asarray(hist, dtype=np.int32)
+            for i in range(1, len(dense)):
+                window = dense[max(0, i - n) : i]
+                # Left-pad to N: the array starts zeroed, so writing the
+                # window into the trailing slots is the whole padding step.
+                histories[row, n - len(window) :] = window
+                positives[row] = dense[i]
+                row += 1
+
+        return torch.from_numpy(histories), torch.from_numpy(positives)
 
     def _encode_user(self, history_batch: torch.Tensor) -> torch.Tensor:
         """Mean-pool over non-padding history items, then L2-normalize.
@@ -313,9 +455,13 @@ class TwoTowerModel:
 
         Each negative logit has ``log P(negative)`` subtracted so the
         gradient is an unbiased estimator of the full softmax over the
-        catalog. The positive gets the same correction so warm items — even
-        popular ones — aren't systematically penalized in the ranking. The
-        result is a cross-entropy where the positive occupies column 0.
+        catalog. The positive gets the same correction by default — the
+        reading TensorFlow's ``sampled_softmax_loss`` takes, where the true
+        class is treated as if it too could have been drawn — but ADR 0006's
+        own wording says "each negative's logit", so
+        ``config.correct_positive_logit`` makes the difference measurable
+        rather than assumed. The result is a cross-entropy where the
+        positive occupies column 0.
         """
         assert self._item_tower is not None
         # (num_sampled,) — sampled ranks, mapped to dense indices.
@@ -333,11 +479,23 @@ class TwoTowerModel:
         pos_logits = (user_vecs * pos_vecs).sum(dim=-1, keepdim=True)  # (B, 1)
         neg_logits = user_vecs @ neg_vecs.T  # (B, S)
 
+        # Temperature. Both towers are L2-normalized, so these dot products
+        # are cosines in [-1, 1] — two nats of range for the model to say
+        # anything in, against a correction term below that spans about ten.
+        # Dividing by a temperature is what lets the learned score compete
+        # with the prior. 1.0 is v1's implicit value and leaves the arithmetic
+        # exactly as it was.
+        temperature = self.config.logit_temperature
+        if temperature != 1.0:
+            pos_logits = pos_logits / temperature
+            neg_logits = neg_logits / temperature
+
         # Log-uniform correction — subtract log P(item) from each logit.
-        pos_correction = log_p_per_index_t[positive_batch].unsqueeze(-1)  # (B, 1)
         neg_correction = log_p_per_index_t[neg_dense].unsqueeze(0)  # (1, S)
-        pos_logits = pos_logits - pos_correction
         neg_logits = neg_logits - neg_correction
+        if self.config.correct_positive_logit:
+            pos_correction = log_p_per_index_t[positive_batch].unsqueeze(-1)  # (B, 1)
+            pos_logits = pos_logits - pos_correction
 
         logits = torch.cat([pos_logits, neg_logits], dim=1)  # (B, 1 + S)
         target = torch.zeros(logits.shape[0], dtype=torch.long)
@@ -361,6 +519,15 @@ class TwoTowerModel:
             )
 
         d = self.config.embedding_dim
+        if self.config.faiss_exact:
+            # Diagnostic path: brute-force inner product, no quantization and
+            # no recall loss of its own. A run that gains here and nowhere
+            # else was losing neighbours to the index, not to the embeddings.
+            exact = faiss.IndexFlatIP(d)
+            exact.add(item_vecs)
+            self._faiss_index = exact
+            return
+
         quantizer = faiss.IndexFlatIP(d)
         # nlist must not exceed n_train. FAISS complains loudly on small
         # synthetic datasets otherwise; cap defensively.
