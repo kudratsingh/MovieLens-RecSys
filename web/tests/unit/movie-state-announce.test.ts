@@ -115,7 +115,8 @@ describe("a conflict reads as a correction rather than a dead end", () => {
 });
 
 describe("a refused transition states the rule instead of blaming a race", () => {
-  // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
+  // One of the rules ADR 0012's transition table states. The API sends the
+  // sentence; nothing here parses it, and it is repeated rather than rewritten.
   const RULE = "a watched movie cannot be added to the watchlist";
 
   it("repeats the API's own sentence rather than translating it", () => {
@@ -148,6 +149,36 @@ describe("a refused transition states the rule instead of blaming a race", () =>
         { title: "Heat", voice: "detail" },
       ),
     ).toBe("Heat was not changed. Undo the dismissal first.");
+  });
+
+  it("says the control moved when the re-read actually moved it", () => {
+    // The refusal triggers a canonical re-read, so the card can look different
+    // a moment later. "Not changed" followed by a silent change is the version
+    // of this that lies, and a reader who cannot see the control has no other
+    // way to learn it moved.
+    for (const voice of ["discover", "detail"] as const) {
+      expect(
+        movieStateAnnouncement(
+          { kind: "refused", detail: RULE, corrected: true },
+          { title: "Heat", voice },
+        ),
+      ).toBe(`Heat was not changed. ${RULE}. Its current state is shown.`);
+    }
+    expect(
+      movieStateAnnouncement(
+        { kind: "refused", detail: RULE, corrected: true },
+        { title: "Heat", voice: "library", persona: "Action Fan" },
+      ),
+    ).toBe(`Heat was left as it is in Action Fan's library. ${RULE}. Its current state is shown.`);
+  });
+
+  it("claims no correction when the record confirmed what was on screen", () => {
+    expect(
+      movieStateAnnouncement(
+        { kind: "refused", detail: RULE, corrected: false },
+        { title: "Heat", voice: "detail" },
+      ),
+    ).toBe(`Heat was not changed. ${RULE}.`);
   });
 });
 

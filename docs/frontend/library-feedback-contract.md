@@ -2,7 +2,7 @@
 
 **Status:** Implemented in Bundle 2
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
 ## Persistence boundary
 
@@ -35,9 +35,33 @@ and deterministic provenance events for fixtures created after migration.
 
 Every mutation accepts an optional UUID `Idempotency-Key` and an optional
 `expected_revision`. Reusing a key for the same target/action replays the
-original canonical result without another event. Reusing it for a different
-mutation or writing a stale revision returns `409`. The authenticated request
+original canonical result without another event. The authenticated request
 transaction commits before the response is released.
+
+### When a mutation is turned away
+
+Two different things can turn a well-formed write away, and they are answered on
+two different statuses with a machine-readable `code` in the body. `detail` is
+prose written for a viewer and may be reworded; `code` is the contract.
+
+| Status | `code` | Condition | Recovery |
+|---|---|---|---|
+| `409` | `revision_conflict` | Stale `expected_revision` — something else committed first | Re-read the canonical record and replay the same intent (same key) against it |
+| `409` | `idempotency_conflict` | The key was used for a different mutation, or the same rating with a different value | Same recovery |
+| `422` | `transition_refused` | The transition table above forbids the result | **No replay** — the same rule would give the same answer. Re-read and correct the control |
+| `422` | *(none)* | Request validation failed; `detail` is a list of field errors | The caller's own defect, never shown as a product rule |
+
+The refusal earns a re-read even though nothing was written, because the rule it
+broke is a rule *about state*: a refusal is proof that what the client rendered
+is not what is stored. `web/lib/movie-state/client.ts` performs it, attaches the
+record as `canonical`, and sets `corrected` when the record differs from the
+revision the refused write asserted; each surface adopts it, and the live region
+adds "Its current state is shown." so a reader who cannot see the control move
+still learns that it did. A refusal never asks the viewer to reload.
+
+Until 2026-08-29 a refusal was a third condition under `409` and the client told
+it apart by matching the sentence in `detail` — six regular expressions against
+prose owned by the server (issue #74). That branch is deleted.
 
 ## Library resources
 

@@ -870,6 +870,18 @@ def test_movie_detail_state_overlay_survives_a_write_without_crossing_tenants(
         )
         assert default_detail.json()["item"]["state"] is None
         assert '"tenant_id":"demo"' not in default_detail.text
+
+        # The refusal the docstring names, exercised against the real service
+        # rather than assumed: a rule is a 422 carrying its own code, never the
+        # 409 that means "somebody committed first" (issue #74). Nothing is
+        # written, so there is nothing to undo in the teardown below.
+        refused = client.put(
+            f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/watchlist",
+            headers=demo_headers,
+            json={},
+        )
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["code"] == "transition_refused"
     finally:
         restored = client.put(
             f"/users/987654324/movies/{DEMO_DETAIL_MOVIE_ID}/rating",

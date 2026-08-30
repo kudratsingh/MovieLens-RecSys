@@ -334,7 +334,10 @@ component, so a resource that fails never blanks the regions around it. Writes
 go through exactly one path, `web/lib/movie-state/`: the transition table
 written once, an idempotency key bound to the intent, `expected_revision` on
 every request, a 409 that triggers a canonical re-read and one replay at that
-revision, and a rollback that announces the restore and walks focus back. That
+revision, a 422 with `code: transition_refused` that earns the same re-read but
+no replay — a rule about state, so being refused proves the control was stale,
+and asking again would only ask the same rule — and a rollback that announces the
+restore and walks focus back. That
 consolidation was not tidiness — the previous copies had already diverged, and
 only one of them turned a conflict into a correction rather than telling the
 viewer to reload. The route map is in

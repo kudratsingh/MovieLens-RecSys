@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal
 from uuid import UUID
 
 from sqlalchemy import JSON, Connection, bindparam, text
@@ -38,16 +38,46 @@ LibraryTab = Literal["rated", "watchlist", "history"]
 LibrarySort = Literal["recent", "title", "rating", "release", "tmdb"]
 
 
-class StateRevisionConflictError(ValueError):
+class FeedbackMutationError(ValueError):
+    """Base for the three ways a well-formed mutation can be turned away.
+
+    Each subclass carries the status it answers with and a stable ``code`` the
+    client branches on. The code exists because the status alone is ambiguous
+    in both directions: ``409`` covers two different races, and ``422`` is also
+    what FastAPI answers for a request that failed validation. The message is
+    prose written for a viewer and is free to be reworded; the code is the
+    contract and is not (issue #74).
+    """
+
+    code: ClassVar[str]
+    http_status: ClassVar[int]
+
+
+class StateRevisionConflictError(FeedbackMutationError):
     """The caller mutated a stale state revision."""
 
+    code = "revision_conflict"
+    http_status = 409
 
-class IdempotencyConflictError(ValueError):
+
+class IdempotencyConflictError(FeedbackMutationError):
     """An idempotency key was already used for a different mutation."""
 
+    code = "idempotency_conflict"
+    http_status = 409
 
-class InvalidStateTransitionError(ValueError):
-    """The requested product states would contradict one another."""
+
+class InvalidStateTransitionError(FeedbackMutationError):
+    """The requested product states would contradict one another.
+
+    A refusal, not a race: the request was understood, the revision it asserted
+    was current, and ADR 0012's transition table forbids the result. Nothing was
+    written, and repeating the request cannot change the answer — which is why
+    it is a ``422`` rather than one more condition hiding under the ``409``.
+    """
+
+    code = "transition_refused"
+    http_status = 422
 
 
 class InvalidLibraryCursorError(ValueError):

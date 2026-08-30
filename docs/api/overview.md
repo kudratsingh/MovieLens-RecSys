@@ -61,16 +61,37 @@ one caller's allowance, not a cluster-wide quota. `/healthz` and `/readyz` are
 exempt and carry no such headers.
 
 **Shared error responses.** `401` missing or invalid token · `403` actor not
-authorized · `404` persona or movie does not exist · `409` idempotency, state
-revision, or transition conflict · `422` validation error · `429` rate limit
-exceeded · `500` request transaction failed. `400` additionally means an invalid
-parameter or a cursor that does not match the query it is used against.
+authorized · `404` persona or movie does not exist · `409` idempotency or state
+revision conflict · `422` validation error, or a refused state transition ·
+`429` rate limit exceeded · `500` request transaction failed. `400` additionally
+means an invalid parameter or a cursor that does not match the query it is used
+against.
 
-One wrinkle worth knowing: `409` covers three different conditions on one
-status. A revision conflict and an idempotency reuse are recoverable; a
-transition refusal (adding an already-watched title to the watchlist, say) is
-not, and retrying will not help. The web client splits them by response body. A
-distinct status or a machine-readable code is the cleaner contract and is owed.
+**Error codes.** Every deliberate 4xx renders `ErrorResponse`: a `detail`
+sentence, and — wherever one status covers more than one condition a caller has
+to tell apart — a stable `code`. `detail` is prose meant for a person and may be
+reworded at any time; `code` is the contract. Read the code first and fall back
+to the status; where the status is unambiguous no code is sent at all.
+
+| Status | `code` | What happened | What a client does |
+|---|---|---|---|
+| `409` | `revision_conflict` | The `expected_revision` sent was not the current one — something else committed first | Re-read the canonical state, replay the same intent (same `Idempotency-Key`) against it |
+| `409` | `idempotency_conflict` | The `Idempotency-Key` was already used for a different mutation, or the same rating resource with a different value | Same recovery; the key belongs to a decision that is already recorded |
+| `422` | `transition_refused` | The request was understood and the revision was current, and [ADR 0012](../adr/0012-browser-identity-feedback-and-online-freshness.md)'s transition table forbids the result — adding an already-watched title to the watchlist, say | Nothing was written and no retry can succeed. Show the sentence, re-read the state (the rule broken is a rule *about* state, so the client's picture of it was wrong), and correct the control |
+| `422` | *(none)* | Request validation failed. `detail` is a **list** of field errors, not a sentence | Fix the request; this is the caller's own defect |
+
+The two shapes on `422` are why the code exists rather than the status alone,
+and both are declared on every mutation operation in `openapi.json`. Until
+2026-08-29 a transition refusal was a third condition hiding under `409`, and
+the web client told it apart by matching the sentence in `detail` with regular
+expressions — so a copy edit on the server would silently have turned a product
+rule into a "somebody else changed this" prompt (issue #74).
+
+An error body deliberately does **not** carry a state snapshot. A client that
+needs the current record after a refusal reads it from
+`GET /users/{user_id}/movies/{movie_id}` (or `.../state`), which is the one
+representation carrying a revision the next write can assert — an abbreviated
+copy inside an error body would be a second source of truth for the same row.
 
 ## Unauthenticated
 

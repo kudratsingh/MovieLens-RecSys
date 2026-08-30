@@ -163,6 +163,83 @@ def test_feedback_mutations_accept_idempotency_and_revision_contracts() -> None:
     }
 
 
+# Every operation that runs a movie-state mutation, including the two
+# compatibility shapes. The list is asserted against the routes themselves in
+# `test_serving_error_contract.py`; here it names what the contract must say.
+MUTATION_OPERATIONS = {
+    ("/users/{user_id}/movies/{movie_id}/watched", "put"),
+    ("/users/{user_id}/movies/{movie_id}/watched", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/rating", "put"),
+    ("/users/{user_id}/movies/{movie_id}/rating", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/watchlist", "put"),
+    ("/users/{user_id}/movies/{movie_id}/watchlist", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/dismissal", "put"),
+    ("/users/{user_id}/movies/{movie_id}/dismissal", "delete"),
+    ("/users/{user_id}/ratings/{movie_id}", "put"),
+    ("/users/{user_id}/ratings", "delete"),
+}
+
+
+def test_an_error_body_can_name_itself_without_promising_to() -> None:
+    """``code`` is optional rather than required-and-nullable, deliberately.
+
+    Most 4xx on this surface carry a status that says everything there is to
+    say and send no code at all, so a required field would publish a `null` the
+    service never emits and make every client handle it.
+    """
+    error = _schema()["components"]["schemas"]["ErrorResponse"]
+
+    assert error["required"] == ["detail"]
+    assert error["properties"]["code"]["type"] == "string"
+    assert error["properties"]["detail"]["type"] == "string"
+
+
+@pytest.mark.parametrize(("path", "method"), sorted(MUTATION_OPERATIONS))
+def test_a_mutation_documents_both_bodies_its_422_can_carry(path: str, method: str) -> None:
+    """A refusal and a validation error share the status, so both are declared.
+
+    Declaring `422` at all suppresses the entry FastAPI generates for its own
+    validation error, and dropping that would leave a client parsing a shape
+    the contract never mentions (issue #74). The two are told apart by `code`.
+    """
+    operation = _schema()["paths"][path][method]
+    schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
+
+    assert schema["anyOf"] == [
+        {"$ref": "#/components/schemas/ErrorResponse"},
+        {"$ref": "#/components/schemas/HTTPValidationError"},
+    ]
+    assert "transition_refused" in operation["responses"]["422"]["description"]
+
+
+@pytest.mark.parametrize(("path", "method"), sorted(MUTATION_OPERATIONS))
+def test_a_mutation_409_names_the_two_races_it_still_covers(path: str, method: str) -> None:
+    operation = _schema()["paths"][path][method]
+    documented = operation["responses"]["409"]
+
+    assert documented["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
+    assert "revision_conflict" in documented["description"]
+    assert "idempotency_conflict" in documented["description"]
+    # The transition refusal moved off this status and must not be advertised
+    # here any more — that wording is what the old client parsed by sentence.
+    assert "transition" not in documented["description"]
+
+
+def test_both_bodies_a_mutation_422_references_are_defined() -> None:
+    """The `anyOf` above points at two components; a dangling `$ref` is a lie.
+
+    `HTTPValidationError` in particular is generated only because some other
+    operation still leaves FastAPI to document its own 422.
+    """
+    schemas = _schema()["components"]["schemas"]
+
+    assert "ErrorResponse" in schemas
+    assert "HTTPValidationError" in schemas
+    assert "ValidationError" in schemas
+
+
 def test_catalog_contract_is_bounded_and_exposes_opaque_page_state() -> None:
     schema = _schema()
     operation = schema["paths"]["/users/{user_id}/catalog"]["get"]

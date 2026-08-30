@@ -515,6 +515,19 @@ control reports intent (MovieStateAction)
   conflict is raised before any feedback event is written, and because both
   attempts carry the same idempotency key, so a lost response replays the stored
   result rather than applying it twice.
+- **A refusal is corrected too, but never replayed.** A `422` with
+  `code: transition_refused` is a rule rather than a race — ADR 0012's table
+  forbids the result, nothing was written, and asking again earns the same
+  answer, so there is no replay and no `Try again`. It still triggers the
+  canonical re-read, because the rule that was broken is a rule *about state*:
+  a refusal is proof that what the control rendered is not what is stored. The
+  record comes back on the result as `canonical`, with `corrected` set when it
+  differs from the revision the refused write asserted, and the live region
+  then adds "Its current state is shown." — a control that changes under a
+  reader without saying so is the accessibility failure the region exists to
+  prevent. The API's own sentence is repeated verbatim as the reason; nothing
+  here tells the viewer to reload. The two used to share `409` and be told
+  apart by matching that sentence with regular expressions (issue #74).
 - **One intent, one key.** A retry of the same intent replays the original
   commit rather than writing a second feedback event. `Try again` in the Library
   and a re-pressed control in `useMovieState` both rely on that.

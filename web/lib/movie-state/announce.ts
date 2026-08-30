@@ -26,8 +26,14 @@ export type MovieStateVoice = "detail" | "discover" | "library";
 export type MovieStateOutcome =
   | { kind: "committed"; action: MovieStateAction }
   | { kind: "conflict" }
-  /** The API declined the transition and said why; `detail` is its sentence. */
-  | { kind: "refused"; detail: string }
+  /**
+   * The API declined the transition and said why; `detail` is its sentence.
+   * `corrected` is set when the re-read that followed actually moved the
+   * control — a reader who cannot see it change has no other way to learn it
+   * did, and a silent correction is the accessibility problem this whole
+   * region exists to avoid.
+   */
+  | { kind: "refused"; detail: string; corrected?: boolean }
   | { kind: "failed"; failure: ResourceFailure };
 
 export type AnnouncementContext = {
@@ -55,7 +61,7 @@ export function movieStateAnnouncement(
     return conflictLine(context);
   }
   if (outcome.kind === "refused") {
-    return refusedLine(outcome.detail, context);
+    return refusedLine(outcome.detail, context, outcome.corrected ?? false);
   }
   return failureLine(outcome.failure, context);
 }
@@ -159,19 +165,29 @@ function conflictLine({ title, voice, persona }: AnnouncementContext): string {
 }
 
 /**
- * A refusal is not a conflict and not a failure. Nothing changed anywhere, the
+ * A refusal is not a conflict and not a failure. Nothing was stored, the
  * request was understood, and the API named the rule it would have broken — so
  * that sentence is repeated verbatim rather than translated. The lead-in says
  * the one thing the API's sentence does not: which title this was about, and
  * that it was left alone. No retry is offered, because there is nothing here
  * that a second press would change.
+ *
+ * `corrected` adds the one clause a refusal owes when the control moved under
+ * the reader: the rule that was broken is a rule about state, so the write path
+ * re-reads and the card may now show something else. Saying "not changed" and
+ * then quietly changing what is on screen is the version of this that lies.
  */
-function refusedLine(detail: string, { title, voice, persona }: AnnouncementContext): string {
+function refusedLine(
+  detail: string,
+  { title, voice, persona }: AnnouncementContext,
+  corrected: boolean,
+): string {
   const reason = sentence(detail);
+  const shown = corrected ? " Its current state is shown." : "";
   if (voice === "library") {
-    return `${title} was left as it is in ${persona ?? "this persona"}'s library. ${reason}`;
+    return `${title} was left as it is in ${persona ?? "this persona"}'s library. ${reason}${shown}`;
   }
-  return `${title} was not changed. ${reason}`;
+  return `${title} was not changed. ${reason}${shown}`;
 }
 
 /** The API's details are lowercase fragments with no terminator of their own. */

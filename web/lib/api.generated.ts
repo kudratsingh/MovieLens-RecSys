@@ -506,6 +506,12 @@ export interface components {
         };
         /** ErrorResponse */
         ErrorResponse: {
+            /**
+             * Code
+             * @description Stable machine-readable name for this refusal. Present wherever one status covers more than one condition; absent otherwise, so read the code first and fall back to the status.
+             */
+            code?: string;
+            /** Detail */
             detail: string;
         };
         /** FeedbackMutationResponse */
@@ -1166,7 +1172,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1286,7 +1292,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1392,7 +1398,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1490,7 +1496,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1590,7 +1596,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1697,7 +1703,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1796,7 +1802,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1899,7 +1905,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1908,13 +1914,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2002,7 +2008,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2011,13 +2017,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2109,7 +2115,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2118,13 +2124,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2212,7 +2218,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2221,13 +2227,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2311,7 +2317,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2414,7 +2420,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2423,13 +2429,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2517,7 +2523,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2526,13 +2532,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2620,7 +2626,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2629,13 +2635,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2723,7 +2729,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2732,13 +2738,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -2821,7 +2827,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2925,7 +2931,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`). This resource has no idempotency key and no transition table, so it is the only condition on the status */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3023,7 +3029,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3032,13 +3038,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -3126,7 +3132,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Stale `expected_revision` (`code: revision_conflict`) or an `Idempotency-Key` already used for a different mutation (`code: idempotency_conflict`). Both are races: re-read the canonical state and replay the same intent against it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3135,13 +3141,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The transition is refused by ADR 0012's state table (`code: transition_refused`, `detail` a sentence naming the rule); or the request failed validation (`detail` a list of errors, no `code`) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded for this tenant and subject */
@@ -3226,7 +3232,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3324,7 +3330,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3420,7 +3426,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;

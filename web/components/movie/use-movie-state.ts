@@ -202,15 +202,17 @@ export function useMovieState(options: MovieStateOptions) {
           text: movieStateAnnouncement({ kind: "conflict" }, { title, voice, persona }),
         });
       } else if (result.status === "refused") {
-        // A rule, not a race. Nothing changed, so there is nothing to re-read:
-        // dropping the pending patch above has already put the control back on
-        // its committed value, and the API's sentence says why it stayed
-        // there. The intent keeps its key — no feedback event was written, so
-        // pressing again is still the same decision.
+        // A rule, not a race — so no replay. But the rule is about state, and
+        // this control asserted a picture of that state the API just
+        // contradicted, so the write path read the record back: adopt it, and
+        // the control stops offering an action that cannot succeed. The intent
+        // keeps its key — no feedback event was written, so pressing again is
+        // still the same decision rather than a second one.
+        if (result.canonical) adopt(result.canonical);
         setMessage({
           tone: "note",
           text: movieStateAnnouncement(
-            { kind: "refused", detail: result.detail },
+            { kind: "refused", detail: result.detail, corrected: result.corrected },
             { title, voice, persona },
           ),
         });

@@ -63,7 +63,7 @@ function Host({
   movieId: number;
   initialState: MovieState | null;
 }) {
-  const { display, state, run } = useMovieState({
+  const { display, message, state, run } = useMovieState({
     userId: USER_ID,
     movieId,
     title: `Movie ${movieId}`,
@@ -78,6 +78,9 @@ function Host({
       </button>
       <p data-testid="revision">{state?.revision ?? "none"}</p>
       <p data-testid="watchlisted">{String(display.watchlisted)}</p>
+      <p data-testid="watched">{String(display.watched)}</p>
+      <p data-testid="tone">{message?.tone ?? "none"}</p>
+      <p data-testid="message">{message?.text ?? ""}</p>
     </div>
   );
 }
@@ -125,5 +128,44 @@ describe("useMovieState", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Watchlist" }));
     await waitFor(() => expect(client.revisions).toEqual([7]));
+  });
+
+  it("corrects the control from the record a refusal came back with", async () => {
+    // A refusal is a rule about state, so being refused proves this control was
+    // rendering something that is not stored. The write path re-reads and hands
+    // the record over; leaving the control on the picture the API just
+    // contradicted would keep offering an action that cannot succeed.
+    const rule = "a watched movie cannot be added to the watchlist";
+    const revisions: number[] = [];
+    const client: MovieStateClient = {
+      async mutate(input) {
+        revisions.push(input.expectedRevision);
+        return {
+          status: "refused",
+          requestId: "req-refused",
+          detail: rule,
+          canonical: movieState({ watched_at: "2026-08-21T10:00:00Z", revision: 9 }),
+          corrected: true,
+        };
+      },
+      async readState() {
+        throw new Error("the write path owns the re-read; the hook must not repeat it");
+      },
+    };
+
+    render(<Host client={client} initialState={movieState({ revision: 4 })} movieId={101} />);
+    await userEvent.click(screen.getByRole("button", { name: "Watchlist" }));
+
+    await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("9"));
+    expect(screen.getByTestId("watched")).toHaveTextContent("true");
+    expect(screen.getByTestId("watchlisted")).toHaveTextContent("false");
+    // A note, not an error: nothing broke and nothing was stored.
+    expect(screen.getByTestId("tone")).toHaveTextContent("note");
+    expect(screen.getByTestId("message")).toHaveTextContent(rule);
+    expect(screen.getByTestId("message")).toHaveTextContent("Its current state is shown.");
+
+    // And the next press asserts the revision that came back, not the stale one.
+    await userEvent.click(screen.getByRole("button", { name: "Watchlist" }));
+    await waitFor(() => expect(revisions).toEqual([4, 9]));
   });
 });

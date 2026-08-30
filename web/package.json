@@ -8,6 +8,8 @@
     "start": "next start -p 3001",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:e2e": "playwright test tests/e2e/browser-auth.spec.ts tests/e2e/seen-journey.spec.ts tests/e2e/discover-journey.spec.ts tests/e2e/featured-skip-journey.spec.ts tests/e2e/finish-gate-journey.spec.ts tests/e2e/shell-and-doors.spec.ts tests/e2e/persona-hygiene.spec.ts",
     "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
@@ -52,6 +54,7 @@
     "jsdom": "^26.1.0",
     "mermaid": "11.17.2",
     "openapi-typescript": "^7.13.0",
+    "prettier": "3.6.2",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.4"

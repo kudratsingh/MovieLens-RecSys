@@ -523,11 +523,20 @@ export function LibraryExperience({
         setAnnouncement(movieStateAnnouncement({ kind: "conflict" }, voice));
         setPending(null);
       } else if (result.status === "refused") {
-        // A rule, not a race: the row is already back on `mutation.rollback`,
-        // nothing was stored to re-read, and `Try again` is dropped because a
-        // second press would ask the same rule the same question.
+        // A rule, not a race: `Try again` is dropped because a second press
+        // would ask the same rule the same question. The row is already back on
+        // `mutation.rollback`, but the write path re-read the record — a rule
+        // about state that this row's revision did not expect means the row is
+        // stale — so show what is stored rather than the picture that was just
+        // contradicted.
+        if (result.canonical) {
+          settled = replaceMovieState(mutation.rollback, mutation.movieId, result.canonical);
+        }
         setAnnouncement(
-          movieStateAnnouncement({ kind: "refused", detail: result.detail }, voice),
+          movieStateAnnouncement(
+            { kind: "refused", detail: result.detail, corrected: result.corrected },
+            voice,
+          ),
         );
         setPending(null);
       } else {
