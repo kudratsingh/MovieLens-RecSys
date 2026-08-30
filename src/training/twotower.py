@@ -220,20 +220,24 @@ def run_once(
             model.build_index()
             epoch_recs = model.recommend_for_users(holdout_user_ids, k=K_CANDIDATES)
             epoch_result = evaluate(epoch_recs, holdout, train_counts, k=K_CANDIDATES)
+            spread = model.embedding_spread()
             epoch_eval_seconds += time.perf_counter() - t_eval
             mlflow.log_metrics(
                 {
                     "epoch_warm_recall_at_k_candidates": epoch_result.warm.recall,
                     "epoch_overall_recall_at_k_candidates": epoch_result.overall.recall,
+                    **{f"epoch_{name}": value for name, value in spread.items()},
                 },
                 step=epoch,
             )
             logger.info(
-                "Epoch %d: loss=%.4f warm_recall@%d=%.4f",
+                "Epoch %d: loss=%.4f warm_recall@%d=%.4f item_cos_mean=%.4f item_cos_std=%.4f",
                 epoch,
                 mean_loss,
                 K_CANDIDATES,
                 epoch_result.warm.recall,
+                spread.get("item_cosine_mean", float("nan")),
+                spread.get("item_cosine_std", float("nan")),
             )
 
         model.fit(train_frame, on_epoch=_log_epoch)

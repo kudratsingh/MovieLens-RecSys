@@ -380,6 +380,37 @@ class TwoTowerModel:
         self.build_index()
         return self
 
+    def embedding_spread(self, sample_size: int = 2000) -> dict[str, float]:
+        """Mean and spread of pairwise cosine among a fixed sample of items.
+
+        The diagnostic for the failure mode a loss curve cannot show. Both
+        towers are L2-normalized, so retrieval can only order items by angle;
+        if training drives the item embeddings into one direction (or into two
+        antipodal clumps) the loss can keep improving while the top-500 for
+        every user becomes the same near-tied set, and recall collapses toward
+        chance. High ``abs_mean`` with low ``std`` is that state.
+
+        The sample is the first ``sample_size`` dense indices — deterministic,
+        and drawing no random numbers, so calling this between epochs cannot
+        perturb the run it is measuring.
+        """
+        if self._item_tower is None:
+            return {}
+        n_items = len(self._index_to_item)
+        take = min(sample_size, n_items)
+        if take < 2:
+            return {}
+        with torch.no_grad():
+            vecs = self._item_tower(torch.arange(1, take + 1, dtype=torch.long))
+            sims = vecs @ vecs.T
+            off_diagonal = ~torch.eye(take, dtype=torch.bool)
+            values = sims[off_diagonal]
+            return {
+                "item_cosine_mean": float(values.mean()),
+                "item_cosine_abs_mean": float(values.abs().mean()),
+                "item_cosine_std": float(values.std()),
+            }
+
     def build_index(self) -> None:
         """(Re)build the retrieval index over the current item embeddings.
 

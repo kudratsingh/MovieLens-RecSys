@@ -347,6 +347,46 @@ def test_parse_grid_labels_unlabelled_cells_positionally() -> None:
     assert [label for label, _ in cells] == ["cell0", "cell1"]
 
 
+def test_embedding_spread_reports_the_three_statistics() -> None:
+    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    spread = model.embedding_spread()
+    assert set(spread) == {"item_cosine_mean", "item_cosine_abs_mean", "item_cosine_std"}
+    assert -1.0 <= spread["item_cosine_mean"] <= 1.0
+    assert 0.0 <= spread["item_cosine_abs_mean"] <= 1.0
+    assert spread["item_cosine_std"] >= 0.0
+
+
+def test_embedding_spread_is_empty_before_fitting() -> None:
+    """An unmeasured spread and a measured zero are different claims."""
+    assert TwoTowerModel(config=_FAST_CONFIG).embedding_spread() == {}
+
+
+def test_embedding_spread_draws_no_random_numbers() -> None:
+    """It runs between epochs, so it must not perturb the run it measures."""
+    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    torch.manual_seed(123)
+    before = torch.rand(4)
+    torch.manual_seed(123)
+    model.embedding_spread()
+    assert torch.equal(torch.rand(4), before)
+
+
+def test_a_collapsed_embedding_table_is_visible_in_the_spread() -> None:
+    """The state the diagnostic exists to name: every item pointing one way.
+
+    A loss curve cannot show this, and it is the difference between "the model
+    stopped learning" and "the model learned something that cannot be
+    retrieved from".
+    """
+    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    assert model._item_tower is not None
+    with torch.no_grad():
+        model._item_tower.embed.weight[1:] = 1.0
+    collapsed = model.embedding_spread()
+    assert collapsed["item_cosine_mean"] == pytest.approx(1.0, abs=1e-5)
+    assert collapsed["item_cosine_std"] == pytest.approx(0.0, abs=1e-5)
+
+
 def test_committed_pilot_grid_parses() -> None:
     """The grid that produced the numbers in docs/results.md is committed;
     it has to stay loadable by the runner that consumed it."""
