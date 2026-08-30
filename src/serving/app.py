@@ -131,6 +131,23 @@ _app_engine = create_engine(
     future=True,
 )
 
+# Same role, same RLS, its own tiny pool — used only when a handler raised and
+# the generic audit has to be written outside the transaction that is about to
+# be rolled back. It must not draw on `_app_engine`: the failing request is
+# still holding one of those connections, so a burst of simultaneous failures
+# on a shared pool would deadlock every one of them against a checkout that
+# cannot be satisfied, for the full default `pool_timeout` of thirty seconds
+# and on the shared thread pool. Here the failure mode is a dropped audit row
+# and a log line, which is the cheaper thing to lose mid-incident.
+_audit_failure_engine = create_engine(
+    _settings.app_user_database_url,
+    pool_pre_ping=True,
+    pool_size=1,
+    max_overflow=1,
+    pool_timeout=1.0,
+    future=True,
+)
+
 _jwks = JwksCache(
     keycloak_base_url=_settings.keycloak_base_url,
     ttl_seconds=_settings.jwks_cache_ttl_seconds,
@@ -734,7 +751,7 @@ if _settings.request_audit_mode == "inline":
     app.add_middleware(
         RequestAuditMiddleware,
         audits=_request_audits,
-        engine=_app_engine,
+        engine=_audit_failure_engine,
     )
 # Between auth and the audit writer, and only where it is active. It needs the
 # resolved principal, so it cannot run outside AuthMiddleware; and a throttled

@@ -494,15 +494,33 @@ An operator asking "what did this tenant do" unions two tables and joins them on
 `correlation_id`; that is written down here and in `docs/api/overview.md` rather
 than hidden behind a view.
 
+The skip is checked two ways, because a route template is not always available.
+`/users/42/recommendations/` with a trailing slash matches no route at all — the
+router answers it with a redirect and never records a match — so the template
+check alone sees "unmatched" and would write a row, while the prediction audit's
+own path regex still matches and writes its own. Checking the path as well is
+what makes "one request, one audit table" true off the canonical path too.
+
 **A failing handler is audited out of band.** If a handler raises,
 `AuthMiddleware` rolls the transaction back, and it must: a mutation that raised
 mid-flight cannot be allowed to become durable because we wanted its audit. So
-that one row is written on a fresh short-lived transaction on the same
-RLS-applied engine, with `app.tenant_id` set from the same verified principal,
-and the original exception is re-raised unchanged. The request's own semantics
-do not move a millimetre; only the audit outlives the rollback. A failure of
-that write is logged and swallowed, because the exception the operator needs is
-the one that broke the request.
+that one row is written on a fresh short-lived transaction, as the same
+RLS-applied role, with `app.tenant_id` set from the same verified principal, and
+the original exception is re-raised unchanged. The request's own semantics do
+not move a millimetre; only the audit outlives the rollback. A failure of that
+write is logged and swallowed, because the exception the operator needs is the
+one that broke the request.
+
+That transaction runs on a **separate one-connection pool**, not on the engine
+serving requests, and the separation is load-bearing rather than tidy. The
+failing request is still holding one of the request pool's connections until
+`AuthMiddleware` unwinds, so borrowing from the same pool means a burst of
+simultaneous failures — a bug in a shared helper, a dependency going down — can
+check out every connection and then block waiting for one more that nobody can
+release, for the full thirty-second default `pool_timeout`, on the shared thread
+pool. A fast 500 would become a stalled worker. On its own pool with a
+one-second timeout the worst case is a dropped audit row and a log line, which
+is the cheaper thing to lose while the service is already failing.
 
 **What the row does not carry, and why that is the design.** No request body, no
 headers, no query string. `endpoint` is the matched route template

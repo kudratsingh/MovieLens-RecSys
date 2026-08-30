@@ -89,20 +89,36 @@ def test_both_access_patterns_have_an_index() -> None:
     assert 'sa.text("created_at DESC")' in source
 
 
+def _code(source: str) -> str:
+    """The migration with its module docstring and comment lines removed.
+
+    Prose is allowed to name the neighbouring table; statements are not. This
+    strips exactly the prose — dropping *lines* by shape would keep only the
+    first and last line of a multi-line ``op.execute(\"\"\"...\"\"\")`` and
+    silently discard the SQL in between, which is where a destructive statement
+    would actually live in this file.
+    """
+    _, _, after_open = source.partition('"""')
+    _, _, body = after_open.partition('"""')
+    return "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+
+
 def test_the_migration_is_additive_and_touches_nothing_that_exists() -> None:
     source = _MIGRATION.read_text()
-    # Prose is allowed to name the neighbouring table; statements are not.
-    statements = [
-        line
-        for line in source.splitlines()
-        if line.strip().startswith(("op.", '"""', "'")) or ("op.execute" in line) or ("sa." in line)
-    ]
-    body = "\n".join(statements)
+    code = _code(source)
+
+    # Guard the guard: if the docstring/comment strip ever stopped working, the
+    # assertions below would pass over anything.
+    assert "CREATE POLICY request_audits_tenant_isolation" in code
+    assert "DROP POLICY IF EXISTS request_audits_tenant_isolation" in code
 
     # Production is additive-migrations-only (ADR 0013). Nothing here may drop,
     # alter or re-grant an existing table, and in particular the prediction
     # audit's own isolation must be left exactly as 0008 and 0012 left it.
-    assert "recommendation_audits" not in body
-    assert "op.alter_column" not in source
-    assert "DISABLE ROW LEVEL SECURITY" not in source.split("def downgrade")[0]
-    assert "DROP POLICY" not in source.split("def downgrade")[0]
+    assert "recommendation_audits" not in code
+    assert "op.alter_column" not in code
+    # The upgrade half creates; only the downgrade half tears down.
+    upgrade = code.split("def downgrade")[0]
+    assert "DISABLE ROW LEVEL SECURITY" not in upgrade
+    assert "DROP POLICY" not in upgrade
+    assert "op.drop_table" not in upgrade

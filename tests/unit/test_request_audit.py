@@ -355,6 +355,24 @@ def test_recommendations_are_left_to_the_prediction_audit() -> None:
     assert recorder.calls == []
 
 
+def test_a_trailing_slash_does_not_put_one_request_in_both_audit_tables() -> None:
+    """`/users/42/recommendations/` matches no route.
+
+    The router answers it with a redirect and never sets `scope["route"]`, so
+    the template check alone sees `<unmatched>` and would write a row — while
+    `RecommendationAuditMiddleware`'s regex still matches the path and writes
+    its own. Skipping on the path as well as the template is what keeps "one
+    request, one audit table" true off the canonical path too.
+    """
+    recorder = _AuditRecorder()
+    client = TestClient(_audit_app(recorder), follow_redirects=False)
+
+    redirected = client.get("/users/42/recommendations/")
+
+    assert redirected.status_code == 307
+    assert recorder.calls == []
+
+
 def test_every_skipped_endpoint_names_a_route_that_exists() -> None:
     """The skip is keyed on a route template, so it has to name a real route.
 
