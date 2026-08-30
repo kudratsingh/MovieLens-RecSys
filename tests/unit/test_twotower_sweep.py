@@ -387,13 +387,15 @@ def test_a_collapsed_embedding_table_is_visible_in_the_spread() -> None:
     assert collapsed["item_cosine_std"] == pytest.approx(0.0, abs=1e-5)
 
 
-def test_committed_pilot_grid_parses() -> None:
-    """The grid that produced the numbers in docs/results.md is committed;
-    it has to stay loadable by the runner that consumed it."""
+@pytest.mark.parametrize("name", ["pilot", "full"])
+def test_committed_grids_parse(name: str) -> None:
+    """The grids that produced the numbers in docs/results.md are committed;
+    they have to stay loadable by the runner that consumed them."""
     import json
     from pathlib import Path
 
-    spec = json.loads(Path("docs/experiments/twotower-sweep/pilot.json").read_text())
+    spec = json.loads(Path(f"docs/experiments/twotower-sweep/{name}.json").read_text())
     fraction, cells = parse_grid(spec)
     assert 0.0 < fraction <= 1.0
+    assert cells
     assert len({label for label, _ in cells}) == len(cells), "duplicate cell labels"
