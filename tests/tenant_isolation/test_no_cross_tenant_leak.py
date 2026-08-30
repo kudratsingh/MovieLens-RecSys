@@ -8,7 +8,9 @@ endpoint, asserting the returned payload matches the caller's tenant.
 Covered today: ``/whoami``, ``/users/{id}/recommendations`` (including the
 serving-policy and exclusion evidence it now returns, and the per-item movie
 state it overlays), ``/users/{id}/history``, ``/users/{id}/audits``,
-``/personas``, ``/users/{id}/features``, ``/users/{id}/catalog``,
+``/users/{id}/request-audits`` (the generic per-request log every authenticated
+endpoint now writes), ``/personas``, ``/users/{id}/features``,
+``/users/{id}/catalog``,
 ``/users/{id}/library`` (including the shared artwork its rows now carry, the
 Seen tab's search, genre, year and ranking parameters, and the exact
 ``page.matched`` count they produce),
@@ -358,6 +360,61 @@ def test_recommendation_audits_are_visible_only_inside_active_tenant(
     assert all(item["tenant_id"] == "demo" for item in demo_audits.json()["items"])
     assert "900000004" not in default_audits.text
     assert "900000003" not in demo_audits.text
+
+
+def test_request_audits_are_visible_only_inside_active_tenant(
+    client: TestClient, mint_token: TokenMinter
+) -> None:
+    """The generic audit is a row per authenticated request, so it is written on
+    the widest surface in the service and read back through a forced-RLS table.
+
+    Two things have to hold and they are separate. The rows one tenant can read
+    must be its own — the same property ``/audits`` has — and the *act* of
+    reading must itself be audited into the caller's tenant, because this is the
+    one endpoint whose read is also a write. So each tenant hits a plain read
+    first, then reads its audits, then reads them again: the second read must
+    contain the first read's row, and neither may contain the other tenant's.
+    """
+    default_headers = {"Authorization": f"Bearer {mint_token('default', 'alice', 'alice')}"}
+    demo_headers = {"Authorization": f"Bearer {mint_token('demo', 'demo', 'demo')}"}
+
+    unauthenticated = client.get(f"/users/{CANARY_USER_ID}/request-audits")
+    assert unauthenticated.status_code == 401
+
+    for headers in (default_headers, demo_headers):
+        seeded = client.get(f"/users/{CANARY_USER_ID}/history", headers=headers)
+        assert seeded.status_code == 200
+
+    default_audits = client.get(
+        f"/users/{CANARY_USER_ID}/request-audits?limit=100", headers=default_headers
+    )
+    demo_audits = client.get(
+        f"/users/{CANARY_USER_ID}/request-audits?limit=100", headers=demo_headers
+    )
+
+    assert default_audits.status_code == 200
+    assert demo_audits.status_code == 200
+    for response, tenant in ((default_audits, "default"), (demo_audits, "demo")):
+        items = response.json()["items"]
+        assert items, "a generic audit row is written for every authenticated request"
+        assert all(item["tenant_id"] == tenant for item in items)
+        assert all(item["user_id"] == CANARY_USER_ID for item in items)
+        # The route template, never the concrete path: a persona id in the
+        # column would make one operation look like thousands.
+        assert "/users/{user_id}/history" in {item["endpoint"] for item in items}
+        assert f"/users/{CANARY_USER_ID}/history" not in response.text
+        # The prediction audit owns its own route and is not duplicated here.
+        assert "/users/{user_id}/recommendations" not in {item["endpoint"] for item in items}
+
+    # The reading tenant's own read is durable by the time the next one runs.
+    second_default = client.get(
+        f"/users/{CANARY_USER_ID}/request-audits?limit=100", headers=default_headers
+    )
+    assert second_default.status_code == 200
+    assert "/users/{user_id}/request-audits" in {
+        item["endpoint"] for item in second_default.json()["items"]
+    }
+    assert all(item["tenant_id"] == "default" for item in second_default.json()["items"])
 
 
 def test_rating_write_is_confined_to_active_tenant(

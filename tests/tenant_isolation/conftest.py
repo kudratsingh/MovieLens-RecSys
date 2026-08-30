@@ -395,10 +395,11 @@ def _delete_canary_rows(connection: Connection) -> None:
             ).bindparams(bindparam("personas", expanding=True)),
             scoped,
         )
-    connection.execute(
-        text("DELETE FROM recommendation_audits WHERE user_id = :canary_user"),
-        {"canary_user": CANARY_USER_ID},
-    )
+    for audits in ("recommendation_audits", "request_audits"):
+        connection.execute(
+            text(f"DELETE FROM {audits} WHERE user_id = :canary_user"),
+            {"canary_user": CANARY_USER_ID},
+        )
     connection.execute(
         text("DELETE FROM demo_personas WHERE user_id IN :personas").bindparams(
             bindparam("personas", expanding=True)

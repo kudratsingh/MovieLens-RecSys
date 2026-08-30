@@ -101,7 +101,7 @@ through Redis.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/tenancy-and-auth.dark.svg">
-  <img alt="Tenant isolation as implemented: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the seven forced-RLS tables against the deliberately shared ones." src="../diagrams/tenancy-and-auth.svg" width="100%">
+  <img alt="Tenant isolation as implemented: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the eight forced-RLS tables against the deliberately shared ones." src="../diagrams/tenancy-and-auth.svg" width="100%">
 </picture>
 
 ## Registry note — 2026-08-29: the tenant row now carries serving coordinates
