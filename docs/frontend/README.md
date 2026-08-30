@@ -110,6 +110,15 @@ surface: it is authenticated, it is in the service-backed journey, and its
 serving-contract panel reports the policy the response carried rather than a
 constant.
 
+**The TMDB attribution no longer blocks the removal.** It used to: the mark and
+the required non-endorsement sentence existed in one file,
+`components/legacy/recommendation-demo.tsx`, so deleting `/legacy` would have
+left a product whose every card is a TMDB poster with no attribution anywhere.
+It now lives in the shell's footer on all five product routes and at the foot of
+the signed-out door, held there by `web/e2e/tmdb-attribution.spec.ts` at
+390/768/1440 and 320. The retirement PR can delete the legacy copy along with
+the rest of the route, and needs to change nothing else about attribution.
+
 One consequence worth naming: the legacy dashboard is currently the only place
 in the UI that offers the four demo personas by name. The product selects a
 persona by URL (`?userId=` on Discover and Library, `?user=` on Browse, movie

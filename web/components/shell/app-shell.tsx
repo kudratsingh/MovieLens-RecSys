@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { SignOutButton } from "@/components/auth-controls";
 import { ProductNavigation } from "@/components/shell/product-navigation";
+import { TmdbAttribution } from "@/components/ui/tmdb-attribution";
 import type { NavigationItem } from "@/lib/navigation";
 
 /**
@@ -116,14 +117,24 @@ export function AppShell({
 
       <main id="main-content">{children}</main>
 
-      {legacyHref ? (
-        <footer className="shell-footer">
-          <Link href={legacyHref}>Legacy dashboard</Link>
-          <span>
-            The pre-redesign surface, kept as the rollback for this cutover.
-          </span>
-        </footer>
-      ) : null}
+      {/*
+        The footer is unconditional now, because the TMDB notice is. It used to
+        appear only where a `legacyHref` was passed, which meant Discover in
+        fixture mode and every `/ui-preview` route rendered no footer at all —
+        and the attribution TMDB's terms require lived nowhere in the product,
+        only on the pre-redesign dashboard that is due to be retired.
+      */}
+      <footer className="shell-footer">
+        {legacyHref ? (
+          <p className="shell-footer-legacy">
+            <Link href={legacyHref}>Legacy dashboard</Link>
+            <span>
+              The pre-redesign surface, kept as the rollback for this cutover.
+            </span>
+          </p>
+        ) : null}
+        <TmdbAttribution />
+      </footer>
 
       <ProductNavigation items={navigationItems} location="mobile" />
     </div>

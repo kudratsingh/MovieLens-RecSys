@@ -33,6 +33,7 @@ import { MovieTrailerSection } from "@/components/movie/movie-trailer";
 import { PosterFallbackMark } from "@/components/movie/poster-card";
 import { Drawer } from "@/components/ui/drawer";
 import { Icon } from "@/components/ui/icons";
+import { TmdbAttribution } from "@/components/ui/tmdb-attribution";
 import type {
   CatalogItem,
   MovieDetailItem,
@@ -163,7 +164,18 @@ export function MovieDetailView({
           />
         ) : null}
 
-        {details ? <TmdbAttribution /> : null}
+        {/*
+          Scoped to the enriched block it sits under, which is what the design
+          contract asks for — and explicitly not a substitute for the shell's
+          product-wide notice, which this page carries as well. A title with no
+          `details` shows no enriched fields, so it shows no scoped line.
+        */}
+        {details ? (
+          <TmdbAttribution
+            className="movie-detail-attribution"
+            lead="Details from TMDB."
+          />
+        ) : null}
 
         <div className="movie-detail-disclosure">
           <Drawer
@@ -280,25 +292,6 @@ function Backdrop({ src }: { src: string }) {
       />
       <span className="movie-detail-backdrop-veil" />
     </div>
-  );
-}
-
-/**
- * Required by TMDB's terms wherever their data is shown, and honest about what
- * it covers: the enriched fields on this page, not the whole product. The
- * shell-level attribution the product still owes is a separate piece of work.
- */
-function TmdbAttribution() {
-  return (
-    <p className="movie-detail-attribution">
-      <a href="https://www.themoviedb.org" rel="noreferrer" target="_blank">
-        <Image alt="TMDB" height={13} src="/tmdb-logo.svg" width={100} />
-      </a>
-      <span>
-        Details from TMDB. This product uses the TMDB API but is not endorsed or
-        certified by TMDB.
-      </span>
-    </p>
   );
 }
 
