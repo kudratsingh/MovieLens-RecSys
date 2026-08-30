@@ -85,7 +85,8 @@ partial index. Positives are watched-and-not-dismissed titles, newest first,
 because that is the order retrieval walks them in. Exclusions are dismissals
 plus everything already seen.
 
-If there are fewer than five positive signals, the request takes the popularity
+If there are fewer than ten positive signals (ADR 0001's `COLD_START_THRESHOLD`,
+amended to 10 on 2026-08-30), the request takes the popularity
 fallback. Otherwise the coordinator asks the sidecar for
 `max(100, limit × 10)` candidates over a 0.5-second timeout. The sidecar
 retrieves from the item-item index, batch-reads eight features per candidate
@@ -471,7 +472,7 @@ them is drawn on a diagram as though it exists.
 - **Cold-start cohorts.** [ADR 0011](adr/0011-cold-start-coverage.md) specifies a
   fixed-seed synthetic cohort at history sizes 0/1/3/10 scored per bucket. The
   methodology is pinned; the harness is not built. Cold-start *handling* exists
-  and is exercised — a persona with fewer than five positive signals takes the
+  and is exercised — a persona below the cold-start threshold takes the
   fallback and says so — but its coverage is not yet a metric line.
 - **Feast-backed training rows.** Training still builds features with the
   point-in-time `FeatureIndex` rather than Feast's historical retrieval, so

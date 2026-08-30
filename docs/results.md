@@ -10,21 +10,51 @@ not finish, this file says so instead of reporting a partial number.
 **Cold-start cohort:** ADR 0011 `v1`, md5 `9e0c978eff3d45f0985e9e0bbe0551d7`, fingerprint `ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2`
 **Evaluation:** every metric comes from [`src/evaluation/`](../src/evaluation/) — the trainers were run, nothing was computed by hand (non-negotiable #5)
 
-> **Later sessions appended to this page.** Everything down to "Caveats worth
+> **2026-08-30 — every number on this page predates the threshold change.**
+> All of it was scored with `COLD_START_THRESHOLD = 5`, and every run whose name
+> carries no policy suffix was scored under **index-membership** routing. The
+> owner then took both decisions at once
+> ([ADR 0001's amendment](adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)):
+> the threshold is **10**, and the threshold — not index membership — is the
+> offline routing rule too, which makes `threshold` the default policy and the
+> plain run name. Nothing here is retracted: the head-to-head tables in
+> ["Both cold-start routing policies, measured"](#2-both-cold-start-routing-policies-measured)
+> are still the right comparison between the two policies, because both arms were
+> run at the same threshold on the same data. What is no longer true of a *future*
+> run is the labelling — an unsuffixed run from now on is a threshold run, and an
+> index run is named `<base>-index-routing`. Re-running any of these at threshold
+> 10 would move the warm/cold slicing as well as the routing, so the two are not
+> directly comparable to the rows below and would need their own dated section.
+>
+> **Four later sessions appended to this page.** Everything down to "Caveats worth
 > writing down" is the 2026-08-29 measurement and is left exactly as it was
-> written. [The 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
+> written. [The first 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
 > adds two things that change how one section above should be
 > read: **the two-tower did run to completion**, so "The two-tower did not run
 > to completion" records that session's outcome, not the model's, and both
 > cold-start routing policies were measured, so "Routing: what the cohort
 > actually measured" now has a counterfactual beside it.
->
-> [A second 2026-08-30 session](#2026-08-30-second-session--the-learning-rate-and-budget-sweep)
-> at the bottom runs the learning-rate and budget sweep the first one said was
-> the cheapest next experiment. It changes how that session's two-tower result
-> should be read — **not the number, which stands, but its cause.** The flat
-> loss curve there was not a model that had finished learning, and the sweep
-> says what it was instead.
+> [The second](#2026-08-30--the-promotion-gates-noise-floor-measured) re-runs
+> CF/ALS and the ranker at three seeds each and changes how the whole page
+> should be read: **the ranker's warm NDCG@10 moves by 28.7% of its own mean on
+> the seed alone, and its overall NDCG@10 by 5.8% — wider than ADR 0001's +3%
+> promotion threshold.** Every single-run gap on this page smaller than that is
+> a direction and not a result.
+> [The third](#2026-08-30--the-rankers-training-sample-and-the-variance-it-was-buying)
+> closes that: the ranker's positive sample was 13% of the window it was drawn
+> from, so **the seed was choosing the training set**; at the whole window the
+> three seeds build the identical one and the warm spread falls from 25.4% to
+> **1.7%**. It is also **the first section measured at
+> `COLD_START_THRESHOLD = 10` under threshold routing**, so its rows are on a
+> different axis from every row above them and say so.
+> [The fourth](#2026-08-30-fourth-session--the-two-towers-learning-rate-and-budget-swept)
+> runs the learning-rate and budget sweep the first session called the cheapest
+> next experiment, and changes how that session's two-tower result should be
+> read — **not the number, which stands, but its cause.** The flat loss curve
+> there was not a model that had finished learning; v1's final loss is worse
+> than the loss of a model with no opinion at all. It is back on
+> `COLD_START_THRESHOLD = 5` and index routing, with the first two sessions,
+> because every reference line it compares against lives there.
 
 ## The machine, and what it was doing at the time
 
@@ -609,6 +639,11 @@ default — is the index-membership rule these models have always used, and an i
 applies ADR 0001's `COLD_START_THRESHOLD`. The trainers read it from
 `SYNTH_COLD_ROUTING` (`index` or `threshold`). Unset reproduces `main`.
 
+> *As of the owner's decision later the same day, the polarity is reversed:
+> `threshold` is the default and `index` is the opt-out, so an unsuffixed run
+> from now on is a threshold run. The runs in this section were made before
+> that, and their names are as recorded.*
+
 **Checked, not assumed.** The index-policy item-item run below and the
 `65faeebb5e0545dcaba9ae703cc67af0` run of record from 2026-08-29 agree on every
 logged metric to the last digit MLflow stores — warm recall@500
@@ -792,18 +827,800 @@ threshold run is named `<base>-threshold-routing` in MLflow and tagged
   CF/ALS is unaffected by it. It would settle nothing the candidate runs have not,
   so it was left for whoever takes the decision. The ranker figures above remain
   the 2026-08-29 run.
-- **No re-seeded runs.** Everything on this page, in both sessions, is one run per
-  cell at seed 42. The 4.16% warm-NDCG question in
+- **No re-seeded runs.** Everything in the first two sessions is one run per cell
+  at seed 42. The 4.16% warm-NDCG question in
   [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) needs a
   noise floor before it can be settled, and that means three to five seeds of the
-  same model. Not done here.
+  same model. Not done here — **done in the session below**, which measured it and
+  found the warm question was inside the floor.
 - **No two-tower re-training at a larger budget.** The loss curve says that is the
   interesting experiment, and ADR 0004's note names it — but changing ADR 0006's
   configuration is a modelling decision with an approval gate
   ([`modeling-roadmap.md`](modeling-roadmap.md)), not something to slip into the
   run that measures the configuration as pinned.
 
-## 2026-08-30, second session — the learning-rate and budget sweep
+
+## 2026-08-30 — the promotion gate's noise floor, measured
+
+The two sessions above are unchanged. This third one exists because both of them
+ended on the same sentence — *"no re-seeded runs"* — and the promotion gate could
+not be written without them.
+
+[`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) asked which
+slice ADR 0001's gate reads, recommended reading the aggregate with a per-slice
+non-regression clause, and said the clause's tolerance **must be set from measured
+variance rather than judgement**. The owner took that option on 2026-08-30. This
+section is the measurement it depends on, and the gate it produced is
+[`src/evaluation/gate.py`](../src/evaluation/gate.py).
+
+**Measured:** 2026-08-30
+**Dataset, split and cohort:** identical to both sessions above — MovieLens 25M at
+DVC version `c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train
+20,000,075 / holdout 129,683 / test 4,870,337 untouched, 2,641 holdout users
+(1,939 warm, 702 cold). The ADR 0011 cohort was regenerated from scratch in this
+worktree before any run and reproduced the committed DVC md5
+`9e0c978eff3d45f0985e9e0bbe0551d7` and fingerprint `ae4475f0e063…` exactly — a
+third independent confirmation, on a third checkout.
+**Machine:** the same Apple M3 / 16 GiB / macOS 26.5.2 box and library set.
+Postgres 16 in Docker on host port 5433, MLflow on 5001.
+**Routing policy:** index membership — the `main` default — on every run below, so
+these numbers sit on the same axis as the rest of the page.
+**Threads and load:** `nice -n 15`, thread caps of 4, one job at a time. The host
+was quiet for the first five runs (1-minute load average 2.8–3.9 on 8 cores) and
+**heavily loaded for the sixth** — an unrelated workload took the load average to
+39 just as `ranker seed=13` started. As everywhere else on this page the
+wall-clocks are upper bounds; the metrics are not affected, and the reproduction
+check below is what establishes that rather than assuming it.
+
+**What changed in the code.** `TRAIN_SEED` ([`src/training/seeds.py`](../src/training/seeds.py)),
+read by the two trainers that have a stochastic component. Unset it and every
+number in the two sessions above comes back unchanged; the run also keeps the
+MLflow run name those sessions cite, so only a re-seeded run is renamed
+(`<base>-seed<n>`) and tagged `train_seed`.
+
+### Which models have a noise floor at all
+
+Only two, and this is worth stating rather than leaving as an omission:
+
+| Model | Stochastic? | Re-run at three seeds? |
+|---|---|---|
+| Popularity | No — ranks items by training-window count | No. Deterministic by construction |
+| Item-item cosine | No — `CosineRecommender` over a fixed matrix | No. Deterministic by construction |
+| CF / ALS | **Yes** — ALS initialises its factor matrices at random | **Yes**, seeds 42 / 7 / 13 |
+| LightGBM ranker | **Yes** — which positives are sampled, which negatives fill each group, and LightGBM's own tie-breaking | **Yes**, seeds 42 / 7 / 13 |
+
+A seed parameter on a deterministic model would be a knob that changes nothing,
+and "we measured a spread of exactly zero" is not a measurement. The two-tower is
+stochastic too and was not re-seeded here: at ~78 minutes a run, three seeds is
+four hours, and ADR 0004's verdict on it does not turn on a noise floor.
+
+### The check that had to pass first
+
+Before a spread across seeds means anything, a re-run *at the same seed* has to
+reproduce. Both do, exactly:
+
+| Model | Run of record (2026-08-29) | Re-run at seed 42 (2026-08-30) | Logged metrics compared | Differences |
+|---|---|---|---:|---:|
+| CF / ALS | `d961e6d9ba214edb9283266777aebf40` | `ddc2bd983f52402baf14eb8977de1de4` | 38 | **0** |
+| LightGBM ranker | `1d898b02fcc842b6a7283dc6eb9117ad` | `bc4cbcc4e1ba4e02973fb41449e86635` | 36 | **0** |
+
+Every metric MLflow stores, value for value, on a different day in a different
+worktree. The ranker also rebuilt the identical training set — 11,374 groups,
+238,854 rows, 8,626 positives dropped. **So everything below is seed-to-seed
+variation and nothing else.**
+
+### The six runs
+
+NDCG@10, the metric ADR 0001's gate reads:
+
+| Model | Seed | Run id | Warm NDCG@10 | Cold NDCG@10 | Overall NDCG@10 |
+|---|---:|---|---:|---:|---:|
+| CF / ALS | 42 | `ddc2bd983f52402baf14eb8977de1de4` | 0.057850 | 0.487981 | 0.172182 |
+| CF / ALS | 7 | `2a2a21770d744629848dac93e98049bb` | 0.059478 | 0.488002 | 0.173383 |
+| CF / ALS | 13 | `ecd38b19bdb54e029d207e05f674c059` | 0.057657 | 0.488165 | 0.172090 |
+| Ranker | 42 | `bc4cbcc4e1ba4e02973fb41449e86635` | 0.055444 | 0.563104 | 0.190384 |
+| Ranker | 7 | `3509c50fa25247c19ccf769ced6f6213` | **0.049222** | 0.549324 | 0.182153 |
+| Ranker | 13 | `36ada5d9548d497389936b0327df9a47` | **0.065491** | 0.545592 | 0.193106 |
+
+Recall@10 over the same runs, since the gate is not the only reader of this page:
+
+| Model | Seed | Warm recall@10 | Cold recall@10 | Overall recall@10 |
+|---|---:|---:|---:|---:|
+| CF / ALS | 42 | 0.033841 | 0.063780 | 0.041799 |
+| CF / ALS | 7 | 0.034323 | 0.063780 | 0.042153 |
+| CF / ALS | 13 | 0.033333 | 0.063829 | 0.041439 |
+| Ranker | 42 | 0.039422 | 0.079337 | 0.050032 |
+| Ranker | 7 | 0.034207 | 0.081655 | 0.046819 |
+| Ranker | 13 | 0.044944 | 0.076624 | 0.053365 |
+
+Wall-clocks, all upper bounds, with the 1-minute load average each job started at:
+
+| Model | Seed | Load at start | Wall-clock |
+|---|---:|---:|---:|
+| CF / ALS | 42 | 2.83 | 88 s |
+| CF / ALS | 7 | 3.65 | 89 s |
+| CF / ALS | 13 | 2.98 | 88 s |
+| Ranker | 42 | 3.91 | 258 s |
+| Ranker | 7 | 3.75 | 372 s |
+| Ranker | 13 | **39.40** | 499 s |
+
+### The spread
+
+Relative range is `(max − min) / mean`; relative sd is `stdev / mean`. Three
+samples, so both are coarse estimates and the range is the one the tolerance uses.
+
+| Model | Slice | Min | Max | Mean | Range | sd |
+|---|---|---:|---:|---:|---:|---:|
+| CF / ALS | warm | 0.057657 | 0.059478 | 0.058328 | 3.12% | 1.72% |
+| CF / ALS | cold | 0.487981 | 0.488165 | 0.488049 | **0.04%** | 0.02% |
+| CF / ALS | overall | 0.172090 | 0.173383 | 0.172552 | 0.75% | 0.42% |
+| Ranker | warm | 0.049222 | 0.065491 | 0.056719 | **28.68%** | 14.47% |
+| Ranker | cold | 0.545592 | 0.563104 | 0.552673 | 3.17% | 1.67% |
+| Ranker | overall | 0.182153 | 0.193106 | 0.188548 | **5.81%** | 3.02% |
+
+Three things fall out of this table, and the third is the one that matters.
+
+**CF/ALS's cold slice barely moves (0.04%) because it is not really ALS.** 701 of
+the 702 cold users are served by the embedded popularity fallback, which is
+deterministic, so that row is measuring the fallback's stability and not the
+model's. It is the control that says the harness itself contributes no noise.
+
+**The ranker's warm slice moves by 28.68% of its own mean.** Not the model, not
+the data, not the protocol — the seed. The cause is in the trainer's own log:
+the seed decides which ≤20,000 positives are sampled from the trailing 30 days
+(`RANKER_POSITIVE_LIMIT`), roughly 8,600 of those are dropped for missing the
+item-item top-500, and what is left is ~11,350 LambdaRank groups. Seed 42 built
+11,374 groups from 20,000 sampled positives; seed 7 built 11,313. **A re-seed is
+a different training set, not a different tie-break**, which is exactly the kind
+of variation a promotion gate has to be robust to.
+
+**The ranker's *overall* NDCG@10 spread is 5.81% — wider than ADR 0001's own +3%
+promotion threshold.** That is the finding with the longest reach on this page.
+ADR 0001 chose +3% in May with the reasoning *"noise from retraining randomness
+alone can exceed 1%"*; on this pipeline it reaches nearly six times that on the
+aggregate the gate reads. **A single seeded run of the ranker cannot establish a
++3% aggregate improvement.** Nothing has been promoted on one, and nothing
+should be.
+
+### The tolerance, and what it is worth
+
+Stated once and applied mechanically: **the tolerance for a slice is 2× the
+largest relative range observed on that slice, rounded up to the next whole
+percentage point, with a floor of 0.5%.**
+
+- *2× rather than 1×* because the gate reads a difference between two
+  independently seeded runs, so it carries both runs' noise, not one run's.
+- *Rounded up* because a tolerance sitting exactly on an observed maximum will
+  refuse a model for a wobble the next re-seed would have produced — and a range
+  over three samples underestimates the true range in any case.
+- *A 0.5% floor* because anything finer is below the resolution at which this
+  page publishes and compares these numbers.
+
+| Slice | Largest range observed | 2× | **Tolerance** |
+|---|---:|---:|---:|
+| Warm | 28.68% (ranker) | 57.37% | **58%** |
+| Cold | 3.17% (ranker) | 6.34% | **7%** |
+
+Those two numbers are the defaults in
+[`src/evaluation/gate.py`](../src/evaluation/gate.py).
+
+**A 58% warm tolerance is not a view about how much regression is acceptable. It
+is what this pipeline's measurement precision licenses, and saying so is the
+point.** No tighter warm clause could refuse a real regression without also
+refusing good models at random — the very failure a gate exists to avoid. So the
+warm clause is, today, effectively non-binding, and the aggregate clause is doing
+the work. That is a defect in the offline pipeline, recorded rather than dressed
+up.
+
+**More seeds are not the cheap fix.** The standard error of a three-seed mean is
+still 8.4% relative on the ranker's warm slice; averaging enough runs to bring the
+floor under 3% would take on the order of a hundred. The cheap fix is a larger
+ranker training sample — `RANKER_POSITIVE_LIMIT` is 20,000 against a trailing
+window holding far more — and it is now a measurable change rather than a
+preference. Named on the Phase 3 platform backlog.
+
+### What the gate says about the runs already on this page
+
+The comparison the memo was written about — the LightGBM ranker as challenger,
+CF/ALS as incumbent — through `python -m src.evaluation.gate` at the tolerances
+above:
+
+```
+$ make gate CANDIDATE=1d898b02fcc842b6a7283dc6eb9117ad \
+            INCUMBENT=d961e6d9ba214edb9283266777aebf40
+PROMOTE — ndcg@10
+  overall: overall ndcg@10 gained 10.57% (0.172182 → 0.190384) against a required +3.00%
+  warm: warm ndcg@10 regressed 4.16% (0.057850 → 0.055444, n=1939), within the 58.00% tolerance
+  cold: cold ndcg@10 improved 15.39% (0.487981 → 0.563104, n=702)
+```
+
+**It would promote — because the −4.16% warm regression is inside the measured
+floor, by a wide margin.** The memo's option (c) said the verdict would be
+"rejected at any tolerance under 4.16%; promoted above it", and the measurement
+says the floor is thirteen times 4.16%. So the warm regression that made the
+question urgent is, on the evidence, not a result at all.
+
+The clearest way to see that is to run the same comparison seed by seed —
+challenger and incumbent both at 42, both at 7, both at 13:
+
+| Seed pair | Overall | Warm | Cold | Verdict |
+|---:|---:|---:|---:|---|
+| 42 | +10.57% | **−4.16%** | +15.39% | promote |
+| 7 | +5.06% | **−17.24%** | +12.57% | promote |
+| 13 | +12.21% | **+13.59%** | +11.76% | promote |
+
+**The same experiment reports the warm effect as −4%, −17% and +14%. Its sign is
+not determined by the data.** The 2026-08-29 run happened to land in the middle.
+
+Averaging the three runs per model — the comparison a Phase 4 DAG should actually
+be making — gives the most trustworthy reading available today:
+
+| Slice | CF/ALS (mean of 3) | Ranker (mean of 3) | Relative |
+|---|---:|---:|---:|
+| Warm NDCG@10 | 0.058328 | 0.056719 | **−2.76%** |
+| Cold NDCG@10 | 0.488049 | 0.552673 | +13.24% |
+| Overall NDCG@10 | 0.172552 | 0.188548 | **+9.27%** |
+
+Seed-averaged, the warm regression shrinks from −4.16% to −2.76% and the aggregate
+gain from +10.57% to +9.27%. The gate promotes on these too — and here it promotes
+for a reason worth having, since the aggregate's +9.27% is comfortably outside the
+5.81% single-run spread that a one-seed comparison could not clear.
+
+**Nothing has been promoted.** `pipelines/` is still empty, the gate is a library
+and a CLI rather than a DAG, and the served bundle is unchanged. What this section
+establishes is that the gate now has a defensible rule and a measured number, and
+that the number is currently large enough to be a finding in its own right.
+
+### Reproducing this
+
+Same prerequisites as the sections above — Postgres holding the 25M ratings and
+the ADR 0011 parquet present. Then:
+
+```bash
+# Three seeds per stochastic model, one job at a time. Unset TRAIN_SEED is 42,
+# which reproduces the runs of record above metric for metric.
+TRAIN_SEED=42 make train-cf
+TRAIN_SEED=7  make train-cf
+TRAIN_SEED=13 make train-cf
+
+TRAIN_SEED=42 make train-ranker
+TRAIN_SEED=7  make train-ranker
+TRAIN_SEED=13 make train-ranker
+
+# The gate over any two runs. Exit 0 promotes, 1 refuses, 2 declines to decide
+# (two different K values, or a killed run with parameters and no metrics).
+make gate CANDIDATE=<run id> INCUMBENT=<run id>
+```
+
+`TRAIN_SEED` is read by `train-cf` and `train-ranker` only; `train-popularity` and
+`train-itemitem` are deterministic and ignore it.
+
+## 2026-08-30 — the ranker's training sample, and the variance it was buying
+
+The section above measured the promotion gate's noise floor and ended on a
+finding rather than a verdict: the LightGBM ranker's warm NDCG@10 moved **28.68%
+of its own mean** across three seeds and its *overall* NDCG@10 moved **5.81%**,
+wider than ADR 0001's own +3% promotion threshold — so a single seeded run of the
+ranker could not establish the improvement the gate exists to confirm. It named
+the cause (`RANKER_POSITIVE_LIMIT = 20 000`: a re-seed is a different training
+set, not a different tie-break) and the fix (a larger sample, not more seeds).
+This session is that fix, measured.
+
+**Measured:** 2026-08-30
+**Dataset, split and cohort:** unchanged — MovieLens 25M at DVC version
+`c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train 20,000,075 /
+holdout 129,683 / test 4,870,337. The ADR 0011 cohort was regenerated from
+scratch in this worktree before any run and reproduced the committed DVC md5
+`9e0c978eff3d45f0985e9e0bbe0551d7` and fingerprint `ae4475f0e063…` exactly — a
+fourth independent confirmation, on a fourth checkout.
+**Machine:** the same Apple M3 / 8 cores / 16 GiB / macOS 26.5.2 box and library
+set as ["The machine, and what it was doing at the time"](#the-machine-and-what-it-was-doing-at-the-time)
+above. Postgres 16 in Docker on host port 5433, MLflow on 5001. `nice -n 15`,
+thread caps of 4, one job of mine at a time — but a second agent's two-tower
+sweep held one core at 100% for the whole session (1-minute load average 2.5–7.1
+on 8 cores at job start, recorded per run below), so **every wall-clock here is
+an upper bound, not a benchmark**. The metrics are unaffected.
+
+> **Threshold and routing: this section is the first on a new axis.**
+> Every run below was scored with **`COLD_START_THRESHOLD = 10` under threshold
+> routing** — `main`'s defaults since [ADR 0001's amendment](adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline).
+> Everything above this heading was scored at 5 under index-membership routing.
+> The holdout's warm/cold split therefore moves from 1,939 / 702 to **1,931 /
+> 710** — eight users — and the routing moves with it, so **no row below is
+> comparable with a row above**. That is exactly why the 20,000-positive runs
+> were **re-made here** rather than reused from the section above: the whole
+> point is a like-for-like comparison across sample sizes, and it has to be on
+> one axis.
+
+### The ceiling nobody had measured
+
+Positives come from the trailing `RANKER_POSITIVE_WINDOW_DAYS = 30` days of train
+(ADR 0005's construction rule). Nobody had asked how many rows that is. Counted
+straight off the `ratings` table at `T = 1466837397` — an inventory of the data,
+not a model metric, so it does not go through `src/evaluation/`; the trainer then
+reproduced the 30-day figure on every run and logs it as
+`ranker_positive_window_rows`:
+
+| Trailing window | Rows in train |
+|---|---:|
+| 30 days (the pinned window) | **154,003** |
+| 60 days | 343,399 |
+| 90 days | 496,048 |
+
+**So `RANKER_POSITIVE_LIMIT = 20 000` was drawing 13.0% of what was already
+eligible** — and the ceiling has a sharper consequence than "there was more data".
+`_sample_training_positives` only calls `rng.choice` when `len(window) > limit`.
+At or above 154,003 it never runs: the sample *is* the window, identically at
+every seed. Raising the limit past the ceiling does not just give the ranker more
+positives, **it removes the seed's say in which positives the ranker sees.**
+
+That is the experimental design of everything below:
+
+| Sample size | Cap binds? | What the seed still moves |
+|---|---|---|
+| 20,000 | yes | which positives, which negatives, LightGBM's tie-breaking |
+| 60,000 | yes | the same three |
+| 200,000 (the new default) | **no** | the negatives and LightGBM's tie-breaking only |
+
+### Where the wall-clock goes
+
+Profiled at 20,000 positives before committing to the larger runs, so the scaling
+was predicted rather than guessed. (`ItemItemModel` and `FeatureIndex` were built
+on `split.train` alone here rather than on the cohort-augmented frame the trainer
+uses, so this run assembled 11,376 groups where the trainer's seed-42 run
+assembles 11,368 — a profile, not a run of record.)
+
+| Step | Seconds at 20,000 | Scales with |
+|---|---:|---|
+| Postgres read of 25 M ratings | 80.6 | nothing (fixed) |
+| Item-item candidate fit | 25.5 | nothing (fixed) |
+| `FeatureIndex.build` over 20 M rows | 8.7 | nothing (fixed) |
+| **Training-set build — candidate retrieval** | **10.5** | **the sample** |
+| **Training-set build — `features_for`** | **11.2** | **the sample** |
+| Training-set build — other loop work | 1.1 | the sample |
+| `pd.concat` of the per-group frames | 0.1 | the sample |
+| LightGBM fit | 3.9 | the sample (rows) |
+| Holdout ranking (4,641 users × 500 candidates) | 139.3 \* | nothing (fixed) |
+
+\* The profile stops after the fit; that figure is the seed-42 20,000 trainer
+run's own `rank_seconds`, which every run logs.
+
+The sample-dependent part is **22.8 s at 20,000**, or ~1.14 ms per positive: one
+500-candidate retrieval plus 21 feature rows. Linear extrapolation to the full
+154,003-row window predicted **~176 s of build** and a 7–8 minute run. The
+measured seed-42 full-window run built its training set in **146.4 s** and
+finished in **460 s** — so the prediction held, erring pessimistic by 17%, and
+the decision to run nine of these was taken on a measurement rather than on
+optimism.
+
+Two things the profile ruled out before they could become a surprise: the
+`pd.concat` over one small DataFrame per group is 0.1 s and not a bottleneck at
+any size the window permits, and the LightGBM fit stays in the tens of seconds
+rather than the tens of minutes.
+
+### The runs
+
+Nine ranker runs — three sample sizes × three seeds — plus one at a limit of
+1,000,000. NDCG@10 is the metric ADR 0001's gate reads. Warm n = 1,931, cold
+n = 710 on every row.
+
+| Limit | Seed | Run id | Warm NDCG@10 | Cold NDCG@10 | Overall NDCG@10 |
+|---:|---:|---|---:|---:|---:|
+| 20,000 | 42 | `7a1ab37497914b61815262054a3e0f1f` | **0.053533** | 0.560728 | 0.189886 |
+| 20,000 | 7 | `2344227ee6594c64b44e08d624c7c8bb` | 0.054713 | 0.555597 | 0.189370 |
+| 20,000 | 13 | `d55e33c83c73469c85b37662b6b6a139` | **0.068473** | 0.533071 | 0.193374 |
+| 60,000 | 42 | `fd918e90ee8c44299a97b4a68379fd7b` | 0.070710 | 0.535361 | 0.195625 |
+| 60,000 | 7 | `4625dd02292449babeb25d67bfbfff23` | 0.065048 | 0.551999 | 0.195959 |
+| 60,000 | 13 | `c6a91e2bb49948aca139e7b176be65db` | 0.070694 | 0.535188 | 0.195567 |
+| **200,000** | 42 | `517fdc75136842e188018ae0a9210c20` | 0.069967 | 0.544948 | 0.197659 |
+| **200,000** | 7 | `3bf3f91f901f4ea7a0c9b385563ad136` | 0.071150 | 0.547141 | 0.199114 |
+| **200,000** | 13 | `ea72a491c4db48d49e82ec275bd91d32` | 0.070368 | 0.556510 | 0.201061 |
+
+Recall@10 over the same runs, since the gate is not the only reader of this page:
+
+| Limit | Seed | Warm recall@10 | Cold recall@10 | Overall recall@10 |
+|---:|---:|---:|---:|---:|
+| 20,000 | 42 | 0.039112 | 0.078912 | 0.049812 |
+| 20,000 | 7 | 0.035759 | 0.082532 | 0.048333 |
+| 20,000 | 13 | 0.048275 | 0.077678 | 0.056179 |
+| 60,000 | 42 | 0.046968 | 0.077844 | 0.055268 |
+| 60,000 | 7 | 0.043837 | 0.079929 | 0.053540 |
+| 60,000 | 13 | 0.047815 | 0.077766 | 0.055867 |
+| **200,000** | 42 | 0.048867 | 0.077805 | 0.056647 |
+| **200,000** | 7 | 0.049725 | 0.078405 | 0.057435 |
+| **200,000** | 13 | 0.048620 | 0.079762 | 0.056992 |
+
+**The training set the seed built, run by run.** This is the mechanism, visible as
+a number: below the ceiling the three seeds assemble *different* training sets;
+at or above it they assemble the same one.
+
+| Limit | Seed | Positives sampled | Groups kept | Training rows |
+|---:|---:|---:|---:|---:|
+| 20,000 | 42 | 20,000 | 11,368 | 238,728 |
+| 20,000 | 7 | 20,000 | 11,309 | 237,489 |
+| 20,000 | 13 | 20,000 | 11,436 | 240,156 |
+| 60,000 | 42 | 60,000 | 34,166 | 717,486 |
+| 60,000 | 7 | 60,000 | 34,154 | 717,234 |
+| 60,000 | 13 | 60,000 | 34,275 | 719,775 |
+| **200,000** | 42 | **154,003** | **87,794** | **1,843,674** |
+| **200,000** | 7 | **154,003** | **87,794** | **1,843,674** |
+| **200,000** | 13 | **154,003** | **87,794** | **1,843,674** |
+
+The last three rows are the finding in one glance. At 20,000 the seeds keep
+11,368 / 11,309 / 11,436 groups; at the whole window all three keep **87,794**, to
+the row. (66,209 of the 154,003 positives are dropped for missing item-item's
+top-500 — a 57.0% survival rate, the same rate the 20,000 sample saw, so raising
+the limit did not change what kind of positive survives, only how many.)
+
+Wall-clocks, all upper bounds — an unrelated job shared the box throughout:
+
+| Limit | Seed | Load at start | Training-set build | LightGBM fit | Wall-clock |
+|---:|---:|---:|---:|---:|---:|
+| 20,000 | 42 | 2.48 | 23.9 s | 4.0 s | 292 s |
+| 20,000 | 7 | 3.99 | 22.6 s | 3.8 s | 277 s |
+| 20,000 | 13 | 3.79 | 23.1 s | 4.0 s | 302 s |
+| 60,000 | 42 | 5.65 | 69.7 s | 11.3 s | 348 s |
+| 60,000 | 7 | 4.32 | 69.6 s | 10.9 s | 346 s |
+| 60,000 | 13 | 3.25 | 75.1 s | 12.2 s | 367 s |
+| **200,000** | 42 | 6.78 | 146.4 s | 28.7 s | **460 s** |
+| **200,000** | 7 | 4.56 | 144.2 s | 30.6 s | **438 s** |
+| **200,000** | 13 | 4.65 | 146.6 s | 28.9 s | **447 s** |
+
+**A default run is 7.7 minutes at its worst here, against a stated 30-minute
+budget** — and roughly half of that is the two fixed costs a run of any size
+pays: the 25M-row `pd.read_sql` (~85 s) and ranking 4,641 holdout-plus-cohort
+users through the two-stage path (~140 s).
+
+### What the ranker learned from, and what it served the cohort
+
+Feature importance, as each feature's share of total LightGBM gain, averaged over
+the three seeds at each sample size. ADR 0005's *"how we'd know we're wrong"*
+names a single feature above 60% as the tell for a leakage bug or an
+unpersonalised model; nothing here is above 24%, at any size.
+
+| Feature | 20,000 | 60,000 | 200,000 |
+|---|---:|---:|---:|
+| `user_interaction_count` | 17.9% | 21.1% | **21.5%** |
+| `item_popularity_30d` | 16.4% | 19.7% | **23.4%** |
+| `user_days_active` | 14.2% | 13.6% | 13.3% |
+| `item_popularity_all_time` | 11.6% | 11.8% | 13.4% |
+| `user_genre_affinity` | 12.2% | 9.8% | **8.0%** |
+| `item_age_days` | 10.1% | 9.2% | 8.5% |
+| `item_popularity_7d` | 9.4% | 8.0% | 6.4% |
+| `user_days_since_last_interaction` | 8.2% | 6.8% | 5.5% |
+
+The ordering is stable and the drift with sample size is mild but consistent:
+with more groups the booster leans further on the two strongest signals
+(`user_interaction_count`, `item_popularity_30d`) and less on the weaker
+personalised one (`user_genre_affinity`, 12.2% → 8.0%). That is what a
+better-determined model looks like, and it is also a reminder of what this
+ranker is: eight aggregate features, no sequence, no item content.
+
+ADR 0011's cohort behaves exactly as the routing decision requires, at every
+sample size: h0/h1/h3 are fallback-served 500/500 and h10 — which sits *on* the
+threshold since it moved to 10 — is fallback-served 0/500, matching the expected
+counts the harness derives from `COLD_START_THRESHOLD` rather than from what any
+model does. `synth_cold_routing_ok = true` on all nine runs. The three
+fallback-served buckets land near the popularity control's numbers, because a
+fallback-served user *is* being served that policy:
+
+| Run | h0 | h1 | h3 | h10 |
+|---|---:|---:|---:|---:|
+| Popularity control | 0.0340 | 0.0420 | 0.0160 | 0.0240 |
+| Ranker, 200,000, seed 42 | 0.0220 | 0.0300 | 0.0120 | 0.0220 |
+| Ranker, 200,000, seed 7 | 0.0260 | 0.0260 | 0.0160 | 0.0220 |
+| Ranker, 200,000, seed 13 | 0.0360 | 0.0240 | 0.0160 | 0.0200 |
+
+They are close to the control rather than equal to it because the ranker
+re-orders the popularity candidates it is handed, and recall@10 is sensitive to
+that re-ordering even when the candidate set is identical. At 500 users per
+bucket one hit is 0.002, so none of these gaps is a result on its own; what the
+table establishes is the routing, not a ranking of the buckets.
+
+### The variance, by sample size
+
+Relative range is `(max − min) / mean`; relative sd is `stdev / mean`. Three
+samples per cell, so both are coarse and the range is what the tolerance uses —
+the same convention as the section above.
+
+| Limit | Slice | Min | Max | Mean | Range | sd |
+|---:|---|---:|---:|---:|---:|---:|
+| 20,000 | warm | 0.053533 | 0.068473 | 0.058906 | **25.36%** | 14.10% |
+| 20,000 | cold | 0.533071 | 0.560728 | 0.549798 | 5.03% | 2.68% |
+| 20,000 | overall | 0.189370 | 0.193374 | 0.190877 | 2.10% | 1.14% |
+| 60,000 | warm | 0.065048 | 0.070710 | 0.068817 | **8.23%** | 4.74% |
+| 60,000 | cold | 0.535188 | 0.551999 | 0.540849 | 3.11% | 1.79% |
+| 60,000 | overall | 0.195567 | 0.195959 | 0.195717 | 0.20% | 0.11% |
+| **200,000** | warm | 0.069967 | 0.071150 | 0.070495 | **1.68%** | 0.85% |
+| **200,000** | cold | 0.544948 | 0.556510 | 0.549533 | 2.10% | 1.12% |
+| **200,000** | overall | 0.197659 | 0.201061 | 0.199278 | 1.71% | 0.86% |
+
+Three things to read off this.
+
+**The warm spread collapses, and it collapses in the shape the mechanism
+predicts.** 25.36% → 8.23% → **1.68%**: a **15-fold** reduction, with the largest
+step where the cap stops binding. Cold falls too, 5.03% → 3.11% → 2.10%, less
+dramatically because the cold slice was never the problem. The overall column is
+the one place the trend is not monotone — 2.10% → 0.20% → 1.71% — and the honest
+reading is that all three of those are small numbers estimated from three samples
+and their ordering is not a result; the warm column is where the effect is large
+enough to survive that.
+
+**The ranker also gets better, not just steadier.** Mean warm NDCG@10 rises
+0.058906 → 0.068817 → **0.070495** as the sample grows, and mean overall NDCG@10
+0.190877 → 0.195717 → **0.199278**. That is a
+second finding and a smaller one — it is three runs per cell, and the 20,000-row
+mean is itself drawn from a distribution 25% wide — but the direction is
+consistent across all three slices and it is the answer to "was 20,000 enough for
+the model to converge?", which ADR 0005 asserted in 2026-07 and nobody had
+checked. It was not.
+
+**What variance is left is not the sampling.** At the default the three seeds
+build the **identical** training set — same 154,003 positives, same 87,794
+groups, same 1,843,674 rows — so everything below is the negatives drawn into
+each LambdaRank group plus LightGBM's own tie-breaking. That is the floor this
+pipeline has without changing the model or the protocol, and it is what the
+tolerance below is set from.
+
+> **A note on comparing this table with the section above.** The 20,000-positive
+> warm range here is 25.36% where the previous section measured 28.68%, and the
+> overall range is 2.10% where it measured 5.81%. Those are not a re-measurement
+> of the same quantity: this session is at threshold 10 under threshold routing
+> and that one was at 5 under index membership, which moves the warm/cold split
+> and moves which users take the fallback. **The three rows in this table are
+> comparable with each other, which is what the finding rests on, and none of
+> them is comparable with the section above.** The tolerance below is therefore
+> re-derived entirely from runs made on this axis.
+
+### 1,000,000 positives is the same run as 200,000
+
+The obvious next question is whether a still-larger sample buys more. On this
+dataset it cannot, and the cheapest way to establish that is to run it rather
+than to argue it. `RANKER_POSITIVE_LIMIT=1000000 TRAIN_SEED=42 make train-ranker`
+against the seed-42 default run:
+
+| | Limit 1,000,000 | Limit 200,000 (default) |
+|---|---|---|
+| Run id | `9576af1bc08b473c93d631b41804f31e` | `517fdc75136842e188018ae0a9210c20` |
+| Run name | `…-pos1000000` | `lgbm-lambdarank-itemitem-candidates` |
+| `ranker_positive_window_rows` | 154,003 | 154,003 |
+| `ranker_positive_limit_binding` | False | False |
+| `n_positives_sampled` | 154,003 | 154,003 |
+| Groups / rows | 87,794 / 1,843,674 | 87,794 / 1,843,674 |
+| **Metrics compared** | **36** | **36** |
+| **Differences** | — | **0** |
+
+**Every logged metric identical, on a run made separately** (443 s wall-clock,
+so it cost nothing to establish by measurement instead of by argument). Both draw the same
+154,003 positives because the window has no more to give, and everything
+downstream is a deterministic function of that set plus the seed. Anything above
+154,003 is the same experiment under a different name — so "how much data does
+the ranker get?" is not answered by this constant any more, it is answered by
+`RANKER_POSITIVE_WINDOW_DAYS`, which is a modelling decision and is not taken
+here.
+
+### The tolerance, re-derived
+
+The rule does not change. It is the section above's, applied unchanged to a new
+measurement: **the tolerance for a slice is 2× the largest relative range
+observed on that slice, rounded up to the next whole percentage point, with a
+floor of 0.5%.** What changes is what the pipeline's precision licenses.
+
+The incumbent has to be on the same axis, so CF/ALS was also re-run at three
+seeds at threshold 10 (popularity and item-item are deterministic and were run
+once):
+
+| Model | Seed | Run id | Warm NDCG@10 | Cold NDCG@10 | Overall NDCG@10 |
+|---|---:|---|---:|---:|---:|
+| Popularity | — | `fbf2b9a4f7a945ab9f2dc5c5001160cd` | 0.030755 | 0.483440 | 0.152454 |
+| CF / ALS | 42 | `d3a105c549c04742b28a44cb649aa7c4` | 0.057607 | 0.483440 | 0.172087 |
+| CF / ALS | 7 | `f17eb37e201641f4bce4e6bebb3e5912` | 0.059295 | 0.483440 | 0.173321 |
+| CF / ALS | 13 | `8cfb105ccf9242fb992db044d2c86ffe` | 0.057572 | 0.483440 | 0.172062 |
+| Item-item, K = 500 | — | `c10eabaf4afd40579e4b2fe1fa6a45a0` | 0.138753 | 0.435847 | 0.218623 |
+
+CF/ALS's cold column is **identical to the popularity baseline's, to every digit
+MLflow stores** — all four runs report `cold_ndcg_at_k = 0.4834402636907392` and
+`cold_recall_at_k = 0.06334481830156065` — and its seed-to-seed range there is
+exactly 0.00%. That is not a coincidence and it is a useful control: at threshold
+10 all 710 cold holdout users take CF's embedded popularity fallback, so that row
+is the deterministic fallback and nothing else. It says the harness itself
+contributes no noise, and any spread elsewhere is the model's. (At threshold 5 it
+was *nearly* identical rather than identical, because one holdout user sat in the
+1-to-4-interaction band and was served by ALS; at 10 that user is cold too.)
+
+| Model | Slice | Range across three seeds |
+|---|---|---:|
+| CF / ALS | warm | **2.96%** |
+| CF / ALS | cold | 0.00% |
+| Ranker (default sample) | warm | 1.68% |
+| Ranker (default sample) | cold | **2.10%** |
+
+Applying the rule to the larger of each column:
+
+| Slice | Largest range observed | 2× | **Tolerance** | Was |
+|---|---:|---:|---:|---:|
+| Warm | 2.96% (CF/ALS) | 5.92% | **6%** | 58% |
+| Cold | 2.10% (ranker) | 4.20% | **5%** | 7% |
+
+Those two numbers are the new defaults in
+[`src/evaluation/gate.py`](../src/evaluation/gate.py).
+
+**The warm clause goes from decorative to binding, and that is the result.** The
+earlier derivation had to allow a 58% warm regression because the ranker's own
+warm NDCG@10 moved 28.68% on the seed alone; nothing a reviewer would call a
+regression could have been refused by such a clause. At 6% it can. And note
+which model now sets the warm number: **CF/ALS**, at 2.96%, not the ranker at
+1.68% — the ranker has stopped being the noisiest thing in the comparison.
+
+**Which runs the tolerance is derived from, and which it is not.** Only the runs
+at the **default** sample size. The 20,000- and 60,000-positive rows describe
+configurations that are no longer what `make train-ranker` does; they are the
+evidence for *why* the default moved, not a description of the pipeline the gate
+is now guarding. The practical consequence is worth stating plainly: **a run made
+with `RANKER_POSITIVE_LIMIT` set below the window's size is not covered by this
+tolerance**, and comparing one against a default run through the gate would be
+comparing two pipelines rather than two models. Every run carries
+`ranker_positive_limit` and `ranker_positive_limit_binding`, so that is checkable
+rather than assumed.
+
+### The gate
+
+The owner's rule for this unit was that the current model has to be **proven
+better than its predecessor** before any new model is started. The predecessor of
+the two-stage path at K = 10 is CF/ALS, and the predecessor of CF/ALS is the
+popularity baseline, so the whole recommender-end-to-end ladder is gateable on
+one axis. Every comparison below is `python -m src.evaluation.gate` at the
+re-derived tolerances, over runs made in this session at threshold 10.
+
+#### Is the current ranker proven better than its predecessor? Yes.
+
+```
+$ make gate CANDIDATE="517fdc75… 3bf3f91f… ea72a491…" \
+            INCUMBENT="d3a105c5… f17eb37e… 8cfb105c…"
+candidate  mean of 3: 517fdc75136842e188018ae0a9210c20, 3bf3f91f901f4ea7a0c9b385563ad136, ea72a491c4db48d49e82ec275bd91d32
+incumbent  mean of 3: d3a105c549c04742b28a44cb649aa7c4, f17eb37e201641f4bce4e6bebb3e5912, 8cfb105ccf9242fb992db044d2c86ffe
+PROMOTE — ndcg@10
+  overall: overall ndcg@10 gained 15.53% (0.172490 → 0.199278) against a required +3.00%
+  warm: warm ndcg@10 improved 21.21% (0.058158 → 0.070495, n=1931)
+  cold: cold ndcg@10 improved 13.67% (0.483440 → 0.549533, n=710)
+$ echo $?
+0
+```
+
+**And it promotes at every seed, on its own, with the same sign.** This is the
+table the previous section could not produce:
+
+| Seed pair | Overall | Warm | Cold | Verdict |
+|---:|---:|---:|---:|---|
+| 42 | +14.86% | **+21.45%** | +12.72% | promote |
+| 7 | +14.88% | **+19.99%** | +13.18% | promote |
+| 13 | +16.85% | **+22.23%** | +15.11% | promote |
+
+Set that beside the same three comparisons at 20,000 positives, which read
+**−4.16%, −17.24% and +13.59%** on the warm slice — a sign the data did not
+determine. **The warm regression that made the gate's slice question urgent was
+not a property of the ranker. It was a property of training it on 13% of the
+window.** Trained on the whole window, the ranker improves the warm slice by
+about 21%, at every seed, and the aggregate gain of +15.53% is nine times the
+1.71% single-run spread that a one-seed comparison would have had to clear.
+
+#### The rest of the ladder, under the same gate
+
+| Comparison | Overall | Warm | Cold | Verdict |
+|---|---:|---:|---:|---|
+| CF/ALS (mean of 3) vs popularity | +13.14% | +89.10% | 0.00% | **promote** |
+| Ranker (mean of 3) vs popularity | +30.71% | +129.21% | +13.67% | **promote** |
+| Ranker (mean of 3) vs CF/ALS (mean of 3) | +15.53% | +21.21% | +13.67% | **promote** |
+
+**Ordering: popularity < CF/ALS < ranker, on every slice, under one gate.** The
+one row worth pausing on is CF/ALS's cold slice at exactly 0.00%: CF serves all
+710 cold users through its embedded popularity fallback, so it *is* the
+incumbent there. The gate reports that as a 0.00% regression inside the 5%
+tolerance rather than as a pass it earned, which is the right way round.
+
+#### The candidate stage is not gateable here, and the gate says so
+
+`make gate` refuses `item-item vs popularity`, and it is right to:
+
+```
+$ make gate CANDIDATE=c10eabaf4afd40579e4b2fe1fa6a45a0 \
+            INCUMBENT=fbf2b9a4f7a945ab9f2dc5c5001160cd
+could not decide: candidate was scored at k=500 and the incumbent at k=10; a gate
+verdict across two different K values would answer a question nobody asked (see
+EvalResult.k)
+$ echo $?
+2
+```
+
+Item-item is scored at `K_CANDIDATES = 500` and the popularity baseline only at
+K = 10, and `EvalResult.k` equality is exactly the guard that stops a recall@500
+being compared with an NDCG@10. **There is no popularity baseline at K = 500 on
+record** — the candidate stage has never had its zero-model floor scored on its
+own axis, which is a real hole and not a limitation of the gate. Adding one is a
+small change to `src/training/popularity.py`; it belongs with the candidate
+ladder rather than inside a ranker unit, and is named in "What was not run".
+
+### What this changes, and what it does not
+
+**Changed.** `RANKER_POSITIVE_LIMIT` defaults to 200,000 rather than 20,000, so
+`make train-ranker` trains on the whole trailing window; the gate's slice
+tolerances fall from warm 58% / cold 7% to **warm 6% / cold 5%**; the gate CLI
+takes several run ids per side and reads their mean; and the LightGBM ranker is,
+for the first time, **measured better than its predecessor** rather than assumed
+to be.
+
+**Not changed.** No model, no hyperparameter, no feature, no metric, no split, no
+routing policy, and no clause of the gate's rule. `LGBMRankerConfig` is
+untouched. **Nothing was promoted** — `pipelines/` is still empty, the gate is a
+library and a CLI rather than a DAG, and the served bundle is unchanged
+(`src/training/demo_artifacts.py` assembles its own training set from the
+120-title demo fixture and never reads this knob, so `infra/model-bundle/` is
+byte-identical).
+
+Two things this session's numbers should not be read as. The ranker's *overall*
+NDCG@10 (0.199278) is still far below item-item's recall-oriented figure at
+K = 500 — different K, different question, and `EvalResult.k` exists so those two
+can never be compared by accident. And "+21% warm against CF/ALS" is an offline
+NDCG@10 result on one holdout window on one dataset; it says the two-stage path
+orders MovieLens's next 28 days better than matrix factorisation does, not that a
+user would notice.
+
+### The rest of this session's runs
+
+| Model | Seed | Run id | Load at start | Wall-clock |
+|---|---:|---|---:|---:|
+| Popularity | — | `fbf2b9a4f7a945ab9f2dc5c5001160cd` | 4.11 | 93 s |
+| Item-item, K = 500 | — | `c10eabaf4afd40579e4b2fe1fa6a45a0` | 4.91 | 138 s |
+| CF / ALS | 42 | `d3a105c549c04742b28a44cb649aa7c4` | 4.93 | 144 s |
+| CF / ALS | 7 | `f17eb37e201641f4bce4e6bebb3e5912` | 4.27 | 132 s |
+| CF / ALS | 13 | `8cfb105ccf9242fb992db044d2c86ffe` | 3.69 | 141 s |
+| Ranker, limit 1,000,000 | 42 | `9576af1bc08b473c93d631b41804f31e` | 3.75 | 443 s |
+
+### Reproducing this
+
+Same prerequisites as the sections above — Postgres holding the 25M ratings and
+the ADR 0011 parquet present. `RANKER_POSITIVE_LIMIT` is read by `train-ranker`
+only; the other trainers ignore it.
+
+```bash
+# The new default: the whole 30-day window, at three seeds.
+TRAIN_SEED=42 make train-ranker
+TRAIN_SEED=7  make train-ranker
+TRAIN_SEED=13 make train-ranker
+
+# The old default, for the comparison above. Named <base>-pos20000[-seed<n>].
+RANKER_POSITIVE_LIMIT=20000 TRAIN_SEED=42 make train-ranker
+RANKER_POSITIVE_LIMIT=60000 TRAIN_SEED=42 make train-ranker
+
+# The incumbent the ranker is gated against, on the same axis.
+TRAIN_SEED=42 make train-cf
+TRAIN_SEED=7  make train-cf
+TRAIN_SEED=13 make train-cf
+
+# The gate. Either side takes several run ids and reads their mean — which is
+# the comparison to make whenever the ranker is on one of the two sides.
+make gate CANDIDATE="<id> <id> <id>" INCUMBENT="<id> <id> <id>"
+```
+
+### What was not run, and why
+
+- **No two-tower run on this axis.** It is a ~78-minute run and ADR 0004's
+  verdict on it does not turn on the ranker's training sample. Its numbers stay
+  the threshold-5 ones in the first 2026-08-30 session.
+- **No popularity baseline at K = 500**, which is why the candidate-stage half of
+  the ladder is not gateable here — see the gate section above. Scoring one is a
+  small change to `src/training/popularity.py` and belongs with whoever next
+  works on the candidate ladder, not slipped into a ranker unit.
+- **No re-run of the sections above at threshold 10.** Everything on this page
+  older than this section stays as measured, under the threshold and routing it
+  was measured with. This section is the first on the new axis and says so at the
+  top; the rest converts as those models are next touched.
+- **No change to `RANKER_POSITIVE_WINDOW_DAYS`.** Widening the window past 30
+  days would change *which* interactions the ranker trains on rather than how
+  many of them it uses — a modelling decision with its own measurement, recorded
+  as open in [ADR 0005's note](adr/0005-lightgbm-over-neural-ranker.md#note-2026-08-30--the-training-sample-is-the-whole-trailing-window).
+
+## 2026-08-30, fourth session — the two-tower's learning rate and budget, swept
 
 The [session above](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
 measured two-tower v1 at ADR 0006's configuration and found warm recall@500 of
@@ -823,19 +1640,22 @@ retrieval index and the routing are ADR 0006's, and every default in
 at DVC version `c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train
 20,000,075 / holdout 129,683 / test 4,870,337 untouched, 2,641 holdout users
 (1,939 warm, 702 cold), ADR 0011 cohort `v1` attached to every full-dataset run.
-**Threshold regime:** this section sits under the banner at the top of the page
-with everything above it. It was measured on `main` at `a5f8d20` — *before*
+**Threshold regime — read this before the numbers.** Every run in this section
+was made on `main` at `a5f8d20`, *before*
 [#119](https://github.com/kudratsingh/MovieLens-RecSys/pull/119) raised
 `COLD_START_THRESHOLD` from 5 to 10 and made ADR 0001's threshold the default
-offline routing rule — so warm/cold slicing is at 5, routing is index
-membership, and the slice is 1,939 warm / 702 cold. That is deliberate rather
-than incidental: the sweep's entire method is comparison against v1, item-item
-and popularity, and all three are on this regime. Reproducing these numbers on
-current `main` needs `SYNTH_COLD_ROUTING=index` *and* the threshold back at 5;
-re-running at 10 moves the slicing and the served population together and would
-need its own dated section. The MLflow run names here carry a sweep label
-rather than a policy suffix, which under the pre-#119 convention means index
-routing.
+offline routing rule. So this section belongs with the page's top banner and
+with the first two 2026-08-30 sessions: **warm/cold slicing at 5,
+index-membership routing, 1,939 warm / 702 cold.** It is *not* on the same axis
+as [the ranker's training sample](#2026-08-30--the-rankers-training-sample-and-the-variance-it-was-buying),
+which is the first section measured at 10. That is deliberate rather than
+incidental — the sweep's whole method is comparison against v1, item-item and
+popularity, and all three live on this regime; moving it would have moved every
+reference line with it. Reproducing these numbers on current `main` needs
+`SYNTH_COLD_ROUTING=index` *and* the threshold back at 5. Re-running at 10 would
+move the warm/cold slicing and the served population together, and would need
+its own dated section. The MLflow run names here carry a sweep label and no
+policy suffix, which under the pre-#119 convention means index routing.
 **Machine:** the same Apple M3 / 8 cores / 16 GiB / macOS 26.5.2 (25F84) box,
 Python 3.11.16, numpy 2.4.6, pandas 2.3.3, torch 2.13.0, faiss-cpu 1.15.0,
 MLflow client 3.15.1, Postgres 16 in Docker on host port 5433, MLflow on 5001.

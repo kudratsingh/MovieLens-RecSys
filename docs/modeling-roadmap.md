@@ -31,7 +31,7 @@ ladder resumes as the primary work.
 |---|---|---|---|
 | Retrieval | Item-item cosine (`implicit`) | Nothing — cosine over co-occurrence counts. The zero-parameter baseline every learned retriever must beat ([ADR 0004](adr/0004-item-item-before-two-tower.md)). Warm recall@500 **0.4001**. | Champion in the served bundle |
 | Retrieval | Two-tower (PyTorch + FAISS) | Item embeddings; the user side is a mean-pool over the last 50 items, no user-id embedding; sampled softmax with log-uniform correction ([ADR 0006](adr/0006-two-tower-retrieval-architecture.md)) | Measured on the full dataset 2026-08-30 and **not promoted**: warm recall@500 0.0466 against item-item's 0.4001. Not the champion |
-| Ranker | LightGBM LambdaRank | A GBDT over eight point-in-time features — counts, popularity windows, item age, genre affinity ([ADR 0005](adr/0005-lightgbm-over-neural-ranker.md)). It sees aggregates of the history, never its order or contents. | Champion in the served bundle |
+| Ranker | LightGBM LambdaRank | A GBDT over eight point-in-time features — counts, popularity windows, item age, genre affinity ([ADR 0005](adr/0005-lightgbm-over-neural-ranker.md)). It sees aggregates of the history, never its order or contents. | Champion in the served bundle, and since 2026-08-30 **proven better than its predecessor** rather than assumed to be: seed-averaged over three seeds it clears ADR 0001's gate against CF/ALS at **overall +15.53%, warm +21.21%, cold +13.67%**, and promotes at each seed individually. It trains on the whole 30-day trailing window (154,003 positives) rather than a 20,000 sample of it, which is what made a re-seeded run comparable to the last one at all |
 
 Retrieval is similarity in an embedding space; ranking is tabular. That shape is
 exactly the two-stage architecture of [ADR 0003](adr/0003-two-stage-architecture.md),
@@ -217,8 +217,10 @@ The system pieces, mapped to the phases that own them:
 - **Build and measure.** Through `src/evaluation/`, logged to MLflow, recorded
   in [`results.md`](results.md) with the run, date, machine and wall-clock.
 - **Promote or not.** The served bundle changes only when the candidate clears
-  the ADR 0001 gate on the slice that ADR names; the outcome is a dated note on
-  the rung's ADR either way.
+  the ADR 0001 gate, which since 2026-08-30 names its slices: overall NDCG@10 at
+  +3% relative **and** no regression in the warm or cold slice beyond that
+  slice's measured seed-to-seed tolerance (`src/evaluation/gate.py`, `make
+  gate`). The outcome is a dated note on the rung's ADR either way.
 
 ## Decision log
 
@@ -227,7 +229,7 @@ The system pieces, mapped to the phases that own them:
 | Two-stage architecture | done | 2026-05-31 | 0003 | The base |
 | Item-item retrieval | done | 2026-06-01 | 0004 | Warm recall@500 0.4001 on 2026-08-29 |
 | Two-tower v1 | done — measured, not promoted | 2026-07-02 | 0006 | Warm recall@500 **0.0466** against item-item's 0.4001 on the full dataset, 2026-08-30 (−88.4%). ADR 0004's gate is not cleared and item-item stays champion; the loss flattened after epoch 1, so this is a verdict on v1 as configured, not on learned retrieval |
-| LightGBM LambdaRank | done | 2026-07-02 | 0005 | Warm NDCG@10 0.0554 on 2026-08-29 |
+| LightGBM LambdaRank | done — promoted over CF/ALS on the gate | 2026-07-02 | 0005 | Warm NDCG@10 **0.0705**, overall 0.1993, seed-averaged over three seeds at the whole trailing window, 2026-08-30. Clears ADR 0001's gate against CF/ALS at **+15.53% overall / +21.21% warm**, and at every seed on its own. (The 0.0554 recorded on 2026-08-29 was one seed of a 20,000-positive sample whose warm slice moved 25% on the seed alone.) |
 | 1 — Two-tower v2 | not proposed | — | — | |
 | 2 — SASRec | not proposed | — | — | The expected next rung; needs approval |
 | 3 — Target attention ranker | not proposed | — | — | |

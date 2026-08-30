@@ -39,6 +39,7 @@ from dataclasses import dataclass
 import pytest
 from fastapi.testclient import TestClient
 
+from src.evaluation.protocol import COLD_START_THRESHOLD
 from src.serving.app import app
 from tests.tenant_isolation.conftest import (
     CANARY_USER_ID,
@@ -591,7 +592,7 @@ def test_serving_policy_and_exclusion_evidence_are_tenant_scoped(
     for response in (default_recs, demo_recs):
         policy = response.json()["serving_policy"]
         assert policy["name"] == response.json()["policy"]
-        assert policy["threshold"] == 5
+        assert policy["threshold"] == COLD_START_THRESHOLD
         assert policy["filter_policy"].endswith("-v1")
         # A rank score must never be advertised as a probability.
         assert policy["score_scale"] in {"lightgbm-rank-score", "tenant-interaction-count"}

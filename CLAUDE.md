@@ -351,7 +351,7 @@ movielens-recsys/
 
 - **On `main`:** the authenticated, RLS-isolated two-stage serving path — item-item retrieval and a LightGBM ranker in a private sidecar, Feast/Redis features, durable prediction *and* request audits, per-tenant champion/quota columns on the registry, a shared Redis rate limiter, the pinned k6 p99 gate; the movie-discovery product (Discover, Browse, movie detail, Library with Seen, Quick Picks) cut over at `/`; the ADR 0011 cold-start cohort; measured offline results in `docs/results.md`; the production deployment specified and rehearsed (ADR 0013) but **not provisioned — nothing is deployed**; dev and staging Compose beside it.
 - **Frontend finish gate:** every criterion a reviewer can settle passes; HOLD only on moderated sessions with real participants.
-- **Open decisions, mine:** the cold-start routing policy for the offline models; which slice the promotion gate reads; the two-tower's fate after its full-dataset run; which rung of `docs/modeling-roadmap.md` is approved next.
+- **Open decisions, mine:** which slice the promotion gate reads; the two-tower's fate after its full-dataset run; which rung of `docs/modeling-roadmap.md` is approved next. (The cold-start routing policy was settled on 2026-08-30 — the threshold is 10 and the offline models route on it, like the deployed path.)
 - **Remaining Phase 3 work** is itemised in [`docs/status/phase-3.md`](docs/status/phase-3.md): product track — moderated sessions then `/legacy` retirement, `/me` ownership, N6; platform track — Feast-backed ranker training, training-time candidate exclusions, and the two decisions above.
 
 ### Current step

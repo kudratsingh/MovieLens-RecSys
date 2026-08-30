@@ -3,7 +3,8 @@
 %% src/serving/orchestration.py (the gates, in evaluation order),
 %% src/serving/policy.py (the shared vocabulary), src/serving/models.py,
 %% src/models/artifacts.py (CandidateIndex.retrieve and seed_count),
-%% src/evaluation/protocol.py (COLD_START_THRESHOLD = 5),
+%% src/evaluation/protocol.py (COLD_START_THRESHOLD = 10, ADR 0001 as amended
+%% 2026-08-30),
 %% infra/model-bundle/manifest.json (candidate artifact_type = item-item-cosine).
 %% Every policy and reason string below is the literal the code emits.
 flowchart TB
@@ -13,7 +14,7 @@ flowchart TB
   IN --> G0
   G0 -- no --> P0["policy popularity · learned false<br/>fallback_reason no-champion<br/>score_scale tenant-interaction-count"]
 
-  G1{"positive_signal_count &lt; 5?"}
+  G1{"positive_signal_count &lt; 10?"}
   G0 -- yes --> G1
   G1 -- yes --> P1["policy popularity · learned false<br/>fallback_reason cold-start<br/>score_scale tenant-interaction-count"]
 

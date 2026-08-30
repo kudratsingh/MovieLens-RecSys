@@ -15,6 +15,10 @@ const COLD_USER = 900000104;
 const MIXED_USERS = [...WARM_USERS, COLD_USER];
 const LEARNED_POLICY = "item-item-cosine+lightgbm";
 const POPULARITY_POLICY = "popularity";
+// ADR 0001 as amended 2026-08-30, mirroring src/evaluation/protocol.py. k6
+// cannot import the Python constant, so the gate asserts the response reports
+// this value: a threshold change that never reached the service fails here.
+const COLD_START_THRESHOLD = 10;
 
 // Mirrors the `--workers` value on the api-load service in
 // docker-compose.demo.yml. Every worker is a separate process holding its own
@@ -362,7 +366,7 @@ function recommend(auth, userId, expected, traffic) {
         return (
           !!servingPolicy &&
           servingPolicy.name === expected &&
-          servingPolicy.threshold === 5 &&
+          servingPolicy.threshold === COLD_START_THRESHOLD &&
           servingPolicy.learned === learnedExpected &&
           typeof servingPolicy.score_scale === "string" &&
           servingPolicy.score_scale.length > 0

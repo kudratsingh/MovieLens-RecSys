@@ -74,14 +74,14 @@ test("undo returns the dismissed title to the front of the queue", async ({ page
 
 test("watchlist leaves the signal count alone and watched moves it", async ({ page }) => {
   await openQuickPicks(page);
-  await expect(page.getByText("2 of 5 positive watched signals")).toBeVisible();
+  await expect(page.getByText("2 of 10 positive watched signals")).toBeVisible();
 
   await page.getByRole("button", { name: /^Watchlist/ }).click();
   await expect(status(page)).toContainText("watchlist saved");
-  await expect(page.getByText("2 of 5 positive watched signals")).toBeVisible();
+  await expect(page.getByText("2 of 10 positive watched signals")).toBeVisible();
 
   await page.getByRole("button", { name: /^Watched/ }).click();
-  await expect(page.getByText("3 of 5 positive watched signals")).toBeVisible();
+  await expect(page.getByText("3 of 10 positive watched signals")).toBeVisible();
 });
 
 test("a failed decision keeps the card and restores the controls", async ({ page }) => {

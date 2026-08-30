@@ -53,9 +53,9 @@ export const fixtureFallbackPolicy: ServingPolicy = {
   learned: false,
   name: "popularity",
   positive_signal_count: 2,
-  reason: "cold-start: 2 positive watched signals below threshold 5",
+  reason: "cold-start: 2 positive watched signals below threshold 10",
   score_scale: "tenant-interaction-count",
-  threshold: 5,
+  threshold: 10,
 };
 
 export const fixtureLearnedPolicy: ServingPolicy = {
@@ -63,11 +63,11 @@ export const fixtureLearnedPolicy: ServingPolicy = {
   filter_policy: "watched-and-dismissed-excluded-v1",
   learned: true,
   name: "item-item-cosine+lightgbm",
-  positive_signal_count: 7,
+  positive_signal_count: 12,
   reason:
-    "learned-two-stage: item-item-cosine retrieval over 7 positive seeds, ranked by lgbm-ranker-2026.08",
+    "learned-two-stage: item-item-cosine retrieval over 12 positive seeds, ranked by lgbm-ranker-2026.08",
   score_scale: "lightgbm-rank-score",
-  threshold: 5,
+  threshold: 10,
 };
 
 export function fixtureQuickPickResponse(

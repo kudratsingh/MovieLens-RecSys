@@ -38,8 +38,8 @@
 // The two writing scenarios follow the same persona ownership table the browser
 // suite uses, revert inside the iteration, and are swept again in teardown.
 // Cold Start is never mutated, and the run refuses to start if it is pointed
-// there: pushing it past five positive signals would flip the fallback path
-// this harness exists to keep honest, and would break the browser suite's Quick
+// there: it is handed on at *zero* positive signals, not merely below the
+// threshold, and leaving a signal behind would break the browser suite's Quick
 // Picks journey, which owns that persona precisely for its signal count.
 import { check } from "k6";
 import exec from "k6/execution";
@@ -59,7 +59,11 @@ const API_WORKERS = Number(__ENV.API_WORKERS || 4);
 const LEARNED_POLICY = "item-item-cosine+lightgbm";
 const POPULARITY_POLICY = "popularity";
 const FILTER_POLICY = "watched-and-dismissed-excluded-v1";
-const COLD_START_THRESHOLD = 5;
+// ADR 0001 as amended 2026-08-30, mirroring src/evaluation/protocol.py. k6
+// cannot import the Python constant, so every check below compares this against
+// the `serving_policy.threshold` the response reports rather than asserting the
+// number on its own — a drift between the two fails the gate here.
+const COLD_START_THRESHOLD = 10;
 
 // Page sizes are the client's, not invented here: `DISCOVER_RECOMMENDATION_LIMIT`
 // and `DISCOVER_HISTORY_LIMIT` in web/lib/discover/resources.ts,
@@ -104,7 +108,7 @@ const QUICKPICKS_USER = Number(__ENV.LOAD_QUICKPICKS_USER || 900000102);
 const MUTATING_USERS = [...new Set([RATING_USER, WATCHLIST_USER, QUICKPICKS_USER])];
 
 // Cold Start is the one persona with a hard rule attached: the browser suite's
-// PKCE and Quick Picks journeys own it and require it to stay below five
+// PKCE and Quick Picks journeys own it and require it to be handed on with zero
 // watched signals, and this harness's own cold-traffic assertion requires it to
 // stay on the popularity fallback. A writer pointed at it would break both, so
 // the run refuses to start rather than discovering it in a threshold.

@@ -19,10 +19,11 @@ import type { RecommendationResponse } from "@/lib/api";
 import { isRecord } from "@/lib/resources/validate";
 
 /**
- * The router's documented cold-start boundary (ADR 0011, ADR 0012 §6). Used
- * only when a response does not report its own threshold.
+ * The router's documented cold-start boundary (ADR 0001 as amended 2026-08-30,
+ * ADR 0011, ADR 0012 §6). Used only when a response does not report its own
+ * threshold — a response that reports one always wins.
  */
-export const LEARNED_SERVING_SIGNAL_THRESHOLD = 5;
+export const LEARNED_SERVING_SIGNAL_THRESHOLD = 10;
 
 /**
  * A learned response reports `<candidate policy>+lightgbm`; the fallback
@@ -129,7 +130,7 @@ function namesLearnedRanker(policy: string): boolean {
  * Said when a fallback response comes back for a persona that already has more
  * signals than the router asks for. Reachable since PR #64: an
  * `unseeded-retrieval` response reports `learned: false` with a high count, and
- * the counting sentence below then read "28 of the 5 watched signals".
+ * the counting sentence below then read "28 of the 10 watched signals".
  */
 export const WARM_FALLBACK_NOTE =
   "This persona has enough watched signals; this response still came back on " +

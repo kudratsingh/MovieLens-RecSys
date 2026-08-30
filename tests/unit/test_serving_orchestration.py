@@ -4,6 +4,7 @@ import httpx
 import pytest
 from sqlalchemy import Connection, bindparam, text
 
+from src.evaluation.protocol import COLD_START_THRESHOLD
 from src.features import FEATURE_COLUMNS
 from src.serving.models import (
     ModelRankingResult,
@@ -30,6 +31,24 @@ DEMO_CHAMPION = TenantChampion(
     ranker_version="ranker-v1",
     feature_version="features-v1",
 )
+
+# The history size the tests that are *not* about routing give their user. Two
+# clear of the boundary rather than one, because several of them dismiss a
+# title mid-test: at exactly the threshold a dismissal would silently move the
+# user onto the popularity fallback and the assertion under test would start
+# passing or failing for a reason it was never about. Derived from the constant
+# so that moving the threshold moves the fixture with it.
+_WARM_HISTORY = COLD_START_THRESHOLD + 2
+
+# Two catalog titles the warm user has not seen: one for the sidecar stub to
+# return as a learned result, one more so a test can offer two and have the
+# exclusion filter drop only the first.
+_UNSEEN_MOVIE = _WARM_HISTORY + 1
+_OTHER_UNSEEN_MOVIE = _WARM_HISTORY + 2
+_CATALOG_SIZE = _OTHER_UNSEEN_MOVIE
+
+# The ids `_add_catalog_and_history` marks watched at `_WARM_HISTORY`.
+_WATCHED_IDS = list(range(1, _WARM_HISTORY + 1))
 
 
 class _LearnedModels:
@@ -95,9 +114,9 @@ def _add_catalog_and_history(
     history_count: int,
 ) -> None:
     # The shared SQLite fixture starts with movies 1-3. Add enough rated
-    # catalog items to test both sides of the five-interaction boundary while
-    # leaving movie 11 unseen for learned-result hydration.
-    for movie_id in range(4, 12):
+    # catalog items to test both sides of ADR 0001's boundary while leaving the
+    # last two unseen for learned-result hydration.
+    for movie_id in range(4, _CATALOG_SIZE + 1):
         connection.execute(
             text("INSERT INTO movies VALUES (:movie_id, :title, 'Drama')"),
             {"movie_id": movie_id, "title": f"Movie {movie_id}"},
@@ -106,7 +125,7 @@ def _add_catalog_and_history(
             text('INSERT INTO links ("movieId", "tmdbId") VALUES (:movie_id, NULL)'),
             {"movie_id": movie_id},
         )
-    for movie_id in range(1, 12):
+    for movie_id in range(1, _CATALOG_SIZE + 1):
         connection.execute(
             text(
                 "INSERT INTO ratings VALUES "
@@ -144,32 +163,32 @@ def _add_catalog_and_history(
 
 
 def _make_existing_user_warm(connection: Connection) -> None:
-    # User 10 starts with two interactions; add three more without marking
-    # learned result movie 3 as seen.
-    connection.execute(
-        text(
-            "INSERT INTO movies VALUES "
-            "(4, 'Warm Four', 'Drama'), (5, 'Warm Five', 'Drama'), "
-            "(6, 'Warm Six', 'Drama')"
+    # User 10 starts with two interactions; add enough more to clear ADR 0001's
+    # threshold, without marking learned result movie 3 as seen.
+    for offset, movie_id in enumerate(range(4, 4 + _WARM_HISTORY - 2)):
+        timestamp = 300 + offset
+        connection.execute(
+            text("INSERT INTO movies VALUES (:movie_id, :title, 'Drama')"),
+            {"movie_id": movie_id, "title": f"Warm {movie_id}"},
         )
-    )
-    connection.execute(text("INSERT INTO links VALUES (4, NULL), (5, NULL), (6, NULL)"))
-    connection.execute(
-        text(
-            "INSERT INTO ratings VALUES "
-            "('demo', 10, 4, 4.0, 300), ('demo', 10, 5, 4.0, 301), "
-            "('demo', 10, 6, 4.0, 302)"
+        connection.execute(
+            text('INSERT INTO links ("movieId", "tmdbId") VALUES (:movie_id, NULL)'),
+            {"movie_id": movie_id},
         )
-    )
-    connection.execute(text("""
-            INSERT INTO user_movie_state (
-                tenant_id, user_id, movie_id, watched_at, rating,
-                rating_updated_at, state_version, updated_at
-            ) VALUES
-                ('demo', 10, 4, 300, 4.0, 300, 1, 300),
-                ('demo', 10, 5, 301, 4.0, 301, 1, 301),
-                ('demo', 10, 6, 302, 4.0, 302, 1, 302)
-            """))
+        connection.execute(
+            text("INSERT INTO ratings VALUES ('demo', 10, :movie_id, 4.0, :timestamp)"),
+            {"movie_id": movie_id, "timestamp": timestamp},
+        )
+        connection.execute(
+            text("""
+                INSERT INTO user_movie_state (
+                    tenant_id, user_id, movie_id, watched_at, rating,
+                    rating_updated_at, state_version, updated_at
+                ) VALUES ('demo', 10, :movie_id, :timestamp, 4.0,
+                          :timestamp, 1, :timestamp)
+                """),
+            {"movie_id": movie_id, "timestamp": timestamp},
+        )
 
 
 @pytest.mark.asyncio
@@ -208,7 +227,7 @@ async def test_cold_user_routes_to_popularity_without_calling_models() -> None:
     assert [prediction.features for prediction in decision.predictions] == [{}, {}]
 
 
-@pytest.mark.parametrize("history_count", [0, 1, 3, 4])
+@pytest.mark.parametrize("history_count", [0, 1, 3, COLD_START_THRESHOLD - 1])
 @pytest.mark.asyncio
 async def test_short_history_routes_to_cold_start_fallback(history_count: int) -> None:
     connection = _connection()
@@ -224,7 +243,7 @@ async def test_short_history_routes_to_cold_start_fallback(history_count: int) -
     assert decision.fallback_reason == "cold-start"
 
 
-@pytest.mark.parametrize("history_count", [5, 10])
+@pytest.mark.parametrize("history_count", [COLD_START_THRESHOLD, _WARM_HISTORY])
 @pytest.mark.asyncio
 async def test_history_at_or_above_threshold_routes_to_learned_policy(
     history_count: int,
@@ -233,7 +252,7 @@ async def test_history_at_or_above_threshold_routes_to_learned_policy(
     try:
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
@@ -296,10 +315,10 @@ def _dismiss(connection: Connection, *, user_id: int, movie_id: int, timestamp: 
 @pytest.mark.asyncio
 async def test_positive_history_and_exclusions_reach_the_sidecar_separately() -> None:
     connection = _connection()
-    models = _LearnedModels(movie_id=11)
+    models = _LearnedModels(movie_id=_UNSEEN_MOVIE)
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=9, timestamp=4000)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_OTHER_UNSEEN_MOVIE, timestamp=4000)
         await RecommendationCoordinator(RecommendationService(), models).recommend(
             connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
@@ -309,9 +328,9 @@ async def test_positive_history_and_exclusions_reach_the_sidecar_separately() ->
     call = models.calls[0]
     positives = list(call["positive_history_movie_ids"])  # type: ignore[arg-type]
     excluded = list(call["excluded_movie_ids"])  # type: ignore[arg-type]
-    assert positives == [6, 5, 4, 3, 2, 1]
-    assert 9 not in positives
-    assert 9 in excluded
+    assert positives == list(range(_WARM_HISTORY, 0, -1))
+    assert _OTHER_UNSEEN_MOVIE not in positives
+    assert _OTHER_UNSEEN_MOVIE in excluded
     # Already-seen filtering stays part of the exclusion set, so the two inputs
     # overlap on watched titles without collapsing into one list.
     assert set(positives).issubset(set(excluded))
@@ -327,9 +346,9 @@ async def test_watched_titles_hide_without_being_dropped_as_seeds() -> None:
     reason.
     """
     connection = _connection()
-    models = _LearnedModels(movie_id=11)
+    models = _LearnedModels(movie_id=_UNSEEN_MOVIE)
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
             connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
@@ -347,10 +366,10 @@ async def test_watched_titles_hide_without_being_dropped_as_seeds() -> None:
 @pytest.mark.asyncio
 async def test_dismissals_reach_the_sidecar_on_their_own_field() -> None:
     connection = _connection()
-    models = _LearnedModels(movie_id=11)
+    models = _LearnedModels(movie_id=_UNSEEN_MOVIE)
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=9, timestamp=4900)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_OTHER_UNSEEN_MOVIE, timestamp=4900)
         await RecommendationCoordinator(RecommendationService(), models).recommend(
             connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
@@ -358,18 +377,20 @@ async def test_dismissals_reach_the_sidecar_on_their_own_field() -> None:
         connection.close()
 
     call = models.calls[0]
-    assert list(call["dismissed_movie_ids"]) == [9]  # type: ignore[arg-type]
-    assert 9 in list(call["excluded_movie_ids"])  # type: ignore[arg-type]
-    assert 9 not in list(call["positive_history_movie_ids"])  # type: ignore[arg-type]
+    assert list(call["dismissed_movie_ids"]) == [_OTHER_UNSEEN_MOVIE]  # type: ignore[arg-type]
+    assert _OTHER_UNSEEN_MOVIE in list(call["excluded_movie_ids"])  # type: ignore[arg-type]
+    assert _OTHER_UNSEEN_MOVIE not in list(
+        call["positive_history_movie_ids"]  # type: ignore[arg-type]
+    )
 
 
 @pytest.mark.asyncio
 async def test_a_retrieval_no_seed_reached_is_not_reported_as_learned() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11, seed_count=0)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE, seed_count=0)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
@@ -378,39 +399,39 @@ async def test_a_retrieval_no_seed_reached_is_not_reported_as_learned() -> None:
     assert decision.serving_policy.name == "popularity-fill+lightgbm"
     assert decision.policy == decision.serving_policy.name
     assert decision.serving_policy.reason.startswith("unseeded-retrieval")
-    assert "6 positive watched signals" in decision.serving_policy.reason
+    assert f"{_WARM_HISTORY} positive watched signals" in decision.serving_policy.reason
     assert decision.fallback_reason == "unseeded-retrieval"
     # The ranker still ran, so the score is still an ordering score and the
     # items are still served — only the claim about the first stage changes.
     assert decision.serving_policy.score_scale == "lightgbm-rank-score"
-    assert [item.movie_id for item in decision.items] == [11]
+    assert [item.movie_id for item in decision.items] == [_UNSEEN_MOVIE]
 
 
 @pytest.mark.asyncio
 async def test_reported_seed_count_is_the_number_of_seeds_retrieval_used() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11, seed_count=2)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE, seed_count=2)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
-    # Six positive signals, two of which the index could retrieve from: the
+    # A warm history, two of which the index could retrieve from: the
     # reason reports the seeds used and the signal count separately rather
     # than letting one stand in for the other.
     assert "over 2 positive seeds" in decision.serving_policy.reason
-    assert decision.serving_policy.positive_signal_count == 6
+    assert decision.serving_policy.positive_signal_count == _WARM_HISTORY
     assert decision.serving_policy.learned is True
 
 
 @pytest.mark.asyncio
 async def test_dismissed_movie_is_never_a_positive_or_a_seed() -> None:
     connection = _connection()
-    models = _LearnedModels(movie_id=11)
+    models = _LearnedModels(movie_id=_UNSEEN_MOVIE)
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         # Movie 2 was watched first and then dismissed: it must stop being a
         # positive signal and must not seed retrieval.
         _dismiss(connection, user_id=77, movie_id=2, timestamp=4100)
@@ -423,22 +444,23 @@ async def test_dismissed_movie_is_never_a_positive_or_a_seed() -> None:
     call = models.calls[0]
     assert 2 not in list(call["positive_history_movie_ids"])  # type: ignore[arg-type]
     assert 2 in list(call["excluded_movie_ids"])  # type: ignore[arg-type]
-    assert decision.positive_signal_count == 5
+    assert decision.positive_signal_count == _WARM_HISTORY - 1
 
 
 @pytest.mark.asyncio
 async def test_dismissal_does_not_write_a_training_negative() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         before = connection.execute(text("SELECT COUNT(*) FROM ratings")).scalar_one()
-        _dismiss(connection, user_id=77, movie_id=9, timestamp=4200)
-        await RecommendationCoordinator(RecommendationService(), _LearnedModels(11)).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
-        )
+        _dismiss(connection, user_id=77, movie_id=_OTHER_UNSEEN_MOVIE, timestamp=4200)
+        await RecommendationCoordinator(
+            RecommendationService(), _LearnedModels(_UNSEEN_MOVIE)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
         after = connection.execute(text("SELECT COUNT(*) FROM ratings")).scalar_one()
         negative_rows = connection.execute(
-            text('SELECT COUNT(*) FROM ratings WHERE "userId" = 77 AND "movieId" = 9')
+            text("SELECT COUNT(*) FROM ratings " 'WHERE "userId" = 77 AND "movieId" = :movie_id'),
+            {"movie_id": _OTHER_UNSEEN_MOVIE},
         ).scalar_one()
     finally:
         connection.close()
@@ -468,26 +490,26 @@ async def test_dismissed_movie_is_excluded_from_the_popularity_fallback() -> Non
 async def test_dismissed_movie_is_dropped_during_metadata_hydration() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=11, timestamp=4400)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_UNSEEN_MOVIE, timestamp=4400)
         # The sidecar stub still offers movie 11; hydration must not return it.
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels([11, 10])
+            RecommendationService(), _LearnedModels([_UNSEEN_MOVIE, _OTHER_UNSEEN_MOVIE])
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
-    assert 11 not in [item.movie_id for item in decision.items]
-    assert 11 not in [prediction.movie_id for prediction in decision.predictions]
+    assert _UNSEEN_MOVIE not in [item.movie_id for item in decision.items]
+    assert _UNSEEN_MOVIE not in [prediction.movie_id for prediction in decision.predictions]
 
 
 @pytest.mark.asyncio
 async def test_final_validation_drops_an_excluded_id_that_survived_hydration() -> None:
     connection = _connection()
-    models = _LearnedModels([11, 10])
+    models = _LearnedModels([_UNSEEN_MOVIE, _OTHER_UNSEEN_MOVIE])
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=11, timestamp=4500)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_UNSEEN_MOVIE, timestamp=4500)
         decision = await RecommendationCoordinator(_LeakyHydration(), models).recommend(
             connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
@@ -496,19 +518,19 @@ async def test_final_validation_drops_an_excluded_id_that_survived_hydration() -
 
     # Hydration handed back the dismissed title; the last check has to catch it
     # rather than let an explicit "not for me" reappear.
-    assert [item.movie_id for item in decision.items] == [10]
-    assert 11 not in [prediction.movie_id for prediction in decision.predictions]
+    assert [item.movie_id for item in decision.items] == [_OTHER_UNSEEN_MOVIE]
+    assert _UNSEEN_MOVIE not in [prediction.movie_id for prediction in decision.predictions]
     assert decision.fallback_reason is None
-    assert "excluded-id-blocked: [11]" in decision.reason
+    assert f"excluded-id-blocked: [{_UNSEEN_MOVIE}]" in decision.reason
 
 
 @pytest.mark.asyncio
 async def test_learned_output_holding_only_excluded_ids_fails_closed() -> None:
     connection = _connection()
-    models = _LearnedModels(movie_id=11)
+    models = _LearnedModels(movie_id=_UNSEEN_MOVIE)
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=11, timestamp=4600)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_UNSEEN_MOVIE, timestamp=4600)
         decision = await RecommendationCoordinator(_LeakyHydration(), models).recommend(
             connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
@@ -518,7 +540,7 @@ async def test_learned_output_holding_only_excluded_ids_fails_closed() -> None:
     assert decision.policy == "popularity"
     assert decision.fallback_reason == "excluded-id-blocked"
     assert decision.reason.startswith("excluded-id-blocked")
-    assert 11 not in [item.movie_id for item in decision.items]
+    assert _UNSEEN_MOVIE not in [item.movie_id for item in decision.items]
 
 
 class _LeakyHydration(RecommendationService):
@@ -573,13 +595,13 @@ async def test_policy_reports_fallback_below_the_threshold(history_count: int) -
     assert decision.serving_policy.name == "popularity"
     assert decision.serving_policy.learned is False
     assert decision.serving_policy.positive_signal_count == history_count
-    assert decision.serving_policy.threshold == 5
+    assert decision.serving_policy.threshold == COLD_START_THRESHOLD
     assert decision.serving_policy.reason.startswith("cold-start")
     assert decision.serving_policy.score_scale == "tenant-interaction-count"
     assert decision.serving_policy.filter_policy == EXCLUSION_FILTER_POLICY
 
 
-@pytest.mark.parametrize("history_count", [5, 10])
+@pytest.mark.parametrize("history_count", [COLD_START_THRESHOLD, _WARM_HISTORY])
 @pytest.mark.asyncio
 async def test_policy_reports_learned_serving_at_or_above_the_threshold(
     history_count: int,
@@ -588,7 +610,7 @@ async def test_policy_reports_learned_serving_at_or_above_the_threshold(
     try:
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
@@ -596,7 +618,7 @@ async def test_policy_reports_learned_serving_at_or_above_the_threshold(
     assert decision.serving_policy.name == "item-item-cosine+lightgbm"
     assert decision.serving_policy.learned is True
     assert decision.serving_policy.positive_signal_count == history_count
-    assert decision.serving_policy.threshold == 5
+    assert decision.serving_policy.threshold == COLD_START_THRESHOLD
     assert decision.serving_policy.reason.startswith("learned-two-stage")
     # A LambdaRank score is an ordering, not a probability. The response has to
     # say so or a client will render it as a match percentage.
@@ -608,19 +630,21 @@ async def test_policy_reports_learned_serving_at_or_above_the_threshold(
 async def test_audit_payload_carries_input_state_exclusions_and_freshness() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
-        _dismiss(connection, user_id=77, movie_id=9, timestamp=4700)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
+        _dismiss(connection, user_id=77, movie_id=_OTHER_UNSEEN_MOVIE, timestamp=4700)
         decision = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
     assert decision.input_state_revision > 0
-    assert decision.input_state_hash == id_set_digest([1, 2, 3, 4, 5, 6])
-    assert decision.exclusion_hash == id_set_digest([1, 2, 3, 4, 5, 6, 9])
-    assert decision.positive_signal_count == 6
-    assert decision.excluded_count == 7
+    # The dismissed title was never watched, so it belongs to the exclusion
+    # set and to neither the positives nor their digest.
+    assert decision.input_state_hash == id_set_digest(_WATCHED_IDS)
+    assert decision.exclusion_hash == id_set_digest([*_WATCHED_IDS, _OTHER_UNSEEN_MOVIE])
+    assert decision.positive_signal_count == _WARM_HISTORY
+    assert decision.excluded_count == _WARM_HISTORY + 1
     assert decision.filter_policy == EXCLUSION_FILTER_POLICY
     assert decision.feature_event_time is not None
     assert decision.candidate_sources == {"item-item-cosine": 1}
@@ -632,16 +656,16 @@ async def test_audit_payload_carries_input_state_exclusions_and_freshness() -> N
 async def test_input_digests_are_order_independent_and_revision_moves_with_state() -> None:
     connection = _connection()
     try:
-        _add_catalog_and_history(connection, user_id=77, history_count=6)
+        _add_catalog_and_history(connection, user_id=77, history_count=_WARM_HISTORY)
         first = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
         second = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
-        _dismiss(connection, user_id=77, movie_id=9, timestamp=4800)
+        _dismiss(connection, user_id=77, movie_id=_OTHER_UNSEEN_MOVIE, timestamp=4800)
         third = await RecommendationCoordinator(
-            RecommendationService(), _LearnedModels(movie_id=11)
+            RecommendationService(), _LearnedModels(movie_id=_UNSEEN_MOVIE)
         ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()

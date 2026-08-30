@@ -1,7 +1,20 @@
 # The cold-start routing divergence, measured both ways
 
 **Date:** 2026-08-30
-**Status:** open — a decision for the owner. Nothing in [ADR 0001](adr/0001-evaluation-protocol.md) or [ADR 0011](adr/0011-cold-start-coverage.md) is amended by this document, and no default behaviour changed.
+**Decision (owner, 2026-08-30): option (a), at threshold 10.** ADR 0001's
+threshold becomes the offline routing rule as well as the online one, and the
+threshold itself moves from 5 to 10 — *"the first ten should be popular, then
+personalized."* `cold_start_threshold=COLD_START_THRESHOLD` is the constructor
+default on all three learned candidate models and `threshold` is the default
+`SYNTH_COLD_ROUTING` policy; `None` / `index` is kept as the explicit opt-out,
+and a run made under it is renamed `<base>-index-routing`. Recorded in
+[ADR 0001's 2026-08-30 amendment](adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)
+and [ADR 0011's note](adr/0011-cold-start-coverage.md#2026-08-30--the-threshold-is-10-so-h10-sits-on-the-boundary).
+
+**Status:** closed. Everything below is the measurement the decision was taken
+from, and it is left exactly as it was written — including the tense. It was
+made at threshold 5; the head-to-head tables are still the right comparison
+between the two *policies*, because both arms were run at the same threshold.
 **Companion:** [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) — the other ADR 0001 question this measurement session surfaced, summarised at the bottom of this page.
 **Runs:** all in [`results.md`](results.md), "2026-08-30 — the two-tower finished, and both cold-start routing policies were run".
 

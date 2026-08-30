@@ -21,6 +21,14 @@ def _ratings(rows: list[tuple[int, int]]) -> pd.DataFrame:
 
 # Eight users with overlapping tastes — enough signal for ALS to converge
 # meaningfully on a small synthetic dataset.
+# Every user in the fixture below has three interactions, which is under
+# ADR 0001's `COLD_START_THRESHOLD` — the constructor default since the owner's
+# 2026-08-30 decision. A model built with the default answers every one of them
+# from its popularity fallback, so these tests pass `cold_start_threshold=None`,
+# the documented index-membership opt-out, and keep measuring retrieval rather
+# than the fallback in front of it. Where the *default* sends this fixture is
+# asserted by the routing test below, and exhaustively in
+# `tests/unit/test_candidate_routing.py`.
 _SYNTHETIC_TRAIN = _ratings(
     [
         # "action fans" rate the action canon
@@ -53,7 +61,7 @@ _SYNTHETIC_TRAIN = _ratings(
 
 
 def test_fit_returns_self_for_chaining() -> None:
-    model = CFModel(iterations=2).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=2).fit(_SYNTHETIC_TRAIN)
     assert isinstance(model, CFModel)
 
 
@@ -61,7 +69,7 @@ def test_recommendations_are_valid_movie_ids() -> None:
     # Every returned id must be one that existed in train — the model can't
     # invent items. Catches index→id mapping bugs that would surface as
     # KeyErrors at serving time.
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
     catalog = set(_SYNTHETIC_TRAIN["movieId"].unique())
     recs = model.recommend(user_id=1, k=5)
     assert all(item in catalog for item in recs)
@@ -71,14 +79,14 @@ def test_recommendations_exclude_already_seen_items() -> None:
     # User 1's history is {100, 101, 102}; the recommender's filter must hide them.
     # This is the leak-prevention guarantee for CF: a user can't be told to watch
     # what they already watched.
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
     seen = {100, 101, 102}
     recs = model.recommend(user_id=1, k=10)
     assert not (set(recs) & seen)
 
 
 def test_returns_at_most_k_items() -> None:
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
     recs = model.recommend(user_id=1, k=3)
     assert len(recs) <= 3
 
@@ -87,7 +95,7 @@ def test_unknown_user_falls_through_to_popularity() -> None:
     # ADR 0001 fallback path. User 999 was never in train; the recommender
     # must still return something, and it should match what the embedded
     # popularity model would return for an unknown user.
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
     cf_recs = model.recommend(user_id=999, k=3)
     pop_recs = model._popularity.recommend(user_id=999, k=3)
     assert cf_recs == pop_recs
@@ -98,12 +106,12 @@ def test_empty_train_handles_gracefully() -> None:
     # Operator footgun: temporal_split could in principle return an empty
     # train slice on weird data. The model shouldn't crash — it should
     # quietly produce no recommendations.
-    model = CFModel(iterations=5).fit(_ratings([]))
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_ratings([]))
     assert model.recommend(user_id=1, k=10) == []
 
 
 def test_recommend_for_users_returns_one_list_per_user() -> None:
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
     out = model.recommend_for_users(user_ids=[1, 2, 999], k=3)
     assert set(out.keys()) == {1, 2, 999}
     assert all(len(v) <= 3 for v in out.values())
@@ -112,17 +120,26 @@ def test_recommend_for_users_returns_one_list_per_user() -> None:
 def test_was_served_by_als_matches_recommend_routing() -> None:
     # The predicate is the contract the training pipeline relies on for
     # per-policy MLflow metrics. It must mirror the exact branch in
-    # recommend(): True iff ALS factors exist AND the user was in train.
-    model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
-    assert model.was_served_by_als(1) is True
-    assert model.was_served_by_als(999) is False  # unknown user → fallback
+    # recommend(), under whichever policy the model was built with.
+    index_model = CFModel(cold_start_threshold=None, iterations=5).fit(_SYNTHETIC_TRAIN)
+    assert index_model.was_served_by_als(1) is True
+    assert index_model.was_served_by_als(999) is False  # unknown user → fallback
+
+    # And under the shipped default, this fixture's three-interaction users are
+    # below the threshold, so the fallback answers them and the predicate says
+    # so rather than reporting a learned serve the model did not make.
+    default_model = CFModel(iterations=5).fit(_SYNTHETIC_TRAIN)
+    assert default_model.was_served_by_als(1) is False
+    assert default_model.recommend(user_id=1, k=3) == default_model._popularity.recommend(
+        user_id=1, k=3
+    )
 
 
 def test_was_served_by_als_false_for_empty_train() -> None:
     # No ALS factors means every user routes to the popularity fallback,
     # so the predicate must return False even for an id the caller
     # might think is "known."
-    model = CFModel(iterations=5).fit(_ratings([]))
+    model = CFModel(cold_start_threshold=None, iterations=5).fit(_ratings([]))
     assert model.was_served_by_als(1) is False
 
 
@@ -130,6 +147,6 @@ def test_determinism_with_fixed_random_state() -> None:
     # Two models with the same seed + hyperparams on the same data should
     # produce the same recommendations. If this breaks, something is
     # picking up entropy outside our control — surface it loudly.
-    a = CFModel(iterations=5, random_state=42).fit(_SYNTHETIC_TRAIN)
-    b = CFModel(iterations=5, random_state=42).fit(_SYNTHETIC_TRAIN)
+    a = CFModel(cold_start_threshold=None, iterations=5, random_state=42).fit(_SYNTHETIC_TRAIN)
+    b = CFModel(cold_start_threshold=None, iterations=5, random_state=42).fit(_SYNTHETIC_TRAIN)
     assert a.recommend(user_id=1, k=5) == b.recommend(user_id=1, k=5)

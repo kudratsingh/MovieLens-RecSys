@@ -96,7 +96,7 @@ Open <http://localhost:3001>.
    persona and `Popular while we learn` for a cold one — it follows the
    `serving_policy` the response reported and is never inferred when the response
    states it. Switch persona in the address (`?userId=900000104`) to show Cold
-   Start on the fallback label, with the five-signal routing rule stated as
+   Start on the fallback label, with the cold-start routing rule stated as
    policy rather than guessed at. Recommendations and watch history load as
    independent regions, so a dead history query cannot take the movie decision
    with it. The featured slot is a queue position: `Watched`, `Watchlist`, and
@@ -166,7 +166,7 @@ Open <http://localhost:3001>.
    `Not for me` (J), `Watchlist` (K), `Watched` (L), and `Undo` (U) available
    identically as buttons, keys, and swipes. The card advances only after the API
    commits, so a failure keeps the card and returns focus to the control that
-   failed. The progress panel reads `<n> of 5 positive watched signals` and says
+   failed. The progress panel reads `<n> of 10 positive watched signals` and says
    how many more are needed before learned serving can be used — it reports the
    count the response carried and never announces a policy transition it has not
    observed.

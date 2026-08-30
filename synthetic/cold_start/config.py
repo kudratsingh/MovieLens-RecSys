@@ -17,10 +17,14 @@ from pathlib import Path
 SYNTH_COLD_SEED = 42
 
 # History sizes the cohort covers. 0/1/3 sit below ADR 0001's
-# COLD_START_THRESHOLD of 5 (fallback territory); 10 sits just above it. The
-# bucket above the boundary is deliberately close to it: the failure mode worth
+# COLD_START_THRESHOLD (fallback territory); 10 sits at or above it. The bucket
+# above the boundary is deliberately close to it: the failure mode worth
 # catching is a routing bug *at* the threshold, and a bucket at 50 would sail
-# past one.
+# past one. Since the owner moved the threshold to 10 on 2026-08-30, h10 sits
+# exactly *on* the boundary, which is the sharpest version of that test — the
+# expected fallback counts are unchanged at 500/500/500/0 because
+# `expected_fallback_served` derives them from the constant rather than
+# restating them (`synthetic/cold_start/harness.py`).
 HISTORY_BUCKETS: tuple[int, ...] = (0, 1, 3, 10)
 
 # 500 users per bucket. At a target rate around 0.15 the standard error is

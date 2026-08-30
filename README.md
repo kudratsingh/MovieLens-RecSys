@@ -41,7 +41,7 @@ lands — sixteen ADRs, each with its alternatives analyzed and the signals that
 - **Measured cold-start coverage.** A fixed-seed cohort of 2,000 synthetic users at history sizes
   0/1/3/10, scored per bucket by the same evaluation harness ([ADR 0011](docs/adr/0011-cold-start-coverage.md)).
   On its first run it falsified a claim: the offline candidate models fall back on "no history at
-  all" rather than on the threshold of five, so a one-interaction user was handed item-item
+  all" rather than on ADR 0001's threshold, so a one-interaction user was handed item-item
   neighbours and did about a third as well as the fallback would have — reported, not patched.
 - **The movie-discovery product.** Discover, Browse, movie detail, Library and Quick Picks behind one
   shell, ML evidence behind progressive disclosure. `/` serves it; the pre-redesign dashboard is
@@ -99,7 +99,7 @@ it empty for generated artwork. Walkthrough, reset and troubleshooting:
 
 **Online.** The tenant comes from the issuer that signed the token; the audience and authorized party
 must be on an allow-list. A per-request transaction opens with `SET LOCAL app.tenant_id`, and one
-read of `user_movie_state` returns positives and exclusions separately. Below five positive signals
+read of `user_movie_state` returns positives and exclusions separately. Below ten positive signals
 the request takes the popularity fallback. Above it, the private sidecar retrieves item-item
 candidates — only dismissals may drop a seed — batch-reads eight features per candidate from Redis,
 and scores them with LightGBM. Exclusions are re-applied at retrieval, at hydration, and in a final
@@ -155,12 +155,23 @@ and caveats is in [`docs/results.md`](docs/results.md). Holdout: 1,939 warm user
 
 Three things the table says that a leaderboard would not. Cold NDCG@10 dwarfs warm for every model
 because cold users rate the canonical popular titles — which is why per-policy attribution exists.
-The ranker lifts warm recall@10 by 16.5% over CF/ALS while its warm NDCG@10 *falls* 4.2%, so
-[ADR 0001](docs/adr/0001-evaluation-protocol.md)'s +3% promotion gate clears on the aggregate only
-because of the cold slice; which slice the Phase 4 gate reads is an open decision, and item-item's
-top-500 holds only 56.9% of the ranker's sampled training positives. The two-tower did not finish a
-90-minute CPU budget, so [ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s comparison on the
-full dataset stays open with 0.4001 as the number to beat. On the synthetic cold-start cohort,
+On this single run the ranker lifted warm recall@10 by 16.5% over CF/ALS while its warm NDCG@10
+*fell* 4.2% — **and that fall turned out to be noise.** Re-seeding showed the ranker's warm NDCG@10
+moving 28.7% of its own mean on the seed alone, because it was training on 20,000 positives sampled
+from a 154,003-row window; trained on the whole window it beats CF/ALS by **+21.2% warm and +15.5%
+overall, seed-averaged and at every individual seed**, and
+[ADR 0001](docs/adr/0001-evaluation-protocol.md)'s gate — which since 2026-08-30 reads overall
+NDCG@10 at +3% with a measured per-slice non-regression clause — promotes it. Item-item's top-500
+still holds only 57.0% of the ranker's training positives. The two-tower has since run to
+completion and lost — warm recall@500 **0.0466** against item-item's 0.4001, and against **0.2310**
+for the popularity list it carries inside itself as its own cold-start fallback — so
+[ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s gate is not cleared and item-item stays
+champion. A [learning-rate and budget sweep](docs/results.md#2026-08-30-fourth-session--the-two-towers-learning-rate-and-budget-swept)
+of 12 pilot cells and two full-dataset runs closed the hyper-parameter explanation rather than the
+model: the learning rate was already right to within a decade either side, eight epochs score below
+three, and v1's flat loss curve was not convergence but a model with no range left to speak in —
+its final loss of 10.2718 is worse than `ln(1 + 16,384) = 9.7041`, the loss of a model that emits
+the identical logit for every candidate. On the synthetic cold-start cohort,
 item-item at history sizes 0/1/3/10 scores recall@500 0.4760 / 0.1440 / 0.2880 / 0.3900 with
 `synth_cold_routing_ok = false`
 ([ADR 0011, 2026-08-29 note](docs/adr/0011-cold-start-coverage.md)).

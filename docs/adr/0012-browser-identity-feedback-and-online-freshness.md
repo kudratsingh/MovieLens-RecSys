@@ -66,10 +66,12 @@ are not passed to the deployed model. Feast features are materialized snapshots
 and LightGBM receives neither rating magnitude nor an on-demand update.
 
 Finally, the Bundle 0 online router sent any non-empty history to learned
-serving. That conflicted with ADR 0011 and the shared
-`COLD_START_THRESHOLD = 5`, which
-define histories of 0, 1, and 3 as fallback cohorts and a history of 10 as
-learned.
+serving. That conflicted with ADR 0011 and the shared `COLD_START_THRESHOLD`,
+which define histories of 0, 1, and 3 as fallback cohorts and a history of 10 as
+learned. (The constant was 5 when this ADR was written; the owner moved it to 10
+on 2026-08-30 — see [ADR 0001's amendment](0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline).
+Nothing in this ADR's semantics changes: it defers to the constant and never
+restates the number.)
 
 The frontend needs one explicit contract for what the signed-in actor may do,
 what each feedback action means, when a success is durable, and which parts of
@@ -177,12 +179,14 @@ acknowledged mutation.
 
 ### 6. Align cold-start routing with ADR 0011
 
-Online serving uses popularity fallback while positive history count is below
-five. Five or more positive watched interactions may use the learned path.
-Tests pin histories 0, 1, and 3 to fallback and histories 5 and 10 to learned
-serving when artifacts are available.
+Online serving uses popularity fallback while the positive history count is
+below `COLD_START_THRESHOLD`; at or above it, the learned path may serve. Tests
+pin histories below the threshold to fallback and histories at or above it to
+learned serving when artifacts are available — derived from the constant rather
+than restated, so moving it moves the tests with it.
 
-Quick Picks may show progress toward five watched signals. It must not claim a
+Quick Picks may show progress toward the threshold, reading the number from
+`serving_policy.threshold` where the response carries it. It must not claim a
 serving-policy transition until the response policy confirms it.
 
 ### 7. Keep Phase 3 personalization claims intentionally narrow

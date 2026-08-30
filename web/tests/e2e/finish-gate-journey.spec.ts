@@ -28,7 +28,8 @@ import { COLD_START, clearDismissal, resetColdStart } from "./personas";
  *
  * Cold Start is read-only apart from one dismissal that is undone in the same
  * step, and its exit state is the strict one the whole run depends on: **zero
- * positive signals**, not merely fewer than five. Step 8 restores it in a
+ * positive signals**, not merely fewer than the routing threshold. Step 8
+ * restores it in a
  * `finally` even though a dismissal is not a positive signal, because a failure
  * part way through the deck can leave one behind. Every write below is
  * reversed, each reversal tolerates finding the persona already restored so the
@@ -236,7 +237,7 @@ test("the ten-step finish-gate journey holds against the seeded stack", async ({
     `Cold Start reported ${JSON.stringify(coldResponse.serving_policy)}`,
   ).toBe(false);
   expect(coldResponse.serving_policy?.positive_signal_count ?? 0).toBeLessThan(
-    coldResponse.serving_policy?.threshold ?? 5,
+    coldResponse.serving_policy?.threshold ?? 10,
   );
 
   await page.goto(`/discover?userId=${COLD_START}`);

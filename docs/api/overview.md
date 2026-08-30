@@ -223,7 +223,7 @@ can assert on.
 | `name` | The policy that ran, e.g. `item-item-cosine+lightgbm` or `popularity` |
 | `learned` | Whether both stages actually ran. A seedless retrieval reports `false` |
 | `positive_signal_count` | Unique watched, non-dismissed titles |
-| `threshold` | The cold-start threshold, `5` |
+| `threshold` | The cold-start threshold, `10` (ADR 0001 as amended 2026-08-30). Read it from the response rather than hardcoding it |
 | `reason` | Free text after a stable prefix — group on the prefix |
 | `score_scale` | What `items[].score` is: `lightgbm-rank-score` or `tenant-interaction-count`. An ordering, never a probability, and never to be shown as a match percentage |
 | `filter_policy` | The exclusion rule applied, e.g. `watched-and-dismissed-excluded-v1` |
@@ -246,12 +246,12 @@ matter. Field names are the schema's; values are illustrative.
   "serving_policy": {
     "name": "item-item-cosine+lightgbm",
     "learned": true,
-    "positive_signal_count": 8,
-    "threshold": 5,
-    "reason": "learned-two-stage: item-item-cosine retrieval over 6 positive seeds, ranked by demo-lgbm-v1",
+    "positive_signal_count": 12,
+    "threshold": 10,
+    "reason": "learned-two-stage: item-item-cosine retrieval over 12 positive seeds, ranked by demo-lgbm-v1",
     "score_scale": "lightgbm-rank-score",
     "filter_policy": "watched-and-dismissed-excluded-v1",
-    "excluded_count": 8
+    "excluded_count": 12
   },
   "items": [
     {

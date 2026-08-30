@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker gate serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -219,6 +219,36 @@ train-twotower:
 
 train-ranker:
 	python -m src.training.ranker
+
+# The seed the two stochastic trainers use. CF/ALS initialises its factors at
+# random and the ranker samples its positives, its negatives and its splits;
+# popularity and item-item have no random component and ignore this entirely.
+# Unset reproduces every number in docs/results.md.
+#
+#   TRAIN_SEED=7 make train-cf
+#
+# Three seeds per model is what the promotion gate's slice tolerance was
+# measured from — see src/evaluation/gate.py and docs/results.md.
+
+# How many positives the ranker trains on. Unset is the whole 30-day trailing
+# window, which is what makes a re-seeded ranker run comparable to the last one
+# — see src/training/sampling.py and docs/results.md's sample-size section.
+# Popularity, item-item, CF/ALS and the two-tower ignore it.
+#
+#   RANKER_POSITIVE_LIMIT=20000 make train-ranker
+
+# ADR 0001's promotion gate over MLflow runs. Prints the verdict and exits 0 to
+# promote, 1 to refuse, 2 when it cannot decide (a K mismatch, or a killed run
+# with parameters and no metrics). Either side takes several space-separated
+# run ids, in which case the gate reads their mean — the comparison to make for
+# a model whose metrics move with the seed.
+#
+#   make gate CANDIDATE=<run id> INCUMBENT=<run id>
+#   make gate CANDIDATE="<id> <id> <id>" INCUMBENT="<id> <id> <id>"
+gate:
+	@test -n "$(CANDIDATE)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
+	@test -n "$(INCUMBENT)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
+	python -m src.evaluation.gate --candidate $(CANDIDATE) --incumbent $(INCUMBENT) $(GATE_ARGS)
 
 # Non-negotiable #5's entry point: a fixed seed and a fixed as-of produce the
 # same artifact hashes. It is the serving-bundle build under the name the

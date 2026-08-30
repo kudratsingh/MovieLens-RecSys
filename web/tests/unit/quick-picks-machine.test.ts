@@ -187,14 +187,14 @@ describe("committing a decision", () => {
 
     expect(currentCard(after)?.movieId).toBe(cards[1].movieId);
     expect(progressOf(after).count).toBe(fixtureFallbackPolicy.positive_signal_count + 1);
-    expect(after.announcement).toContain("3 of 5 watched signals recorded");
+    expect(after.announcement).toContain("3 of 10 watched signals recorded");
     expect(after.focusRequest).toBe(actionFocusId("watched"));
   });
 
   it("describes progress past the threshold instead of reading out a ratio", () => {
     // The visual meter clamps its fill at the threshold; the live region used
     // to announce the raw numbers, so a warm persona was told it had "29 of
-    // the 5" watched signals.
+    // the 10" watched signals.
     const policy: ServingPolicy = {
       ...fixtureFallbackPolicy,
       positive_signal_count: 28,
@@ -204,7 +204,7 @@ describe("committing a decision", () => {
     ]);
 
     expect(progressOf(after).count).toBe(29);
-    expect(after.announcement).not.toContain("29 of 5");
+    expect(after.announcement).not.toContain("29 of 10");
     expect(after.announcement).toContain("Enough watched signals are recorded");
   });
 
@@ -226,7 +226,7 @@ describe("committing a decision", () => {
       { action: "watched", state: watched(cards[0].movieId) },
     ]);
 
-    expect(after.announcement).toContain("3 of 5 watched signals recorded; 2 to go.");
+    expect(after.announcement).toContain("3 of 10 watched signals recorded; 7 to go.");
   });
 
   it("restores the card, the controls, and focus when the write fails", () => {
@@ -317,7 +317,7 @@ describe("undo", () => {
 
 describe("refetch policy", () => {
   it("asks for a fresh queue after the third committed watched signal", () => {
-    // Starting from zero so the batch rule fires before the five-signal rule.
+    // Starting from zero so the batch rule fires before the threshold rule.
     const coldPolicy: ServingPolicy = { ...fixtureFallbackPolicy, positive_signal_count: 0 };
     const twoSignals = decideAll(start({ policy: coldPolicy }), [
       { action: "watched", state: watched(cards[0].movieId) },
@@ -344,8 +344,13 @@ describe("refetch policy", () => {
     expect(after.refreshRequest).toBeNull();
   });
 
-  it("refetches at the five-signal boundary instead of announcing a transition", () => {
-    const policy: ServingPolicy = { ...fixtureFallbackPolicy, positive_signal_count: 4 };
+  it("refetches at the threshold boundary instead of announcing a transition", () => {
+    // One short of the fixture policy's threshold, so the single watched
+    // signal below lands exactly on it.
+    const policy: ServingPolicy = {
+      ...fixtureFallbackPolicy,
+      positive_signal_count: fixtureFallbackPolicy.threshold - 1,
+    };
     const after = decideAll(start({ policy }), [
       { action: "watched", state: watched(cards[0].movieId) },
     ]);

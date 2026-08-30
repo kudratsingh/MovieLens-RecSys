@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 import torch
 
+from src.models.candidates import routing
 from src.models.candidates.twotower import (
     TwoTowerConfig,
     TwoTowerModel,
@@ -303,11 +304,21 @@ def test_resolve_sample_fraction_defaults_to_the_whole_dataset() -> None:
     assert resolve_sample_fraction({"TWOTOWER_USER_SAMPLE_FRACTION": "0.06"}) == 0.06
 
 
-def test_default_run_keeps_the_name_results_md_cites() -> None:
-    """docs/results.md finds v1 by this name; a sweep must not rename it."""
-    assert run_name_for("index", "") == "twotower-sampled-softmax"
-    assert run_name_for("index", "lr1e-2") == "twotower-sampled-softmax-lr1e-2"
-    assert run_name_for("threshold", "") == "twotower-sampled-softmax-threshold-routing"
+def test_a_sweep_label_is_the_only_thing_a_sweep_adds_to_a_run_name() -> None:
+    """The label composes with whatever the routing policy already does.
+
+    Which policy takes the plain name is `routing`'s business and it changed on
+    2026-08-30, so this asserts the composition rather than restating the
+    default — otherwise the test breaks every time the owner takes a routing
+    decision, which is the wrong thing to be sensitive to.
+    """
+    default = routing.DEFAULT_POLICY
+    other = next(p for p in routing.POLICIES if p != default)
+
+    assert run_name_for(default, "") == "twotower-sampled-softmax"
+    assert run_name_for(default, "lr1e-2") == "twotower-sampled-softmax-lr1e-2"
+    assert run_name_for(other, "") == f"twotower-sampled-softmax-{other}-routing"
+    assert run_name_for(other, "lr1e-2") == f"twotower-sampled-softmax-{other}-routing-lr1e-2"
 
 
 # --- the grid runner -------------------------------------------------------

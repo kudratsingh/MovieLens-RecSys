@@ -4,6 +4,17 @@
 
 **Snapshot taken:** 2026-05-31
 
+> **2026-08-30 — the cold-start threshold has moved since this snapshot.** Every
+> `<5 training interactions` figure below was measured against ADR 0001's
+> original threshold of 5. The owner amended it to **10** on 2026-08-30
+> ([ADR 0001](adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)),
+> so the cold slice is now `<10`. Nothing here is retracted — these are the
+> numbers that were measured — but the headline conclusion is if anything
+> *reinforced*: MovieLens's min-20-ratings floor means the population between 1
+> and 9 training interactions is still nearly empty, so the cold slice remains
+> dominated by brand-new users. Re-run `make eda` to re-measure at the new
+> threshold; nothing on this page has been recomputed.
+
 **Figures rendered:** 2026-08-29, from the same DVC data version (`c3ce6309f6f0ec347a9e0a662c640021.dir`) and the same SQL aggregations that produced the tables. The prose snapshot below is unchanged — nothing in it was re-measured, and every figure is drawn from the numbers already in the table above it. Re-render with `make eda`; the PNGs are deterministic, so an unchanged database produces unchanged bytes.
 
 ## Headlines
