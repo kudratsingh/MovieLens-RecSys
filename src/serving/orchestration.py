@@ -172,9 +172,9 @@ class RecommendationCoordinator:
         # Asked before the cold-start threshold on purpose. A tenant with no
         # registered champion (``public.tenants``, migration 0016) cannot take
         # the learned path however much history the user has, so reporting
-        # "cold-start" here would tell a viewer to go and watch five more movies
-        # to unlock something that would not change. The tenant's own state is
-        # the more specific answer, so it is the one the response carries.
+        # "cold-start" here would tell a viewer to go and watch more movies to
+        # unlock something that would not change. The tenant's own state is the
+        # more specific answer, so it is the one the response carries.
         if champion is None:
             return await self._popularity(
                 connection,

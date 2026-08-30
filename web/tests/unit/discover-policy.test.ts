@@ -97,8 +97,8 @@ describe("the reported serving policy wins over the inferred one", () => {
       withEnvelope(fallbackRecommendations, {
         name: "item-item+lightgbm",
         learned: true,
-        positive_signal_count: 9,
-        threshold: 5,
+        positive_signal_count: 12,
+        threshold: 10,
         reason: null,
       }),
     );
@@ -114,13 +114,13 @@ describe("the reported serving policy wins over the inferred one", () => {
         name: "lightgbm-unavailable",
         learned: false,
         positive_signal_count: 2,
-        threshold: 5,
+        threshold: 10,
         reason: "model-server-unavailable",
       }),
     );
 
     expect(policy.kind).toBe("fallback");
-    expect(policy.note).toContain("2 of the 5 watched signals");
+    expect(policy.note).toContain("2 of the 10 watched signals");
     // The recorded reason is quoted as evidence, never paraphrased into copy.
     expect(policy.note).not.toContain("model-server-unavailable");
     expect(policy.reason).toBe("model-server-unavailable");
@@ -166,7 +166,7 @@ describe("the plain sentence Why this? opens with", () => {
   it("says where a learned response came from, in the viewer's words", () => {
     const sentence = plainServingExplanation(learnedRecommendations);
 
-    expect(sentence).toContain("Picked from 8 of the movies this persona has watched");
+    expect(sentence).toContain("Picked from 12 of the movies this persona has watched");
     expect(sentence).toContain("ordered by the ranking model");
     // No version, no policy name, no hash, no request id: that is the evidence
     // directly beneath it, one heading away.
@@ -198,7 +198,7 @@ describe("the plain sentence Why this? opens with", () => {
     const sentence = plainServingExplanation(fallbackRecommendations);
 
     expect(sentence).toContain("watched most across this tenant");
-    expect(sentence).toContain("3 of the 5 watched movies");
+    expect(sentence).toContain("3 of the 10 watched movies");
     expect(sentence).not.toContain("Picked from");
   });
 
@@ -214,7 +214,7 @@ describe("the plain sentence Why this? opens with", () => {
     );
 
     expect(sentence).toContain("enough watched signals");
-    expect(sentence).not.toContain("28 of the 5");
+    expect(sentence).not.toContain("28 of the 10");
     expect(sentence).not.toMatch(/\d+ of the \d+ watched movies/);
   });
 
@@ -229,7 +229,7 @@ describe("the plain sentence Why this? opens with", () => {
   });
 
   it("reads the seed count out of the recorded reason, or nothing at all", () => {
-    expect(reportedSeedCount(readServingPolicyEnvelope(learnedRecommendations))).toBe(8);
+    expect(reportedSeedCount(readServingPolicyEnvelope(learnedRecommendations))).toBe(12);
     expect(reportedSeedCount(readServingPolicyEnvelope(fallbackRecommendations))).toBeNull();
     expect(reportedSeedCount(null)).toBeNull();
   });
@@ -248,13 +248,13 @@ describe("a fallback served to a persona that is not cold", () => {
     expect(warm.label).toBe(POPULARITY_FALLBACK_LABEL);
     expect(warm.label).not.toBe(FALLBACK_POLICY_LABEL);
     expect(warm.note).toBe(WARM_FALLBACK_NOTE);
-    expect(warm.note).not.toContain("28 of the 5");
+    expect(warm.note).not.toContain("28 of the 10");
   });
 
   it("keeps the cold-start label and the count while the persona is cold", () => {
     const cold = describeServingPolicy(fallbackRecommendations);
 
     expect(cold.label).toBe(FALLBACK_POLICY_LABEL);
-    expect(cold.note).toContain("3 of the 5 watched signals");
+    expect(cold.note).toContain("3 of the 10 watched signals");
   });
 });

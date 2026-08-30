@@ -242,17 +242,17 @@ describe("progress toward learned serving", () => {
     renderDeck();
 
     expect(screen.getByRole("heading", { name: "Popular while we learn" })).toBeVisible();
-    expect(screen.getByText("2 of 5 positive watched signals")).toBeVisible();
+    expect(screen.getByText("2 of 10 positive watched signals")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /^Watchlist/ }));
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("watchlist saved"),
     );
-    expect(screen.getByText("2 of 5 positive watched signals")).toBeVisible();
+    expect(screen.getByText("2 of 10 positive watched signals")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /^Watched/ }));
     await waitFor(() =>
-      expect(screen.getByText("3 of 5 positive watched signals")).toBeVisible(),
+      expect(screen.getByText("3 of 10 positive watched signals")).toBeVisible(),
     );
   });
 
@@ -263,7 +263,7 @@ describe("progress toward learned serving", () => {
     await user.click(screen.getByRole("button", { name: "4 stars for Perfect Blue" }));
 
     await waitFor(() =>
-      expect(screen.getByText("3 of 5 positive watched signals")).toBeVisible(),
+      expect(screen.getByText("3 of 10 positive watched signals")).toBeVisible(),
     );
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("In the Mood for Love");
     expect(screen.getByRole("status")).toHaveTextContent("Perfect Blue: watched saved.");

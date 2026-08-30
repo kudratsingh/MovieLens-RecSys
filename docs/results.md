@@ -10,6 +10,22 @@ not finish, this file says so instead of reporting a partial number.
 **Cold-start cohort:** ADR 0011 `v1`, md5 `9e0c978eff3d45f0985e9e0bbe0551d7`, fingerprint `ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2`
 **Evaluation:** every metric comes from [`src/evaluation/`](../src/evaluation/) — the trainers were run, nothing was computed by hand (non-negotiable #5)
 
+> **2026-08-30 — every number on this page predates the threshold change.**
+> All of it was scored with `COLD_START_THRESHOLD = 5`, and every run whose name
+> carries no policy suffix was scored under **index-membership** routing. The
+> owner then took both decisions at once
+> ([ADR 0001's amendment](adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)):
+> the threshold is **10**, and the threshold — not index membership — is the
+> offline routing rule too, which makes `threshold` the default policy and the
+> plain run name. Nothing here is retracted: the head-to-head tables in
+> ["Both cold-start routing policies, measured"](#2-both-cold-start-routing-policies-measured)
+> are still the right comparison between the two policies, because both arms were
+> run at the same threshold on the same data. What is no longer true of a *future*
+> run is the labelling — an unsuffixed run from now on is a threshold run, and an
+> index run is named `<base>-index-routing`. Re-running any of these at threshold
+> 10 would move the warm/cold slicing as well as the routing, so the two are not
+> directly comparable to the rows below and would need their own dated section.
+>
 > **A later session appended to this page.** Everything down to "Caveats worth
 > writing down" is the 2026-08-29 measurement and is left exactly as it was
 > written. [The 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
@@ -601,6 +617,11 @@ candidate model takes `cold_start_threshold: int | None`, where `None` — the
 default — is the index-membership rule these models have always used, and an int
 applies ADR 0001's `COLD_START_THRESHOLD`. The trainers read it from
 `SYNTH_COLD_ROUTING` (`index` or `threshold`). Unset reproduces `main`.
+
+> *As of the owner's decision later the same day, the polarity is reversed:
+> `threshold` is the default and `index` is the opt-out, so an unsuffixed run
+> from now on is a threshold run. The runs in this section were made before
+> that, and their names are as recorded.*
 
 **Checked, not assumed.** The index-policy item-item run below and the
 `65faeebb5e0545dcaba9ae703cc67af0` run of record from 2026-08-29 agree on every

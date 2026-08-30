@@ -197,7 +197,7 @@ function requestRefresh(
  *
  * A persona whose count is already past the threshold has to be described, not
  * counted: the visual meter clamps its fill, and the announcement used to read
- * the raw ratio out loud — "29 of 5 watched signals recorded" — to the one
+ * the raw ratio out loud — "29 of 10 watched signals recorded" — to the one
  * audience that cannot see the clamped bar. Past the threshold the honest
  * statement is what it means, and it stays careful about the difference between
  * *enough signals recorded* and *serving has switched*, which only a returned

@@ -10,9 +10,10 @@ The recommender precomputes, for each item, the top-K most similar items
 under cosine similarity over the binary user-item interaction matrix. At
 recommend time, for a user with history H, item i is scored as the sum of
 its similarities to the items in H; the top-N by score are returned with
-already-seen items filtered out. Cold users — those absent from the
-training matrix — fall through to the embedded popularity baseline, the
-same fallback pattern CFModel established and ADR 0001 locked in.
+already-seen items filtered out. Cold users — those below ADR 0001's
+``COLD_START_THRESHOLD`` distinct training items — fall through to the
+embedded popularity baseline, the same fallback pattern CFModel established
+and ADR 0001 locked in, and the same rule the deployed service routes on.
 
 The implicit library's CosineRecommender does exactly this precomputation
 and aggregation, including a sparse top-K storage of the similarity matrix
@@ -45,10 +46,11 @@ class ItemItemModel:
     # future sweeps can sweep it.
     k_neighbors: int = 200
 
-    # Opt-in, non-default: where the learned path stops. None keeps the
-    # index-membership rule this model has always used; an int applies
-    # ADR 0001's threshold instead. See src/models/candidates/routing.py.
-    cold_start_threshold: int | None = None
+    # Where the learned path stops. ADR 0001's threshold by default, which is
+    # the rule the deployed service routes on; None opts out to the
+    # index-membership rule this model used before 2026-08-30. See
+    # src/models/candidates/routing.py.
+    cold_start_threshold: int | None = routing.DEFAULT_COLD_START_THRESHOLD
 
     # Populated by fit:
     _knn: CosineRecommender | None = None
@@ -152,11 +154,12 @@ class ItemItemModel:
         """Predicate: would ``recommend(user_id, …)`` go through item-item or popularity?
 
         ``recommend`` *calls this* rather than restating the condition, so the
-        two cannot drift — which matters now that the condition has a second
-        form. By default: true iff this user has any training history and the
-        KNN index is fitted. With ``cold_start_threshold`` set, index
-        membership is necessary but no longer sufficient — the user also needs
-        that many distinct training items.
+        two cannot drift — which matters because the condition has two forms.
+        By default: true iff the KNN index is fitted and this user has at least
+        ``cold_start_threshold`` distinct training items, which is the rule
+        `src/serving/orchestration.py` applies to a live request. With
+        ``cold_start_threshold=None`` the index-membership opt-out applies and
+        any training history at all is enough.
         """
         if self._knn is None or user_id not in self._user_to_index:
             return False

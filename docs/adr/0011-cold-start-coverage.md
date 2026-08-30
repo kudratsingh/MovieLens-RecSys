@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-04
+**Note:** 2026-08-30 — the threshold moved to 10, so the h10 bucket now sits exactly *on* the boundary and the divergence this cohort found is closed. See [the note at the bottom](#2026-08-30--the-threshold-is-10-so-h10-sits-on-the-boundary).
 
 ## Context
 
@@ -20,7 +21,7 @@ This ADR fixes the shape of that control. It answers:
 
 Cold-start coverage is measured via a **fixed-seed synthetic cohort of 2 000 users** with the following shape:
 
-- **History-size buckets: {0, 1, 3, 10}.** 500 users per bucket, 2 000 total. Buckets are chosen (per CLAUDE.md) to span the cold-start boundary: 0/1/3 sit below ADR 0001's threshold of 5 (fallback territory); 10 sits just above (learned-model territory at the boundary). Statistical power at n=500 per bucket is sufficient to detect a ~5% recall difference between buckets at α = 0.05.
+- **History-size buckets: {0, 1, 3, 10}.** 500 users per bucket, 2 000 total. Buckets are chosen (per CLAUDE.md) to span the cold-start boundary: 0/1/3 sit below ADR 0001's threshold of 5 (fallback territory); 10 sits just above (learned-model territory at the boundary). *(The threshold became 10 on 2026-08-30, so h10 now sits exactly **on** the boundary rather than just above it — the buckets and expected counts are unchanged. See the note at the bottom of this file.)* Statistical power at n=500 per bucket is sufficient to detect a ~5% recall difference between buckets at α = 0.05.
 - **Item selection: popularity-weighted (Zipfian) over the train catalog.** Each synthetic user's history is drawn without replacement from the item catalog with sampling probability proportional to each item's train interaction count. This matches the empirical pattern where new users first interact with popular items — a uniform-random alternative was rejected as unrealistic (see Alternatives), and a genre-clustered alternative is deferred to the persona harness (`synthetic/personas/`) which serves a different job.
 - **Target: single held-out next-item per user, from the same popularity-weighted distribution, excluded from that user's history.** Recall@K = "did the model return this one item in top-K." Clean per-user pass/fail signal; aggregates to per-bucket recall directly.
 - **Dedicated `synth_cold` tenant.** Realm-per-tenant (ADR 0007) provisions the tenant; RLS (ADR 0008) scopes the users' rows. Isolated from `demo` (portfolio walkthroughs) and the default MovieLens tenant. Synthetic users are tagged `synthetic=true` on the users table for filtering by any downstream analysis.
@@ -266,3 +267,46 @@ users, 7 000 history rows, 1 313 distinct target titles, cohort fingerprint
 it produced a byte-identical parquet. The 7 000 attached rows are 0.035% of
 train and no cohort user appears in holdout, so the warm/cold metrics every
 earlier run reported are unchanged.
+
+## 2026-08-30 — the threshold is 10, so h10 sits *on* the boundary
+
+[ADR 0001's amendment](0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)
+moved `COLD_START_THRESHOLD` to 10 and made it the offline candidate models'
+routing rule as well as the deployed one. The divergence the section above
+reported is therefore closed rather than merely documented, and this cohort was
+the instrument that made closing it a decision instead of a preference.
+
+**The buckets do not change, and neither do the expected counts.**
+`HISTORY_BUCKETS` stays `{0, 1, 3, 10}` and
+`expected_fallback_served` stays **500 / 500 / 500 / 0**, because
+`synthetic/cold_start/harness.py` derives it from the constant
+(`bucket.n_users if bucket.history_size < COLD_START_THRESHOLD else 0`) rather
+than restating a number. At a threshold of 10, `10 < 10` is false, so h10 is
+still the one bucket the learned path is expected to serve.
+
+What changes is how sharp that last bucket is. Rationale #4 above chose 10 over
+20 or 50 precisely because "the interesting claim is that routing switches
+correctly *at the boundary*" — and h10 now sits **exactly on** the boundary
+rather than one step past it. A model whose fallback fires at 11 instead of 10,
+or an off-by-one in `>=` versus `>`, shows up here as `synth_cold_routing_ok =
+false` where before the bucket had a step of slack to absorb it. That is a
+strictly stronger test of the thing the bucket exists for, and it arrived
+without touching the cohort: the parquet, the seed, and fingerprint
+`ae4475f0e063…` are all unchanged, so every per-bucket recall number above is
+still directly comparable.
+
+**Expected effect on the numbers.** Under the new default, the fallback counts
+become 500/500/500/0 on every learned candidate run and `synth_cold_routing_ok`
+becomes true — the state this cohort was built to be able to assert. The
+per-bucket recalls for h1 and h3 rise to the popularity control's, since those
+buckets are now fallback-served; h0 and h10 are unmoved. The routing memo
+recorded exactly this, run both ways: item-item h1 0.1440 → 0.4600 and h3
+0.2880 → 0.4560 (`docs/cold-start-routing-decision.md`).
+
+**The Risks-section caveat still binds, and binds harder now.** The targets are
+popularity-weighted, so every fallback-served bucket is flattered by
+construction — and after this change three of the four buckets are
+fallback-served. `synth_cold_routing_ok` remains a *routing* tripwire, not
+evidence that the fallback is the better product answer below the boundary; the
+recall column on h1 and h3 should be read as "the popularity control's number,
+reproduced" rather than as a model improvement.

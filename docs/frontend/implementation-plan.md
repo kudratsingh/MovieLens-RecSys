@@ -9,6 +9,18 @@ gets its own PR.
 
 **Last updated:** 2026-08-29
 
+> **2026-08-30 — every "five" below means "the cold-start threshold", and that
+> number is now 10.** This document is a record of what was planned and built,
+> and is left as it was written: online routing was aligned to
+> five unique watched movie IDs, because five is what ADR 0001 pinned at the
+> time. The owner amended it to **10** on 2026-08-30
+> ([ADR 0001](../adr/0001-evaluation-protocol.md#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline)),
+> and every one of those mechanisms now reads the constant rather than a
+> literal. Nothing in the plan's design needed to change for that, which is the
+> point of having routed through `serving_policy.threshold` in the first place;
+> the live statement of the rule is in
+> [`design-contracts.md`](design-contracts.md).
+
 ## Delivery principle
 
 The redesign proceeds as a set of reviewable vertical slices. Frontend shell

@@ -48,13 +48,13 @@ const learnedPolicy: ServingPolicy = {
   filter_policy: FILTER_POLICY,
   learned: true,
   name: "item-item-lightgbm",
-  positive_signal_count: 8,
+  positive_signal_count: 12,
   reason:
-    "learned-two-stage: item-item-cosine retrieval over 8 positive seeds, " +
+    "learned-two-stage: item-item-cosine retrieval over 12 positive seeds, " +
     "ranked by lgbm-ranker-2026.08",
   // An uncalibrated LambdaRank ordering — never a probability or a percentage.
   score_scale: "lightgbm-rank-score",
-  threshold: 5,
+  threshold: 10,
 };
 
 const fallbackPolicy: ServingPolicy = {
@@ -63,9 +63,9 @@ const fallbackPolicy: ServingPolicy = {
   learned: false,
   name: "popularity",
   positive_signal_count: 3,
-  reason: "cold-start: 3 positive watched signals below threshold 5",
+  reason: "cold-start: 3 positive watched signals below threshold 10",
   score_scale: "tenant-interaction-count",
-  threshold: 5,
+  threshold: 10,
 };
 
 const SEEDS: readonly ItemSeed[] = [
@@ -363,7 +363,7 @@ export const discoverAudits: RecommendationAuditResponse = {
       feature_version: "online-features-v2",
       fallback_reason: null,
       reason: learnedPolicy.reason,
-      positive_signal_count: 8,
+      positive_signal_count: 12,
       excluded_count: 9,
       filter_policy: FILTER_POLICY,
       input_state_revision: 12,

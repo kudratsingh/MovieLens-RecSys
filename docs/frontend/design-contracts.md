@@ -226,7 +226,7 @@ fallback note may not describe a signal count above the threshold as though it
 were below it — `serving_policy` can legitimately report a high
 `positive_signal_count` alongside `learned: false` (an unseeded retrieval, for
 instance), and the copy has to say the true thing in that case rather than
-"28 of the 5 watched signals".
+"28 of the 10 watched signals".
 
 The drawer also states **what never comes back**. Watched and dismissed titles
 are dropped from the exclusion set before retrieval runs — true at the source
@@ -508,9 +508,12 @@ behavior.
 title suppression; it must not become a negative training label without an
 accepted cross-cutting ADR.
 
-Progress copy uses the accepted five-interaction cold-start threshold. Until
-the online router is aligned with ADR 0011, Quick Picks may show collected
-feedback but must not claim that five signals have switched serving policy.
+Progress copy uses the accepted cold-start threshold, read from
+`serving_policy.threshold` wherever the response carries it and otherwise from
+the one shared constant (`LEARNED_SERVING_SIGNAL_THRESHOLD` in
+`web/lib/discover/policy.ts`) — never a literal. The threshold is **10** since
+ADR 0001's 2026-08-30 amendment, and the copy must not claim that reaching it
+has switched serving policy until a returned policy says `learned: true`.
 
 **Responsive priority:** Touch actions stay within thumb reach; keyboard and
 screen-reader order remains logical. Motion never hides the result of a failed

@@ -77,12 +77,12 @@ def test_record_persists_versions_predictions_features_and_latency() -> None:
             input_state_revision=9,
             input_state_hash="positive-digest",
             exclusion_hash="exclusion-digest",
-            positive_signal_count=6,
+            positive_signal_count=12,
             excluded_count=2,
             filter_policy=EXCLUSION_FILTER_POLICY,
             feature_event_time=event_time,
             candidate_sources={"item-item-cosine": 40, "popularity-fill": 10},
-            reason="learned-two-stage: item-item-cosine retrieval over 6 positive seeds",
+            reason="learned-two-stage: item-item-cosine retrieval over 12 positive seeds",
         ),
     )
 
@@ -105,7 +105,7 @@ def test_record_persists_versions_predictions_features_and_latency() -> None:
     assert values["input_state_revision"] == 9
     assert values["input_state_hash"] == "positive-digest"
     assert values["exclusion_hash"] == "exclusion-digest"
-    assert values["positive_signal_count"] == 6
+    assert values["positive_signal_count"] == 12
     assert values["excluded_count"] == 2
     assert values["filter_policy"] == EXCLUSION_FILTER_POLICY
     assert values["feature_event_time"] == event_time
@@ -175,7 +175,7 @@ def test_list_for_user_maps_newest_tenant_scoped_rows() -> None:
                 filter_policy=EXCLUSION_FILTER_POLICY,
                 feature_event_time=None,
                 candidate_sources={"popularity-fallback": 1},
-                reason="cold-start: 3 positive watched signals below threshold 5",
+                reason="cold-start: 3 positive watched signals below threshold 10",
             )
         ]
     )

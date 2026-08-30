@@ -41,7 +41,7 @@ lands — sixteen ADRs, each with its alternatives analyzed and the signals that
 - **Measured cold-start coverage.** A fixed-seed cohort of 2,000 synthetic users at history sizes
   0/1/3/10, scored per bucket by the same evaluation harness ([ADR 0011](docs/adr/0011-cold-start-coverage.md)).
   On its first run it falsified a claim: the offline candidate models fall back on "no history at
-  all" rather than on the threshold of five, so a one-interaction user was handed item-item
+  all" rather than on ADR 0001's threshold, so a one-interaction user was handed item-item
   neighbours and did about a third as well as the fallback would have — reported, not patched.
 - **The movie-discovery product.** Discover, Browse, movie detail, Library and Quick Picks behind one
   shell, ML evidence behind progressive disclosure. `/` serves it; the pre-redesign dashboard is
@@ -99,7 +99,7 @@ it empty for generated artwork. Walkthrough, reset and troubleshooting:
 
 **Online.** The tenant comes from the issuer that signed the token; the audience and authorized party
 must be on an allow-list. A per-request transaction opens with `SET LOCAL app.tenant_id`, and one
-read of `user_movie_state` returns positives and exclusions separately. Below five positive signals
+read of `user_movie_state` returns positives and exclusions separately. Below ten positive signals
 the request takes the popularity fallback. Above it, the private sidecar retrieves item-item
 candidates — only dismissals may drop a seed — batch-reads eight features per candidate from Redis,
 and scores them with LightGBM. Exclusions are re-applied at retrieval, at hydration, and in a final

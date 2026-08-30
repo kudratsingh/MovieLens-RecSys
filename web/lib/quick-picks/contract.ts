@@ -13,6 +13,7 @@
  */
 
 import type { RecommendationItem, RecommendationResponse, ServingPolicy } from "@/lib/api";
+import { LEARNED_SERVING_SIGNAL_THRESHOLD } from "@/lib/discover/policy";
 import { displayTitle } from "@/lib/movie-types";
 
 /**
@@ -216,7 +217,7 @@ export function quickPickProgress(
   policy: ServingPolicy | null,
   committedSinceLoad: number,
 ): QuickPickProgress {
-  const threshold = policy?.threshold ?? 5;
+  const threshold = policy?.threshold ?? LEARNED_SERVING_SIGNAL_THRESHOLD;
   const count = (policy?.positive_signal_count ?? 0) + committedSinceLoad;
   return {
     count,

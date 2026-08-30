@@ -3,8 +3,12 @@ from dataclasses import dataclass, field
 
 from .metrics import ndcg_at_k, recall_at_k
 
-# Matches ADR 0001: users with fewer than this many training interactions are cold.
-COLD_START_THRESHOLD = 5
+# Matches ADR 0001 as amended 2026-08-30: users with fewer than this many
+# training interactions are cold. One number for the whole system — the warm/cold
+# slicing here, the offline candidate models' fallback routing, and the deployed
+# path in `src/serving/orchestration.py` all read it, so "is this user cold?" has
+# a single answer offline and online (`docs/cold-start-routing-decision.md`).
+COLD_START_THRESHOLD = 10
 
 # K for the recommender end-to-end (top-K returned to the user).
 K = 10

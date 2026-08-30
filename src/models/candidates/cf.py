@@ -36,10 +36,11 @@ class CFModel:
     iterations: int = 15
     random_state: int = 42
 
-    # Opt-in, non-default: where the learned path stops. None keeps the
-    # index-membership rule this model has always used; an int applies
-    # ADR 0001's threshold instead. See src/models/candidates/routing.py.
-    cold_start_threshold: int | None = None
+    # Where the learned path stops. ADR 0001's threshold by default, which is
+    # the rule the deployed service routes on; None opts out to the
+    # index-membership rule this model used before 2026-08-30. See
+    # src/models/candidates/routing.py.
+    cold_start_threshold: int | None = routing.DEFAULT_COLD_START_THRESHOLD
 
     # Populated by fit:
     _als: AlternatingLeastSquares | None = None
@@ -139,11 +140,12 @@ class CFModel:
         """Predicate: would ``recommend(user_id, …)`` go through ALS or popularity?
 
         ``recommend`` *calls this* rather than restating the condition, so the
-        two cannot drift — which matters now that the condition has a second
-        form. By default: true iff this user has any training history and the
-        ALS factors are fitted. With ``cold_start_threshold`` set, index
-        membership is necessary but no longer sufficient — the user also needs
-        that many distinct training items.
+        two cannot drift — which matters because the condition has two forms.
+        By default: true iff the ALS factors are fitted and this user has at
+        least ``cold_start_threshold`` distinct training items, which is the
+        rule `src/serving/orchestration.py` applies to a live request. With
+        ``cold_start_threshold=None`` the index-membership opt-out applies and
+        any training history at all is enough.
         """
         if self._als is None or user_id not in self._user_to_index:
             return False

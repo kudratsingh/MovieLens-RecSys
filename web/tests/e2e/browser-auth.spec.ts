@@ -22,7 +22,8 @@ import { COLD_START, clearDismissal, resetColdStart } from "./personas";
  *
  * Cold Start is the one deliberate share, and its rule is the strict one:
  * **every journey that touches it hands it on with zero positive signals**, in
- * a `finally`, tolerating whatever it found on arrival. Not "below five" — the
+ * a `finally`, tolerating whatever it found on arrival. Not merely "below the
+ * routing threshold" — the
  * seeder leaves this persona empty, the run's cold-start assertions are about a
  * persona with nothing to learn from, and the k6 page workload's teardown reads
  * that emptiness back at the end. `resetColdStart` in `./personas` is the only
@@ -478,10 +479,10 @@ test("Quick Picks decisions change what serving returns", async ({ page }) => {
     expect(await signalCount()).toBe(before);
 
     // The panel caps its display at the threshold, so the expectation does too.
-    const expected = Math.min(before + 1, 5);
+    const expected = Math.min(before + 1, 10);
     await page.getByRole("button", { name: /^Watched/ }).click();
     await expect(page.locator(".quick-pick-progress-count")).toHaveText(
-      `${expected} of 5 positive watched signals`,
+      `${expected} of 10 positive watched signals`,
     );
     expect(await recommendedIds()).not.toContain(movieId);
   } finally {
