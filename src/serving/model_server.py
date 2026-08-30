@@ -24,7 +24,7 @@ from src.config import Settings
 from src.feature_contract import FEATURE_COLUMNS
 from src.features.online import RANKER_FEATURES, create_feature_store
 from src.models.artifacts import ServingArtifactBundle, ServingManifest
-from src.serving.policy import EXCLUSION_FILTER_POLICY
+from src.serving.policy import EXCLUSION_FILTER_POLICY, REASON_CHAMPION_MISMATCH
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,22 @@ class ColdStartError(ValueError):
 
 class TenantArtifactMismatchError(ValueError):
     """The request tenant does not match the artifact isolation boundary."""
+
+
+class ChampionMismatchError(ValueError):
+    """The loaded bundle is not the champion the calling tenant is registered on.
+
+    Distinct from ``TenantArtifactMismatchError`` because it is a different
+    failure with a different fix. That one is an isolation breach — a tenant
+    reaching artifacts that are not theirs — and it is answered 403. This one is
+    a version skew inside the right tenant: the registry (``public.tenants``,
+    migration 0016) names a champion this sidecar did not load, which happens
+    for the length of a rolling deploy and permanently if a promotion updated
+    the row without shipping the bundle. Serving anyway would put predictions in
+    the audit log under a version that was never promoted, so the request is
+    refused and the coordinator degrades to popularity with a reason that says
+    which versions disagreed.
+    """
 
 
 class DegenerateWarmupError(RuntimeError):
@@ -246,12 +262,23 @@ class ModelRankingService:
         dismissed_movie_ids: list[int],
         limit: int,
         candidate_limit: int,
+        champion: ChampionCoordinates | None = None,
     ) -> RankingResult:
         started = time.perf_counter()
         manifest = self._bundle.manifest
         if tenant_id != manifest.tenant_id:
             raise TenantArtifactMismatchError(
                 f"tenant {tenant_id!r} cannot use artifacts for {manifest.tenant_id!r}"
+            )
+        # The tenant check above proves these artifacts belong to this tenant;
+        # this one proves they are the *version* the tenant is registered on.
+        # Checked before any work is done, because the answer does not depend on
+        # the request — a mismatched deployment refuses every rank call, and it
+        # should do so without first reading a candidate batch out of Redis.
+        if champion is not None and not champion.matches(manifest):
+            raise ChampionMismatchError(
+                f"tenant {tenant_id!r} is registered on champion {champion.describe()} "
+                f"but this sidecar loaded {_describe_manifest(manifest)}"
             )
         if not positive_history_movie_ids:
             raise ColdStartError("learned retrieval requires at least one historical interaction")
@@ -391,6 +418,29 @@ class ModelRankingService:
         return result
 
 
+class ChampionCoordinates(BaseModel):
+    """The champion the calling tenant is registered on (``public.tenants``).
+
+    The three coordinates of a ``ServingManifest``, sent by the coordinator on
+    every rank request so the sidecar can refuse to answer under a version this
+    deployment never promoted.
+    """
+
+    candidate_version: str = Field(min_length=1)
+    ranker_version: str = Field(min_length=1)
+    feature_version: str = Field(min_length=1)
+
+    def matches(self, manifest: ServingManifest) -> bool:
+        return (
+            self.candidate_version == manifest.candidate.version
+            and self.ranker_version == manifest.ranker.version
+            and self.feature_version == manifest.feature_version
+        )
+
+    def describe(self) -> str:
+        return f"{self.candidate_version}/{self.ranker_version}/{self.feature_version}"
+
+
 class RankRequest(BaseModel):
     tenant_id: str = Field(min_length=1)
     user_id: int
@@ -411,6 +461,13 @@ class RankRequest(BaseModel):
     dismissed_movie_ids: list[int] = Field(default_factory=list)
     limit: int = Field(default=10, ge=1, le=50)
     candidate_limit: int = Field(default=100, ge=1, le=500)
+    # Optional for the same reason ``dismissed_movie_ids`` is: during a rolling
+    # deploy the API and the sidecar are briefly different builds, and an API
+    # that predates this field must keep being served rather than have every
+    # request refused by the newer sidecar. Absent means "the caller stated no
+    # champion", which is checked as far as it can be — the tenant boundary
+    # above still holds — and not silently treated as a match.
+    champion: ChampionCoordinates | None = None
 
 
 class RankItemResponse(BaseModel):
@@ -540,9 +597,21 @@ async def rank(
             dismissed_movie_ids=payload.dismissed_movie_ids,
             limit=payload.limit,
             candidate_limit=payload.candidate_limit,
+            champion=payload.champion,
         )
     except TenantArtifactMismatchError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ChampionMismatchError as exc:
+        # 409 rather than 403: the caller is authorized for this tenant, and the
+        # conflict is between two versions of the same deployment. The body is a
+        # structured code rather than prose because the coordinator classifies
+        # on it — a fallback audited as "champion-mismatch" is a promotion that
+        # needs finishing, and one audited as "model-server-unavailable" is an
+        # outage. Those are different pages at 3am.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": REASON_CHAMPION_MISMATCH, "message": str(exc)},
+        ) from exc
     except ColdStartError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return RankResponse(
@@ -623,6 +692,11 @@ def _assert_online_features_are_materialized(
             "every ranking score would be computed from missing features. Materialize before "
             "serving: python -m src.features.materialize"
         )
+
+
+def _describe_manifest(manifest: ServingManifest) -> str:
+    """The loaded bundle in the same shape a champion is written down in."""
+    return f"{manifest.candidate.version}/{manifest.ranker.version}/{manifest.feature_version}"
 
 
 def _declared_workers() -> int | None:

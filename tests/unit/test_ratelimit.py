@@ -29,6 +29,7 @@ from src.serving.ratelimit import (
     RateLimitMiddleware,
     TokenBucketLimiter,
 )
+from src.serving.tenancy import NO_TENANT_OVERRIDES, TenantRateLimit
 
 KEY = ("demo", "subject-a")
 OTHER_KEY = ("demo", "subject-b")
@@ -213,6 +214,16 @@ def test_the_limiter_module_imports_nothing_that_could_do_io() -> None:
     forbidden = {"redis", "socket", "httpx", "sqlalchemy", "psycopg2", "requests", "asyncio"}
     assert not (imported & forbidden), sorted(imported & forbidden)
 
+    # The per-tenant quota (migration 0016) is the one thing here that can reach
+    # a database, and it arrives as an injected callable rather than as an
+    # import — which is why the connection it forwards is typed as an opaque
+    # object. The module still knows nothing about SQLAlchemy, the resolver
+    # answers from the tenant router's cache on the hot path, and a failed read
+    # falls open to the global limiter in ``src.serving.app`` rather than
+    # failing the request.
+    signature = inspect.signature(module.RateLimitMiddleware.__init__)
+    assert signature.parameters["tenant_limits"].default is None
+
 
 # --- the middleware ---------------------------------------------------------
 
@@ -385,3 +396,144 @@ def test_a_zero_limit_is_refused_rather_than_read_as_disabled(clean_env: None) -
     outage. It is refused at construction instead."""
     with pytest.raises(Exception, match="rate_limit_requests_per_minute"):
         Settings(_env_file=None, rate_limit_requests_per_minute=0)
+
+
+# --- per-tenant quota overrides (migration 0016) -----------------------------
+
+
+def _tenant_limited_client(
+    *,
+    overrides: dict[str, TenantRateLimit],
+    principal: StubPrincipal = StubPrincipal("demo", "subject-a"),
+    per_minute: int = 120,
+    burst: int = 2,
+    resolutions: list[str] | None = None,
+) -> TestClient:
+    """The same harness, plus the registry lookup the app injects."""
+    app = FastAPI()
+
+    @app.get("/whoami")
+    async def whoami() -> dict[str, str]:
+        return {"tenant_id": principal.tenant_id}
+
+    async def tenant_limits(tenant_id: str, connection: object | None) -> TenantRateLimit:
+        if resolutions is not None:
+            resolutions.append(tenant_id)
+        return overrides.get(tenant_id, NO_TENANT_OVERRIDES)
+
+    limiter = TokenBucketLimiter(requests_per_minute=per_minute, burst=burst)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter, tenant_limits=tenant_limits)
+    app.add_middleware(PrincipalMiddleware, principal=principal)
+    return TestClient(app)
+
+
+def test_a_tenant_without_overrides_charges_the_global_bucket() -> None:
+    """The unconfigured deployment behaves exactly as it did before 0016."""
+    resolutions: list[str] = []
+    with _tenant_limited_client(overrides={}, resolutions=resolutions, burst=2) as client:
+        assert client.get("/whoami").headers[LIMIT_HEADER] == "2"
+        assert client.get("/whoami").headers[LIMIT_HEADER] == "2"
+        refused = client.get("/whoami")
+
+    assert refused.status_code == 429
+    assert resolutions == ["demo", "demo", "demo"]
+
+
+def test_a_tenants_own_burst_replaces_the_global_one() -> None:
+    with _tenant_limited_client(
+        overrides={"demo": TenantRateLimit(requests_per_minute=600, burst=4)},
+        burst=2,
+    ) as client:
+        statuses = [client.get("/whoami").status_code for _ in range(5)]
+        headers = client.get("/whoami")
+
+    # Four admitted on the tenant's own capacity, where the global limiter
+    # would have refused after two.
+    assert statuses == [200, 200, 200, 200, 429]
+    assert headers.status_code == 429
+    assert headers.headers[LIMIT_HEADER] == "4"
+    assert "600 requests/minute with a burst of 4" in headers.json()["detail"]
+
+
+def test_one_null_column_falls_back_to_the_global_setting_on_its_own() -> None:
+    """ADR 0014's 2026-08-29 note: each column falls back independently.
+
+    Lowering a tenant's sustained rate should not require restating a burst
+    that was already right.
+    """
+    with _tenant_limited_client(
+        overrides={"demo": TenantRateLimit(requests_per_minute=60, burst=None)},
+        per_minute=120,
+        burst=3,
+    ) as client:
+        refused = [client.get("/whoami") for _ in range(4)][-1]
+
+    assert refused.status_code == 429
+    assert refused.headers[LIMIT_HEADER] == "3"
+    assert "60 requests/minute with a burst of 3" in refused.json()["detail"]
+
+
+def test_each_tenant_gets_its_own_buckets() -> None:
+    """One tenant emptying its bucket cannot throttle another.
+
+    The keys were already per ``(tenant, subject)``; what this proves is that a
+    tenant with its own limiter is not accidentally sharing the global one's
+    state, which would let a low-quota tenant spend a high-quota tenant's
+    allowance.
+    """
+    overrides = {"demo": TenantRateLimit(requests_per_minute=600, burst=1)}
+    with _tenant_limited_client(overrides=overrides, burst=5) as demo:
+        assert demo.get("/whoami").status_code == 200
+        assert demo.get("/whoami").status_code == 429
+
+    with _tenant_limited_client(
+        overrides=overrides,
+        principal=StubPrincipal("default", "subject-a"),
+        burst=5,
+    ) as other:
+        assert [other.get("/whoami").status_code for _ in range(5)] == [200] * 5
+
+
+def test_a_changed_quota_takes_effect_without_a_restart() -> None:
+    """The registry is the control surface, so a change has to be readable.
+
+    The limiter is rebuilt when the numbers move, which hands the affected
+    subjects a full bucket once — the direction to err in, since a config
+    change should not retroactively refuse a caller who was inside the old
+    limit.
+    """
+    overrides = {"demo": TenantRateLimit(requests_per_minute=600, burst=1)}
+    with _tenant_limited_client(overrides=overrides, burst=5) as client:
+        assert client.get("/whoami").status_code == 200
+        assert client.get("/whoami").status_code == 429
+
+        overrides["demo"] = TenantRateLimit(requests_per_minute=600, burst=3)
+        assert [client.get("/whoami").status_code for _ in range(3)] == [200] * 3
+        assert client.get("/whoami").status_code == 429
+
+
+def test_the_exempt_probes_never_consult_the_registry() -> None:
+    """`/healthz` and `/readyz` carry no identity, so there is nothing to look up."""
+    resolutions: list[str] = []
+    app = FastAPI()
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def tenant_limits(tenant_id: str, connection: object | None) -> TenantRateLimit:
+        resolutions.append(tenant_id)
+        return NO_TENANT_OVERRIDES
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=TokenBucketLimiter(requests_per_minute=120, burst=2),
+        tenant_limits=tenant_limits,
+    )
+    app.add_middleware(PrincipalMiddleware, principal=StubPrincipal("demo", "subject-a"))
+
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+
+    assert resolutions == []
+    assert "/healthz" in UNAUTHENTICATED_PATHS

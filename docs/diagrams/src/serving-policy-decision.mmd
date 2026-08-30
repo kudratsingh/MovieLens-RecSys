@@ -1,4 +1,6 @@
-%% Sources: src/serving/orchestration.py (the gates, in evaluation order),
+%% Sources: src/serving/tenancy/router.py (the champion the tenant is registered
+%% on, from public.tenants — migration 0016),
+%% src/serving/orchestration.py (the gates, in evaluation order),
 %% src/serving/policy.py (the shared vocabulary), src/serving/models.py,
 %% src/models/artifacts.py (CandidateIndex.retrieve and seed_count),
 %% src/evaluation/protocol.py (COLD_START_THRESHOLD = 5),
@@ -7,12 +9,20 @@
 flowchart TB
   IN(["GET /users/{id}/recommendations<br/>positives and exclusions read from user_movie_state"])
 
+  G0{"does the tenant name a champion<br/>in public.tenants?"}
+  IN --> G0
+  G0 -- no --> P0["policy popularity · learned false<br/>fallback_reason no-champion<br/>score_scale tenant-interaction-count"]
+
   G1{"positive_signal_count &lt; 5?"}
-  IN --> G1
+  G0 -- yes --> G1
   G1 -- yes --> P1["policy popularity · learned false<br/>fallback_reason cold-start<br/>score_scale tenant-interaction-count"]
 
-  G2{"POST /rank to the sidecar —<br/>timeout, connect error, 401/403/409,<br/>or a contract violation?"}
-  G1 -- no --> G2
+  G2A{"POST /rank — did the sidecar refuse<br/>with code champion-mismatch?<br/>its bundle is not the registered champion"}
+  G1 -- no --> G2A
+  G2A -- yes --> P2A["policy popularity · learned false<br/>fallback_reason champion-mismatch"]
+
+  G2{"timeout, connect error, another<br/>401/403/409, or a contract violation?"}
+  G2A -- no --> G2
   G2 -- yes --> P2["policy popularity · learned false<br/>fallback_reason model-server-unavailable"]
 
   G3{"anything left after hydration and<br/>the fail-closed exclusion sweep?"}

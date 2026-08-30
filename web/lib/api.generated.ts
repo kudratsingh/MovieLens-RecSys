@@ -482,6 +482,12 @@ export interface components {
         CurrentActorResponse: {
             /** Authorized Party */
             authorized_party: string;
+            /** Champion Candidate Version */
+            champion_candidate_version?: string | null;
+            /** Champion Feature Version */
+            champion_feature_version?: string | null;
+            /** Champion Ranker Version */
+            champion_ranker_version?: string | null;
             /** Realm */
             realm: string;
             /** Redis Prefix */

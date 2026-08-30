@@ -244,6 +244,39 @@
             "title": "Authorized Party",
             "type": "string"
           },
+          "champion_candidate_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Candidate Version"
+          },
+          "champion_feature_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Feature Version"
+          },
+          "champion_ranker_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Ranker Version"
+          },
           "realm": {
             "title": "Realm",
             "type": "string"
