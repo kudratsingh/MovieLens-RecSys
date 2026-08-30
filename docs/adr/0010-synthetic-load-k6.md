@@ -637,7 +637,7 @@ Playwright's round trip as much as the application.
 
 Each route is measured against the persona whose journey already owns that kind
 of write, per the same ownership table, and every write is undone. Cold Start is
-read and never written: Quick Picks owns it for the five-signal counter, and
+read and never written: Quick Picks owns it for the cold-start counter, and
 timing a decision queue is not a reason to spend the signal it is counting.
 
 Three runs on the seeded local stack, worst reading per route:

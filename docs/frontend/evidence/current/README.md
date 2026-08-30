@@ -9,6 +9,19 @@ meaning the current build. The dated folders beside it stay as they are: each on
 is the record of what a particular bundle changed, and none of them is a picture
 of the whole product. This one is.
 
+> **2026-08-30 — these captures predate the cold-start threshold change and a
+> re-shoot is owed.** The threshold moved from 5 to 10 and the demo personas
+> grew with it: Action Fan and Drama Fan now carry **12** watched titles each
+> (they carried 8 when these were shot), Eclectic Viewer is unchanged at 11, and
+> Cold Start is still 0. So the policy strings quoted below — `8 positive
+> signals`, `over 8 positive seeds`, `below threshold 5` — are what the build
+> reported *on 2026-08-29*, and the pixels show the recommendations that history
+> produced. Nothing here is hand-edited: the next `npm run evidence:current`
+> overwrites the images and regenerates this table from the run, at which point
+> the strings become `12 positive signals`, `over 12 positive seeds` and
+> `below threshold 10`. The verified live values are in the PR that made the
+> change.
+
 ## Provenance
 
 | | |

@@ -42,6 +42,14 @@ def _ratings(rows: list[tuple[int, int, int]]) -> pd.DataFrame:
 # augmented with timestamps because the two-tower is time-aware.
 # Timestamps are per-user increasing so the (userId, timestamp) sort in
 # build_user_history produces a well-defined chronological order.
+# Every user in the fixture below has three interactions, which is under
+# ADR 0001's `COLD_START_THRESHOLD` — the constructor default since the owner's
+# 2026-08-30 decision. A model built with the default answers every one of them
+# from its popularity fallback, so these tests pass `cold_start_threshold=None`,
+# the documented index-membership opt-out, and keep measuring retrieval rather
+# than the fallback in front of it. Where the *default* sends this fixture is
+# asserted by the routing test below, and exhaustively in
+# `tests/unit/test_candidate_routing.py`.
 _SYNTHETIC_TRAIN = _ratings(
     [
         (1, 100, 10),
@@ -88,7 +96,7 @@ _FAST_CONFIG = TwoTowerConfig(
 
 
 def test_fit_returns_self_for_chaining() -> None:
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     assert isinstance(model, TwoTowerModel)
 
 
@@ -96,7 +104,7 @@ def test_recommendations_are_valid_movie_ids() -> None:
     # Every returned id must be one that existed in train. Catches the
     # dense-index → movieId inverse map going wrong — the same bug that
     # would surface as a KeyError at serving time.
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     catalog = set(_SYNTHETIC_TRAIN["movieId"].unique())
     recs = model.recommend(user_id=1, k=5)
     assert all(item in catalog for item in recs)
@@ -106,14 +114,14 @@ def test_recommendations_exclude_already_seen_items() -> None:
     # Same leak-prevention guarantee CF and item-item carry. The FAISS
     # results are post-filtered against the user's training history, and
     # the request headroom (k + |seen|) makes sure we don't shrink below k.
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     seen = {100, 101, 102}
     recs = model.recommend(user_id=1, k=5)
     assert not (set(recs) & seen)
 
 
 def test_returns_at_most_k_items() -> None:
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     recs = model.recommend(user_id=1, k=3)
     assert len(recs) <= 3
 
@@ -122,7 +130,7 @@ def test_unknown_user_falls_through_to_popularity() -> None:
     # ADR 0001 / ADR 0006 fallback path. User 999 was never in train and
     # so has no history to encode; recommend must route to the embedded
     # popularity model and return its top-k.
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     tt_recs = model.recommend(user_id=999, k=3)
     pop_recs = model._popularity.recommend(user_id=999, k=3)
     assert tt_recs == pop_recs
@@ -132,12 +140,12 @@ def test_unknown_user_falls_through_to_popularity() -> None:
 def test_empty_train_handles_gracefully() -> None:
     # temporal_split could produce an empty train slice on edge-case data.
     # The tower can't fit but the model must still return a list (empty).
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_ratings([]))
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_ratings([]))
     assert model.recommend(user_id=1, k=10) == []
 
 
 def test_recommend_for_users_returns_one_list_per_user() -> None:
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     out = model.recommend_for_users(user_ids=[1, 2, 999], k=3)
     assert set(out.keys()) == {1, 2, 999}
     assert all(len(v) <= 3 for v in out.values())
@@ -145,18 +153,28 @@ def test_recommend_for_users_returns_one_list_per_user() -> None:
 
 def test_was_served_by_twotower_matches_recommend_routing() -> None:
     # Predicate contract the training pipeline uses for per-policy MLflow
-    # attribution. Must mirror the recommend() branch exactly: True iff the
-    # tower is fitted, the FAISS index exists, and the user has training
-    # history.
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
-    assert model.was_served_by_twotower(1) is True
-    assert model.was_served_by_twotower(999) is False
+    # attribution. Must mirror the recommend() branch exactly, under whichever
+    # policy the model was built with.
+    index_model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(
+        _SYNTHETIC_TRAIN
+    )
+    assert index_model.was_served_by_twotower(1) is True
+    assert index_model.was_served_by_twotower(999) is False
+
+    # And under the shipped default, this fixture's three-interaction users are
+    # below the threshold, so the fallback answers them and the predicate says
+    # so rather than reporting a learned serve the model did not make.
+    default_model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    assert default_model.was_served_by_twotower(1) is False
+    assert default_model.recommend(user_id=1, k=3) == default_model._popularity.recommend(
+        user_id=1, k=3
+    )
 
 
 def test_was_served_by_twotower_false_for_empty_train() -> None:
     # No tower means every user routes to popularity, and the predicate
     # must acknowledge that even for ids the caller might assume are known.
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_ratings([]))
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_ratings([]))
     assert model.was_served_by_twotower(1) is False
 
 
@@ -200,7 +218,7 @@ def test_training_pair_history_excludes_positive() -> None:
     """The (history, positive) pairs must never include the positive in the
     history — the invariant that keeps offline recall from being inflated by
     trivial self-reconstruction. Position 0 (no history) is dropped."""
-    model = TwoTowerModel(config=_FAST_CONFIG)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None)
     # Prime the model's internal state as .fit() would, then call the
     # private builder directly so we can inspect the tensors.
     movie_ids = sorted(_SYNTHETIC_TRAIN["movieId"].unique())
@@ -239,7 +257,7 @@ def test_converges_on_two_cluster_synthetic() -> None:
         faiss_nprobe=2,
         seed=0,
     )
-    model = TwoTowerModel(config=config).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=config, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
 
     action_ids = [100, 101, 102, 103, 104]
     drama_ids = [200, 201, 202, 203, 204]
@@ -266,7 +284,7 @@ def test_padding_row_stays_zero_after_training() -> None:
     padding-aware exclusion), variable-length users get a spurious
     padding contribution to their user vector.
     """
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     assert model._item_tower is not None
     padding_vec = model._item_tower.embed.weight[0]
     assert torch.allclose(padding_vec, torch.zeros_like(padding_vec))
@@ -275,6 +293,6 @@ def test_padding_row_stays_zero_after_training() -> None:
 @pytest.mark.parametrize("k", [1, 5, 10])
 def test_recommend_length_bounded_by_k(k: int) -> None:
     """Basic parametric sanity — recommend never returns more than k."""
-    model = TwoTowerModel(config=_FAST_CONFIG).fit(_SYNTHETIC_TRAIN)
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     recs = model.recommend(user_id=1, k=k)
     assert len(recs) <= k

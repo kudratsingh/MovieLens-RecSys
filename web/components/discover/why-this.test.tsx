@@ -86,9 +86,9 @@ describe("Why this? shows only evidence that exists", () => {
     expect(drawer().getByText(/Popular while we learn/)).toBeVisible();
     // The response reports its own counts, so the note quotes those rather
     // than restating the generic routing rule.
-    expect(drawer().getByText(/3 of the 5 watched signals/)).toBeVisible();
+    expect(drawer().getByText(/3 of the 10 watched signals/)).toBeVisible();
     expect(
-      drawer().getByText("cold-start: 3 positive watched signals below threshold 5"),
+      drawer().getByText("cold-start: 3 positive watched signals below threshold 10"),
     ).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Show prediction audit" }));
@@ -181,7 +181,7 @@ describe("Why this? answers in a sentence before it answers in a table", () => {
     expect(drawer().queryByText(/^Picked from/)).not.toBeInTheDocument();
   });
 
-  it("never tells a warm persona it has N of the 5 signals", async () => {
+  it("never tells a warm persona it has N of the 10 signals", async () => {
     const user = userEvent.setup();
     const warm: RecommendationResponse = {
       ...fallbackRecommendations,
@@ -198,7 +198,7 @@ describe("Why this? answers in a sentence before it answers in a table", () => {
     // sentence also stands as the policy note below.
     const opening = drawer().getByText(/^These are the titles watched most/);
     expect(opening).toHaveTextContent("enough watched signals");
-    expect(drawer().queryByText(/28 of the 5/)).not.toBeInTheDocument();
+    expect(drawer().queryByText(/28 of the 10/)).not.toBeInTheDocument();
     // …and it is not labelled as cold start either.
     expect(drawer().queryByText(/Popular while we learn/)).not.toBeInTheDocument();
   });

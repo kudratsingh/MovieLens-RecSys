@@ -10,10 +10,10 @@ const LEARNED: ServingPolicy = {
   filter_policy: "watched-and-dismissed-excluded-v1",
   learned: true,
   name: "item-item-cosine+lightgbm",
-  positive_signal_count: 8,
+  positive_signal_count: 12,
   reason: "learned-two-stage: item-item-cosine retrieval, ranked by demo-lgbm-v1",
   score_scale: "lightgbm-rank-score",
-  threshold: 5,
+  threshold: 10,
 };
 
 /**
@@ -55,6 +55,6 @@ describe("the legacy serving-contract panel", () => {
       />,
     );
 
-    expect(screen.getByText("No — 2 of 5 positive signals")).toBeVisible();
+    expect(screen.getByText("No — 2 of 10 positive signals")).toBeVisible();
   });
 });

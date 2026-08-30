@@ -179,7 +179,10 @@ describe("progress and policy copy", () => {
   });
 
   it("never reports learned serving from a count alone", () => {
-    const atThreshold = quickPickProgress(fixtureFallbackPolicy, 3);
+    const atThreshold = quickPickProgress(
+      fixtureFallbackPolicy,
+      fixtureFallbackPolicy.threshold - fixtureFallbackPolicy.positive_signal_count,
+    );
     expect(atThreshold.thresholdReached).toBe(true);
     expect(atThreshold.learned).toBe(false);
     expect(policyHeadline(fixtureFallbackPolicy)).toBe(FALLBACK_POLICY_COPY);

@@ -31,22 +31,22 @@ export const movieState: MovieState = {
 
 /**
  * The serving policy the API reports alongside every recommendation. Both
- * variants are recorded because the truthful copy differs: below five positive
- * watched signals the response is fallback, and only a `learned: true` policy
- * licenses learned-serving language.
+ * variants are recorded because the truthful copy differs: below the router's
+ * reported threshold of positive watched signals the response is fallback, and
+ * only a `learned: true` policy licenses learned-serving language.
  */
 export const learnedServingPolicy: ServingPolicy = {
   excluded_count: 9,
   filter_policy: "watched-and-dismissed-excluded-v1",
   learned: true,
   name: "item-item-lightgbm",
-  positive_signal_count: 8,
+  positive_signal_count: 12,
   reason:
-    "learned-two-stage: item-item-cosine retrieval over 8 positive seeds, " +
+    "learned-two-stage: item-item-cosine retrieval over 12 positive seeds, " +
     "ranked by lgbm-ranker-2026.08",
   // An uncalibrated LambdaRank ordering — never a probability or a match percentage.
   score_scale: "lightgbm-rank-score",
-  threshold: 5,
+  threshold: 10,
 };
 
 export const fallbackServingPolicy: ServingPolicy = {
@@ -55,9 +55,9 @@ export const fallbackServingPolicy: ServingPolicy = {
   learned: false,
   name: "popularity",
   positive_signal_count: 3,
-  reason: "cold-start: 3 positive watched signals below threshold 5",
+  reason: "cold-start: 3 positive watched signals below threshold 10",
   score_scale: "tenant-interaction-count",
-  threshold: 5,
+  threshold: 10,
 };
 
 export const recommendationResponse: RecommendationResponse = {
@@ -88,7 +88,7 @@ export const emptyRecommendationResponse: RecommendationResponse = {
   items: [],
 };
 
-/** A persona still below the five-signal threshold: popularity, not learned. */
+/** A persona still below the signal threshold: popularity, not learned. */
 export const fallbackRecommendationResponse: RecommendationResponse = {
   items: [
     {
@@ -203,7 +203,7 @@ export const auditResponse: RecommendationAuditResponse = {
       model_version: "lgbm-ranker-2026.08",
       outcome: "served",
       policy: "item-item-lightgbm",
-      positive_signal_count: 8,
+      positive_signal_count: 12,
       predictions: [
         {
           candidate_source: "item-item-cosine",

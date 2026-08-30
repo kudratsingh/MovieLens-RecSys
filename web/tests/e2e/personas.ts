@@ -28,9 +28,9 @@ import { type Page } from "@playwright/test";
 export const COLD_START = 900000104;
 
 /**
- * The cold-start policy flips at five positive signals and the library caps a
- * page at fifty, so one page is far more than any leak these suites could
- * plausibly leave behind.
+ * The cold-start policy flips at the router's reported positive-signal
+ * threshold and the library caps a page at fifty, so one page is far more than
+ * any leak these suites could plausibly leave behind.
  */
 const HISTORY_PAGE = 50;
 

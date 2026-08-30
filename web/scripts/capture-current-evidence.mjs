@@ -28,7 +28,8 @@ import { chromium } from "@playwright/test";
  * Discover as Drama Fan, Browse as Eclectic Viewer, Library and movie detail as
  * Action Fan, Quick Picks as Cold Start. Nothing here presses a decision
  * control. Opening a disclosure is a read; marking a movie watched is not, and
- * a capture that spent one of Cold Start's five signals would leave the persona
+ * a capture that spent one of the signals Cold Start is meant to have none of
+ * would leave the persona
  * dirty for the journeys, the k6 page workload, and every later run.
  *
  * The run writes its own README from what it observed — the commit, the serving
@@ -550,7 +551,7 @@ asserted from the design contract.
 ${policyRows}
 
 Cold Start reporting a fallback policy is the correct answer, not a defect: the
-persona is seeded empty and the threshold is five positive signals.
+persona is seeded empty and the threshold is ten positive signals.
 
 ### The movie page's subject
 

@@ -22,7 +22,7 @@ parts of the route design are implementation claims.
 
 | Concern | What works now | Boundary or gap |
 |---|---|---|
-| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below five unique movies now remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy. Each ranked item also carries the caller's own `state` for that title, or `null` | Static artifacts and snapshot features still do not update on each rating |
+| Recommendation serving | Authenticated, tenant-scoped item-item candidates, Feast/Redis features, LightGBM ranking, popularity fallback, prediction audits; histories below the cold-start threshold (10 since 2026-08-30) remain on fallback. Positive watched history and excluded/dismissed IDs are separate inputs end to end, filtered at fallback, retrieval, hydration, and final validation, and the response carries a `serving_policy` object with the policy name, learned flag, positive-signal count, threshold, score scale, and filter policy. Each ranked item also carries the caller's own `state` for that title, or `null` | Static artifacts and snapshot features still do not update on each rating |
 | Feedback state | Forced-RLS `user_movie_state` stores independent watched, rating, watchlist, and dismissal state with revisions; append-only events record actor/action/canonical outcome; mutations commit before success | Star magnitude is still not an online model input; watchlist remains organizational; dismissal is durable exclusion rather than a training negative |
 | Presentation preferences | `GET|PUT /users/{user_id}/preferences` store one typed per-persona setting — `feature_watchlisted_titles` — in forced-RLS `user_preferences` (migration 0013). The write is a full-object PUT with `expected_revision`, reports `changed`/`no_change`, records the acting OIDC subject, and commits before the 200 like every other mutation. An untouched persona reads the documented default at revision 0 with a null `updated_at` | Presentation only: no serving path reads the table, so a response's `serving_policy`, exclusion count, and audit row are identical either way. There is no change history — the append-only feedback log is movie-scoped and would have to misfile a preference as a movie decision. Adding a preference is a migration rather than a JSON key |
 | Tenant isolation | RLS and least-privilege application role protect user-scoped rows across tenants | RLS does not establish same-tenant user ownership; arbitrary numeric persona IDs remain addressable |
@@ -80,7 +80,7 @@ It must not say:
 - `We learned you dislike this genre` from a low star value.
 - `92% match` for an uncalibrated LightGBM score.
 - `Your private library` while the route is a selected shared demo persona.
-- `Personalized after one rating` while the accepted threshold is five.
+- `Personalized after one rating` while the accepted threshold is ten.
 - `All 62,423 movies can be recommended` merely because they can be browsed.
 - `Skipping this teaches the recommender` — a skip writes nothing, and the
   `Featured picks` preference reaches no serving path (ADR 0012, 2026-08-28).
@@ -200,8 +200,9 @@ written back as a rating or training negative. The final check fails closed:
 an excluded ID that reaches the outgoing list is dropped and the block is
 logged and audited rather than served.
 
-Histories below five use fallback; histories of five or more may use the
-learned path. The response reports this through `serving_policy`
+Histories below the cold-start threshold use fallback; histories at or above it
+may use the learned path. The threshold is 10 (ADR 0001, amended 2026-08-30) and
+is read from the response rather than restated in the client. The response reports this through `serving_policy`
 (`name`, `learned`, `positive_signal_count`, `threshold`, `reason`,
 `score_scale`, `filter_policy`, `excluded_count`); the flat `policy` string is
 retained and always equals `serving_policy.name`. Prediction audits record the
@@ -308,7 +309,7 @@ may claim comparable recommendation coverage. CI should assert both:
 | `/browse` | Yes: cursor catalog, local metadata, durable state overlay, filters, load more, fallbacks, and scroll restoration | Run seeded browser/visual gates and profile full-catalog queries before expanding beyond the reviewed fixture |
 | `/library` | Yes: durable tabs, counts, state controls, filtering, and canonical reconciliation | `/me` ownership mapping and shared poster-card integration remain follow-up work |
 | `/movies/[id]` | Yes: local detail, source status, durable state, CSRF-protected rating action, and fallbacks | Add structured explanation and the broader shared state-control component later |
-| `/quick-picks` | Yes: the serving prerequisite is implemented (PR #54) | Watched/watchlist/dismissal resources, undo, and the Quick Picks state machine remain frontend work; separate positive/excluded inputs, five-signal routing, and audit evidence are in place |
+| `/quick-picks` | Yes: the serving prerequisite is implemented (PR #54) | Watched/watchlist/dismissal resources, undo, and the Quick Picks state machine remain frontend work; separate positive/excluded inputs, threshold routing, and audit evidence are in place |
 | Real signed-in product | Role-gated persona mode is signed in through Auth.js | `/me` mapping remains required before claiming a private end-user profile |
 
 ## Verification gates

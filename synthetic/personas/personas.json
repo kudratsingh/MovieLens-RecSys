@@ -6,14 +6,14 @@
       "display_name": "Action Fan",
       "description": "Blockbusters, crime thrillers, and high-stakes adventures.",
       "user_id": 900000101,
-      "history": [6, 10, 32, 47, 110, 2028, 2571, 2959]
+      "history": [6, 10, 32, 47, 110, 589, 733, 1036, 1198, 2028, 2571, 2959]
     },
     {
       "slug": "drama-fan",
       "display_name": "Drama Fan",
       "description": "Character-driven dramas, romances, and enduring classics.",
       "user_id": 900000102,
-      "history": [16, 17, 318, 356, 527, 858, 1193, 1207]
+      "history": [16, 17, 318, 356, 527, 858, 912, 1193, 1207, 1246, 1276, 1704]
     },
     {
       "slug": "eclectic-viewer",

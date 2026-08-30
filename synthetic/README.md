@@ -99,10 +99,16 @@ recommendations are visibly different from one another:
 
 | Persona | ID | History |
 |---|---|---|
-| Action Fan | 900000101 | 8 |
-| Drama Fan | 900000102 | 8 |
+| Action Fan | 900000101 | 12 |
+| Drama Fan | 900000102 | 12 |
 | Eclectic Viewer | 900000103 | 11 |
 | Cold Start | 900000104 | **0** — served by the explicit popularity fallback |
+
+The three warm histories all clear ADR 0001's `COLD_START_THRESHOLD` (10 since
+2026-08-30), which is what `make demo-smoke`, the k6 gate's `learned` assertion,
+`src/release/verify.py` V-5 and the browser journeys all read back. Action Fan
+and Drama Fan carry a margin of two over the boundary so a journey that
+dismisses a title cannot tip them onto the fallback mid-run.
 
 `catalog.json` holds the reviewed 120-title catalog; every title carries a
 poster URL, an overview, and a `details` object. `personas.json` holds the four
@@ -120,7 +126,7 @@ whether a pull request is mergeable. The offline half — that every entry carri
 a URL in the pinned shape — is a unit test and does gate CI.
 
 Cold Start is load-bearing rather than decorative. Several suites here refuse to
-run, or to finish, if anything has pushed it past the five-signal threshold: it
+run, or to finish, if anything has pushed it past the cold-start threshold: it
 is the only persona that proves the fallback path, and a harness that quietly
 warmed it would delete its own control.
 

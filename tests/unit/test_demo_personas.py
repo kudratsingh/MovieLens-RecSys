@@ -7,6 +7,7 @@ import httpx
 import pytest
 from sqlalchemy import Engine, create_engine, text
 
+from src.evaluation.protocol import COLD_START_THRESHOLD
 from synthetic.personas.enrich_posters import poster_url_shape_error
 from synthetic.personas.seed import load_demo_catalog, load_personas, seed_demo_personas
 from synthetic.smoke.demo import DemoSmokeError, check_catalog_coverage
@@ -75,9 +76,15 @@ def test_persona_fixture_has_stable_required_profiles() -> None:
         "cold-start",
     ]
     assert personas[0].history != personas[1].history
-    assert len(personas[0].history) == 8
-    assert len(personas[1].history) == 8
+    # Every warm persona sits at or above ADR 0001's threshold, because the demo
+    # smoke check, the k6 gate's `learned` assertion, `src/release/verify.py`
+    # V-5 and the browser journeys all require them on the learned path. The two
+    # 12-title personas carry a deliberate margin over the boundary so a single
+    # dismissal in a journey cannot tip them onto the popularity fallback.
+    assert len(personas[0].history) == 12
+    assert len(personas[1].history) == 12
     assert len(personas[2].history) == 11
+    assert min(len(persona.history) for persona in personas[:3]) >= COLD_START_THRESHOLD
     assert personas[3].history == ()
 
 
