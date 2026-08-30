@@ -53,8 +53,15 @@ def test_the_default_seed_keeps_the_run_name_the_results_page_cites():
 
 
 def test_the_seed_suffix_composes_with_the_routing_suffix():
-    """A re-seeded threshold-routed run has to be findable as both."""
+    """A re-seeded run has to be findable by both its policy and its seed.
+
+    Since the 2026-08-30 threshold decision the default policy carries no
+    suffix, so only the opt-out ``index`` policy is named — and a re-seeded
+    index run has to say both things.
+    """
     from src.models.candidates import routing
 
-    base = routing.run_name_for("cf-als-baseline", routing.POLICY_THRESHOLD)
-    assert seeds.run_name_for(base, 7) == "cf-als-baseline-threshold-routing-seed7"
+    default = routing.run_name_for("cf-als-baseline", routing.POLICY_THRESHOLD)
+    assert seeds.run_name_for(default, 7) == "cf-als-baseline-seed7"
+    index = routing.run_name_for("cf-als-baseline", routing.POLICY_INDEX)
+    assert seeds.run_name_for(index, 7) == "cf-als-baseline-index-routing-seed7"

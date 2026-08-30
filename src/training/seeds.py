@@ -74,7 +74,8 @@ def run_name_for(base: str, seed: int, default: int = DEFAULT_SEED) -> str:
     The default seed keeps the run name it has always had, so the runs already
     cited by name in `docs/results.md` stay findable; only a re-seeded run is
     renamed. Same contract as `routing.run_name_for`, and the two compose:
-    a threshold-routed run at seed 7 is `<base>-threshold-routing-seed7`.
+    an index-routed run at seed 7 is `<base>-index-routing-seed7`, and a run at
+    the default (threshold) policy carries only the seed.
     """
     if seed == default:
         return base
