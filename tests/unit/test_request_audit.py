@@ -285,6 +285,25 @@ def test_an_authenticated_route_without_a_persona_records_a_null_user() -> None:
     assert recorder.calls[0]["user_id"] is None
 
 
+def test_a_persona_id_outside_the_column_s_range_is_recorded_as_no_persona() -> None:
+    """Python integers are unbounded and the column is a BIGINT.
+
+    `/users/<huge>/catalog` reaches the handler and is answered 404. If the
+    audit then tried to store that id, the insert would abort the request's
+    transaction and the caller would get a 500 instead of the 404 the service
+    correctly decided on. An id no persona could have is stored as none.
+    """
+    recorder = _AuditRecorder()
+    response = TestClient(_audit_app(recorder)).get(f"/users/{2**63}/catalog")
+
+    assert response.status_code == 200
+    assert recorder.calls[0]["endpoint"] == "/users/{user_id}/catalog"
+    assert recorder.calls[0]["user_id"] is None
+    # The largest id the column can hold is still recorded.
+    TestClient(_audit_app(recorder)).get(f"/users/{2**63 - 1}/catalog")
+    assert recorder.calls[1]["user_id"] == 2**63 - 1
+
+
 def test_an_unmatched_path_cannot_fan_out_into_distinct_endpoints() -> None:
     recorder = _AuditRecorder()
     client = TestClient(_audit_app(recorder))

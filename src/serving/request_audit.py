@@ -78,6 +78,11 @@ RECOMMENDATION_OWNED_ENDPOINTS: frozenset[str] = frozenset({RECOMMENDATION_ENDPO
 # per-tenant champion routing is what will fill it.
 MODEL_VERSION_STATE_KEY = "request_audit_model_version"
 
+# `request_audits.user_id` is a BIGINT; see `_persona_id` for why the bound is
+# checked here rather than left to Postgres to refuse.
+_BIGINT_MIN = -(2**63)
+_BIGINT_MAX = 2**63 - 1
+
 
 @dataclass(frozen=True)
 class RequestAuditRecord:
@@ -386,9 +391,17 @@ def _persona_id(request: Request) -> int | None:
     handler, not in the router — so a route that names a ``user_id`` this
     service could never serve is recorded with a null rather than failing the
     audit of a request that was itself refused with a 422.
+
+    The range check is doing real work, not defending against nothing. Python
+    integers are unbounded and ``user_id`` is a BIGINT, so
+    ``/users/99999999999999999999/catalog`` reaches the handler, is answered
+    404, and would then abort the request's transaction on the audit insert —
+    turning a correct 404 into a 500. A persona id outside the column's range
+    matches nothing anyway, so it is recorded as "no persona".
     """
     raw = request.scope.get("path_params", {}).get("user_id")
     try:
-        return int(raw)
+        persona = int(raw)
     except (TypeError, ValueError):
         return None
+    return persona if _BIGINT_MIN <= persona <= _BIGINT_MAX else None
