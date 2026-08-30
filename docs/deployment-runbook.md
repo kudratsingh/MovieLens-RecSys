@@ -456,7 +456,10 @@ reliability harness. What it covers:
 - The auth boundary: 401 unauthenticated across nine routes, plus request-id echo and persistence,
   dependency visibility, degraded metadata, bounded pages, cursor rejection, and rate limiting — the
   `X-RateLimit-*` headers on an admitted request and a `429` with `Retry-After` once a bucket is
-  drained, with no third behaviour.
+  drained, with no third behaviour; and, since the shared bucket landed, that there is exactly *one*
+  bucket behind the service — no more than one bucket's worth admitted before the refusal, and a
+  burst of brand-new connections refused afterwards. Both bounds are arithmetic against the capacity
+  and refill the `429` itself advertised, so changing `RATE_LIMIT_*` needs no change here.
 - Tenant isolation: the `default`-realm `isolation` account must be 403 on every persona-guarded
   route, and a `demo` token must be refused against a `default` user id. **An unreachable target is a
   hard failure, never a skip.**
@@ -671,7 +674,9 @@ journalctl -u movielens-prune.service -n 20
 | The API refuses to boot on a pgBouncer check | Either the pooler is down (the API cannot boot without it, by design), or `pool_mode` is not `transaction`, or `PGBOUNCER_ADMIN_PASSWORD` disagrees between the API and the pooler |
 | A deploy never finishes and readiness times out | `/readyz` is returning non-200. It fails on database or JWKS only, never on a sidecar — so this means the pooler path or Keycloak, not the model server |
 | `make prod-verify` fails but the site looks fine | Read the failing row before anything else. A silent popularity fallback, a broken isolation guard and a stale audit table all look fine from a browser |
-| Requests come back `429` with `Retry-After` | The ADR 0014 token bucket, working. It is keyed on `(tenant, sub)` from the verified token, so it is one *account* that is over, not the deployment. The bucket is **per worker** — 600/minute with a burst of 120 on the worker a keep-alive client is pinned to. If the workload is legitimate, raise `RATE_LIMIT_REQUESTS_PER_MINUTE`; never reach for `RATE_LIMIT_ENABLED=false` on a public service, and never exempt a client |
+| Requests come back `429` with `Retry-After` | The ADR 0014 token bucket, working. It is keyed on `(tenant, sub)` from the verified token, so it is one *account* that is over, not the deployment. One bucket in Redis serves every worker — 600/minute with a burst of 120 for the whole service, not per process. If the workload is legitimate, raise `RATE_LIMIT_REQUESTS_PER_MINUTE`; never reach for `RATE_LIMIT_ENABLED=false` on a public service, and never exempt a client |
+| `/readyz` reports `rate_limit: degraded` | The shared bucket cannot reach Redis and is failing open onto a per-worker one, so the limit is now `workers ×` what it says. Deliberate (a limiter is backpressure, not an auth boundary, and failing closed would turn a Redis blip into an outage), and reported here because a `429` writes no audit row and the API runs with `--no-access-log`, so nothing else records it. Check `docker compose logs redis` and the API's `outcome=fail_open` lines, which carry the count they stand for |
+| The reliability harness fails with "about N buckets" or "brand-new connections were admitted" | The service is enforcing one bucket per worker rather than one bucket. Either `RATE_LIMIT_BACKEND` is `memory` on `api` (it should be absent, and the default is `redis`), or the shared bucket is failing open — see the `/readyz` row above |
 | A deploy failed and the workflow says the host rolled back | The previous release is running and was verified. Read the deploy log's verify rows to find what the new commit broke; the box is not the thing to debug |
 
 ## 14. What this deployment does not do

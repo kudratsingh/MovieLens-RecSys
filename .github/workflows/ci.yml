@@ -54,7 +54,7 @@ jobs:
       - name: Verify API runtime imports and size budget
         run: |
           docker run --rm movielens-api-ci python -c \
-            "import alembic, fastapi, httpx, jwt, psycopg2, pydantic_settings, sqlalchemy"
+            "import alembic, fastapi, httpx, jwt, psycopg2, pydantic_settings, redis, sqlalchemy"
           size=$(docker image inspect movielens-api-ci --format '{{.Size}}')
           test "$size" -lt 400000000 || {
             echo "API runtime image exceeds 400 MB: $size bytes"
@@ -406,7 +406,10 @@ jobs:
 
       # Request-id traceability, the auth boundary, dependency provenance,
       # bounded pages, cursor rejection, and degraded metadata: pass/fail facts
-      # a percentile cannot express. Records rate limiting as not implemented.
+      # a percentile cannot express. The rate-limit row records the absence of a
+      # limiter here rather than asserting one: `api-load` runs with
+      # ENVIRONMENT=dev so the p99 gate measures the service and not the rig
+      # (ADR 0014). `make prod-verify` is where that row runs against a limiter.
       - name: Check serving reliability promises
         run: make demo-reliability-check
 

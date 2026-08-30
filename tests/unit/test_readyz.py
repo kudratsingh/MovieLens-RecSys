@@ -27,6 +27,7 @@ from sqlalchemy.exc import OperationalError
 
 from src.auth.jwks import JwksCache
 from src.auth.middleware import UNAUTHENTICATED_PATHS, AuthMiddleware
+from src.config import Settings
 from src.serving import app as app_module
 from src.serving.audit import RecommendationAuditMiddleware
 from src.serving.request_id import REQUEST_ID_HEADER
@@ -129,6 +130,27 @@ def _wire(
     monkeypatch.setattr(app_module, "_readiness_probe", _sidecar_client(answering=sidecars))
 
 
+def _with_limiter(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    """Turn the limiter on and pin what its backend reports.
+
+    The probe answers ``disabled`` from the settings rather than from the
+    limiter, because the limiter object exists on every stack — it is built at
+    import so a bad ``RATE_LIMIT_BURST`` fails the boot — while the middleware
+    is installed only where ADR 0014 turns it on.
+    """
+
+    class _Limiter:
+        async def report(self) -> str:
+            return state
+
+    monkeypatch.setattr(
+        app_module,
+        "_settings",
+        Settings(_env_file=None, environment="dev", rate_limit_enabled=True),
+    )
+    monkeypatch.setattr(app_module, "_rate_limiter", _Limiter())
+
+
 def _replace_auth_engine(monkeypatch: pytest.MonkeyPatch, engine: object) -> None:
     """Swap the engine the ``AuthMiddleware`` instance will be built with.
 
@@ -176,6 +198,9 @@ def test_readyz_answers_200_with_no_authorization_header(
         "jwks": "ok",
         "model_server": "ok",
         "feature_server": "ok",
+        # The unit-test process is a dev environment, where ADR 0014 turns the
+        # limiter off; the states a deployment reports are covered below.
+        "rate_limit": "disabled",
     }
 
 
@@ -193,6 +218,28 @@ def test_readyz_reports_dead_sidecars_without_failing_the_deploy(
     assert body["status"] == "ready"
     assert body["model_server"] == "unavailable"
     assert body["feature_server"] == "unavailable"
+
+
+@pytest.mark.parametrize("state", ["shared", "degraded", "in-process"])
+def test_readyz_reports_the_rate_limit_bucket_without_gating_on_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """ADR 0014's shared bucket fails open onto the per-worker one when Redis
+    is unreachable, which weakens a promise the response headers keep making —
+    and leaves no other trace, since a 429 writes no audit row and the deployed
+    API runs with ``--no-access-log``. So it is reported. It does not gate: a
+    limiter is backpressure, not an auth boundary, and a deploy that stalls
+    because Redis blinked would be trading a bounded weakening for an outage.
+    """
+    _wire(monkeypatch)
+    _with_limiter(monkeypatch, state)
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["rate_limit"] == state
 
 
 def test_readyz_fails_when_the_database_is_unreachable(
