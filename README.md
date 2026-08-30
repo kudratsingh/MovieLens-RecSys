@@ -58,7 +58,9 @@ green no-ops until one is configured. See [ADR 0013](docs/adr/0013-production-de
 and the [deployment runbook](docs/deployment-runbook.md).
 
 Still open in Phase 3: per-tenant champion routing, audit coverage for non-prediction endpoints,
-dev/staging Compose files, and the offline routing gap the cold-start cohort found (below). The frontend finish gate passes every
+and the offline routing gap the cold-start cohort found (below). The dev and staging Compose
+environments landed (`make up-dev`, `make up-staging`); staging is a thin overlay on the production
+stack and, like production, has no host yet. The frontend finish gate passes every
 criterion a reviewer can settle and [holds](docs/frontend/finish-gate-review.md) on moderated
 sessions with real participants, which a reviewer cannot substitute for. The long form is in
 [CLAUDE.md](CLAUDE.md) and [`docs/README.md`](docs/README.md).

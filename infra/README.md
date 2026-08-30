@@ -6,9 +6,17 @@ the **repository root as the build context** — which is why the Dockerfiles'
 `COPY` paths are repo-root-relative. `infra/mlflow/` is the one exception; its
 context is itself.
 
-Nothing here is invoked directly. The Makefile's `demo-*` and `prod-*` targets
-own the Compose invocation, the project name and the env-file path, and the two
-deploy workflows drive those targets over SSH.
+Nothing here is invoked directly. The Makefile's `demo-*`, `staging-*` and
+`prod-*` targets own the Compose invocation, the project name and the env-file
+path, and the two deploy workflows drive the production ones over SSH.
+
+Three environments read these directories, and two of them read the same files:
+**dev** is `docker-compose.yml` + `docker-compose.demo.yml` (`make up-dev`),
+**staging** is `docker-compose.prod.yml` + `docker-compose.staging.yml`
+(`make up-staging`), and **production** is `docker-compose.prod.yml` alone. So
+wherever a row below says "prod", read it as "staging too": staging changes the
+Compose project and `ENVIRONMENT`, and nothing about which image, config file or
+script a service uses.
 
 ## Directories
 
@@ -25,7 +33,7 @@ deploy workflows drive those targets over SSH.
 | `k6/` | The `loadcheck` image — `grafana/k6` with `synthetic/load/` baked in, because the production host never builds and never mounts a source tree. The dev stack does not use it; there, k6 is the stock image with the scripts bind-mounted | Prod `loadcheck`; `make prod-load` |
 | `edge/` | The Caddy edge terminating https for the deployment's two public hostnames, in both TLS modes: Let's Encrypt on the box (`EDGE_TLS=acme`) and Caddy's internal CA on a laptop. `admin off` — no authenticated admin API, even on the private network | Prod `edge`; `make prod-stores`, `prod-edge-ca` |
 | [`host/`](#host) | Host bootstrap and the five systemd units | **Nothing automated.** Run by hand on the box per the deployment runbook |
-| [`deploy/`](#deploy) | The release script, the environment contract, the role SQL, the rollback rehearsal | `make prod-deploy` / `prod-rollback` / `prod-rollback-rehearsal`; prod `postgres-provision`; both deploy workflows |
+| [`deploy/`](#deploy) | The release script, the production **and staging** environment contracts, the role SQL, the rollback rehearsal | `make prod-deploy` / `prod-rollback` / `prod-rollback-rehearsal`; prod and staging `postgres-provision`; `make up-staging` reads `staging.env.example`; both deploy workflows |
 | `mlflow/` | The official MLflow image plus the `psycopg2` driver it lacks, so a Postgres `--backend-store-uri` does not crash on import. The one build context here that is not the repository root | Dev stack's `mlflow` |
 | [`ci/`](#ci) | One file: the pinned k6 version | Makefile and CI both read it |
 | `prometheus.yml` | Dev-stack scrape config, pointed at an API on the host | Dev stack's `prometheus`. Not used in production |
@@ -137,9 +145,10 @@ weekly prune service and timer — **images only, never volumes**.
 ### `deploy/`
 
 Read [`deploy/README.md`](deploy/README.md) rather than duplicating it here: it
-documents `deploy.sh` and its sentinels, the full `production.env.example`
-variable contract, `provision-roles.sql`, the rollback rehearsal, the two
-rehearsal-only environment switches, **and** `infra/host/` in detail.
+documents `deploy.sh` and its sentinels, the `production.env.example` variable
+contract and its `staging.env.example` sibling, `provision-roles.sql`, the
+rollback rehearsal, the two rehearsal-only environment switches, **and**
+`infra/host/` in detail.
 
 The one thing worth repeating: `deploy.sh` rolls back to `.release/previous` and
 re-verifies **on its own** when verification fails. `DEPLOY-OK` and `ROLLBACK-OK`

@@ -427,9 +427,13 @@ them is drawn on a diagram as though it exists.
   plus an external uptime check that is still owed.
 - **Structured JSON logging.** The convention is written down; the serving path
   does not yet emit it.
-- **`docker-compose.{dev,staging}.yml`.** The production file landed with the
-  deployment work and doubles as its own local rehearsal. Dev and staging
-  splits remain.
+- **A staging *host*.** The environments themselves are done: dev is
+  `docker-compose.yml` + `docker-compose.demo.yml` behind `make up-dev` (there
+  is deliberately no third file), and staging is `docker-compose.staging.yml`, a
+  thin overlay on the production stack behind `make up-staging`. Neither is
+  deployed anywhere — staging runs on a laptop with Caddy's own CA, has no
+  deploy workflow and no canary, and pointing it at a second box is two
+  hostnames and `EDGE_TLS=acme` away.
 - **Generic request audits.** The audit middleware matches only the
   recommendations route. Every other authenticated endpoint writes no audit row,
   in production too, and the runbook says so plainly rather than letting the

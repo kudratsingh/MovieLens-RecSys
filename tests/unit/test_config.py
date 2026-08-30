@@ -182,6 +182,53 @@ def test_non_dev_rejects_default_pgbouncer_admin_password(clean_env: None) -> No
         )
 
 
+def test_staging_is_guarded_exactly_as_production_is(clean_env: None) -> None:
+    """`docker-compose.staging.yml` exists because of this, and only this.
+
+    Every guard in Settings is written `environment != "dev"`, so staging
+    inherits all of them — and that is the intended reading rather than an
+    accident of the expression. A staging build that relaxed a production guard
+    would rehearse a system nobody is going to deploy, which defeats the point
+    of having a staging environment at all.
+
+    Asserted here because it is invisible: nothing in the type or the field
+    names says the third Literal value behaves like the second, and a future
+    guard written `environment == "production"` would silently exempt staging.
+    """
+    with pytest.raises(RuntimeError, match="MODEL_SERVER_AUTH_TOKEN"):
+        Settings(_env_file=None, environment="staging")
+
+    with pytest.raises(RuntimeError, match="PGBOUNCER_ADMIN_PASSWORD"):
+        Settings(
+            _env_file=None,
+            environment="staging",
+            model_server_auth_token="staging-secret",
+        )
+
+    with pytest.raises(RuntimeError, match="dev_auth_bypass"):
+        Settings(
+            _env_file=None,
+            environment="staging",
+            dev_auth_bypass=True,
+            model_server_auth_token="staging-secret",
+            pgbouncer_admin_password="staging-pooler-secret",
+        )
+
+
+def test_the_rate_limiter_is_on_in_staging_as_well_as_production(clean_env: None) -> None:
+    # ADR 0014's bucket is unset-means-on-outside-dev, so staging gets it
+    # without configuration. A rehearsal without the limiter would not
+    # reproduce the 429s the production canary can see.
+    settings = Settings(
+        _env_file=None,
+        environment="staging",
+        model_server_auth_token="staging-secret",
+        pgbouncer_admin_password="staging-pooler-secret",
+    )
+
+    assert settings.rate_limit_active is True
+
+
 def test_non_dev_keeps_the_pgbouncer_admin_role_name(clean_env: None) -> None:
     # Only the password is refused outside dev: production keeps the
     # `pgbouncer_admin` role name, and guarding the user name would reject a

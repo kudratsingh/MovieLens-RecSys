@@ -1,4 +1,4 @@
-"""Structural gates on the production stack.
+"""Structural gates on the production stack, and on the two environments beside it.
 
 ``docker compose config`` proves the file parses and that every variable it
 interpolates has a value. It cannot prove the things this stack has to be: that
@@ -8,6 +8,17 @@ from the host, that the services which construct ``Settings()`` all say
 box built for itself, and that the variable contract and its example file are
 still the same contract. Those are the claims the deployment rests on, so they
 are asserted here rather than remembered.
+
+The last section covers the other two environments, because both are defined
+*against* this one and neither can protect that relationship on its own:
+
+* staging is ``docker-compose.prod.yml`` with a thin overlay, so what has to be
+  asserted is that the overlay stays thin — a staging stack that diverges in
+  topology has stopped rehearsing the thing it exists to rehearse — and that a
+  service added to production cannot be left saying ``production`` in staging;
+* dev is ``docker-compose.yml`` + ``docker-compose.demo.yml`` and deliberately
+  has no third file, which is a decision rather than an omission and so is
+  asserted here where the next person to reach for one will find the reasoning.
 
 Nothing in this module starts a container or reads the network.
 """
@@ -24,9 +35,14 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = REPO_ROOT / "docker-compose.prod.yml"
+STAGING_COMPOSE_PATH = REPO_ROOT / "docker-compose.staging.yml"
+DEV_COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
+DEMO_COMPOSE_PATH = REPO_ROOT / "docker-compose.demo.yml"
 ENV_EXAMPLE_PATH = REPO_ROOT / "infra" / "deploy" / "production.env.example"
+STAGING_ENV_EXAMPLE_PATH = REPO_ROOT / "infra" / "deploy" / "staging.env.example"
 CADDYFILE_PATH = REPO_ROOT / "infra" / "edge" / "Caddyfile"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
+CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # Everything that runs between deploys. The jobs below run and exit.
 LONG_LIVED_SERVICES = frozenset(
@@ -133,6 +149,18 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
 
 ENV_EXAMPLE = _parse_env_file(ENV_EXAMPLE_PATH)
+STAGING_ENV_EXAMPLE = _parse_env_file(STAGING_ENV_EXAMPLE_PATH)
+
+STAGING_COMPOSE: dict[str, Any] = yaml.safe_load(STAGING_COMPOSE_PATH.read_text(encoding="utf-8"))
+STAGING_SERVICES: dict[str, dict[str, Any]] = STAGING_COMPOSE["services"]
+
+# Every production service that answers "which environment is this?", which is
+# the whole of what the staging overlay changes. Derived from the production
+# file rather than listed, so the two directions below are a real coupling and
+# not a copy of the same literal twice.
+PRODUCTION_LABELLED_SERVICES = frozenset(
+    name for name in SERVICES if _environment(name).get("ENVIRONMENT") == "production"
+)
 
 
 def test_the_stack_declares_every_service_in_the_deployment_topology() -> None:
@@ -630,3 +658,272 @@ def test_the_production_stack_cannot_be_confused_with_the_demo_stack() -> None:
     assert COMPOSE["name"] == "movielens-prod"
     tags = [str(body["image"]) for body in SERVICES.values() if "image" in body]
     assert [tag for tag in tags if tag.endswith(":demo")] == []
+
+
+# --- staging: the same stack, one environment removed ------------------------
+
+
+def test_staging_is_an_overlay_on_the_production_file_and_not_a_copy_of_it() -> None:
+    """A duplicated 1 000-line stack drifts; an overlay cannot.
+
+    Staging runs `-f docker-compose.prod.yml -f docker-compose.staging.yml`, so
+    every property asserted above this line — no published port but the edge, no
+    dev-only switch, one image repository, a memory ceiling per long-lived
+    service — is a property staging has too, for free and permanently.
+    """
+    assert STAGING_COMPOSE["name"] == "movielens-staging"
+    # Nothing but `name` and `services`: an overlay that declared its own
+    # volumes, networks or extension fields would be starting to become a second
+    # topology, which is the thing this file exists not to be.
+    assert set(STAGING_COMPOSE) == {"name", "services"}
+
+
+def test_the_staging_overlay_changes_the_environment_label_and_nothing_else() -> None:
+    """The thinness is the claim, so it is what gets asserted.
+
+    A staging stack that differs from production in worker counts, memory
+    ceilings, pooler mode, TLS termination or startup order stops rehearsing the
+    deployment: the defect it would have caught is precisely the one it no
+    longer shares. Every other difference between the two — hostnames, every
+    credential, the certificate issuer, the image tag — travels in the env file,
+    the same way the box and the laptop rehearsal already differ today.
+    """
+    for name, body in sorted(STAGING_SERVICES.items()):
+        assert body == {"environment": {"ENVIRONMENT": "staging"}}, name
+
+
+def test_every_production_labelled_service_is_relabelled_for_staging() -> None:
+    """The coupling neither file can hold on its own.
+
+    A new service that constructs Settings() gets `ENVIRONMENT: production` in
+    the production file, and would then silently report `production` from inside
+    staging — the one claim staging makes about itself. The reverse is worth
+    catching too: a service named here that production does not define is a typo
+    Compose would turn into a new, image-less service rather than an error.
+    """
+    assert set(STAGING_SERVICES) == PRODUCTION_LABELLED_SERVICES
+    # Sanity on the derived set, which is eight services: the seven that build
+    # Settings(), plus the Feast server -- which carries the label for
+    # consistency rather than because anything in it reads the value.
+    assert PRODUCTION_LABELLED_SERVICES == SETTINGS_BUILDING_SERVICES | {"feature-server"}
+    # The count is quoted as prose in the staging compose file's header, the
+    # Makefile, docs/deployment-runbook.md and the readiness review. It is not a
+    # constraint on the topology -- add a service and change the number -- but a
+    # number nothing checks is a number that goes quietly wrong.
+    assert len(PRODUCTION_LABELLED_SERVICES) == 8, (
+        "the environment-labelled service count moved; the staging compose header, "
+        "the Makefile's staging section, docs/deployment-runbook.md's Staging section "
+        "and docs/production-readiness-review.md all say 'eight'"
+    )
+
+
+@pytest.mark.parametrize("variable", FORBIDDEN_VARIABLES)
+def test_the_staging_overlay_reintroduces_no_dev_only_switch(variable: str) -> None:
+    """`staging` is not `dev` to src/config.py, and must not be here either.
+
+    Every guard in src/config.py is written `!= "dev"`, so the bypass refusal,
+    the model-server-token refusal, the pgBouncer-password refusal and the ADR
+    0014 limiter are all live in staging. An overlay that set one of these would
+    be asking a service to refuse to boot — but the stronger property is the
+    same one production holds: absence, not "false".
+    """
+    assert variable not in STAGING_COMPOSE_PATH.read_text(encoding="utf-8")
+
+
+def test_the_staging_contract_is_the_production_contract() -> None:
+    """One variable set, two sets of values.
+
+    Staging reads the production compose file, so it reads the production
+    variable contract exactly. Drift in either direction is the bug: a variable
+    staging forgot fails an interpolation four services into a release, and one
+    staging documents that production dropped is a credential a rotation misses.
+    """
+    missing = sorted(set(ENV_EXAMPLE) - set(STAGING_ENV_EXAMPLE))
+    extra = sorted(set(STAGING_ENV_EXAMPLE) - set(ENV_EXAMPLE))
+    assert missing == [], f"in the production contract, absent from staging's: {missing}"
+    assert extra == [], f"documented by staging, read by nothing: {extra}"
+
+
+def test_the_staging_example_ships_no_credential_and_none_of_productions() -> None:
+    """A staging value that reads like a production value gets pasted like one.
+
+    Both files ship placeholders rather than secrets, and the placeholders are
+    deliberately distinguishable — `REPLACE_ME__staging_*` against
+    `REPLACE_ME__*` — so a `.env.staging` that is really a copy of the
+    production template is visible on sight rather than after an incident.
+    """
+    secretish = {
+        name: value
+        for name, value in STAGING_ENV_EXAMPLE.items()
+        if any(marker in name for marker in ("PASSWORD", "SECRET", "TOKEN"))
+    }
+    assert secretish, "the staging example defines no secrets at all, which cannot be right"
+    for name, value in sorted(secretish.items()):
+        assert value not in DEV_CREDENTIAL_LITERALS, name
+        assert value.startswith("REPLACE_ME__staging_"), name
+        assert value != ENV_EXAMPLE[name], name
+    # And the same generation rule, because the DSN-encoding and pgBouncer
+    # userlist constraints that make it load-bearing are the same code.
+    text = STAGING_ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+    assert "secrets.token_urlsafe(48)" in text
+    assert "openssl rand -base64" in text
+
+
+def test_staging_defaults_to_the_local_ca_and_its_own_hostnames() -> None:
+    """Staging is not on public DNS, so it must not ask Let's Encrypt for a name.
+
+    `internal` is also the compose file's own default for EDGE_TLS, so this is
+    belt and braces: what it really pins is that nobody flipped the example to
+    `acme` while leaving `localtest.me` hostnames behind it, which would burn
+    rate limit against names nobody can validate.
+    """
+    assert STAGING_ENV_EXAMPLE["EDGE_TLS"] == "internal"
+    assert ENV_EXAMPLE["EDGE_TLS"] == "acme"
+    for name in ("PUBLIC_APP_HOST", "PUBLIC_AUTH_HOST"):
+        assert STAGING_ENV_EXAMPLE[name].startswith("staging."), name
+        assert STAGING_ENV_EXAMPLE[name] != ENV_EXAMPLE[name], name
+    # The same registry, deliberately: staging rehearses the artifact the box
+    # will run, and an image built somewhere else is not that artifact.
+    assert STAGING_ENV_EXAMPLE["IMAGE_REPOSITORY"] == ENV_EXAMPLE["IMAGE_REPOSITORY"]
+    # And the same sizing, because worker counts are where a rehearsal most
+    # easily stops rehearsing anything.
+    for name in ("API_WORKERS", "MODEL_SERVER_WORKERS", "JAVA_OPTS_KC_HEAP"):
+        assert STAGING_ENV_EXAMPLE[name] == ENV_EXAMPLE[name], name
+
+
+def test_the_makefile_drives_staging_through_its_own_project_and_file_order() -> None:
+    """The overlay is second, and the project name is passed anyway.
+
+    Compose takes `name` from the last file, so the order is what makes the
+    project `movielens-staging` — and `-p` on the command line wins over both,
+    so a hand-typed invocation in the wrong order still cannot address
+    movielens-prod's containers or volumes.
+    """
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    definition = re.search(r"^STAGING_COMPOSE = (?P<body>(?:.*\\\n)*.*)$", makefile, re.MULTILINE)
+    assert definition is not None, "the Makefile no longer defines STAGING_COMPOSE"
+    body = definition.group("body").replace("\\\n", " ")
+    assert "-p movielens-staging" in body
+    assert body.index("-f docker-compose.prod.yml") < body.index("-f docker-compose.staging.yml")
+    assert "--env-file $(STAGING_ENV_FILE)" in body
+
+
+def test_staging_exposes_the_targets_that_rehearse_a_release_and_stops_there() -> None:
+    """Deploys, rollbacks and backups belong to the box.
+
+    Production has seventeen targets because it is operated; staging has the few
+    that run a release and then throw it away. Adding `staging-deploy` or
+    `staging-rollback` would invite someone to exercise the deployment's
+    operational path against the environment that is allowed to be broken.
+    """
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    phony = " ".join(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
+    for target in (
+        "staging-env-guard",
+        "up-staging",
+        "staging-pull",
+        "staging-release",
+        "staging-serve",
+        "staging-verify",
+        "staging-down",
+        "staging-reset",
+    ):
+        assert re.search(rf"^{re.escape(target)}:", makefile, re.MULTILINE), target
+        assert target in phony, target
+    declared = set(re.findall(r"^(staging-[a-z-]+):", makefile, re.MULTILINE))
+    assert not declared & {"staging-deploy", "staging-rollback", "staging-backup"}
+    # Every stack-touching target sits behind the guard, for the same reason the
+    # production ones do: failing on a missing env file beats failing four
+    # services later on an interpolation error.
+    for target in sorted(declared - {"staging-env-guard"}):
+        assert re.search(
+            rf"^{re.escape(target)}: staging-env-guard$", makefile, re.MULTILINE
+        ), target
+
+
+# --- dev: two files, and deliberately not a third ----------------------------
+
+
+def test_the_dev_stack_is_the_base_and_demo_files_with_no_third_one() -> None:
+    """A decision, recorded where the next person to reach for one will look.
+
+    The multi-environment plan names docker-compose.{dev,staging,prod}.yml, and
+    dev already *is* two files: the stores plus a Keycloak with dev credentials,
+    and the application layer at ENVIRONMENT=dev over the reviewed 120-title
+    fixture — which is the smaller dataset snapshot the plan asks dev for. The
+    only job left for a third file would be turning DEV_AUTH_BYPASS on, which
+    docker-compose.demo.yml sets to "false" precisely so the browser journeys
+    and the load gate authenticate against real Keycloak tokens. An overlay that
+    flipped it on the same Compose project would give one stack two auth
+    behaviours depending on which target ran last.
+
+    If this fails because a docker-compose.dev.yml appeared, the fix is to
+    revisit that reasoning rather than to delete this test.
+    """
+    assert DEV_COMPOSE_PATH.is_file()
+    assert DEMO_COMPOSE_PATH.is_file()
+    assert not (REPO_ROOT / "docker-compose.dev.yml").exists()
+
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert re.search(r"^up-dev: demo-up$", makefile, re.MULTILINE)
+    assert "up-dev" in " ".join(
+        line for line in makefile.splitlines() if line.startswith(".PHONY:")
+    )
+
+
+def test_no_deployment_target_can_load_a_development_compose_file() -> None:
+    """The mirror of the production file naming no DEV_AUTH_BYPASS.
+
+    The production model cannot contain a dev switch, and this is the other half
+    of that: the invocation cannot pick up a file that does. docker-compose.yml
+    runs Postgres with `POSTGRES_HOST_AUTH_METHOD: trust` and publishes every
+    data-store port — merged under a production or staging project it would
+    silently undo both, and `docker compose config` would report a valid model.
+
+    Asserted on the whole Makefile with comments stripped, so it holds for any
+    recipe anyone adds later rather than only for the ones here today.
+    """
+    logical: list[str] = []
+    for raw in MAKEFILE_PATH.read_text(encoding="utf-8").splitlines():
+        if raw.lstrip().startswith("#"):
+            continue
+        # Backslash continuations are one statement, so they are joined before
+        # anything is matched — the definitions below span several lines.
+        if logical and logical[-1].endswith("\\"):
+            logical[-1] = logical[-1][:-1].rstrip() + " " + raw.strip()
+        else:
+            logical.append(raw)
+
+    for compose_file, allowed in (
+        ("docker-compose.yml", ("DEMO_COMPOSE =",)),
+        ("docker-compose.demo.yml", ("DEMO_COMPOSE =",)),
+        ("docker-compose.prod.yml", ("PROD_COMPOSE =", "STAGING_COMPOSE =")),
+        ("docker-compose.staging.yml", ("STAGING_COMPOSE =",)),
+    ):
+        # `-f <file>` rather than the bare name, so a mention in `.PHONY` or in
+        # a variable named after a file does not match.
+        naming = [line for line in logical if f"-f {compose_file}" in line]
+        assert naming, f"nothing in the Makefile names {compose_file} any more"
+        for line in naming:
+            assert line.startswith(
+                allowed
+            ), f"{compose_file} is named outside {allowed}: {line.strip()!r}"
+
+
+def test_ci_renders_the_staging_model_so_the_overlay_cannot_rot() -> None:
+    """An overlay nothing merges is an overlay nobody notices breaking.
+
+    The staging stack has no CI job of its own and no host to deploy to, so the
+    only thing standing between a typo here and a failed release rehearsal is
+    the `demo-compose` job rendering the merged model on every pull request. It
+    renders it against the committed example, which also proves that file still
+    satisfies the whole variable contract.
+    """
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    commands = " ".join(
+        str(step.get("run", "")) for step in workflow["jobs"]["demo-compose"]["steps"]
+    )
+    assert "-f docker-compose.staging.yml" in commands
+    assert "infra/deploy/staging.env.example" in commands
+    # And the dev model, which is the pair the `up-dev` alias resolves to.
+    assert "-f docker-compose.yml -f docker-compose.demo.yml" in commands
