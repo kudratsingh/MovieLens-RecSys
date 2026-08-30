@@ -53,6 +53,68 @@ contexts so the same file builds locally for the rehearsal (`make up-prod`), whi
   <img alt="The production topology: one Hetzner CX22 with only the Caddy edge publishing ports and key-only SSH from GitHub Actions, ten long-lived services on a private network, the jobs profile, and the systemd units for boot, nightly backup and weekly prune." src="diagrams/production-topology.svg" width="100%">
 </picture>
 
+## Staging
+
+Numbered sections start below; this one is context, because the first question anyone asks about a
+runbook like this is whether there is somewhere to try it first. There is.
+
+**Staging is `docker-compose.prod.yml` with `docker-compose.staging.yml` layered on it** — a
+different Compose project (`movielens-staging`), `ENVIRONMENT=staging` on the eight services
+production gives an environment label (the seven that construct `Settings()`, plus the Feast
+server), and its own `.env.staging`. Nothing else differs, deliberately: hostnames,
+every credential, the certificate issuer and the image tag all travel in the env file, exactly the
+way the box and the laptop rehearsal already differ from each other.
+
+```bash
+cp infra/deploy/staging.env.example .env.staging   # then fill in every REPLACE_ME__
+chmod 0600 .env.staging
+make up-staging        # build the images from this checkout, then start the stores
+make staging-release   # roles, realms, migrations, the persona seed, materialization
+make staging-serve     # the serving tier, held until the sidecar is warm rather than listening
+make staging-verify    # the post-deploy matrix, then the reliability suite
+make staging-reset     # throw it away; the next rehearsal starts from empty volumes
+```
+
+`make staging-pull IMAGE_TAG=<40-character sha>` replaces the build step when the images should come
+from GHCR — which is the mode worth using before a release, because the artifact staging rehearses is
+then the artifact the box will run.
+
+**What staging is for:** rehearsing a release end to end before a merge to `main` deploys it. The
+release order, the release jobs, the migrations, the Keycloak provisioning and the whole verify
+matrix are the production ones. When a release is going to fail, this is where it should.
+
+**What staging deliberately is not:**
+
+- **Not a second production.** There is no staging deploy workflow, no staging canary, no scheduled
+  staging backup and no staging entry in the deploy gate. `deploy.sh` is production's, and there is
+  no `staging-deploy` target — exercising the deployment's operational path against the environment
+  that is allowed to be broken teaches the wrong thing about both.
+- **Not a relaxed environment.** Every guard in `src/config.py` is written `environment != "dev"`, so
+  `staging` refuses the auth bypass, refuses the checked-in model-server token, refuses the
+  checked-in pgBouncer password and runs the ADR 0014 rate limiter — all of it exactly as production
+  does. A staging build that relaxed a production guard would rehearse a system nobody deploys.
+- **Not a host that exists.** Nothing is deployed to staging either; today it runs on a laptop, from
+  this checkout, with `EDGE_TLS=internal` and `staging.app.localtest.me` / `staging.auth.localtest.me`
+  hostnames that resolve to 127.0.0.1 with no DNS. Pointing it at a second box is two hostnames and
+  `EDGE_TLS=acme` in `.env.staging` and nothing else — but until somebody does that, this is a local
+  environment and the documents should not imply otherwise.
+
+Two practical notes:
+
+- **Staging and the production rehearsal cannot run at the same time on one machine.** Both bind 80
+  and 443, and those ports are not really adjustable — the public origins carry no port, and
+  Keycloak's issuer and Auth.js's callback URL are built from them. `make prod-down` before
+  `make up-staging`, and the reverse. The volumes are separate, so neither loses state to the other.
+- **Trust the edge before you use a browser.** Staging defaults to Caddy's own CA, so
+  `make staging-edge-ca > /tmp/staging-root.crt` and add that root, or expect a certificate warning
+  on every page. The containers already read the same root from the shared `edge_ca` volume.
+
+The dev environment is the other side of this: `make up-dev` starts `docker-compose.yml` +
+`docker-compose.demo.yml` — the stores, a Keycloak with dev credentials, and the application layer at
+`ENVIRONMENT=dev` over the reviewed 120-title fixture. It is the only environment where the auth
+bypass is permitted at all, and it is documented in [`demo-runbook.md`](demo-runbook.md). There is
+deliberately no `docker-compose.dev.yml`; `tests/unit/test_prod_compose.py` records why.
+
 ## 0. Decisions to record before the first deploy
 
 Each row has a default. Replace `☐` with `☑` and a date when you accept it, or write the override in
@@ -394,7 +456,10 @@ reliability harness. What it covers:
 - The auth boundary: 401 unauthenticated across nine routes, plus request-id echo and persistence,
   dependency visibility, degraded metadata, bounded pages, cursor rejection, and rate limiting — the
   `X-RateLimit-*` headers on an admitted request and a `429` with `Retry-After` once a bucket is
-  drained, with no third behaviour.
+  drained, with no third behaviour; and, since the shared bucket landed, that there is exactly *one*
+  bucket behind the service — no more than one bucket's worth admitted before the refusal, and a
+  burst of brand-new connections refused afterwards. Both bounds are arithmetic against the capacity
+  and refill the `429` itself advertised, so changing `RATE_LIMIT_*` needs no change here.
 - Tenant isolation: the `default`-realm `isolation` account must be 403 on every persona-guarded
   route, and a `demo` token must be refused against a `default` user id. **An unreachable target is a
   hard failure, never a skip.**
@@ -604,11 +669,14 @@ journalctl -u movielens-prune.service -n 20
 | Every request 401s, on every route, immediately | The issuer disagrees somewhere. `PUBLIC_AUTH_HOST` is the single source; compare what the token carries against `https://<PUBLIC_AUTH_HOST>/realms/demo` character by character, including scheme and trailing slash |
 | The browser shows a certificate error | ACME. Check `docker compose logs edge` for the challenge, then that both A records still point here. Do not read an auth failure behind a bad certificate as an auth problem |
 | A container refuses to start with "the default model-server token is only permitted in development" | `MODEL_SERVER_AUTH_TOKEN` is missing on a service that constructs `Settings()` — that includes `model-server`, `release` and `verify`, none of which use the token to talk to anything |
+| Every recommendation reports `learned: false` with `no-champion` or `champion-mismatch` | The tenant's champion columns on `public.tenants` (migration 0016) and the bundle the sidecar loaded do not agree. `no-champion` means the row names none — the migration seeds `demo` and deliberately leaves `default` and `synth_cold` empty, so this on `demo` means the seeding update was skipped or the row was edited. `champion-mismatch` means a promotion moved the row without shipping the image, or the reverse; `V-12` in `make prod-verify` compares all three against the sidecar's `/healthz` and names which coordinate disagrees. Fix the row or deploy the matching image — the service keeps serving popularity meanwhile |
 | The API boots but recommendations report `learned: false` with `model-server-unavailable` | The two `MODEL_SERVER_AUTH_TOKEN` values disagree, or the sidecar is not warm. A token mismatch degrades every recommendation to popularity **at HTTP 200** rather than erroring — rotate that value in a window and let verify confirm recovery |
 | The API refuses to boot on a pgBouncer check | Either the pooler is down (the API cannot boot without it, by design), or `pool_mode` is not `transaction`, or `PGBOUNCER_ADMIN_PASSWORD` disagrees between the API and the pooler |
 | A deploy never finishes and readiness times out | `/readyz` is returning non-200. It fails on database or JWKS only, never on a sidecar — so this means the pooler path or Keycloak, not the model server |
 | `make prod-verify` fails but the site looks fine | Read the failing row before anything else. A silent popularity fallback, a broken isolation guard and a stale audit table all look fine from a browser |
-| Requests come back `429` with `Retry-After` | The ADR 0014 token bucket, working. It is keyed on `(tenant, sub)` from the verified token, so it is one *account* that is over, not the deployment. The bucket is **per worker** — 600/minute with a burst of 120 on the worker a keep-alive client is pinned to. If the workload is legitimate, raise `RATE_LIMIT_REQUESTS_PER_MINUTE`; never reach for `RATE_LIMIT_ENABLED=false` on a public service, and never exempt a client |
+| Requests come back `429` with `Retry-After` | The ADR 0014 token bucket, working. It is keyed on `(tenant, sub)` from the verified token, so it is one *account* that is over, not the deployment. One bucket in Redis serves every worker — 600/minute with a burst of 120 for the whole service, not per process. If the workload is legitimate, raise `RATE_LIMIT_REQUESTS_PER_MINUTE`; never reach for `RATE_LIMIT_ENABLED=false` on a public service, and never exempt a client |
+| `/readyz` reports `rate_limit: degraded` | The shared bucket cannot reach Redis and is failing open onto a per-worker one, so the limit is now `workers ×` what it says. Deliberate (a limiter is backpressure, not an auth boundary, and failing closed would turn a Redis blip into an outage), and reported here because a `429` writes no audit row and the API runs with `--no-access-log`, so nothing else records it. Check `docker compose logs redis` and the API's `outcome=fail_open` lines, which carry the count they stand for |
+| The reliability harness fails with "about N buckets" or "brand-new connections were admitted" | The service is enforcing one bucket per worker rather than one bucket. Either `RATE_LIMIT_BACKEND` is `memory` on `api` (it should be absent, and the default is `redis`), or the shared bucket is failing open — see the `/readyz` row above |
 | A deploy failed and the workflow says the host rolled back | The previous release is running and was verified. Read the deploy log's verify rows to find what the new commit broke; the box is not the thing to debug |
 
 ## 14. What this deployment does not do
@@ -617,9 +685,17 @@ Stated plainly so nobody reads an aspiration as a description of what is running
 
 - **There is no high availability.** One machine, one of everything. A reboot, a full disk or a
   hardware failure is a full outage, and a deploy is a brief one.
-- **Audit coverage is recommendations-only.** `src/serving/audit.py` matches
-  `^/users/(\d+)/recommendations/?$`, so every mutation passes through unaudited. CLAUDE.md's "every
-  authenticated request emits a row" describes the intent, not the deployed system.
+- **Audit coverage is two tables and no retention policy.** Every authenticated request writes a row:
+  `recommendation_audits` for the recommendation route (predictions, features, versions, input
+  digests) and `request_audits` for everything else (tenant, actor, persona, route template, method,
+  status, outcome, latency, correlation id). Both are forced-RLS and both commit before the response.
+  What the deployment does *not* have is pruning — `request_audits` grows by one row per
+  authenticated request forever, the same open question `feature_store.*` has. `REQUEST_AUDIT_MODE=off`
+  turns the generic writer off without a migration if that ever becomes urgent before D8 is settled.
+  Two things the generic table deliberately does not store: request bodies and query strings, so a
+  viewer's search terms never land in it. Rows that address no persona (`/whoami`, `/personas`) carry
+  a null `user_id` and are readable only as `admin_user` — `GET /users/{id}/request-audits` is
+  persona-scoped, and there is no tenant-wide operator view (Grafana's job, Phase 5).
 - **Feature parity has no production form.** `tests/feature_parity/` stays a CI gate; pointing it at
   production would mean giving a runner production database and Redis credentials and letting it
   write demo data.

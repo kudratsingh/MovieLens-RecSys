@@ -104,6 +104,7 @@ def test_the_isolation_row_passes_on_a_clean_canary_report(
             "tenant_a": kwargs["actor_a"].tenant_id,
             "tenant_b": kwargs["actor_b"].tenant_id,
             "routes_probed": 20,
+            "sentinel_persona_ids": [900000101, 900000102],
             "failures": [],
             "passed": True,
         }
@@ -113,6 +114,9 @@ def test_the_isolation_row_passes_on_a_clean_canary_report(
 
     assert result.passed is True
     assert result.evidence["routes_probed"] == 20
+    # The row says what made the absences meaningful, not just that they held.
+    assert result.evidence["sentinel_persona_ids"] == [900000101, 900000102]
+    assert "sentinel personas" in result.detail
     # The two actors are the point of the row: one from a realm that must be
     # refused, one from the realm the deployment serves.
     assert (seen["actor_a"].realm, seen["actor_a"].username) == ("default", "isolation")

@@ -31,7 +31,7 @@ The synthetic-load harness is **k6** (`grafana/k6` OSS distribution), with the f
 - **Declarative thresholds define pass/fail.** The recommendation-tagged contract is `p(99)<100`, request failure rate `==0`, response check rate `==1`, and achieved request rate `>50` for the smoke variant. Threshold violations are the CI job's failure signal — no separate assertion layer.
 - **Prometheus remote-write.** k6 pushes metrics to the project's Prometheus via the `k6 run --out experimental-prometheus-rw` output. Labels kept low-cardinality: `endpoint`, `method`, `status`, `tenant`. Latency histograms show up in the same Prometheus tsdb as production metrics.
 - **CI smoke variant.** GitHub Actions runs a 60-second constant-arrival workload targeting 55 requests/second with 10 preallocated VUs. The target leaves measurable headroom above the contractual achieved-rate threshold without turning ordinary runner jitter into a different capacity test. It currently runs on every PR, which is stricter than the minimum serving-path trigger, and fails on any threshold breach.
-- **Larger profile.** `make demo-load-nightly` exposes a five-minute, 600-request/second, 100-VU capacity profile against the same stack. Scheduling it against staging is deferred until the staging Compose environment exists.
+- **Larger profile.** `make demo-load-nightly` exposes a five-minute, 600-request/second, 100-VU capacity profile against the same stack. Scheduling it against staging is deferred — as of 2026-08-29 the staging Compose environment exists (`docker-compose.staging.yml`), but the blocker moved rather than cleared: there is no staging *host*, and a capacity probe run on the same laptop that hosts the stack measures the laptop.
 - **k6 version pinned in Docker.** `infra/ci/k6-version` pins the exact `grafana/k6` image tag used by both Make and CI, avoiding a separate host binary installation and eliminating local/CI version drift.
 
 ## Implemented baseline
@@ -843,6 +843,43 @@ closed by later work, and this is where a reader should find that out.
   and the poster-card unit tests, neither of which needs a poster-less row to
   exist upstream. No threshold moved in either change.
 
+### 2026-08-29 — a durable row on every authenticated request, and where it is measured
+
+Every authenticated endpoint now writes one operational row into `request_audits`
+on the request's own RLS-bound transaction, before the auth middleware commits
+it (migration 0017, `src/serving/request_audit.py`). ADR 0012's 2026-08-29 note
+is the decision and the argument; this is what it means for the measurement, and
+it is narrower than it first looks.
+
+**The pinned gate's own workload does not carry the new row.** `recommendations.js`
+drives `GET /users/{user_id}/recommendations`, and that route is explicitly
+skipped by the new middleware: it already writes the strictly richer
+`recommendation_audits` row, and a second insert there would put another write
+inside the one path with an SLO. So the pinned gate proves the middleware's
+*presence* in the chain is free on the measured path — a `BaseHTTPMiddleware`
+pass-through — and proves nothing at all about the row's cost. Citing a green
+`synthetic-load-smoke` as evidence that the audit is free would be citing a
+measurement that cannot see it.
+
+**Where the row's cost is actually visible.** `synthetic/load/pages.js` — the
+page-shaped per-step budgets from the 2026-08-21 note — is the profile whose
+steps fan out over catalog pages, cursor continuation, Library reads and a
+mutation followed by an immediate read. Those are exactly the requests that gain
+a row, and on a read the marginal cost is not "one more insert on a commit that
+was happening anyway": a read-only transaction writes no WAL and its commit
+flushes nothing, so the insert buys the request its first `fdatasync`. The
+number for that flush is the one the 2026-08-28 section above already had to
+measure — 3.15 ms on the runner whose device was the problem, 0.21 ms on the one
+that was not, near 0.2 ms on tmpfs — and it is the same number, because it is
+the same operation.
+
+**Nothing about the gate moved.** No threshold, arrival rate, workload, traffic
+mix or run length changed, the steal re-measure rule is untouched, the tmpfs
+mount for the CI job is unchanged, and the page-shaped budgets stay advisory
+under the promotion rule the 2026-08-21 note wrote down. The escape hatch, if a
+deployment's storage ever makes the row visible in a percentile that matters, is
+`REQUEST_AUDIT_MODE=off` — a setting, not a threshold.
+
 ## Rationale
 
 1. **Purpose-built for CI/CD load testing is the argument.** k6 was designed by Grafana Labs specifically to fit into the shape non-negotiable #11 is asking for: a scriptable load test with declarative thresholds that a CI job can wait on and fail against. Threshold declarations *are* the pass/fail signal — you write `p(99)<100` in the script and CI stops on breach without a separate assertion harness. Locust's dashboard-first workflow was designed for an operator watching a graph, not for a CI job asserting an inequality; you can bolt CI-shape usage onto Locust with `--headless --check` and post-run parsing, but that's adaptation, not fit.
@@ -873,7 +910,7 @@ closed by later work, and this is where a reader should find that out.
 - **Page-shaped workloads alongside it** (2026-08-21). `pages.js`, `page_thresholds.js`, `lib/stack.js`, and `reliability.py` join the same directory, driven by `make demo-load-pages` / `demo-load-pages-nightly` / `demo-reliability-check`. `run_gate.sh` gained a script selector and a workload mode; `summarize.py` gained a per-(page, step) table and a `GATE=` verdict that separates a correctness breach from a latency one. The `k6` Compose service's entry point is now `${LOAD_SCRIPT}`, defaulting to `recommendations.js` so nothing that invokes it without an override changes behaviour.
 - **A browser-timing suite that is not a load test.** `web/playwright.perf.config.ts` and `web/tests/perf/` measure LCP, CLS, acknowledgement latency, and the structural layout promises on the pinned mobile profile, run by `npm run test:perf` in `browser-auth-e2e`. It produces its own artifact (`artifacts/browser-timing/`) and its numbers are never mixed with k6's.
 - **CI job additions.** The `synthetic-load-smoke` job boots the isolated demo stack, seeds/materializes the Feast and model artifacts, quiesces the unmeasured services with `make demo-load-quiesce`, and invokes `make demo-load-smoke`, then `make demo-load-pages` and `make demo-reliability-check` against the same warm stack (about 90 s on top). That target runs `synthetic/load/run_gate.sh`, which recreates the feature, model, and real-auth load-serving processes before traffic so every run has the same process-cache boundary, samples host CPU accounting for the whole window, and applies the re-measure rule. k6 threshold exit status is the job result; the evidence directory uploads on every run and serving logs are uploaded on failure.
-- **Larger run.** `make demo-load-nightly` selects the five-minute, 100-VU profile locally. A scheduled staging workflow remains pending on the environment-specific Compose bundle, so this ADR does not claim a scheduler that does not yet exist.
+- **Larger run.** `make demo-load-nightly` selects the five-minute, 100-VU profile locally. A scheduled staging workflow remains pending, and this ADR does not claim a scheduler that does not exist. What it was pending on changed on 2026-08-29: `docker-compose.staging.yml` landed, so the missing piece is now a staging host to run it against rather than a Compose file to run it with.
 - **k6 container in dev tools.** `make demo-load-smoke` and CI both resolve the image tag from `infra/ci/k6-version`; no host `brew install` is required.
 - **Prometheus config.** Prometheus's `remote_write` receiver is enabled in the compose stack; the nightly profile's `experimental-prometheus-rw` output points at it. The 60-second smoke does not start Prometheus at all (see the 2026-08-21 note) and writes its evidence to the run artifact. The receiver is *not* enabled in production compose stacks — synthetic-load metrics are dev/CI-only, and mixing them with production metrics would pollute the tsdb.
 - **Auth fixture.** The workload authenticates a dedicated Keycloak client user in the `demo` realm, then reads the stable demo persona IDs. Recommendation traffic is read-only; the resulting prediction audits are intentionally visible in the demo walkthrough.

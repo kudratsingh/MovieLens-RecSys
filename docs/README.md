@@ -14,33 +14,36 @@ If you are here to judge whether the engineering holds up, read in this order.
 2. **[`architecture.md`](architecture.md)** — the system in one document: the
    offline and online paths, and how the pieces fit. Diagram sources and
    rendered SVGs are in [`diagrams/`](diagrams/).
-3. **[`adr/README.md`](adr/README.md)** — the decision records. It carries a
+3. **[`modeling-roadmap.md`](modeling-roadmap.md)** — the model ladder: where the
+   models are today, the rungs from here to a Netflix-class stack, and the
+   approval each rung needs before it starts.
+4. **[`adr/README.md`](adr/README.md)** — the decision records. It carries a
    reading order of its own; the short version is 0001 (the evaluation
    contract), 0003 (why two stages), 0006 (the retrieval model), 0008 (tenant
    isolation), then 0013 if what you care about is how this runs off a laptop.
    ADRs are never rewritten — a correction is a dated note appended to one.
-4. **[`api/overview.md`](api/overview.md)** — every path and method, the auth
+5. **[`api/overview.md`](api/overview.md)** — every path and method, the auth
    rules, the rate-limit and correlation headers, and a worked recommendation
    response. [`api/README.md`](api/README.md) covers the committed OpenAPI
    artifact and its drift checks.
-5. **[`demo-runbook.md`](demo-runbook.md)** — start the whole stack from a clean
+6. **[`demo-runbook.md`](demo-runbook.md)** — start the whole stack from a clean
    checkout, seed it, and walk it. The fastest way to see the claims above
    running.
-6. **[`frontend/README.md`](frontend/README.md)** — the product: design
+7. **[`frontend/README.md`](frontend/README.md)** — the product: design
    contracts, the frontend system, the surface contracts, and the evidence
    index.
-7. **[`frontend/finish-gate-review.md`](frontend/finish-gate-review.md)** — the
+8. **[`frontend/finish-gate-review.md`](frontend/finish-gate-review.md)** — the
    written UI gate and its current verdict, which is HOLD pending moderated
    participant sessions.
-8. **[`deployment-runbook.md`](deployment-runbook.md)** and
+9. **[`deployment-runbook.md`](deployment-runbook.md)** and
    **[ADR 0013](adr/0013-production-deployment-target.md)** — the deployment:
    one Hetzner CX22 running `docker-compose.prod.yml`, images from GHCR, a
    deploy that rolls itself back when verification fails. Specified and
    rehearsed end to end; **not yet provisioned**.
-9. **[`eda.md`](eda.md)** — the dataset, characterised: scale, sparsity, the
+10. **[`eda.md`](eda.md)** — the dataset, characterised: scale, sparsity, the
    popularity tail, the temporal split as it lands on real data, and cold-start
    sizing.
-10. **[`results.md`](results.md)** — the measured offline numbers: baselines,
+11. **[`results.md`](results.md)** — the measured offline numbers: baselines,
     candidate stage, ranker and the cold-start cohort, each with its run, date,
     machine and caveats.
 
@@ -49,6 +52,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | Document | What it holds |
 |---|---|
 | [`architecture.md`](architecture.md) | The system overview, with diagrams |
+| [`modeling-roadmap.md`](modeling-roadmap.md) | The model ladder and its decision log — every rung needs approval before it starts |
 | [`adr/`](adr/README.md) | Backend and cross-cutting ADRs on the flat numeric line; frontend ADRs under [`adr/frontend/`](adr/frontend/) |
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
@@ -82,11 +86,12 @@ never rewritten, and corrections arrive as dated notes.
 
 Phases 1 and 2 are complete; Phase 3 is in progress. The parts of Phase 3 that
 are still open are listed at the end of the status section in
-[`../CLAUDE.md`](../CLAUDE.md) rather than left to be discovered — cold-start
-cohorts, per-tenant champion routing, generic request audits, the Feast-backed
-training refactor, and the dev/staging Compose split. The deployment is specified
-and rehearsed but the machine does not exist yet, and the frontend finish gate
-holds on participant research.
+[`../CLAUDE.md`](../CLAUDE.md) rather than left to be discovered — the offline
+cold-start routing gap the ADR 0011 cohort found, per-tenant champion routing,
+audit retention, and the Feast-backed training refactor. The deployment is
+specified and rehearsed but the machine does not exist yet, the dev and staging
+Compose environments exist but neither is deployed anywhere either, and the
+frontend finish gate holds on participant research.
 
 Documents here say which of those they describe. Where one goes stale, the fix is
 a dated correction rather than a quiet edit.

@@ -5,7 +5,7 @@
 
 _Implementation note (2026-08-21): the `synthetic/auth/` token-minting helper described below never became its own package — the direct-password-grant helper lives in `synthetic/load/lib/auth.js` for the k6 harness and in `tests/tenant_isolation/conftest.py` for the isolation suite. Everything else here (realm-per-tenant, issuer-derived tenant, JWKS cache with force-refresh, the dev-bypass guard in `Settings`) landed as written in `src/auth/`._
 
-_Note (2026-08-29): criterion (b) below names `make up-dev`, a target that was planned but never built. The dev stack is `make infra-up` (`docker-compose.yml`), with `make demo-up` layering the browser demo on top of it; `make up-prod` is the production-mode stack. The criterion is unchanged — the airplane test is still the point — only the command's name was wrong. `docker-compose.{dev,staging}.yml` and their `make up-<env>` targets remain the open half of CLAUDE.md's multi-environment item._
+_Note (2026-08-29): criterion (b) below names `make up-dev`. That target did not exist when the note was first written; it does now, as the dev environment's name for the stack `make demo-up` starts (`docker-compose.yml` + `docker-compose.demo.yml`) — there is deliberately no third `docker-compose.dev.yml`, because the only job left for one would be turning `DEV_AUTH_BYPASS` on, and the demo layer sets it to `"false"` so the browser journeys authenticate against real Keycloak tokens. `make infra-up` still starts the stores alone; `make up-prod` is the production-mode stack and `make up-staging` the staging one (`docker-compose.staging.yml`, an overlay on the production file). The criterion is unchanged — the airplane test is still the point._
 
 ## Context
 

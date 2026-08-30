@@ -9,13 +9,19 @@ A multi-tenant, authenticated two-stage recommender on MovieLens 25M: item-item 
 
 <img alt="Discover at 1440px, signed in as Demo Walkthrough and exploring as the Drama Fan persona: a featured recommendation labelled RANKED BY THE LEARNED MODEL, rank 1, with Open movie, Watchlist, Mark watched and Not for me controls, the Why this? disclosure closed beneath them, and the ranked rail beginning below." src="docs/frontend/evidence/current/discover-desktop-1440.png" width="100%">
 
-The modeling here is deliberately ordinary. What is not is everything around it: the tenant boundary
-the database enforces rather than the application, the feature-freshness contract, the SHA-256-pinned
-serving bundle, the latency gate that measures the service instead of the CI runner, and a serving
-contract that reports when the learned path did *not* run rather than quietly taking credit for the
-fallback. The point is the engineering around the model, not the leaderboard. Every significant
-decision is written down before the code that depends on it lands — sixteen ADRs, each with its
-alternatives analyzed and the signals that would reopen it.
+Two tracks share this repository, and the models are the reason it exists. The modeling track starts
+from the baselines the field measures against and builds the two-stage architecture the way production
+recommenders are built — item-item retrieval, a two-tower with FAISS, a LightGBM LambdaRank ranker today
+— and keeps moving toward what the industry ships now: sequence models with transformer encoders are
+the next step ([the modeling roadmap](docs/modeling-roadmap.md) is the ladder, rung by rung, each
+needing approval before it starts). The engineering track is what makes those models usable by a real person rather than a
+notebook: the tenant boundary the database enforces rather than the application, the feature-freshness
+contract, the SHA-256-pinned serving bundle, the latency gate that measures the service instead of the
+CI runner, and a serving contract that reports when the learned path did *not* run rather than quietly
+taking credit for the fallback. Phase 3 is the engineering track's turn — the harness that makes the
+product and the API real — and the modeling track resumes as the main line of work once it closes.
+Every significant decision, model choices included, is written down before the code that depends on it
+lands — sixteen ADRs, each with its alternatives analyzed and the signals that would reopen it.
 
 ## What is real today
 
@@ -51,8 +57,10 @@ of this codebase with `ENVIRONMENT != dev`, and every defect it exposed was fixe
 green no-ops until one is configured. See [ADR 0013](docs/adr/0013-production-deployment-target.md)
 and the [deployment runbook](docs/deployment-runbook.md).
 
-Still open in Phase 3: per-tenant champion routing, audit coverage for non-prediction endpoints,
-dev/staging Compose files, and the offline routing gap the cold-start cohort found (below). The frontend finish gate passes every
+Still open in Phase 3: per-tenant champion routing, audit retention,
+and the offline routing gap the cold-start cohort found (below). The dev and staging Compose
+environments landed (`make up-dev`, `make up-staging`); staging is a thin overlay on the production
+stack and, like production, has no host yet. The frontend finish gate passes every
 criterion a reviewer can settle and [holds](docs/frontend/finish-gate-review.md) on moderated
 sessions with real participants, which a reviewer cannot substitute for. The long form is in
 [CLAUDE.md](CLAUDE.md) and [`docs/README.md`](docs/README.md).
@@ -117,6 +125,7 @@ response that is not correct, or fewer than 50 requests/second**. The thresholds
 | CI Postgres data directory moved to tmpfs ([PR #80](https://github.com/kudratsingh/MovieLens-RecSys/pull/80)) | 2026-08-28 | p99 230.74 ms → **24.41 ms**; WAL sync 3.15 → 0.21 ms per commit |
 | The same gate at the production topology | 2026-08-27 | p50 6.85 ms · p95 9.47 ms · p99 12.93 ms, zero errors, zero dropped iterations |
 | Rate limiter at its first defaults (120/min, burst 30) | 2026-08-27 | **37.9% of 301 requests refused** — keep-alive pins one client to one worker's bucket; defaults are now 600/min, burst 120 |
+| The bucket moved into Redis, shared by every worker ([issue #70](https://github.com/kudratsingh/MovieLens-RecSys/issues/70)) | 2026-08-29 | One atomic `EVALSHA` per authenticated request; the limit now describes the service rather than one process, and an unreachable Redis costs **0.2 ms** and falls back rather than the 6.7 s redis-py's default retries spent first |
 
 Sources: [ADR 0010](docs/adr/0010-synthetic-load-k6.md) (the first three),
 [the readiness review's R-14](docs/production-readiness-review.md), and
@@ -215,7 +224,7 @@ is still owed.
 | [0011](docs/adr/0011-cold-start-coverage.md) | Fixed-seed synthetic cohorts at history sizes 0/1/3/10, scored per bucket |
 | [0012](docs/adr/0012-browser-identity-feedback-and-online-freshness.md) | Actor separated from demo persona, durable movie state, commit before acknowledgement |
 | [0013](docs/adr/0013-production-deployment-target.md) | One Hetzner CX22 running the same Compose file the rehearsal runs; cost is the deciding factor and says so |
-| [0014](docs/adr/0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket on the verified token, never on a client IP; per-worker, and honest about it |
+| [0014](docs/adr/0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket on the verified token, never on a client IP; one bucket in Redis for every worker, failing open onto a per-worker one |
 | [frontend/0001](docs/adr/frontend/0001-frontend-framework.md) | Next.js App Router with TypeScript and Tailwind |
 | [frontend/0002](docs/adr/frontend/0002-movie-discovery-experience.md) | Poster-first discovery with ML evidence behind progressive disclosure |
 
@@ -257,14 +266,15 @@ docs/           architecture, ADRs, API contract, frontend, runbooks, EDA      �
 Read in this order:
 
 1. [`docs/architecture.md`](docs/architecture.md) — the system on one page, with ten rendered diagrams
-2. [`docs/adr/README.md`](docs/adr/README.md) — every decision, its alternatives, and what would reopen it
-3. [`docs/api/overview.md`](docs/api/overview.md) — every endpoint, and the committed OpenAPI contract beside it
-4. [`docs/demo-runbook.md`](docs/demo-runbook.md) — running the whole stack from a clean checkout
-5. [`docs/frontend/README.md`](docs/frontend/README.md) — the product docs, and the [finish gate](docs/frontend/finish-gate-review.md)
-6. [`docs/production-readiness-review.md`](docs/production-readiness-review.md) — the gap review and the 14-step rehearsal record
-7. [`docs/deployment-runbook.md`](docs/deployment-runbook.md) — the machine, DNS, secrets, first deploy, rollback, backups
-8. [`docs/eda.md`](docs/eda.md) — MovieLens 25M: scale, sparsity, the long tail, the split as applied
-9. [`docs/records/`](docs/records/) — dated documents kept for their reasoning and **not maintained**
+2. [`docs/modeling-roadmap.md`](docs/modeling-roadmap.md) — the model ladder: where the models are, the rungs from here to a Netflix-class stack, which need approval next
+3. [`docs/adr/README.md`](docs/adr/README.md) — every decision, its alternatives, and what would reopen it
+4. [`docs/api/overview.md`](docs/api/overview.md) — every endpoint, and the committed OpenAPI contract beside it
+5. [`docs/demo-runbook.md`](docs/demo-runbook.md) — running the whole stack from a clean checkout
+6. [`docs/frontend/README.md`](docs/frontend/README.md) — the product docs, and the [finish gate](docs/frontend/finish-gate-review.md)
+7. [`docs/production-readiness-review.md`](docs/production-readiness-review.md) — the gap review and the 14-step rehearsal record
+8. [`docs/deployment-runbook.md`](docs/deployment-runbook.md) — the machine, DNS, secrets, first deploy, rollback, backups
+9. [`docs/eda.md`](docs/eda.md) — MovieLens 25M: scale, sparsity, the long tail, the split as applied
+10. [`docs/records/`](docs/records/) — dated documents kept for their reasoning and **not maintained**
 
 ## Development
 

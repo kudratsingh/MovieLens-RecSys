@@ -6,7 +6,7 @@ written from it and is here so a reader can see the shape of the service without
 loading a schema browser. Where the two disagree, the schema is right — see
 [`README.md`](README.md) for how it is regenerated and how CI catches drift.
 
-**20 paths, 25 operations.** Two of them are unauthenticated.
+**21 paths, 26 operations.** Two of them are unauthenticated.
 
 ## Authentication
 
@@ -33,6 +33,15 @@ resort rather than application filtering (ADR 0008). The transaction commits
 **before** a successful response is returned, so a 2xx is never issued for a
 write that could still fail to become durable.
 
+**Every authenticated request leaves a durable row.** Recommendations write the
+detailed prediction audit; every other route writes an operational row —
+tenant, actor, persona, matched route template, method, status, outcome,
+latency, correlation id — into a second forced-RLS table. Both are written on
+the request's own transaction, so both commit before the response. Neither
+stores a request body or a query string, and `endpoint` is always the route
+template rather than the concrete path. ADR 0012's 2026-08-29 note is the
+durability argument; `REQUEST_AUDIT_MODE=off` turns the generic writer off.
+
 ## Cross-cutting response conventions
 
 **Request correlation.** Every response carries `X-Request-ID`. A caller-supplied
@@ -53,31 +62,58 @@ collide with an existing row.
 Exhausting the bucket answers `429` with `Retry-After` (whole seconds, never
 `0`) and an `ErrorResponse` body naming the policy. The bucket is keyed on
 `(tenant_id, sub)` from the verified token — never on a client address, because
-behind the edge every request arrives from a proxy. It lives **in the worker
-process**, so a service running N uvicorn workers admits up to N times the
-configured rate for one subject and `Remaining` is not monotonic across a
-sequence of requests from one client. Treat the headers as one worker's view of
-one caller's allowance, not a cluster-wide quota. `/healthz` and `/readyz` are
+behind the edge every request arrives from a proxy — and it lives **in Redis**,
+one bucket per `(tenant, subject)` charged by an atomic Lua script. Every
+uvicorn worker meets the same bucket, so the configured rate is what one caller
+gets however many processes answer, `Remaining` counts down across a sequence
+of requests, and reconnecting buys no fresh allowance. A deployment that has
+deliberately selected the in-process backend (`RATE_LIMIT_BACKEND=memory`,
+which `Settings` refuses outside dev without an explicit acknowledgement) keeps
+a bucket per worker instead, and then the headers are one worker's view and
+`Remaining` is not monotonic. `/readyz` reports which of the two is in force,
+and reports `degraded` when the shared bucket is failing open onto the
+per-worker one because Redis is unreachable. `/healthz` and `/readyz` are
 exempt and carry no such headers.
 
 **Shared error responses.** `401` missing or invalid token · `403` actor not
-authorized · `404` persona or movie does not exist · `409` idempotency, state
-revision, or transition conflict · `422` validation error · `429` rate limit
-exceeded · `500` request transaction failed. `400` additionally means an invalid
-parameter or a cursor that does not match the query it is used against.
+authorized · `404` persona or movie does not exist · `409` idempotency or state
+revision conflict · `422` validation error, or a refused state transition ·
+`429` rate limit exceeded · `500` request transaction failed. `400` additionally
+means an invalid parameter or a cursor that does not match the query it is used
+against.
 
-One wrinkle worth knowing: `409` covers three different conditions on one
-status. A revision conflict and an idempotency reuse are recoverable; a
-transition refusal (adding an already-watched title to the watchlist, say) is
-not, and retrying will not help. The web client splits them by response body. A
-distinct status or a machine-readable code is the cleaner contract and is owed.
+**Error codes.** Every deliberate 4xx renders `ErrorResponse`: a `detail`
+sentence, and — wherever one status covers more than one condition a caller has
+to tell apart — a stable `code`. `detail` is prose meant for a person and may be
+reworded at any time; `code` is the contract. Read the code first and fall back
+to the status; where the status is unambiguous no code is sent at all.
+
+| Status | `code` | What happened | What a client does |
+|---|---|---|---|
+| `409` | `revision_conflict` | The `expected_revision` sent was not the current one — something else committed first | Re-read the canonical state, replay the same intent (same `Idempotency-Key`) against it |
+| `409` | `idempotency_conflict` | The `Idempotency-Key` was already used for a different mutation, or the same rating resource with a different value | Same recovery; the key belongs to a decision that is already recorded |
+| `422` | `transition_refused` | The request was understood and the revision was current, and [ADR 0012](../adr/0012-browser-identity-feedback-and-online-freshness.md)'s transition table forbids the result — adding an already-watched title to the watchlist, say | Nothing was written and no retry can succeed. Show the sentence, re-read the state (the rule broken is a rule *about* state, so the client's picture of it was wrong), and correct the control |
+| `422` | *(none)* | Request validation failed. `detail` is a **list** of field errors, not a sentence | Fix the request; this is the caller's own defect |
+
+The two shapes on `422` are why the code exists rather than the status alone,
+and both are declared on every mutation operation in `openapi.json`. Until
+2026-08-29 a transition refusal was a third condition hiding under `409`, and
+the web client told it apart by matching the sentence in `detail` with regular
+expressions — so a copy edit on the server would silently have turned a product
+rule into a "somebody else changed this" prompt (issue #74).
+
+An error body deliberately does **not** carry a state snapshot. A client that
+needs the current record after a refusal reads it from
+`GET /users/{user_id}/movies/{movie_id}` (or `.../state`), which is the one
+representation carrying a revision the next write can assert — an abbreviated
+copy inside an error body would be a second source of truth for the same row.
 
 ## Unauthenticated
 
 | Path | Method | Purpose |
 |---|---|---|
 | `/healthz` | GET | Liveness. Deliberately does not touch the database — `pool_pre_ping` covers connectivity, and a probe that fails on a transient database blip takes a healthy service out of rotation |
-| `/readyz` | GET | Readiness for a deploy gate. Reports `database`, `jwks`, `model_server` and `feature_server`; **only the first two decide the status code**, because they are what a single authenticated request cannot be served without. `503` when not ready |
+| `/readyz` | GET | Readiness for a deploy gate. Reports `database`, `jwks`, `model_server`, `feature_server` and `rate_limit` (`shared` / `in-process` / `degraded` / `disabled`); **only the first two decide the status code**, because they are what a single authenticated request cannot be served without. `503` when not ready |
 
 `/readyz` is the second unauthenticated path and was added deliberately, with
 the widening of non-negotiable #10's wording recorded in ADR 0013 rather than
@@ -88,8 +124,27 @@ published. A `/metrics` endpoint is deliberately **not** added.
 
 | Path | Method | Purpose |
 |---|---|---|
-| `/whoami` | GET | Echo of the resolved identity: tenant, subject, realm and role set. The cheapest proof that issuer-derived tenancy works |
+| `/whoami` | GET | Echo of the resolved identity: tenant, subject, realm and role set, plus the tenant's champion model. The cheapest proof that issuer-derived tenancy works |
 | `/personas` | GET | The stable synthetic identities in the caller's tenant — the four demo personas |
+
+`/whoami` also reports the champion the caller's tenant is registered on
+(`public.tenants`, migration 0016) as three nullable fields:
+
+| Field | Meaning |
+|---|---|
+| `champion_candidate_version` | The retrieval artifact this tenant's requests may be served by, e.g. `demo-itemitem-v1` |
+| `champion_ranker_version` | The ranker artifact, e.g. `demo-lgbm-v1` |
+| `champion_feature_version` | The feature snapshot the two were trained against, e.g. `feast-phase3-v1` |
+
+Three fields rather than one string because a `ServingManifest`'s coordinates
+version independently — a release can swap the ranker under the same candidate
+index. All three are `null` together and mean the tenant has no learned serving
+at all, which is the one answer that explains a permanent popularity fallback
+without reading a log; it is the state `default` and `synth_cold` are in. The
+quota columns and the A/B bucketing seed on the same row are deliberately not
+reported: the rate limit is already on every response as headers, and the seed
+is an input to a routing decision rather than something a client should be able
+to predict.
 
 ## Recommendations and evidence
 
@@ -97,7 +152,16 @@ published. A `/metrics` endpoint is deliberately **not** added.
 |---|---|---|
 | `/users/{user_id}/recommendations` | GET | The two-stage path: item-item retrieval, batched Feast/Redis features, LightGBM ranking — or an explicit popularity fallback. `limit` is optional |
 | `/users/{user_id}/audits` | GET | Newest prediction audits visible inside the request tenant: exact ranked items and scores, online feature values, artifact versions, fallback reason, per-stage latencies, and the input-state digests |
+| `/users/{user_id}/request-audits` | GET | Newest generic request audits for this persona: one row per authenticated request to every route *except* recommendations, carrying the matched route template, method, status, outcome, latency and the echoed correlation id |
 | `/users/{user_id}/features` | GET | The tenant-keyed Redis-backed Feast read that online ranking uses — the same values, so an operator can see what the ranker saw |
+
+The two audit resources are siblings, not modes of one endpoint: they read
+different tables with different columns. A recommendation is recorded in
+exactly one of them — the richer one — so "everything this tenant did" is a
+union of the two, joined on `correlation_id`. Both are persona-scoped;
+authenticated requests that address no persona (`/whoami`, `/personas`) are
+audited with a null `user_id` and are readable only to an operator holding the
+`admin_user` role.
 
 ## Catalog and detail
 

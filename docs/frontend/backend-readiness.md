@@ -32,7 +32,7 @@ parts of the route design are implementation claims.
 | Metadata | Shared persisted read model supplies Browse, detail, and recommendation hydration with complete/partial/unavailable status | Snapshot enrichment is offline; partial titles intentionally render deterministic fallbacks |
 | Browser auth | Keycloak gives both callers the API audience; FastAPI pins issuer, audience, calling client, tenant registry, and demo role. Auth.js owns PKCE, encrypted HttpOnly sessions, server-side token refresh/logout, BFF authorization, CSRF/origin, and internal/public issuer routing; bypass-disabled Playwright passes | `/me` subject-to-profile ownership remains for a non-persona product mode |
 | BFF loading | The current dashboard proxy fetches recommendations, history, and catalog concurrently; TypeScript types are now generated from committed OpenAPI | One failed request still fails the entire dashboard and BFF bodies are not yet runtime validated |
-| Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit. Each audit records the input-state revision, positive-history and exclusion digests, positive/excluded counts, feature event time, filter policy, per-source candidate contributions, and a structured reason, all exposed on `GET /users/{user_id}/audits` | Other reads and mutations have no generic request audit or retention policy |
+| Auditing | Recommendation requests persist detailed tenant-scoped prediction audits and successful responses now wait for the fail-closed audit transaction to commit. Each audit records the input-state revision, positive-history and exclusion digests, positive/excluded counts, feature event time, filter policy, per-source candidate contributions, and a structured reason, all exposed on `GET /users/{user_id}/audits`. Every other authenticated route writes an operational row into `request_audits` on the same transaction — tenant, actor, persona, route template, method, status, outcome, latency, correlation id — readable at `GET /users/{user_id}/request-audits` | Neither table is pruned, and the generic one deliberately stores no body or query string, so it cannot answer what a viewer searched for |
 | Performance | Authenticated recommendation k6 gate enforces p99 below 100 ms for its pinned workload | It does not measure page-shaped BFF fan-out, real poster enrichment, catalog paging, or mutation-plus-refresh |
 | Observability | Load results and health checks exist. Every response echoes `X-Request-ID`, adopting a well-formed caller-supplied value so a BFF request id survives the hop, and recommendation audits store it as `correlation_id` | There is no working FastAPI metrics surface, page-route instrumentation, DB-pool visibility, or separate readiness contract |
 
@@ -263,17 +263,22 @@ through, and each one now records what closed it or why it is still open.
   where that boundary sits.
 - **Done (ADR 0014, `src/serving/ratelimit.py`).** Rate limits with `429` and
   `Retry-After` at FastAPI rather than only the BFF: a per-`(tenant, subject)`
-  token bucket keyed on the verified token, on by default outside `dev`. Two
-  limits are deliberate and written down in the ADR rather than hidden — the
-  bucket is per worker process, and the limits are global rather than read from
-  the per-tenant quota column, which lands with the Phase 6 tenant-config work.
+  token bucket keyed on the verified token, on by default outside `dev`. The
+  bucket lives in Redis and is charged by one atomic Lua script, so every
+  worker meets the same one and the configured rate describes the service; when
+  Redis is unreachable it fails open onto a per-worker bucket and `/readyz`
+  reports `rate_limit: degraded`. One limit is still deliberate and written
+  down in the ADR rather than hidden — the limits are global rather than read
+  from the per-tenant quota column, which lands with the Phase 6 tenant-config
+  work.
 - **Open.** Generic request audits with an explicit durability and retention
   policy. The audit middleware still matches only
   `/users/{id}/recommendations`; ADR 0012 allows a best-effort or queued policy
   for the rest only once the durability tradeoff is written down.
 - **Partly done, and partly a recorded decision.** `/healthz` and `/readyz` are
-  separate, with `/readyz` reporting database, JWKS, and both sidecars while
-  gating only on the first two (ADR 0013). A `/metrics` endpoint is
+  separate, with `/readyz` reporting database, JWKS, both sidecars and the
+  rate-limit backend while gating only on the first two (ADR 0013). A
+  `/metrics` endpoint is
   **deliberately not added** — ADR 0013 records the omission rather than leaving
   it to be discovered, and Grafana owns operator views.
 - **Done (Bundle 7b, PR #62).** The direct recommendation p99 gate is untouched

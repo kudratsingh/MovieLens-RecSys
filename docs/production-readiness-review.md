@@ -223,11 +223,25 @@ a Redis-backed shared bucket is the named follow-up.
 - **Audit coverage is recommendations-only.** `src/serving/audit.py` matches one
   path; every mutation passes through unaudited. Non-negotiable #8 (predictions)
   holds; CLAUDE.md's broader goal describes intent, not the deployed system.
-- **`docker-compose.dev.yml` and `docker-compose.staging.yml` do not exist.**
-  The development stack is `docker-compose.yml` + `docker-compose.demo.yml` and
-  stays that way, because a development stack that needs generated secrets to
-  boot is one nobody uses. Production shape is rehearsed by
-  `docker-compose.prod.yml` instead of by a third environment nobody runs.
+- **`docker-compose.dev.yml` does not exist, and `docker-compose.staging.yml`
+  now does** (updated 2026-08-29). The first half of this finding stands and is
+  now a decision rather than a gap: the development stack is
+  `docker-compose.yml` + `docker-compose.demo.yml`, `make up-dev` is its name,
+  and a third file would only turn `DEV_AUTH_BYPASS` on — which the demo layer
+  sets to `"false"` so the browser journeys and the load gate use real Keycloak
+  tokens. A development stack that needs generated secrets to boot is still one
+  nobody uses.
+
+  The second half changed. Staging landed as a thin overlay on
+  `docker-compose.prod.yml` — a different Compose project and
+  `ENVIRONMENT=staging` on the eight services that carry an environment label,
+  and nothing else — rather than as a third environment with its own topology,
+  which is what this finding was arguing against. What that buys over running
+  the production rehearsal directly is a separate project and separate volumes,
+  so a rehearsal can be reset without touching the production stack's state,
+  and a second box can be pointed at later with two hostnames and one variable.
+  There is still no staging host and no staging deploy workflow, so this is a
+  local environment today.
 - **There is no `/me` subject-to-profile ownership.** Any signed-in `demo`-realm
   account can read and mutate all four personas, which is why registration is
   disabled and only three accounts exist.

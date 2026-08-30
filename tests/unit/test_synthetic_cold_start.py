@@ -617,8 +617,13 @@ def test_prepare_refuses_a_cohort_anchored_to_a_different_cutoff(tmp_path: Path)
 MIGRATION = Path("alembic/versions/0015_synth_cold_tenant.py")
 
 
-def test_the_tenant_migration_is_the_linear_head() -> None:
-    """The newest migration names the head; earlier ones only hold the invariant."""
+def test_the_tenant_migration_stays_on_the_one_linear_chain() -> None:
+    """The newest migration names the head; earlier ones only hold the invariant.
+
+    0015 stopped being the newest when 0016 landed, so this now holds the
+    single-head invariant and ``tests/unit/test_tenant_champion_migration.py``
+    names the head.
+    """
     source = MIGRATION.read_text()
     assert 'revision: str = "0015_synth_cold_tenant"' in source
     assert 'down_revision: str | None = "0014_user_preferences"' in source
@@ -634,7 +639,8 @@ def test_the_tenant_migration_is_the_linear_head() -> None:
         if down is not None and down.group(1):
             parents.add(down.group(1))
 
-    assert revisions - parents == {"0015_synth_cold_tenant"}
+    assert len(revisions - parents) == 1, f"the migration graph has branched: {revisions - parents}"
+    assert "0015_synth_cold_tenant" in parents
 
 
 def test_the_tenant_row_is_additive_and_reversible() -> None:

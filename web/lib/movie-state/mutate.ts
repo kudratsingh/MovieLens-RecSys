@@ -37,6 +37,7 @@ import {
   readResourcePayload,
   resourceStateFromPayload,
   resourceStateFromTransportError,
+  upstreamCode,
   upstreamDetail,
 } from "@/lib/resources/mapping";
 import {
@@ -111,49 +112,60 @@ export type MovieStateMutationResult =
        * would break, and no copy written here could say it more precisely.
        */
       detail: string;
+      /**
+       * What is actually stored, read back while recovering — the same field
+       * a conflict carries. A refusal proves this client's picture of the
+       * movie was wrong (the rule it broke is a rule about state), so the
+       * caller corrects its control from this rather than leaving a viewer
+       * looking at something the API has just contradicted.
+       */
+      canonical?: MovieState | null;
+      /**
+       * Whether that read actually moved anything. Derived from the revision
+       * the refused write asserted, which only the write path knows, so it is
+       * settled once here instead of in each of the four surfaces.
+       */
+      corrected?: boolean;
     }
   | { status: "failed"; failure: ResourceFailure };
 
 /**
- * A `409` that means "somebody committed first", as opposed to one that means
- * "this transition is not allowed".
+ * The API's stable names for the two ways a well-formed write is turned away.
  *
- * The split is by body rather than by status because the API documents a single
- * `409` for three different conditions (`src/serving/app.py`: "Idempotency,
- * state revision, or transition conflict"). Two of them are races and are
- * recoverable — re-read the canonical record, replay the intent, and the write
- * lands. The third is a rule: `PUT .../watchlist` on a movie that is already
- * watched answers `409 {"detail": "a watched movie cannot be added to the
- * watchlist"}`, and nothing about retrying it can succeed. Reporting the rule
- * as a race told the viewer something untrue ("<title> changed somewhere else
- * before this saved") and spent a re-read plus a replay proving it.
- *
- * The two recoverable shapes are matched, and everything else is treated as a
- * refusal, because that is the safer direction to be wrong in: an unrecognised
- * `409` shown in the API's own words is honest and costs one retry the viewer
- * can make themselves, while an unrecognised `409` shown as a race is a
- * sentence the product invented about state nobody touched. A `409` with no
- * readable body stays a conflict — with nothing to render, the generic
- * recovery is all there is.
- *
- * The cleaner long-term fix is on the API side: a distinct status (`422`, or a
- * machine-readable `code` in the body) for a transition refusal would let the
- * client branch on the contract instead of on prose that a rewording could
- * silently move. This function is what the frontend can do without it.
+ * They are the contract; the sentence beside them is copy and may be reworded
+ * at any time. This client used to split the two by matching that sentence
+ * (issue #74) — six regexes against prose in `src/serving/feedback.py` — which
+ * meant a copy edit on the server could silently turn a rule into a "somebody
+ * else changed this" prompt.
  */
-const CONCURRENCY_CONFLICT_DETAILS: readonly RegExp[] = [
-  // `StateRevisionConflictError`: "state revision 3 is stale; current revision is 5"
-  /^state revision\b/i,
-  // `IdempotencyConflictError`: "idempotency key was already used for another
-  // mutation" / "… with a different rating"
-  /^idempotency key was already used\b/i,
-];
+export const TRANSITION_REFUSED = "transition_refused";
+export const REVISION_CONFLICT = "revision_conflict";
+export const IDEMPOTENCY_CONFLICT = "idempotency_conflict";
 
-export function isTransitionRefusal(detail: string | null): detail is string {
-  if (detail === null) return false;
-  const text = detail.trim();
-  if (text === "") return false;
-  return !CONCURRENCY_CONFLICT_DETAILS.some((pattern) => pattern.test(text));
+/**
+ * Which of the two the API just answered, or neither.
+ *
+ * A refusal is a rule — `PUT .../watchlist` on a title that is already watched
+ * — and no retry can succeed. A conflict is a race (a stale `expected_revision`
+ * or a reused idempotency key) and the write path recovers from it by re-reading
+ * and replaying. Telling them apart wrongly is expensive in both directions: a
+ * rule reported as a race tells the viewer something untrue about state nobody
+ * touched, and a race reported as a rule abandons a write that would have landed.
+ *
+ * The `code` decides it. The status is the fallback for a body without one, and
+ * on `422` it is deliberately not enough on its own — that is also what FastAPI
+ * answers for a request that failed validation. What separates the two there is
+ * the sentence: a refusal carries one and a validation error carries a list of
+ * field errors instead, so the caller below requires a readable `detail` before
+ * it treats a `422` as a rule.
+ */
+function mutationRefusal(
+  status: number,
+  code: string | null,
+): "refused" | "conflict" | null {
+  if (code === TRANSITION_REFUSED || (code === null && status === 422)) return "refused";
+  if (code === REVISION_CONFLICT || code === IDEMPOTENCY_CONFLICT) return "conflict";
+  return status === 409 ? "conflict" : null;
 }
 
 /**
@@ -249,16 +261,21 @@ export async function mutateMovieState(
   const correlationId =
     sanitizeRequestId(response.headers.get(REQUEST_ID_HEADER)) ?? requestId;
   const payload = await readResourcePayload(response);
-  // A revision or idempotency conflict is not a broken request: somebody else
-  // — another tab, another device — committed first, and the viewer needs to
-  // be told that rather than shown a generic failure. A transition refusal
-  // arrives on the same status and is a different event entirely; see
-  // `isTransitionRefusal` for why the two are told apart by body.
-  if (response.status === 409) {
-    const detail = upstreamDetail(payload);
-    return isTransitionRefusal(detail)
-      ? { status: "refused", requestId: correlationId, detail }
-      : { status: "conflict", requestId: correlationId, detail };
+  // Neither of these is a broken request, and neither is a generic failure:
+  // a conflict means somebody else — another tab, another device — committed
+  // first, and a refusal means the API understood the write and a product rule
+  // forbids it. See `mutationRefusal` for how the two are told apart.
+  const detail = upstreamDetail(payload);
+  const refusal = mutationRefusal(response.status, upstreamCode(payload));
+  // A refusal is shown in the API's own words, so one that arrived without a
+  // sentence — a validation error's list of field errors, or a malformed body
+  // — is not a rule to render blank. It falls through to the generic failure
+  // mapping below, which is right: that is our defect, not a product rule.
+  if (refusal === "refused" && detail !== null) {
+    return { status: "refused", requestId: correlationId, detail };
+  }
+  if (refusal === "conflict") {
+    return { status: "conflict", requestId: correlationId, detail };
   }
 
   const state = resourceStateFromPayload({

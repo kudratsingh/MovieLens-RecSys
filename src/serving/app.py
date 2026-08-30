@@ -28,9 +28,11 @@ minted. Recommendation audits store it alongside their own row identity.
 
 Every authenticated response also carries the ``X-RateLimit-*`` view of the
 calling ``(tenant, subject)`` token bucket, and a caller that empties it gets
-a 429 with ``Retry-After`` (ADR 0014). The limiter is installed everywhere
-except a dev box, where the synthetic-load harnesses deliberately drive one
-Keycloak identity far past any sane per-subject rate.
+a 429 with ``Retry-After`` (ADR 0014). The bucket lives in Redis and is shared
+by every worker, so the configured rate describes the service rather than one
+process; ``/readyz`` reports which backend is in force. The limiter is
+installed everywhere except a dev box, where the synthetic-load harnesses
+deliberately drive one Keycloak identity far past any sane per-subject rate.
 
 Wiring shape: engines, JWKS cache, and tenant router are built at
 module import time so ``AuthMiddleware`` can be added before FastAPI
@@ -49,14 +51,17 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Literal
+from functools import partial
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import Connection, Engine, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from src.auth import AuthMiddleware, JwksCache
@@ -77,10 +82,9 @@ from src.serving.catalog import (
 from src.serving.features import FeatureServerClient
 from src.serving.feedback import (
     FeedbackAction,
+    FeedbackMutationError,
     FeedbackService,
-    IdempotencyConflictError,
     InvalidLibraryCursorError,
-    InvalidStateTransitionError,
     LibraryPage,
     LibraryQuery,
     MovieState,
@@ -99,8 +103,9 @@ from src.serving.ratelimit import (
     REMAINING_HEADER,
     RESET_HEADER,
     RETRY_AFTER_HEADER,
+    RateLimitBackendState,
     RateLimitMiddleware,
-    TokenBucketLimiter,
+    build_rate_limiter,
 )
 from src.serving.recommendations import (
     RecommendationService,
@@ -108,9 +113,16 @@ from src.serving.recommendations import (
     UnknownDemoPersonaError,
     UnknownMovieError,
 )
+from src.serving.request_audit import RequestAuditMiddleware, RequestAuditService
 from src.serving.request_id import RequestIdMiddleware
 from src.serving.startup_checks import run_startup_checks
-from src.serving.tenancy import TenantRouter, UnknownTenantError
+from src.serving.tenancy import (
+    NO_TENANT_OVERRIDES,
+    TenantConfig,
+    TenantRateLimit,
+    TenantRouter,
+    UnknownTenantError,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -130,6 +142,23 @@ _app_engine = create_engine(
     future=True,
 )
 
+# Same role, same RLS, its own tiny pool — used only when a handler raised and
+# the generic audit has to be written outside the transaction that is about to
+# be rolled back. It must not draw on `_app_engine`: the failing request is
+# still holding one of those connections, so a burst of simultaneous failures
+# on a shared pool would deadlock every one of them against a checkout that
+# cannot be satisfied, for the full default `pool_timeout` of thirty seconds
+# and on the shared thread pool. Here the failure mode is a dropped audit row
+# and a log line, which is the cheaper thing to lose mid-incident.
+_audit_failure_engine = create_engine(
+    _settings.app_user_database_url,
+    pool_pre_ping=True,
+    pool_size=1,
+    max_overflow=1,
+    pool_timeout=1.0,
+    future=True,
+)
+
 _jwks = JwksCache(
     keycloak_base_url=_settings.keycloak_base_url,
     ttl_seconds=_settings.jwks_cache_ttl_seconds,
@@ -144,6 +173,7 @@ _recommendations = RecommendationService()
 _feedback = FeedbackService()
 _preferences = PreferencesService()
 _audits = RecommendationAuditService()
+_request_audits = RequestAuditService()
 _feature_server = FeatureServerClient(base_url=_settings.feast_feature_server_url)
 _model_server = ModelServerClient(
     base_url=_settings.model_server_url,
@@ -153,15 +183,16 @@ _model_server = ModelServerClient(
 _recommendation_coordinator = RecommendationCoordinator(_recommendations, _model_server)
 _catalog = CatalogService()
 
-# One bucket set per worker process (ADR 0014). Built unconditionally so its
+# The token bucket every authenticated request is charged against (ADR 0014).
+# `redis` by default, which is one bucket per (tenant, subject) shared by every
+# worker; `memory` keeps it in this process and Settings refuses that outside
+# dev without an explicit acknowledgement. Built unconditionally so its
 # configuration is validated at import even where the middleware is not
 # installed — a deployment should learn about a nonsensical RATE_LIMIT_BURST
 # from a boot failure, not from the first request after someone turns the
-# limiter on.
-_rate_limiter = TokenBucketLimiter(
-    requests_per_minute=_settings.rate_limit_requests_per_minute,
-    burst=_settings.rate_limit_burst,
-)
+# limiter on. Building the Redis client opens no connection; the first charged
+# request does.
+_rate_limiter = build_rate_limiter(_settings)
 
 # Deliberately not the serving clients: their timeouts are latency budgets for a
 # user-facing request, and a probe that reports "unavailable" because a sidecar
@@ -206,8 +237,18 @@ class RecommendationItem(BaseModel):
     state: MovieStateResponse | None
 
 
+# `detail` is prose — it is what a client shows a person, and it may be reworded
+# at any time. `code` is the stable name a client branches on, and it is present
+# wherever one status covers more than one condition a caller has to tell apart:
+# the mutation surface's 409 (two different races) and its 422 (a refused
+# transition, which shares the status with FastAPI's own validation error).
+# Where the status is unambiguous the field is absent, so a client reads the
+# code first and falls back to the status.
 class ErrorResponse(BaseModel):
+    """The body every deliberate 4xx on this surface renders."""
+
     detail: str
+    code: str | None = None
 
 
 class ReadinessResponse(BaseModel):
@@ -215,7 +256,8 @@ class ReadinessResponse(BaseModel):
 
     ``database`` and ``jwks`` decide the status code because they are the
     dependencies this process cannot serve a single authenticated request
-    without. The two sidecars are reported rather than gated — see the handler.
+    without. The two sidecars and the rate-limit bucket are reported rather
+    than gated — see the handler.
     """
 
     status: Literal["ready", "not-ready"]
@@ -223,6 +265,13 @@ class ReadinessResponse(BaseModel):
     jwks: Literal["ok", "error"]
     model_server: Literal["ok", "unavailable"]
     feature_server: Literal["ok", "unavailable"]
+    # Which bucket this worker is charging, as it is behaving rather than as it
+    # is configured: `shared` is the Redis bucket every worker meets,
+    # `in-process` is the per-worker approximation, `degraded` is the shared
+    # bucket failing open onto the per-worker one, and `disabled` is a stack
+    # where ADR 0014 turns the limiter off. Never gates readiness — a limiter
+    # is backpressure, not an auth boundary.
+    rate_limit: RateLimitBackendState
 
 
 class ServingPolicyResponse(BaseModel):
@@ -490,6 +539,16 @@ class CurrentActorResponse(BaseModel):
     roles: list[str]
     tenant_display_name: str
     redis_prefix: str
+    # The champion this tenant's requests may be served by, from the registry
+    # row (migration 0016). All three are null together and mean the tenant has
+    # no learned serving at all, which is why they are reported: it is the one
+    # answer that explains a permanent popularity fallback without reading a
+    # log. Quotas and the bucketing seed stay out — the rate limit is already
+    # on every response as headers, and the seed is an input to a routing
+    # decision rather than something a client should be able to predict.
+    champion_candidate_version: str | None = None
+    champion_ranker_version: str | None = None
+    champion_feature_version: str | None = None
 
 
 class OnlineUserFeaturesResponse(BaseModel):
@@ -552,6 +611,34 @@ class RecommendationAuditResponse(BaseModel):
     items: list[RecommendationAuditItem]
 
 
+class RequestAuditItem(BaseModel):
+    request_id: UUID
+    # The X-Request-ID echoed to the caller, same rule as the prediction audit:
+    # it is the join key between this row, the prediction audit for the same
+    # call, and whatever the caller wrote in its own log.
+    correlation_id: str
+    tenant_id: str
+    actor_user_id: str
+    # Null for an authenticated route that addresses no persona.
+    user_id: int | None
+    # The matched route template, never the concrete path.
+    endpoint: str
+    method: str
+    http_status: int
+    outcome: str
+    latency_ms: float
+    # Null on every route today: the ones that run a model write the richer
+    # `recommendation_audits` row instead.
+    model_version: str | None
+    created_at: datetime
+
+
+class RequestAuditResponse(BaseModel):
+    tenant_id: str
+    user_id: int
+    items: list[RequestAuditItem]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup assertions before accepting traffic. Failure raises
@@ -561,10 +648,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     run_startup_checks(settings=_settings, app_engine=_app_engine)
     logger.info(
-        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s",
+        "MovieLens API ready — environment=%s dev_auth_bypass=%s rate_limit=%s backend=%s",
         _settings.environment,
         _settings.dev_auth_bypass,
         _rate_limiter.describe() if _settings.rate_limit_active else "disabled",
+        _settings.rate_limit_backend if _settings.rate_limit_active else "none",
     )
     yield
     await _feature_server.aclose()
@@ -581,11 +669,13 @@ API_DESCRIPTION = (
     "for the calling `(tenant, subject)` token bucket; exhausting it answers "
     "429 with `Retry-After` and an `ErrorResponse` body (ADR 0014). "
     "`/healthz` and `/readyz` are exempt and carry no such headers.\n\n"
-    "The bucket lives in the worker process that served the request, so a "
-    "service running N uvicorn workers admits up to N times the configured "
-    "rate and `X-RateLimit-Remaining` is not monotonic across a sequence of "
-    "requests from one client. Treat the headers as a per-worker view of one "
-    "caller's allowance, not as a cluster-wide quota."
+    "One bucket per `(tenant, subject)` is shared by every worker of the "
+    "service, so the configured rate is what one caller gets however many "
+    "processes answer and `X-RateLimit-Remaining` counts down across a "
+    "sequence of requests. A deployment that has deliberately selected the "
+    "in-process backend keeps a bucket per worker instead, in which case the "
+    "headers are a per-worker view and `Remaining` is not monotonic; "
+    "`/readyz` reports which of the two is in force."
 )
 
 app = FastAPI(
@@ -623,6 +713,77 @@ _RATE_LIMIT_RESPONSE_HEADERS: dict[str, Any] = {
 }
 
 
+class CodedHTTPException(HTTPException):
+    """An ``HTTPException`` that also carries the machine-readable ``code``.
+
+    Starlette dispatches on the exception's own class before walking its bases,
+    so registering a handler for this subclass is what puts ``code`` in the body
+    without touching how every other ``HTTPException`` on the surface renders.
+    """
+
+    def __init__(self, *, status_code: int, detail: str, code: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+
+
+@app.exception_handler(CodedHTTPException)
+async def _coded_http_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Render ``{"detail": ..., "code": ...}`` for a coded refusal."""
+    coded = cast(CodedHTTPException, exc)
+    return JSONResponse(
+        {"detail": coded.detail, "code": coded.code},
+        status_code=coded.status_code,
+    )
+
+
+def _coded_error(exc: FeedbackMutationError) -> CodedHTTPException:
+    """Map a feedback mutation refusal onto its documented status and code.
+
+    The mapping lives on the exception classes rather than here, so a route
+    cannot answer one of them with a status the contract does not document.
+    """
+    return CodedHTTPException(
+        status_code=exc.http_status,
+        detail=str(exc),
+        code=exc.code,
+    )
+
+
+# Both bodies a mutation's 422 can carry, spelled out because declaring the
+# status at all suppresses the entry FastAPI would otherwise generate for its
+# own validation error — and dropping that would leave a client parsing an
+# undocumented shape. The two are told apart by `code`, and by `detail` being a
+# string rather than a list of validation errors.
+_MUTATION_RESPONSES: dict[int | str, dict[str, Any]] = {
+    409: {
+        "model": ErrorResponse,
+        "description": (
+            "Stale `expected_revision` (`code: revision_conflict`) or an "
+            "`Idempotency-Key` already used for a different mutation "
+            "(`code: idempotency_conflict`). Both are races: re-read the "
+            "canonical state and replay the same intent against it"
+        ),
+    },
+    422: {
+        "description": (
+            "The transition is refused by ADR 0012's state table "
+            "(`code: transition_refused`, `detail` a sentence naming the rule); "
+            "or the request failed validation (`detail` a list of errors, no `code`)"
+        ),
+        "content": {
+            "application/json": {
+                "schema": {
+                    "anyOf": [
+                        {"$ref": "#/components/schemas/ErrorResponse"},
+                        {"$ref": "#/components/schemas/HTTPValidationError"},
+                    ]
+                }
+            }
+        },
+    },
+}
+
+
 def _openapi_schema() -> dict[str, Any]:
     if app.openapi_schema is not None:
         return app.openapi_schema
@@ -639,11 +800,27 @@ def _openapi_schema() -> dict[str, Any]:
         "bearerFormat": "JWT",
         "description": "Keycloak access token with aud=movielens-api",
     }
+    # Most operations reference this as a bare `$ref` below rather than through
+    # a route's `model=`, so the component has to exist whether or not any route
+    # declared it. Written out rather than taken from the model because `code`
+    # is *omitted* from an uncoded error rather than sent as null, and a Pydantic
+    # default of None publishes the opposite — a required, nullable field.
     components.setdefault("schemas", {})["ErrorResponse"] = {
         "type": "object",
         "title": "ErrorResponse",
         "required": ["detail"],
-        "properties": {"detail": {"type": "string"}},
+        "properties": {
+            "detail": {"type": "string", "title": "Detail"},
+            "code": {
+                "type": "string",
+                "title": "Code",
+                "description": (
+                    "Stable machine-readable name for this refusal. Present wherever one "
+                    "status covers more than one condition; absent otherwise, so read the "
+                    "code first and fall back to the status."
+                ),
+            },
+        },
     }
     components.setdefault("headers", {}).update(_RATE_LIMIT_HEADER_COMPONENTS)
     for path, path_item in schema.get("paths", {}).items():
@@ -662,7 +839,11 @@ def _openapi_schema() -> dict[str, Any]:
                 ("401", "Missing or invalid access token"),
                 ("403", "Authenticated actor is not authorized"),
                 ("404", "Requested persona or movie does not exist"),
-                ("409", "Idempotency, state revision, or transition conflict"),
+                # A transition refusal used to hide here too, which left a
+                # client splitting three conditions by reading the sentence in
+                # `detail`. It is a 422 with `code: transition_refused` now, and
+                # the two that remain are races that carry codes of their own.
+                ("409", "Idempotency or state revision conflict"),
                 ("429", "Rate limit exceeded for this tenant and subject"),
                 ("500", "Request transaction failed"),
             ):
@@ -685,14 +866,79 @@ def _openapi_schema() -> dict[str, Any]:
 
 app.openapi = _openapi_schema  # type: ignore[method-assign]
 
+
+async def _resolve_tenant(tenant_id: str, connection: Connection | None = None) -> TenantConfig:
+    """The calling tenant's registry row, without stalling the event loop.
+
+    Since migration 0016 the row carries the champion coordinates and the quota
+    overrides, so it is read on the recommendation path and — through
+    ``_tenant_rate_limit`` — on every authenticated request, rather than by
+    ``/whoami`` alone. The cached half is a dict read and runs here; only the
+    miss, once per tenant per TTL, goes to a thread, because a blocking psycopg2
+    round trip on the event loop would delay every other request this worker is
+    holding.
+
+    The request's own transaction is passed down when there is one, so a miss
+    reuses the connection this request already holds rather than asking the pool
+    for a second one — see ``TenantRouter.resolve``.
+
+    ``UnknownTenantError`` is a 403 for the same reason it always was: a
+    verified realm with no registry row is an auth-side misconfiguration. In
+    practice the auth middleware has already refused it.
+    """
+    cached = _tenant_router.cached(tenant_id)
+    if cached is not None:
+        return cached
+    try:
+        return await run_in_threadpool(
+            partial(_tenant_router.resolve, tenant_id, connection=connection)
+        )
+    except UnknownTenantError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _tenant_rate_limit(tenant_id: str, connection: object | None) -> TenantRateLimit:
+    """This tenant's quota overrides for the ADR 0014 limiter, if it has any.
+
+    Fails open to the global settings rather than propagating: the limiter is a
+    protection, and a registry read that failed is not a reason to refuse a
+    request auth has already accepted. It is the same cached read every other
+    caller performs, so on the hot path it is a dict lookup.
+
+    ``connection`` arrives untyped because the limiter forwards it without
+    knowing what it is — that module deliberately imports nothing that can do
+    I/O. Anything that is not a live connection falls back to the engine rather
+    than being handed to SQLAlchemy on trust.
+    """
+    request_connection = connection if isinstance(connection, Connection) else None
+    try:
+        return (await _resolve_tenant(tenant_id, request_connection)).rate_limit
+    except (HTTPException, SQLAlchemyError):
+        logger.warning("tenant_rate_limit_unresolved tenant_id=%s fell_back_to=global", tenant_id)
+        return NO_TENANT_OVERRIDES
+
+
 # Middleware is added at module import, before the first request. Starlette
 # evaluates the last-added middleware first: RequestIdMiddleware resolves the
 # correlation id and owns the response header, AuthMiddleware opens the RLS
 # transaction, the rate limiter charges the verified identity's bucket, then
-# the audit middleware persists before that transaction commits. Request-id
+# the two audit middlewares persist before that transaction commits. Request-id
 # resolution is outermost so even a 401 carries the header the caller can
 # correlate on.
 app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
+# Outside the prediction audit and inside the limiter. Outside, so a
+# recommendation whose handler raised is already a response by the time this
+# sees it and is skipped rather than double-audited; inside, so a throttled
+# request writes nothing at all (ADR 0014). It records every *other*
+# authenticated route on the same RLS-bound transaction — see ADR 0012's
+# 2026-08-29 note for why inline and not queued, and REQUEST_AUDIT_MODE=off for
+# the way back out.
+if _settings.request_audit_mode == "inline":
+    app.add_middleware(
+        RequestAuditMiddleware,
+        audits=_request_audits,
+        engine=_audit_failure_engine,
+    )
 # Between auth and the audit writer, and only where it is active. It needs the
 # resolved principal, so it cannot run outside AuthMiddleware; and a throttled
 # request must not reach the audit writer, because it produced no prediction to
@@ -700,7 +946,14 @@ app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
 # amplifies the burst it exists to shed. The cost it cannot avoid from here is
 # the request transaction AuthMiddleware has already opened — see ADR 0014.
 if _settings.rate_limit_active:
-    app.add_middleware(RateLimitMiddleware, limiter=_rate_limiter)
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=_rate_limiter,
+        # Where a tenant's own quota comes from. NULL columns read as the
+        # global settings, so a deployment that sets none behaves exactly as it
+        # did before migration 0016.
+        tenant_limits=_tenant_rate_limit,
+    )
 app.add_middleware(
     AuthMiddleware,
     jwks=_jwks,
@@ -763,11 +1016,18 @@ async def readyz(response: Response) -> ReadinessResponse:
     # — and a popularity-serving API beats no API. Whether the learned path is
     # genuinely learned is the post-deploy verification's question; this
     # endpoint only makes a degraded sidecar visible without reading logs.
-    database, jwks_state, model_server, feature_server = await asyncio.gather(
+    #
+    # The rate-limit bucket is reported on the same terms and for a sharper
+    # reason: a Redis it cannot reach makes it fail open onto the per-worker
+    # bucket, which is a real weakening of a promise the response headers keep
+    # making — and one that leaves no other trace, since a 429 writes no audit
+    # row and the deployed API runs with --no-access-log.
+    database, jwks_state, model_server, feature_server, rate_limit = await asyncio.gather(
         run_in_threadpool(_probe_database, _app_engine),
         run_in_threadpool(_probe_jwks, _jwks, _settings.model_tenant_id),
         _probe_sidecar("model-server", _settings.model_server_url, "/healthz"),
         _probe_sidecar("feature-server", _settings.feast_feature_server_url, "/health"),
+        _probe_rate_limit(),
     )
     ready = database == "ok" and jwks_state == "ok"
     if not ready:
@@ -778,6 +1038,7 @@ async def readyz(response: Response) -> ReadinessResponse:
         jwks=jwks_state,
         model_server=model_server,
         feature_server=feature_server,
+        rate_limit=rate_limit,
     )
 
 
@@ -789,10 +1050,8 @@ async def readyz(response: Response) -> ReadinessResponse:
 async def whoami(request: Request) -> CurrentActorResponse:
     """Authenticated echo of the resolved identity."""
     principal = request.state.principal
-    try:
-        tenant = _tenant_router.resolve(principal.tenant_id)
-    except UnknownTenantError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    tenant = await _resolve_tenant(principal.tenant_id, request.state.db)
+    champion = tenant.champion
     return CurrentActorResponse(
         tenant_id=principal.tenant_id,
         user_id=principal.user_id,
@@ -801,6 +1060,9 @@ async def whoami(request: Request) -> CurrentActorResponse:
         roles=sorted(principal.roles),
         tenant_display_name=tenant.display_name,
         redis_prefix=tenant.redis_prefix,
+        champion_candidate_version=champion.candidate_version if champion else None,
+        champion_ranker_version=champion.ranker_version if champion else None,
+        champion_feature_version=champion.feature_version if champion else None,
     )
 
 
@@ -818,11 +1080,16 @@ async def recommendations(
     _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
+    tenant = await _resolve_tenant(principal.tenant_id, connection)
     decision = await _recommendation_coordinator.recommend(
         connection,
         tenant_id=principal.tenant_id,
         user_id=user_id,
         limit=limit,
+        # Which model this tenant is registered on. None means it has none, and
+        # the coordinator answers from popularity with a reason that says so
+        # rather than calling a sidecar that would refuse.
+        champion=tenant.champion,
     )
     request.state.recommendation_audit_context = RecommendationAuditContext(
         policy=decision.policy,
@@ -915,6 +1182,35 @@ async def recommendation_audits(
         tenant_id=principal.tenant_id,
         user_id=user_id,
         items=[RecommendationAuditItem(**item.__dict__) for item in items],
+    )
+
+
+@app.get(
+    "/users/{user_id}/request-audits",
+    response_model=RequestAuditResponse,
+    operation_id="listRequestAudits",
+)
+async def request_audits(
+    user_id: int,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RequestAuditResponse:
+    """Return newest generic request audits for this persona in this tenant.
+
+    A sibling of ``/audits`` rather than a mode of it: the two tables answer
+    different questions and carry different columns, and overloading one
+    response model with a union would make every client branch on a discriminator
+    to read either. Requests that address no persona (``/whoami``, ``/personas``)
+    are audited but carry a null ``user_id``, so they are not returned here.
+    """
+    _require_demo_persona_access(request)
+    principal = request.state.principal
+    connection: Connection = request.state.db
+    items = _request_audits.list_for_user(connection, user_id=user_id, limit=limit)
+    return RequestAuditResponse(
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        items=[RequestAuditItem(**item.__dict__) for item in items],
     )
 
 
@@ -1212,6 +1508,16 @@ async def user_preferences(user_id: int, request: Request) -> UserPreferencesRes
     "/users/{user_id}/preferences",
     response_model=UserPreferencesMutationResponse,
     operation_id="setUserPreferences",
+    responses={
+        409: {
+            "model": ErrorResponse,
+            "description": (
+                "Stale `expected_revision` (`code: revision_conflict`). This "
+                "resource has no idempotency key and no transition table, so "
+                "it is the only condition on the status"
+            ),
+        }
+    },
 )
 async def set_user_preferences(
     user_id: int,
@@ -1242,7 +1548,9 @@ async def set_user_preferences(
     except UnknownDemoPersonaError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except StateRevisionConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Same exception, same code as the movie-state writes raise: a client
+        # that recognises one recognises the other.
+        raise _coded_error(exc) from exc
     return UserPreferencesMutationResponse(
         outcome=result.outcome,
         preferences=_preferences_response(result.preferences),
@@ -1253,6 +1561,7 @@ async def set_user_preferences(
     "/users/{user_id}/movies/{movie_id}/watched",
     response_model=FeedbackMutationResponse,
     operation_id="setMovieWatched",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_watched(
     user_id: int,
@@ -1275,6 +1584,7 @@ async def set_watched(
     "/users/{user_id}/movies/{movie_id}/watched",
     response_model=FeedbackMutationResponse,
     operation_id="removeMovieFromHistory",
+    responses=_MUTATION_RESPONSES,
 )
 async def remove_from_history(
     user_id: int,
@@ -1297,6 +1607,7 @@ async def remove_from_history(
     "/users/{user_id}/movies/{movie_id}/rating",
     response_model=FeedbackMutationResponse,
     operation_id="setMovieStateRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_state_rating(
     user_id: int,
@@ -1321,6 +1632,7 @@ async def set_state_rating(
     "/users/{user_id}/movies/{movie_id}/rating",
     response_model=FeedbackMutationResponse,
     operation_id="deleteMovieStateRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_state_rating(
     user_id: int,
@@ -1343,6 +1655,7 @@ async def delete_state_rating(
     "/users/{user_id}/movies/{movie_id}/watchlist",
     response_model=FeedbackMutationResponse,
     operation_id="addMovieToWatchlist",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_watchlist(
     user_id: int,
@@ -1365,6 +1678,7 @@ async def set_watchlist(
     "/users/{user_id}/movies/{movie_id}/watchlist",
     response_model=FeedbackMutationResponse,
     operation_id="removeMovieFromWatchlist",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_watchlist(
     user_id: int,
@@ -1387,6 +1701,7 @@ async def delete_watchlist(
     "/users/{user_id}/movies/{movie_id}/dismissal",
     response_model=FeedbackMutationResponse,
     operation_id="dismissMovie",
+    responses=_MUTATION_RESPONSES,
 )
 async def set_dismissal(
     user_id: int,
@@ -1409,6 +1724,7 @@ async def set_dismissal(
     "/users/{user_id}/movies/{movie_id}/dismissal",
     response_model=FeedbackMutationResponse,
     operation_id="undoMovieDismissal",
+    responses=_MUTATION_RESPONSES,
 )
 async def delete_dismissal(
     user_id: int,
@@ -1431,6 +1747,7 @@ async def delete_dismissal(
     "/users/{user_id}/ratings/{movie_id}",
     response_model=RatingMutationResponse,
     operation_id="setMovieRating",
+    responses=_MUTATION_RESPONSES,
 )
 async def rate_movie(
     user_id: int,
@@ -1458,6 +1775,11 @@ async def rate_movie(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UnknownMovieError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FeedbackMutationError as exc:
+        # The same state machine sits behind this shape, so it answers with the
+        # same statuses and codes. It had been answering 500: this endpoint
+        # predates the state machine and never caught its refusals at all.
+        raise _coded_error(exc) from exc
     return RatingMutationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -1469,6 +1791,7 @@ async def rate_movie(
     "/users/{user_id}/ratings",
     response_model=RatingMutationResponse,
     operation_id="resetDemoRatings",
+    responses=_MUTATION_RESPONSES,
 )
 async def reset_ratings(user_id: int, request: Request) -> RatingMutationResponse:
     """Compatibility bulk rating clear; watched history is preserved."""
@@ -1492,16 +1815,22 @@ async def reset_ratings(user_id: int, request: Request) -> RatingMutationRespons
         )
     ]
     for movie_id in movie_ids:
-        await run_in_threadpool(
-            _feedback.mutate,
-            connection,
-            tenant_id=principal.tenant_id,
-            actor_user_id=principal.user_id,
-            user_id=user_id,
-            movie_id=movie_id,
-            action="rating_deleted",
-            request_id=uuid4(),
-        )
+        try:
+            await run_in_threadpool(
+                _feedback.mutate,
+                connection,
+                tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                user_id=user_id,
+                movie_id=movie_id,
+                action="rating_deleted",
+                request_id=uuid4(),
+            )
+        except FeedbackMutationError as exc:
+            # `rating_deleted` refuses nothing today, so this is a guard rather
+            # than a live path — but a bulk clear that hit one it could not
+            # apply used to answer 500 for a state the caller could act on.
+            raise _coded_error(exc) from exc
     return RatingMutationResponse(
         tenant_id=principal.tenant_id,
         user_id=user_id,
@@ -1538,12 +1867,11 @@ async def _feedback_mutation(
         )
     except (UnknownDemoPersonaError, UnknownMovieError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (
-        StateRevisionConflictError,
-        IdempotencyConflictError,
-        InvalidStateTransitionError,
-    ) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FeedbackMutationError as exc:
+        # One clause for all three, because the status and the code belong to
+        # the exception rather than to the route: a refusal is a 422 here and a
+        # 422 on the compatibility endpoints below, and neither can drift.
+        raise _coded_error(exc) from exc
     return _mutation_response(result)
 
 
@@ -1584,6 +1912,19 @@ def _probe_jwks(jwks: JwksCache, realm: str) -> Literal["ok", "error"]:
         logger.warning("Readiness probe: JWKS for realm=%s is not fetchable", realm, exc_info=True)
         return "error"
     return "ok"
+
+
+async def _probe_rate_limit() -> RateLimitBackendState:
+    """Report which bucket this worker is actually charging.
+
+    ``disabled`` is answered here rather than by the limiter because the
+    limiter object exists on every stack — it is built at import so a bad
+    ``RATE_LIMIT_BURST`` fails the boot — while the middleware is installed
+    only where ADR 0014 turns it on.
+    """
+    if not _settings.rate_limit_active:
+        return "disabled"
+    return await _rate_limiter.report()
 
 
 async def _probe_sidecar(name: str, base_url: str, path: str) -> Literal["ok", "unavailable"]:

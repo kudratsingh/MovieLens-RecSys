@@ -13,6 +13,12 @@ place that could still return it fails closed with an audited reason instead.
 The policy this module reports is held to what actually ran: a two-stage call
 whose retrieval no seed reached is reported as ``unseeded-retrieval`` with
 ``learned`` false, never as learned two-stage serving.
+
+Which model may run is the tenant's, not this module's, decision. The champion
+coordinates come in from ``public.tenants`` (migration 0016) and travel with the
+rank call so the sidecar can refuse a version it did not load; a tenant with no
+champion never reaches the sidecar at all. Both outcomes are audited under their
+own reason rather than borrowed from the outage vocabulary.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from src.evaluation.protocol import COLD_START_THRESHOLD
 from src.serving.audit import PredictionAudit
 from src.serving.models import (
     ModelRankingResult,
+    ModelServerChampionMismatchError,
     ModelServerClient,
     ModelServerContractError,
 )
@@ -38,6 +45,8 @@ from src.serving.policy import (
     CANDIDATE_SOURCE_POPULARITY_FILL,
     EXCLUSION_FILTER_POLICY,
     POLICY_POPULARITY,
+    REASON_CHAMPION_MISMATCH,
+    REASON_NO_CHAMPION,
     SCORE_SCALE_INTERACTION_COUNT,
     SCORE_SCALE_RANK,
     id_set_digest,
@@ -47,6 +56,7 @@ from src.serving.recommendations import (
     RecommendedMovie,
     ServingInputState,
 )
+from src.serving.tenancy import TenantChampion
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +72,10 @@ REASON_LEARNED = "learned-two-stage"
 # so the response is not a popularity fallback — but it is not learned
 # retrieval either, and it gets its own prefix rather than borrowing one.
 REASON_UNSEEDED = "unseeded-retrieval"
+# Two more prefixes — ``no-champion`` and ``champion-mismatch`` — are imported
+# from ``src.serving.policy`` rather than declared here, because the sidecar
+# names the second one in its refusal body and a code both processes emit
+# belongs in the vocabulary both processes share.
 
 # The honest policy name when retrieval degenerated to its fill order.
 POLICY_UNSEEDED = f"{CANDIDATE_SOURCE_POPULARITY_FILL}+lightgbm"
@@ -80,6 +94,7 @@ class ModelRanker(Protocol):
         dismissed_movie_ids: list[int] | None = None,
         limit: int,
         candidate_limit: int = 100,
+        champion: TenantChampion | None = None,
     ) -> ModelRankingResult: ...
 
 
@@ -139,6 +154,12 @@ class RecommendationCoordinator:
         tenant_id: str,
         user_id: int,
         limit: int,
+        # Required rather than defaulted, and nullable rather than absent: the
+        # caller has to say which model this tenant is on, and "none" has to be
+        # something it states. A default would let a future call site fall back
+        # to popularity for every request by omission, which is the failure this
+        # whole path exists to make visible.
+        champion: TenantChampion | None,
     ) -> RecommendationDecision:
         # SQLAlchemy uses a synchronous psycopg2 connection here. Keep each
         # operation serialized on the request's RLS transaction, but do not
@@ -148,6 +169,25 @@ class RecommendationCoordinator:
             connection,
             user_id=user_id,
         )
+        # Asked before the cold-start threshold on purpose. A tenant with no
+        # registered champion (``public.tenants``, migration 0016) cannot take
+        # the learned path however much history the user has, so reporting
+        # "cold-start" here would tell a viewer to go and watch five more movies
+        # to unlock something that would not change. The tenant's own state is
+        # the more specific answer, so it is the one the response carries.
+        if champion is None:
+            return await self._popularity(
+                connection,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                limit=limit,
+                state=state,
+                fallback_reason=REASON_NO_CHAMPION,
+                reason=(
+                    f"{REASON_NO_CHAMPION}: tenant {tenant_id!r} has no champion model "
+                    "registered, so no request in it takes the learned path"
+                ),
+            )
         if state.positive_signal_count < COLD_START_THRESHOLD:
             return await self._popularity(
                 connection,
@@ -173,6 +213,20 @@ class RecommendationCoordinator:
                 dismissed_movie_ids=state.dismissed_movie_ids,
                 limit=limit,
                 candidate_limit=max(100, limit * 10),
+                # The sidecar re-checks this against the manifest it loaded. The
+                # coordinator cannot: it holds no artifacts, only the row that
+                # says which ones this tenant is registered on.
+                champion=champion,
+            )
+        except ModelServerChampionMismatchError as exc:
+            return await self._popularity(
+                connection,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                limit=limit,
+                state=state,
+                fallback_reason=REASON_CHAMPION_MISMATCH,
+                reason=f"{REASON_CHAMPION_MISMATCH}: {exc}",
             )
         except (httpx.HTTPError, ModelServerContractError) as exc:
             return await self._popularity(

@@ -265,13 +265,14 @@ describe("the live write path", () => {
   });
 
   it("states the rule when the API refuses the transition itself", async () => {
-    // Quoted from `InvalidStateTransitionError` in `src/serving/feedback.py`.
-    // It arrives on the same 409 as a stale revision, and this deck used to
-    // tell the viewer the title "changed somewhere else before this saved" and
-    // invite a retry that could never work.
+    // A refusal in the shape the API answers it: 422 carrying its own code,
+    // never the 409 that means a race. This deck used to tell the viewer the
+    // title "changed somewhere else before this saved" and invite a retry that
+    // could never work.
     const rule = "a watched movie cannot be added to the watchlist";
     const { calls, fetchImpl } = stubBff({
-      mutation: () => jsonResponse({ detail: rule }, 409),
+      mutation: () => jsonResponse({ detail: rule, code: "transition_refused" }, 422),
+      detailState: { ...movieState, movie_id: MOVIE_ID, revision: 9 },
     });
     const { transport, sessionStore } = transportWith(fetchImpl);
 
@@ -279,13 +280,16 @@ describe("the live write path", () => {
 
     expect(outcome).toMatchObject({ ok: false, refused: true });
     expect(outcome.ok === false && outcome.conflict).toBeUndefined();
-    expect(outcome.ok === false && outcome.message).toBe(
+    expect(outcome.ok === false && outcome.message).toContain(
       `That decision was not recorded. ${rule}.`,
     );
     expect(outcome.ok === false && outcome.message).not.toContain("try again");
-    // Nothing was written, so nothing was re-read and nothing was relayed.
-    expect(calls.some((call) => /\/movies\/\d+$/.test(call.url))).toBe(false);
-    expect(readCommittedStates(sessionStore, USER_ID).get(MOVIE_ID)).toBeUndefined();
+    // Nothing was written, but the record was read back: a rule about state
+    // that this press did not expect means the revision this deck holds is
+    // stale, and the next press has to assert a real one.
+    expect(calls.some((call) => /\/movies\/\d+$/.test(call.url))).toBe(true);
+    expect(readCommittedStates(sessionStore, USER_ID).get(MOVIE_ID)?.revision).toBe(9);
+    expect(outcome.ok === false && outcome.message).toContain("current state is shown");
   });
 
   it("never lets a lost network turn into a claimed save", async () => {

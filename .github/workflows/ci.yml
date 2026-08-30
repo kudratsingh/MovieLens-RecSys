@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # These two files *are* the dev environment — `make up-dev` is an alias
+      # for the target that runs them, and there is deliberately no third
+      # docker-compose.dev.yml (tests/unit/test_prod_compose.py records why).
+      # So this step is the dev model's validation as well as the demo stack's.
       - name: Validate merged demo Compose model
         run: docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile load config --quiet
       - name: Verify required demo services
@@ -50,7 +54,7 @@ jobs:
       - name: Verify API runtime imports and size budget
         run: |
           docker run --rm movielens-api-ci python -c \
-            "import alembic, fastapi, httpx, jwt, psycopg2, pydantic_settings, sqlalchemy"
+            "import alembic, fastapi, httpx, jwt, psycopg2, pydantic_settings, redis, sqlalchemy"
           size=$(docker image inspect movielens-api-ci --format '{{.Size}}')
           test "$size" -lt 400000000 || {
             echo "API runtime image exceeds 400 MB: $size bytes"
@@ -91,6 +95,67 @@ jobs:
             echo "docker-compose.prod.yml names DEV_AUTH_BYPASS; production carries no such variable"
             exit 1
           fi
+
+      # Staging has no CI job of its own, no host, and no deploy workflow, so
+      # nothing else in this repository would ever merge these two files. An
+      # overlay nothing renders is an overlay nobody notices breaking, and the
+      # moment it is noticed is the moment somebody needs it: a release
+      # rehearsal. Rendering it against the committed example also proves that
+      # file is still a complete variable contract, the same way the production
+      # step above does.
+      - name: Validate the staging Compose model
+        run: |
+          docker compose --env-file infra/deploy/staging.env.example \
+            -f docker-compose.prod.yml -f docker-compose.staging.yml \
+            --profile jobs config --quiet
+
+      # The claim docker-compose.staging.yml makes about itself: it changes the
+      # environment label and the Compose project, and nothing else. A staging
+      # stack that drifted in worker counts, memory ceilings, pooler mode, TLS
+      # termination or startup order would stop rehearsing the deployment — the
+      # defect it would have caught is the one it no longer shares.
+      #
+      # Both models are rendered from the *production* env file and under one
+      # project name, so the only difference left to find is the overlay's own.
+      - name: Verify staging differs from production by its label alone
+        run: |
+          docker compose -p movielens-compare \
+            --env-file infra/deploy/production.env.example \
+            -f docker-compose.prod.yml --profile jobs config --format json \
+            > "${RUNNER_TEMP}/prod-model.json"
+          docker compose -p movielens-compare \
+            --env-file infra/deploy/production.env.example \
+            -f docker-compose.prod.yml -f docker-compose.staging.yml \
+            --profile jobs config --format json > "${RUNNER_TEMP}/staging-model.json"
+          python3 - "${RUNNER_TEMP}/prod-model.json" "${RUNNER_TEMP}/staging-model.json" <<'PY'
+          import json, sys
+
+          prod = json.load(open(sys.argv[1]))
+          staging = json.load(open(sys.argv[2]))
+          relabelled = set()
+          for name, body in prod["services"].items():
+              environment = body.get("environment") or {}
+              if environment.get("ENVIRONMENT") == "production":
+                  environment["ENVIRONMENT"] = "staging"
+                  relabelled.add(name)
+          assert relabelled, "no production service carries ENVIRONMENT; this check checks nothing"
+          assert prod == staging, "the staging overlay changes more than the environment label"
+          print("staging relabels and changes nothing else:", " ".join(sorted(relabelled)))
+          PY
+
+      # And the two project names, which are what keep `staging-reset` from
+      # ever reaching movielens-prod's volumes. Rendered without `-p`, so this
+      # reads what each file declares rather than what a command line said.
+      - name: Verify the two stacks name different Compose projects
+        run: |
+          prod=$(docker compose --env-file infra/deploy/production.env.example \
+            -f docker-compose.prod.yml config --format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+          staging=$(docker compose --env-file infra/deploy/staging.env.example \
+            -f docker-compose.prod.yml -f docker-compose.staging.yml config --format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+          test "$prod" = "movielens-prod" || { echo "production project is $prod"; exit 1; }
+          test "$staging" = "movielens-staging" || { echo "staging project is $staging"; exit 1; }
 
   frontend:
     runs-on: ubuntu-latest
@@ -341,7 +406,10 @@ jobs:
 
       # Request-id traceability, the auth boundary, dependency provenance,
       # bounded pages, cursor rejection, and degraded metadata: pass/fail facts
-      # a percentile cannot express. Records rate limiting as not implemented.
+      # a percentile cannot express. The rate-limit row records the absence of a
+      # limiter here rather than asserting one: `api-load` runs with
+      # ENVIRONMENT=dev so the p99 gate measures the service and not the rig
+      # (ADR 0014). `make prod-verify` is where that row runs against a limiter.
       - name: Check serving reliability promises
         run: make demo-reliability-check
 

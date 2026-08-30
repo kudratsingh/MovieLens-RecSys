@@ -39,7 +39,7 @@ flowchart TB
 
   subgraph DB["Postgres"]
     direction TB
-    RLS["Forced RLS — 7 tables<br/>ratings · tags · demo_personas<br/>recommendation_audits · user_movie_state<br/>user_feedback_events · user_preferences<br/><br/>policy USING and WITH CHECK<br/>tenant_id =<br/>current_setting('app.tenant_id')"]
+    RLS["Forced RLS — 8 tables<br/>ratings · tags · demo_personas<br/>recommendation_audits · request_audits<br/>user_movie_state · user_feedback_events<br/>user_preferences<br/><br/>policy USING and WITH CHECK<br/>tenant_id =<br/>current_setting('app.tenant_id')"]
     SHARED["No RLS, deliberately shared<br/>movies · links · movie_catalog_metadata<br/>public.tenants — the cross-tenant registry<br/>feature_store.* — admin_user only, app_user has no grant"]
   end
 

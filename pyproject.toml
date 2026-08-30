@@ -49,6 +49,14 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "types-redis",
+    # The rate limiter's token bucket is a Lua script (ADR 0014), and a script
+    # nothing in the suite executes is a script nobody has read. The `lua`
+    # extra pulls lupa, a real Lua interpreter, so `tests/unit/test_ratelimit.py`
+    # runs the shipped script rather than a Python paraphrase of it — including
+    # `redis.call('TIME')`, which is the part that makes four workers agree. A
+    # dev extra rather than a runtime one: the API image installs `redis` and
+    # nothing else new.
+    "fakeredis[lua]>=2.30,<3",
     # notebooks/eda.py renders the figures docs/eda.md embeds. A dev extra
     # rather than a runtime dependency: nothing that serves a request draws a
     # chart, and the API image is on a size budget CI enforces.

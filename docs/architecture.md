@@ -8,10 +8,13 @@ comes back with an explicit statement of which policy served it, and a durable
 audit row is committed before the answer is sent. A Next.js product sits on top
 of the same authenticated API any other client would use.
 
-The interesting part of this project is not the model. It is the engineering
-around it: the isolation boundary, the feature-freshness contract, the artifact
-pinning, the latency gate, and the deployment. Those are what this document
-describes.
+This document describes the engineering around the models — the isolation
+boundary, the feature-freshness contract, the artifact pinning, the latency gate,
+and the deployment — because that is what makes them usable by a real person.
+The models are the project's main line of work: the current two-stage stack is
+documented in ADRs 0003–0006 and measured in [`results.md`](results.md), and the
+modeling track continues past it toward sequence models with transformer
+encoders once the Phase 3 harness is closed.
 
 **What is running right now: nothing.** The production target is specified,
 built and rehearsed end to end — one Hetzner CX22 running `docker-compose.prod.yml`
@@ -69,8 +72,12 @@ Four pieces of middleware wrap every request, outermost first
    transaction and sets `app.tenant_id` on it.
 3. **RateLimit** applies a token bucket per `(tenant, subject)`. It is installed
    everywhere except `environment == "dev"`.
-4. **Audit** matches exactly one route shape — `GET /users/{id}/recommendations` —
-   and writes the prediction log row.
+4. **Audit** is two middlewares, one per table. The prediction audit matches
+   exactly one route shape — `GET /users/{id}/recommendations` — and writes the
+   prediction log row. The request audit writes an operational row for every
+   *other* authenticated route, on the same transaction; it skips that one route
+   rather than duplicating a richer row into a second table, and it sits inside
+   the limiter so a 429 writes nothing.
 
 The coordinator reads positives and exclusions from `user_movie_state` in a
 single `UNION ALL` round trip, written that way so each side can use its own
@@ -129,7 +136,7 @@ rule, not a relaxed threshold, and the thresholds have never moved.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/serving-policy-decision.dark.svg">
-  <img alt="Decision tree for the serving policy: cold start, model-server unavailable, empty or fully-excluded learned output, unseeded retrieval, and the learned two-stage path — with the policy and reason strings the code emits." src="diagrams/serving-policy-decision.svg" width="100%">
+  <img alt="Decision tree for the serving policy: no registered champion, cold start, a sidecar that refuses because its bundle is not the champion, model-server unavailable, empty or fully-excluded learned output, unseeded retrieval, and the learned two-stage path — with the policy and reason strings the code emits." src="diagrams/serving-policy-decision.svg" width="100%">
 </picture>
 
 Every recommendation response carries a `serving_policy` object: the policy
@@ -137,6 +144,14 @@ name, a `learned` boolean, the positive-signal count and the threshold it was
 compared against, a structured reason, the score scale, the filter policy, and
 the excluded count. The frontend labels the response from that flag rather than
 inferring it, and the same values land in the audit row.
+
+Before either branch is taken, the coordinator reads which model the tenant is
+registered on — the three champion columns on `public.tenants` (migration 0016),
+resolved through the tenant router's 30-second cache. A tenant with no champion
+never reaches the sidecar and is answered from popularity under its own reason;
+a champion that does not match the bundle the sidecar loaded is refused by the
+sidecar with a coded 409 and audited as a mismatch rather than as an outage,
+because a half-finished promotion and a dead process need different fixes.
 
 The `unseeded-retrieval` case exists because of a bug worth keeping visible.
 The exclusion set the coordinator sends the sidecar necessarily contains the
@@ -155,7 +170,7 @@ borrowing the learned label.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/tenancy-and-auth.dark.svg">
-  <img alt="Tenant isolation: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the seven forced-RLS tables against the deliberately shared ones." src="diagrams/tenancy-and-auth.svg" width="100%">
+  <img alt="Tenant isolation: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the eight forced-RLS tables against the deliberately shared ones." src="diagrams/tenancy-and-auth.svg" width="100%">
 </picture>
 
 **Auth** is self-hosted Keycloak with one realm per tenant
@@ -268,7 +283,7 @@ committed, so none are quoted here or drawn on any diagram.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/data-model.dark.svg">
-  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model, and the tenant-scoped movie state, feedback events, preferences and prediction audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
+  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model, and the tenant-scoped movie state, feedback events, preferences, prediction audits and request audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
 </picture>
 
 Fourteen migrations, and the shape is worth a paragraph each for the three
@@ -294,6 +309,16 @@ policy and its structured reason, the input-state revision and hash, the
 exclusion hash, the feature event time, and the correlation id. `request_id` is
 the row's own identity and `correlation_id` is the echoed `X-Request-ID`, kept
 separate so a replayed header cannot collide with an existing row's primary key.
+
+**`request_audits`** is the operational log for every other authenticated
+route: tenant, actor subject, the persona the route addressed (null where it
+addresses none), the matched route *template*, method, status, outcome, latency
+and the same correlation id, which is the join key back to the prediction audit
+when both exist for one call. It stores no request body and no query string, so
+a viewer's search terms never reach it, and the template rather than the
+concrete path so one operation cannot fan out into one `endpoint` value per
+persona. Forced RLS and the same `SELECT`-plus-`INSERT` grant as the prediction
+audit, so it is append-only from the request path's point of view.
 
 The `feature_store.*` tables are outside RLS on purpose: `app_user` has no grant
 on them at all, because online reads go through Redis and nothing serving a
@@ -331,7 +356,10 @@ component, so a resource that fails never blanks the regions around it. Writes
 go through exactly one path, `web/lib/movie-state/`: the transition table
 written once, an idempotency key bound to the intent, `expected_revision` on
 every request, a 409 that triggers a canonical re-read and one replay at that
-revision, and a rollback that announces the restore and walks focus back. That
+revision, a 422 with `code: transition_refused` that earns the same re-read but
+no replay — a rule about state, so being refused proves the control was stale,
+and asking again would only ask the same rule — and a rollback that announces the
+restore and walks focus back. That
 consolidation was not tidiness — the previous copies had already diverged, and
 only one of them turned a conflict into a correction rather than telling the
 viewer to reload. The route map is in
@@ -404,11 +432,16 @@ is a green no-op until a host is configured. The full sequence is in the
 This is scope, not apology. Each of these has a place in the plan and none of
 them is drawn on a diagram as though it exists.
 
-- **Per-tenant champion routing.** The tenant router resolves an id, a display
-  name and a Redis prefix. There are no champion-model-version, quota or A/B-seed
-  columns on `public.tenants` yet, and the sidecar is pinned to one tenant by its
-  manifest — a second serving tenant is a second process. That is Phase 6's
-  work, and it is what unblocks champion/challenger and shadow deploys.
+- **Per-tenant champion *routing*.** The registry can now express it: migration
+  0016 put the champion-model coordinates, the rate-limit overrides and the A/B
+  bucketing seed on `public.tenants`, the tenant router resolves all of them,
+  the coordinator sends the champion with every rank call, and the sidecar
+  refuses a bundle that is not the one the tenant is registered on. What does
+  not exist is the routing layer that would make use of a *second* value: the
+  sidecar still loads exactly one bundle for one tenant (`MODEL_TENANT_ID`), so
+  a second serving tenant, or a challenger beside a champion, is still a second
+  process. Splitting traffic between them — and the shadow path that logs a
+  challenger's predictions without shipping them — is Phase 6's work.
 - **Orchestration.** The offline path is a set of entrypoints run by hand.
   Prefect flows, an evaluation gate wired into promotion, and idempotent
   retraining are Phase 4.
@@ -421,13 +454,20 @@ them is drawn on a diagram as though it exists.
   plus an external uptime check that is still owed.
 - **Structured JSON logging.** The convention is written down; the serving path
   does not yet emit it.
-- **`docker-compose.{dev,staging}.yml`.** The production file landed with the
-  deployment work and doubles as its own local rehearsal. Dev and staging
-  splits remain.
-- **Generic request audits.** The audit middleware matches only the
-  recommendations route. Every other authenticated endpoint writes no audit row,
-  in production too, and the runbook says so plainly rather than letting the
-  non-negotiable's wording read as a description of what is running.
+- **A staging *host*.** The environments themselves are done: dev is
+  `docker-compose.yml` + `docker-compose.demo.yml` behind `make up-dev` (there
+  is deliberately no third file), and staging is `docker-compose.staging.yml`, a
+  thin overlay on the production stack behind `make up-staging`. Neither is
+  deployed anywhere — staging runs on a laptop with Caddy's own CA, has no
+  deploy workflow and no canary, and pointing it at a second box is two
+  hostnames and `EDGE_TLS=acme` away.
+- **Audit retention, and a tenant-wide audit view.** Every authenticated request
+  now writes a durable row — `recommendation_audits` for the recommendation
+  route, `request_audits` for everything else — but nothing prunes either table,
+  and the only API read is persona-scoped
+  (`GET /users/{user_id}/request-audits`). A tenant-wide operator view belongs
+  to Phase 5's Grafana rather than to a second endpoint here, and the retention
+  question sits with the same one `feature_store.*` has.
 - **Cold-start cohorts.** [ADR 0011](adr/0011-cold-start-coverage.md) specifies a
   fixed-seed synthetic cohort at history sizes 0/1/3/10 scored per bucket. The
   methodology is pinned; the harness is not built. Cold-start *handling* exists

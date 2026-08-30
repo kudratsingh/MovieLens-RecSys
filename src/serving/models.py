@@ -9,7 +9,8 @@ from typing import Any
 import httpx
 
 from src.feature_contract import FEATURE_COLUMNS
-from src.serving.policy import FILTER_POLICY_NOT_RUN
+from src.serving.policy import FILTER_POLICY_NOT_RUN, REASON_CHAMPION_MISMATCH
+from src.serving.tenancy import TenantChampion
 
 # A sidecar that predates the split inputs still answers, but it cannot
 # attribute a candidate. Say so rather than inventing a source in the audit.
@@ -18,6 +19,17 @@ CANDIDATE_SOURCE_UNKNOWN = "unknown"
 
 class ModelServerContractError(ValueError):
     """The sidecar response is unsafe or incompatible with this API."""
+
+
+class ModelServerChampionMismatchError(Exception):
+    """The sidecar refused: its bundle is not this tenant's registered champion.
+
+    Deliberately not a ``ModelServerContractError``. That name means "the
+    sidecar answered something unsafe" and the coordinator audits it as an
+    outage; this is a healthy sidecar giving a correct answer to a question
+    about versions, and it needs its own reason in the audit or a half-finished
+    promotion looks exactly like a broken one.
+    """
 
 
 @dataclass(frozen=True)
@@ -74,24 +86,33 @@ class ModelServerClient:
         dismissed_movie_ids: list[int] | None = None,
         limit: int,
         candidate_limit: int = 100,
+        champion: TenantChampion | None = None,
     ) -> ModelRankingResult:
         excluded = list(excluded_movie_ids or ())
         dismissed = list(dismissed_movie_ids or ())
-        response = await self._client.post(
-            "/rank",
-            json={
-                "tenant_id": tenant_id,
-                "user_id": user_id,
-                "positive_history_movie_ids": positive_history_movie_ids,
-                "excluded_movie_ids": excluded,
-                # Only dismissals may narrow the seed set. ``excluded`` carries
-                # the user's own watched titles, so the sidecar must never take
-                # it as a reason to stop seeding retrieval.
-                "dismissed_movie_ids": dismissed,
-                "limit": limit,
-                "candidate_limit": candidate_limit,
-            },
-        )
+        payload: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "positive_history_movie_ids": positive_history_movie_ids,
+            "excluded_movie_ids": excluded,
+            # Only dismissals may narrow the seed set. ``excluded`` carries
+            # the user's own watched titles, so the sidecar must never take
+            # it as a reason to stop seeding retrieval.
+            "dismissed_movie_ids": dismissed,
+            "limit": limit,
+            "candidate_limit": candidate_limit,
+        }
+        if champion is not None:
+            # Omitted rather than sent as null when the tenant has no champion,
+            # so an older sidecar and a newer one read the same request the same
+            # way. In practice the coordinator does not call at all in that case.
+            payload["champion"] = {
+                "candidate_version": champion.candidate_version,
+                "ranker_version": champion.ranker_version,
+                "feature_version": champion.feature_version,
+            }
+        response = await self._client.post("/rank", json=payload)
+        _raise_for_champion_mismatch(response)
         response.raise_for_status()
         try:
             return _parse_result(
@@ -110,6 +131,28 @@ class ModelServerClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _raise_for_champion_mismatch(response: httpx.Response) -> None:
+    """Turn the sidecar's coded 409 into its own exception, before the generic one.
+
+    The sidecar has two 409s — a cold-start decline and this — so the status
+    alone is not the signal; the ``code`` in the body is. Anything that does not
+    parse as that exact code is left to ``raise_for_status`` rather than guessed
+    at, because a fallback reason invented from an unreadable body is worse than
+    the honest "the sidecar failed" the coordinator already has.
+    """
+    if response.status_code != 409:
+        return
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return
+    if isinstance(detail, dict) and detail.get("code") == REASON_CHAMPION_MISMATCH:
+        message = detail.get("message")
+        raise ModelServerChampionMismatchError(
+            str(message) if message else "the sidecar is not this tenant's champion"
+        )
 
 
 def _parse_result(

@@ -1,0 +1,101 @@
+# Staging. An overlay on docker-compose.prod.yml, never a copy of it.
+#
+#   docker compose -p movielens-staging \
+#     -f docker-compose.prod.yml -f docker-compose.staging.yml \
+#     --env-file .env.staging ...
+#
+# which is what the Makefile's `staging-*` targets run. This file on its own is
+# not a stack: every service below carries an environment override and nothing
+# else -- no image, no command, no healthcheck -- so `docker compose -f
+# docker-compose.staging.yml up` is a mistake Compose will let you make.
+#
+# What staging is for: rehearsing a release against the full release sequence
+# before `main` auto-deploys to the box. Same images, same release jobs, same
+# post-deploy matrix, different secrets and a different label.
+#
+# What staging deliberately is NOT is a second production, and the thinness of
+# this file is that claim rather than an omission from it. A staging stack that
+# diverges from production in topology, worker counts, memory ceilings, pooler
+# mode, TLS termination or startup order stops being a rehearsal of anything: the
+# defect it would have caught is the one it no longer shares. So the only two
+# differences here are the two that have to be different --
+#
+#   * the Compose project, so the containers, networks and volumes are a
+#     separate set and `staging-reset` can never touch movielens-prod's data;
+#   * ENVIRONMENT, on the eight services that carry it -- the seven that
+#     construct Settings() and the Feast server, which does not read it -- so a
+#     container, a log line and an operator can all answer "which deployment is
+#     this?" without inferring it from a hostname.
+#
+# Everything else that differs between the two -- hostnames, every credential,
+# the certificate issuer, the image tag -- differs through the env file, exactly
+# the way the box and the laptop rehearsal already differ from each other today
+# (infra/deploy/staging.env.example is the staging contract, and it carries the
+# same variables as production.env.example with staging defaults).
+#
+# Two consequences of sharing the production file that are worth knowing before
+# you hit them rather than after:
+#
+#   * The edge publishes 80 and 443, and those ports are not really adjustable
+#     -- the public origins carry no port, and Keycloak's issuer and Auth.js's
+#     callback URL are built from them. So on one machine, staging and the
+#     production rehearsal run one at a time. On a second box the question does
+#     not arise.
+#   * ENVIRONMENT=staging and ENVIRONMENT=production are the same thing to
+#     src/config.py: every dev-only guard there is written `!= "dev"`, so the
+#     bypass refusal, the model-server-token refusal, the pgBouncer-password
+#     refusal and the ADR 0014 rate limiter are all on in staging. That is the
+#     intended reading, not an oversight -- a staging build that relaxed a
+#     production guard would rehearse a system nobody is going to deploy.
+name: movielens-staging
+
+services:
+  # The eight services production gives an environment label: the seven that
+  # build Settings() at import or at boot, plus feature-server. Compose
+  # merges `environment` mappings key by key, so each of these replaces exactly
+  # one variable and inherits the rest of its service definition -- including
+  # the *-db, *-feast-store and *-keycloak-client anchors, which resolve inside
+  # docker-compose.prod.yml before either file is merged.
+  #
+  # tests/unit/test_prod_compose.py holds this list against the production file
+  # in both directions: a service here that production does not define, and a
+  # production service still saying `production` that this file forgot.
+
+  # --- long-lived ------------------------------------------------------------
+
+  api:
+    environment:
+      ENVIRONMENT: staging
+
+  model-server:
+    environment:
+      ENVIRONMENT: staging
+
+  # Feast's own server constructs no Settings, and carries the variable for the
+  # same reason production does: every container in the stack answering the same
+  # question the same way is worth more than the variable costs.
+  feature-server:
+    environment:
+      ENVIRONMENT: staging
+
+  # --- release and verification jobs ----------------------------------------
+
+  release:
+    environment:
+      ENVIRONMENT: staging
+
+  materialize:
+    environment:
+      ENVIRONMENT: staging
+
+  verify:
+    environment:
+      ENVIRONMENT: staging
+
+  canary:
+    environment:
+      ENVIRONMENT: staging
+
+  rollback-rehearsal:
+    environment:
+      ENVIRONMENT: staging

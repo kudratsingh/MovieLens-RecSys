@@ -31,8 +31,9 @@ V-8   The realm invariants still hold live: registration closed, brute-force
 V-9   The audit SLI: one JSON line summarising the last 24 h of
       ``recommendation_audits``, read as ``app_user`` through pgBouncer inside
       a tenant-scoped transaction. (Non-negotiable #8.)
-V-12  Artifact provenance: the sidecar reports the versions it loaded, and they
-      are the versions the API just served with.
+V-12  Artifact provenance: the sidecar reports the versions it loaded, they are
+      the versions the API just served with, and both are the champion the
+      tenant is registered on in ``public.tenants``.
 ===== ==========================================================================
 
 Not here, on purpose. **V-2** (no public sidecar) is settled before anything
@@ -460,17 +461,21 @@ def check_tenant_isolation(run: VerifyRun) -> CheckResult:
                 for failure in report["failures"]
             )
         )
+    sentinels = report.get("sentinel_persona_ids", [])
     return CheckResult(
         "V-6",
         "tenant isolation",
         True,
         f"{report['routes_probed']} persona routes refused for realm "
         f"{report['tenant_a']!r}, and no foreign tenant's rows in realm "
-        f"{report['tenant_b']!r}'s payloads",
+        f"{report['tenant_b']!r}'s payloads, with sentinel personas "
+        f"{sentinels} standing in realm {report['tenant_b']!r} — so the absences "
+        "are isolation rather than an empty tenant",
         {
             "tenant_a": report["tenant_a"],
             "tenant_b": report["tenant_b"],
             "routes_probed": report["routes_probed"],
+            "sentinel_persona_ids": sentinels,
         },
     )
 
@@ -829,11 +834,39 @@ def check_artifact_provenance(run: VerifyRun) -> CheckResult:
             f"the API served model_version {served!r} while the sidecar it is configured "
             f"against reports {expected!r}; the two are not the same deployment"
         )
+
+    # The third party to the same claim: what the tenant registry says this
+    # tenant is *registered* on (migration 0016). The two checks above compare
+    # the sidecar with what it served; this one compares both against what was
+    # promoted, which is the only one of the three that can catch a bundle that
+    # is serving happily under a version nobody registered.
+    actor = run.get_json("/whoami")
+    registered = {
+        key: actor.get(f"champion_{key}")
+        for key in ("candidate_version", "ranker_version", "feature_version")
+    }
+    if not all(registered.values()):
+        raise CheckFailedError(
+            f"tenant {actor.get('tenant_id')!r} has no champion registered in public.tenants, "
+            "so every request in it falls back to popularity however warm the sidecar is"
+        )
+    disagreements = [
+        f"{key}: registry {value!r} vs sidecar {payload.get(key)!r}"
+        for key, value in registered.items()
+        if value != payload.get(key)
+    ]
+    if disagreements:
+        raise CheckFailedError(
+            "the tenant's registered champion is not what the sidecar loaded — "
+            + "; ".join(disagreements)
+        )
+
     return CheckResult(
         "V-12",
         "artifact provenance",
         True,
-        f"sidecar warm on {expected}, feature version {payload['feature_version']}",
+        f"sidecar warm on {expected}, feature version {payload['feature_version']}, "
+        "matching the tenant's registered champion",
         {
             "tenant_id": payload.get("tenant_id"),
             "candidate_version": payload.get("candidate_version"),
@@ -843,6 +876,7 @@ def check_artifact_provenance(run: VerifyRun) -> CheckResult:
             "workers": payload.get("workers"),
             "native_threads": payload.get("native_threads"),
             "served_model_version": served,
+            "registered_champion": registered,
         },
     )
 

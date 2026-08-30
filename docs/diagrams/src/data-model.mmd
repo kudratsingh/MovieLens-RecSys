@@ -1,4 +1,4 @@
-%% Sources: src/data/schema.py and alembic/versions/0001..0014. Every column,
+%% Sources: src/data/schema.py and alembic/versions/0001..0017. Every column,
 %% type and key below was read from those files. RLS marks a table carrying
 %% ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
 %% tenant_id = current_setting('app.tenant_id', true) on USING and WITH CHECK.
@@ -10,7 +10,14 @@ erDiagram
   tenants {
     TEXT id PK
     TEXT display_name
+    TEXT champion_candidate_version "NULL = no learned serving"
+    TEXT champion_ranker_version "all three or none"
+    TEXT champion_feature_version "ck_tenants_champion_complete"
+    INTEGER rate_limit_requests_per_minute "NULL = global default"
+    INTEGER rate_limit_burst "NULL = global default"
+    BIGINT ab_bucketing_seed "derived from id"
     TIMESTAMPTZ created_at
+    TIMESTAMPTZ updated_at
     NOTE no_rls "shared registry"
   }
 
@@ -142,6 +149,22 @@ erDiagram
     TIMESTAMPTZ created_at
   }
 
+  request_audits {
+    UUID request_id PK
+    TEXT correlation_id "echoed"
+    TEXT tenant_id FK "RLS"
+    TEXT actor_user_id
+    BIGINT user_id "null if none"
+    TEXT endpoint "route template"
+    TEXT method
+    INTEGER http_status
+    TEXT outcome
+    DOUBLE latency_ms
+    TEXT model_version
+    TIMESTAMPTZ created_at
+    NOTE every_other_route
+  }
+
   user_features {
     TEXT tenant_id PK "admin only"
     INTEGER user_id PK
@@ -176,6 +199,7 @@ erDiagram
   tenants ||--o{ user_feedback_events : scopes
   tenants ||--o{ user_preferences : scopes
   tenants ||--o{ recommendation_audits : scopes
+  tenants ||--o{ request_audits : scopes
   movies ||--o| movie_catalog_metadata : describes
   movies ||--o{ user_movie_state : subject
   movies ||--o{ user_feedback_events : subject

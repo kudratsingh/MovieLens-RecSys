@@ -1,0 +1,10 @@
+# Build output, dependencies, and test artifacts.
+.next/
+node_modules/
+test-results/
+playwright-report/
+
+# Generated from docs/api/openapi.json by `npm run api:types`; its formatting
+# belongs to openapi-typescript, and reformatting it would fail the drift check
+# the very next time the contract is regenerated.
+lib/api.generated.ts

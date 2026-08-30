@@ -30,6 +30,17 @@ make demo-seed
 make demo-smoke
 ```
 
+`make up-dev` is the same thing under the name the multi-environment plan uses:
+this stack — `docker-compose.yml` for the stores and Keycloak, plus
+`docker-compose.demo.yml` for the application layer at `ENVIRONMENT=dev` over
+the reviewed 120-title fixture — **is** the dev environment. There is
+deliberately no `docker-compose.dev.yml`; the only job a third file would have
+is turning `DEV_AUTH_BYPASS` on, and this stack sets it to `"false"` precisely
+so the browser journeys and the load gate authenticate against real Keycloak
+tokens. `tests/unit/test_prod_compose.py` holds that decision in place, and
+[`deployment-runbook.md`](deployment-runbook.md)'s "Staging" section covers the
+other two environments.
+
 `TMDB_READ_ACCESS_TOKEN` in `.env` is optional. Leave it empty to use the
 generated poster artwork, or set a TMDB API Read Access Token before
 `make demo-up` to enable real posters.
@@ -190,6 +201,15 @@ request ID, exact ranked movie IDs and scores, eight online feature values per
 prediction, candidate/ranker/feature versions, and the separate candidate,
 feature, ranker, model, and total latency fields. Cold Start records
 `popularity`, `fallback_reason: cold-start`, and no fabricated ranker features.
+
+That is the *prediction* audit, and it covers one route. Every other
+authenticated request writes an operational row into `request_audits` on the
+same transaction — tenant, actor, persona, the matched route template, method,
+status, outcome, latency and the same correlation id — readable at
+`GET /users/{user_id}/request-audits`. It is the table to open when the
+question is "what did this persona's session actually call", and the
+correlation id is what joins a row there to the prediction audit for the same
+click. Neither table stores a request body or a query string.
 
 Run the authenticated smoke gate:
 
@@ -355,9 +375,11 @@ make demo-load-nightly
 ```
 
 That profile targets 600 requests/second for five minutes with 100 VUs. Treat
-it as a capacity probe: a laptop may fail to generate or serve that target. A
-scheduled staging run remains deferred until the environment-specific Compose
-stack is implemented.
+it as a capacity probe: a laptop may fail to generate or serve that target. The
+staging Compose environment now exists (`docker-compose.staging.yml`), but a
+*scheduled* staging run still does not: there is no staging host to schedule it
+against, and running it on the laptop that also hosts the stack measures the
+laptop. It stays deferred on a host rather than on the Compose file.
 
 The API container deliberately enables the guarded development impersonation
 mode for tenant `demo`; the browser therefore needs no manual token during this
@@ -454,6 +476,7 @@ somewhere else; the report names which. It is written to
 ## Routine operations
 
 ```bash
+make up-dev      # the dev environment's name for `make demo-up`
 make demo-logs   # tail the services that explain startup/runtime failures
 make demo-down   # stop every container, including the load profile, and preserve demo volumes
 make demo-up     # restart while preserving the database and the online store (also undoes a quiesce)

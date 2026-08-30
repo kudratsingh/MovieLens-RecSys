@@ -44,6 +44,7 @@ def test_authenticated_operations_declare_bearer_security_and_stable_ids() -> No
         "getCurrentActor",
         "recommendMovies",
         "listRecommendationAudits",
+        "listRequestAudits",
         "listRatingHistory",
         "listDemoPersonas",
         "getOnlineUserFeatures",
@@ -161,6 +162,83 @@ def test_feedback_mutations_accept_idempotency_and_revision_contracts() -> None:
     assert operation["responses"]["409"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ErrorResponse"
     }
+
+
+# Every operation that runs a movie-state mutation, including the two
+# compatibility shapes. The list is asserted against the routes themselves in
+# `test_serving_error_contract.py`; here it names what the contract must say.
+MUTATION_OPERATIONS = {
+    ("/users/{user_id}/movies/{movie_id}/watched", "put"),
+    ("/users/{user_id}/movies/{movie_id}/watched", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/rating", "put"),
+    ("/users/{user_id}/movies/{movie_id}/rating", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/watchlist", "put"),
+    ("/users/{user_id}/movies/{movie_id}/watchlist", "delete"),
+    ("/users/{user_id}/movies/{movie_id}/dismissal", "put"),
+    ("/users/{user_id}/movies/{movie_id}/dismissal", "delete"),
+    ("/users/{user_id}/ratings/{movie_id}", "put"),
+    ("/users/{user_id}/ratings", "delete"),
+}
+
+
+def test_an_error_body_can_name_itself_without_promising_to() -> None:
+    """``code`` is optional rather than required-and-nullable, deliberately.
+
+    Most 4xx on this surface carry a status that says everything there is to
+    say and send no code at all, so a required field would publish a `null` the
+    service never emits and make every client handle it.
+    """
+    error = _schema()["components"]["schemas"]["ErrorResponse"]
+
+    assert error["required"] == ["detail"]
+    assert error["properties"]["code"]["type"] == "string"
+    assert error["properties"]["detail"]["type"] == "string"
+
+
+@pytest.mark.parametrize(("path", "method"), sorted(MUTATION_OPERATIONS))
+def test_a_mutation_documents_both_bodies_its_422_can_carry(path: str, method: str) -> None:
+    """A refusal and a validation error share the status, so both are declared.
+
+    Declaring `422` at all suppresses the entry FastAPI generates for its own
+    validation error, and dropping that would leave a client parsing a shape
+    the contract never mentions (issue #74). The two are told apart by `code`.
+    """
+    operation = _schema()["paths"][path][method]
+    schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
+
+    assert schema["anyOf"] == [
+        {"$ref": "#/components/schemas/ErrorResponse"},
+        {"$ref": "#/components/schemas/HTTPValidationError"},
+    ]
+    assert "transition_refused" in operation["responses"]["422"]["description"]
+
+
+@pytest.mark.parametrize(("path", "method"), sorted(MUTATION_OPERATIONS))
+def test_a_mutation_409_names_the_two_races_it_still_covers(path: str, method: str) -> None:
+    operation = _schema()["paths"][path][method]
+    documented = operation["responses"]["409"]
+
+    assert documented["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
+    }
+    assert "revision_conflict" in documented["description"]
+    assert "idempotency_conflict" in documented["description"]
+    # The transition refusal moved off this status and must not be advertised
+    # here any more — that wording is what the old client parsed by sentence.
+    assert "transition" not in documented["description"]
+
+
+def test_both_bodies_a_mutation_422_references_are_defined() -> None:
+    """The `anyOf` above points at two components; a dangling `$ref` is a lie.
+
+    `HTTPValidationError` in particular is generated only because some other
+    operation still leaves FastAPI to document its own 422.
+    """
+    schemas = _schema()["components"]["schemas"]
+
+    assert "ErrorResponse" in schemas
+    assert "HTTPValidationError" in schemas
+    assert "ValidationError" in schemas
 
 
 def test_catalog_contract_is_bounded_and_exposes_opaque_page_state() -> None:
@@ -330,3 +408,40 @@ def test_rating_request_accepts_half_star_values(rating: float) -> None:
 def test_rating_request_rejects_out_of_contract_values(rating: float) -> None:
     with pytest.raises(ValidationError):
         RatingRequest(rating=rating)
+
+
+def test_whoami_publishes_the_tenants_champion_as_three_optional_coordinates() -> None:
+    """Additive and optional, so an existing client is unaffected.
+
+    Three fields rather than one string because the manifest versions
+    independently, and nullable because a tenant with no learned serving has no
+    champion at all — which is the one answer that explains a permanent
+    popularity fallback without reading a log. The quota columns and the
+    bucketing seed are deliberately not here: the rate limit is already on
+    every response as headers, and the seed is an input to a routing decision
+    rather than something a client should be able to predict.
+    """
+    actor = _schema()["components"]["schemas"]["CurrentActorResponse"]
+
+    for coordinate in ("candidate", "ranker", "feature"):
+        field = f"champion_{coordinate}_version"
+        assert field not in actor["required"]
+        assert actor["properties"][field]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+    assert not [name for name in actor["properties"] if "rate_limit" in name or "seed" in name]
+
+
+def test_the_committed_contract_matches_the_live_schema() -> None:
+    """``make api-contract-check`` in one assertion.
+
+    CI runs the generator's own check; this catches the same drift in the unit
+    suite, where it is the first thing to go red rather than the last.
+    """
+    from pathlib import Path
+
+    from scripts.generate_openapi import rendered_schema
+
+    # The generator sorts and re-serializes, so this compares the exact bytes
+    # `make api-contract` writes rather than two dicts that happen to agree.
+    app.openapi_schema = None
+    assert Path("docs/api/openapi.json").read_text() == rendered_schema()

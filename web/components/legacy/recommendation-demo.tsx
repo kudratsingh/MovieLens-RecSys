@@ -12,6 +12,24 @@ import type {
 } from "@/lib/api";
 
 /**
+ * The message an error body carries, or nothing it can honestly show.
+ *
+ * This dashboard reads `detail` directly rather than going through the
+ * product's resource boundary, and the compatibility rating endpoints answer
+ * `422` with two different shapes: a transition refusal, whose `detail` is a
+ * sentence, and FastAPI's request validation, whose `detail` is a list of
+ * error objects. Rendering the second one would put `[object Object]` in front
+ * of a viewer, so anything that is not a string falls back to this surface's
+ * own copy. A `code` beside it is ignored here on purpose — `/legacy` is the
+ * retained rollback, and the branch that acts on codes belongs to the product.
+ */
+function upstreamMessage(payload: { detail?: unknown }): string | null {
+  return typeof payload.detail === "string" && payload.detail !== ""
+    ? payload.detail
+    : null;
+}
+
+/**
  * The pre-redesign Phase 3 dashboard, now reachable only at `/legacy`.
  *
  * It is retained as the cutover rollback, not as a surface under development.
@@ -117,8 +135,8 @@ export function RecommendationDemo({ intro }: { intro?: React.ReactNode }) {
         },
         body: JSON.stringify({ movie_id: movieId, rating }),
       });
-      const payload = (await response.json()) as { detail?: string };
-      if (!response.ok) throw new Error(payload.detail ?? "Could not save rating");
+      const payload = (await response.json()) as { detail?: unknown };
+      if (!response.ok) throw new Error(upstreamMessage(payload) ?? "Could not save rating");
       await loadUser(userId);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not save rating");
@@ -136,8 +154,8 @@ export function RecommendationDemo({ intro }: { intro?: React.ReactNode }) {
         method: "DELETE",
         headers: { "x-csrf-token": await createCsrfToken() },
       });
-      const payload = (await response.json()) as { detail?: string };
-      if (!response.ok) throw new Error(payload.detail ?? "Could not reset ratings");
+      const payload = (await response.json()) as { detail?: unknown };
+      if (!response.ok) throw new Error(upstreamMessage(payload) ?? "Could not reset ratings");
       await loadUser(userId);
       return true;
     } catch (requestError) {

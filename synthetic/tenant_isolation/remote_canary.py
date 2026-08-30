@@ -8,8 +8,24 @@ application object, the database URL and the seeded canary rows, none of which a
 verification job outside the cluster has.
 
 This module is the deployment-side half. It speaks HTTP only, takes every
-identity as a flag, and asks the two questions that survive being asked from
-outside:
+identity as a flag, and asks the questions that survive being asked from
+outside. Two of them are controls and two are the isolation claim itself; the
+controls run first, because without them the claim is satisfied by a system
+with nothing in it:
+
+  0a. Both actors authenticate, and ``/whoami`` reports them in *different*
+      tenants. Pointing ``--realm-a`` at the realm the deployment serves would
+      otherwise turn direction A's wall of 403s into a wall of 200s and read as
+      a catastrophic leak; pointing it at a realm with no ``public.tenants``
+      row would refuse it at the boundary rather than at the guard. Both are
+      harness faults, and they are separated from findings about the system.
+
+  0b. Tenant B can see its own sentinel rows — the seeded persona ids, which
+      belong to tenant B by construction, so the control costs no write against
+      a production database. This is the positive control: every other finding
+      below is an *absence*, and an absence only means isolation if the rows
+      that failed to appear exist. A run that cannot establish it reports a
+      failure, not a pass (issue #75).
 
   A. An authenticated actor from tenant A, deliberately *without* the
      ``demo-impersonator`` role, is refused on every persona-scoped route when
@@ -85,10 +101,13 @@ import httpx
 REQUIRE_STACK_ENV = "REQUIRE_TENANT_ISOLATION_STACK"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-# Seeded persona ids. Tenant B (`demo`) owns 900000101-900000104; the harness
+# Seeded persona ids. Tenant B (`demo`) owns 900000101-900000104. Direction A
 # only ever names the Action Fan, because the guard denies before it looks at
-# which persona was named.
-TENANT_B_PERSONA_ID = 900000101
+# which persona was named; the full set is the sentinel the positive control
+# reads back, since these ids belong to tenant B by construction and no write is
+# needed to make them so.
+TENANT_B_PERSONA_IDS = (900000101, 900000102, 900000103, 900000104)
+TENANT_B_PERSONA_ID = TENANT_B_PERSONA_IDS[0]
 # A user id that belongs to tenant A rather than tenant B, used for direction B.
 TENANT_A_USER_ID = 987654321
 # No movie carries this id in any tenant's catalog, and no persona carries this
@@ -181,6 +200,7 @@ PERSONA_ROUTES: tuple[PersonaRoute, ...] = (
     PersonaRoute("GET", "/users/{user_id}/recommendations", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/history", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/audits", query="?limit=1"),
+    PersonaRoute("GET", "/users/{user_id}/request-audits", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/features"),
     PersonaRoute("GET", "/users/{user_id}/catalog", query="?limit=1"),
     PersonaRoute("GET", "/users/{user_id}/library", query="?tab=rated&limit=1"),
@@ -209,7 +229,15 @@ PERSONA_ROUTES: tuple[PersonaRoute, ...] = (
 
 @dataclass
 class Finding:
-    route: PersonaRoute
+    """One probe and what it established.
+
+    ``method``/``path`` rather than a ``PersonaRoute``: the sentinel checks
+    below probe ``/whoami``, which is not persona-guarded and must never appear
+    in ``PERSONA_ROUTES`` — that table is asserted in CI against the set of
+    routes the application actually guards.
+    """
+
+    method: str
     path: str
     passed: bool
     status: int
@@ -218,7 +246,7 @@ class Finding:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "route": f"{self.route.method} {self.path}",
+            "route": f"{self.method} {self.path}",
             "passed": self.passed,
             "status": self.status,
             "detail": self.detail,
@@ -238,9 +266,9 @@ def check_guard_denies_foreign_actor(
     for route in PERSONA_ROUTES:
         user_id = UNROUTABLE_USER_ID if route.unscoped_mutation else persona_user_id
         path = route.path(user_id=user_id, movie_id=UNROUTABLE_MOVIE_ID)
-        response = _request(client, api_url, route, path, token)
+        response = _request(client, api_url, route.method, path, token, body=route.body())
         if response.status_code == 403:
-            findings.append(Finding(route, path, True, 403, "refused by the persona guard"))
+            findings.append(Finding(route.method, path, True, 403, "refused by the persona guard"))
             continue
         if response.status_code == 404:
             detail = (
@@ -254,7 +282,7 @@ def check_guard_denies_foreign_actor(
             detail = "expected 403 from the persona guard"
         findings.append(
             Finding(
-                route,
+                route.method,
                 path,
                 False,
                 response.status_code,
@@ -273,14 +301,23 @@ def check_no_foreign_tenant_in_payload(
     tenant_id: str,
     user_id: int = TENANT_A_USER_ID,
 ) -> list[Finding]:
-    """Tenant B's actor never receives a row stamped with another tenant."""
+    """Tenant B's actor never receives a row stamped with another tenant.
+
+    On its own this direction is vacuous when tenant A holds nothing under the
+    probed user id, which is the ordinary case on a deployment: it answers
+    "nothing crossed" for a boundary nothing tried to cross. That is what
+    ``check_sentinel_is_visible_to_its_owner`` and
+    ``check_actors_resolve_to_different_tenants`` exist to fix — they establish,
+    without writing a row, that there are two tenants here and that one of them
+    has data the other must not see.
+    """
     findings: list[Finding] = []
     for route in PERSONA_ROUTES:
         path = route.path(user_id=user_id, movie_id=UNROUTABLE_MOVIE_ID)
-        response = _request(client, api_url, route, path, token)
+        response = _request(client, api_url, route.method, path, token, body=route.body())
         status = response.status_code
         if 400 <= status < 500:
-            findings.append(Finding(route, path, True, status, "denied"))
+            findings.append(Finding(route.method, path, True, status, "denied"))
             continue
         if not 200 <= status < 300:
             # A redirect or a server error is not evidence of isolation, and a
@@ -288,7 +325,7 @@ def check_no_foreign_tenant_in_payload(
             # to remove.
             findings.append(
                 Finding(
-                    route,
+                    route.method,
                     path,
                     False,
                     status,
@@ -301,7 +338,7 @@ def check_no_foreign_tenant_in_payload(
         if foreign:
             findings.append(
                 Finding(
-                    route,
+                    route.method,
                     path,
                     False,
                     status,
@@ -311,29 +348,208 @@ def check_no_foreign_tenant_in_payload(
             )
             continue
         findings.append(
-            Finding(route, path, True, status, f"answered only for tenant {tenant_id!r}")
+            Finding(route.method, path, True, status, f"answered only for tenant {tenant_id!r}")
         )
     return findings
+
+
+def check_sentinel_is_visible_to_its_owner(
+    client: httpx.Client,
+    *,
+    api_url: str,
+    token: str,
+    tenant_id: str,
+    persona_ids: Sequence[int] = TENANT_B_PERSONA_IDS,
+) -> list[Finding]:
+    """The positive control: tenant B's rows exist, and tenant B can see them.
+
+    Every other finding in this module is an absence — a 403, or a payload with
+    no foreign ``tenant_id`` in it. An absence proves isolation only if the
+    thing that failed to appear exists in the first place, and against a
+    deployment this harness may not write a row to make it so. What it can do
+    is read one that is already there: the seeded persona ids are tenant B's by
+    construction, they are the same ids direction A is refused on, and V-3
+    independently requires them to be present.
+
+    A run that cannot establish this reports a failure rather than a pass. The
+    alternative is a green check standing over "tenant A saw none of the rows
+    that turned out not to exist", which is the shape of a canary that has
+    quietly stopped canarying.
+    """
+    path = "/personas"
+    response = _request(client, api_url, "GET", path, token)
+    status = response.status_code
+    if not 200 <= status < 300:
+        return [
+            Finding(
+                "GET",
+                path,
+                False,
+                status,
+                "tenant B could not read its own personas, so nothing establishes that "
+                "the rows the other checks require to be hidden exist at all",
+                {"body": _body_excerpt(response)},
+            )
+        ]
+    payload = _parse_json(response)
+    foreign = _foreign_tenants(payload, tenant_id)
+    visible = _persona_ids(payload)
+    missing = sorted(set(persona_ids) - visible)
+    if foreign:
+        return [
+            Finding(
+                "GET",
+                path,
+                False,
+                status,
+                f"tenant B's own persona list carries another tenant's rows: {sorted(foreign)}",
+                {"body": _body_excerpt(response)},
+            )
+        ]
+    if missing:
+        return [
+            Finding(
+                "GET",
+                path,
+                False,
+                status,
+                f"tenant {tenant_id!r} does not hold the sentinel personas {missing}, so the "
+                "isolation findings above are consistent with there being nothing to leak. "
+                "Seed the deployment (V-3 covers the same rows) or pass --sentinel-persona-id",
+                {"visible": sorted(visible)},
+            )
+        ]
+    return [
+        Finding(
+            "GET",
+            path,
+            True,
+            status,
+            f"tenant {tenant_id!r} holds sentinel personas {sorted(persona_ids)}, so the "
+            "rows the other direction must not surface do exist",
+            {"visible": sorted(visible)},
+        )
+    ]
+
+
+def check_actors_resolve_to_different_tenants(
+    client: httpx.Client,
+    *,
+    api_url: str,
+    token_a: str,
+    token_b: str,
+    actor_a: Actor,
+    actor_b: Actor,
+    persona_ids: Sequence[int] = TENANT_B_PERSONA_IDS,
+) -> list[Finding]:
+    """Two identities, two tenants — asserted rather than taken from the flags.
+
+    ``/whoami`` is the one route tenant A's actor is entitled to, and the run's
+    whole premise rests on what it returns. Point ``--realm-a`` at the realm
+    the deployment serves and direction A's wall of 403s becomes a wall of
+    200s; point it at a realm with no ``public.tenants`` row and the actor is
+    refused at the boundary rather than by the guard. Both are harness faults
+    that read as findings about the system, so they are separated out here.
+
+    The sentinel rides along: tenant A's own payload must carry none of tenant
+    B's persona ids, which is the same claim the endpoint canaries make in CI
+    against a sentinel string they are free to write.
+    """
+    findings: list[Finding] = []
+    seen: dict[str, str] = {}
+    for label, actor, token in (("A", actor_a, token_a), ("B", actor_b, token_b)):
+        response = _request(client, api_url, "GET", "/whoami", token)
+        status = response.status_code
+        if not 200 <= status < 300:
+            findings.append(
+                Finding(
+                    "GET",
+                    "/whoami",
+                    False,
+                    status,
+                    f"actor {label} ({actor.username!r} in realm {actor.realm!r}) is not an "
+                    "authenticated caller of this deployment, so nothing it is refused "
+                    "afterwards is evidence about the persona guard",
+                    {"body": _body_excerpt(response)},
+                )
+            )
+            continue
+        payload = _parse_json(response)
+        resolved = payload.get("tenant_id") if isinstance(payload, dict) else None
+        if resolved != actor.tenant_id:
+            findings.append(
+                Finding(
+                    "GET",
+                    "/whoami",
+                    False,
+                    status,
+                    f"actor {label} authenticated into tenant {resolved!r}, not the "
+                    f"{actor.tenant_id!r} its realm names",
+                    {"body": _body_excerpt(response)},
+                )
+            )
+            continue
+        seen[label] = str(resolved)
+        leaked = sorted(pid for pid in persona_ids if str(pid) in (response.text or ""))
+        if label == "A" and leaked:
+            findings.append(
+                Finding(
+                    "GET",
+                    "/whoami",
+                    False,
+                    status,
+                    f"tenant A's own payload names tenant B's personas {leaked}",
+                    {"body": _body_excerpt(response)},
+                )
+            )
+            continue
+        findings.append(
+            Finding("GET", "/whoami", True, status, f"actor {label} resolved to {resolved!r}")
+        )
+    if len(seen) == 2 and seen["A"] == seen["B"]:
+        findings.append(
+            Finding(
+                "GET",
+                "/whoami",
+                False,
+                200,
+                f"both actors resolved to tenant {seen['A']!r}, so this run compared a "
+                "tenant with itself and proved nothing about the boundary",
+            )
+        )
+    return findings
+
+
+def _persona_ids(payload: Any) -> set[int]:
+    """Every ``user_id`` in a ``/personas`` payload."""
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return set()
+    return {
+        int(item["user_id"])
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("user_id"), int)
+    }
 
 
 def _request(
     client: httpx.Client,
     api_url: str,
-    route: PersonaRoute,
+    method: str,
     path: str,
     token: str,
+    body: Mapping[str, Any] | None = None,
 ) -> httpx.Response:
     try:
         return client.request(
-            route.method,
+            method,
             f"{api_url}{path}",
             headers={"Authorization": f"Bearer {token}"},
-            json=route.body(),
+            json=dict(body) if body is not None else None,
         )
     except httpx.HTTPError as exc:
         raise UnreachableTargetError(
-            f"{route.method} {path} could not be reached at {api_url}: "
-            f"{type(exc).__name__}: {exc}"
+            f"{method} {path} could not be reached at {api_url}: {type(exc).__name__}: {exc}"
         ) from exc
 
 
@@ -459,6 +675,7 @@ def run(
     actor_b: Actor,
     persona_user_id: int = TENANT_B_PERSONA_ID,
     foreign_user_id: int = TENANT_A_USER_ID,
+    sentinel_persona_ids: Sequence[int] = TENANT_B_PERSONA_IDS,
     service_client_id: str = DEFAULT_SERVICE_CLIENT_ID,
 ) -> dict[str, Any]:
     api_url = api_url.rstrip("/")
@@ -467,6 +684,24 @@ def run(
     token_b = mint_token(client, keycloak_url=keycloak_url, actor=actor_b)
     assert_denied_by_design(token_a, actor=actor_a, service_client_id=service_client_id)
 
+    # The two controls run first: they say whether the questions below are
+    # being asked of two tenants, one of which has rows worth hiding.
+    actors = check_actors_resolve_to_different_tenants(
+        client,
+        api_url=api_url,
+        token_a=token_a,
+        token_b=token_b,
+        actor_a=actor_a,
+        actor_b=actor_b,
+        persona_ids=sentinel_persona_ids,
+    )
+    sentinel = check_sentinel_is_visible_to_its_owner(
+        client,
+        api_url=api_url,
+        token=token_b,
+        tenant_id=actor_b.tenant_id,
+        persona_ids=sentinel_persona_ids,
+    )
     guard = check_guard_denies_foreign_actor(
         client,
         api_url=api_url,
@@ -480,13 +715,16 @@ def run(
         tenant_id=actor_b.tenant_id,
         user_id=foreign_user_id,
     )
-    failures = [finding for finding in (*guard, *scope) if not finding.passed]
+    failures = [finding for finding in (*actors, *sentinel, *guard, *scope) if not finding.passed]
     return {
         "target": api_url,
         "tenant_a": actor_a.tenant_id,
         "tenant_b": actor_b.tenant_id,
         "routes_probed": len(PERSONA_ROUTES),
+        "sentinel_persona_ids": sorted(sentinel_persona_ids),
         "checks": {
+            "actors_resolve_to_different_tenants": [finding.as_dict() for finding in actors],
+            "sentinel_is_visible_to_its_owner": [finding.as_dict() for finding in sentinel],
             "guard_denies_foreign_actor": [finding.as_dict() for finding in guard],
             "no_foreign_tenant_in_payload": [finding.as_dict() for finding in scope],
         },
@@ -511,6 +749,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--realm-b-password", default="demo")
     parser.add_argument("--persona-user-id", type=int, default=TENANT_B_PERSONA_ID)
     parser.add_argument("--foreign-user-id", type=int, default=TENANT_A_USER_ID)
+    parser.add_argument(
+        "--sentinel-persona-id",
+        type=int,
+        action="append",
+        default=None,
+        dest="sentinel_persona_ids",
+        help=(
+            "a persona id tenant B is known to hold, repeatable. The positive control "
+            "reads these back as tenant B and fails if they are absent, because every "
+            "other finding here is an absence and an absence over an empty tenant is "
+            "not isolation. Defaults to the seeded walkthrough personas."
+        ),
+    )
     parser.add_argument(
         "--service-client-id",
         default=DEFAULT_SERVICE_CLIENT_ID,
@@ -552,6 +803,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 actor_b=actor_b,
                 persona_user_id=int(args.persona_user_id),
                 foreign_user_id=int(args.foreign_user_id),
+                sentinel_persona_ids=(
+                    tuple(int(value) for value in args.sentinel_persona_ids)
+                    if args.sentinel_persona_ids
+                    else TENANT_B_PERSONA_IDS
+                ),
                 service_client_id=str(args.service_client_id),
             )
         except CanaryError as exc:
@@ -587,11 +843,17 @@ def _render(report: dict[str, Any]) -> None:
     print(
         f"\n[tenant-isolation] {report['routes_probed']} persona routes probed as "
         f"tenant {report['tenant_a']!r} against tenant {report['tenant_b']!r} at "
-        f"{report['target']}",
+        f"{report['target']}, with sentinel personas "
+        f"{report.get('sentinel_persona_ids', [])} standing in tenant "
+        f"{report['tenant_b']!r}",
         file=sys.stderr,
     )
     if not failures:
-        print("[tenant-isolation] PASS — every route denied, no foreign rows", file=sys.stderr)
+        print(
+            "[tenant-isolation] PASS — two distinct tenants, tenant B's sentinel rows "
+            "present, every route denied, no foreign rows",
+            file=sys.stderr,
+        )
         return
     for failure in failures:
         print(
