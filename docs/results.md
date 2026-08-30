@@ -1411,11 +1411,14 @@ once):
 | Item-item, K = 500 | — | `c10eabaf4afd40579e4b2fe1fa6a45a0` | 0.138753 | 0.435847 | 0.218623 |
 
 CF/ALS's cold column is **identical to the popularity baseline's, to every digit
-MLflow stores**, and its seed-to-seed range there is exactly 0.00%. That is not a
-coincidence and it is a useful control: at threshold 10 all 710 cold holdout
-users take CF's embedded popularity fallback, so that row is the deterministic
-fallback and nothing else — which says the harness itself contributes no noise,
-and any spread elsewhere is the model's.
+MLflow stores** — all four runs report `cold_ndcg_at_k = 0.4834402636907392` and
+`cold_recall_at_k = 0.06334481830156065` — and its seed-to-seed range there is
+exactly 0.00%. That is not a coincidence and it is a useful control: at threshold
+10 all 710 cold holdout users take CF's embedded popularity fallback, so that row
+is the deterministic fallback and nothing else. It says the harness itself
+contributes no noise, and any spread elsewhere is the model's. (At threshold 5 it
+was *nearly* identical rather than identical, because one holdout user sat in the
+1-to-4-interaction band and was served by ALS; at 10 that user is cold too.)
 
 | Model | Slice | Range across three seeds |
 |---|---|---:|
