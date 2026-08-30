@@ -132,3 +132,52 @@ The subtler cost is defaults. `slowapi` builds on `limits`, whose storage abstra
 - Anyone asks "was a real client throttled last night?" and the honest answer is that nothing recorded it. With `--no-access-log` and no audit row for a refusal, throttling is currently observable only to the client and to the harness that provoked it; the first time that question is asked in earnest, a counter belongs in Phase 5's `/metrics` work.
 - Two portfolio visitors on the shared `walkthrough` account throttle each other. At today's traffic the arithmetic says that cannot happen; if it does, the number of people using one subject has outgrown the account model rather than the limits, and `/me` ownership moves from a product-track item to a prerequisite.
 - `bucket_count` sits at the 4 096 ceiling on a service with four personas and a handful of accounts. That would mean the key is wider than the identity — a `sub` that changes per session, say — and the bucket is no longer measuring a caller.
+
+## Note — 2026-08-29: the per-tenant quota column exists, and NULL is how it reads
+
+The alternative above — "a per-tenant quota column on `public.tenants`, read per
+request" — was rejected for sequencing, not for design: "`src/serving/tenancy/router.py`
+today resolves only id, display name and Redis prefix, so a quota read would be
+a new per-request query with no cache in front of it", and the expensive outcome
+would have been designing tenant-config invalidation twice.
+
+Migration `0016_tenant_champion_columns` is the work that removes that argument.
+It adds the champion-model coordinates, the A/B bucketing seed *and*
+`rate_limit_requests_per_minute` / `rate_limit_burst` in one row, and
+`TenantRouter` grew the 30-second TTL cache all three consumers share — so the
+quota read is a dict lookup on the hot path and one small query per tenant per
+window, and the invalidation question was answered once with three consumers in
+view rather than once for a limiter.
+
+What the limiter does with the columns, exactly:
+
+- **A tenant with both columns NULL charges the global limiter**, unchanged and
+  unallocated. A deployment that sets no quota behaves precisely as it did
+  before this migration, which is the state every tenant is in today.
+- **A tenant with either column set gets its own bucket set**, at
+  `COALESCE(column, global setting)` — each column falls back on its own, so
+  lowering one tenant's sustained rate does not require restating a burst that
+  was already right. `ck_tenants_rate_limit_positive` refuses a zero or negative
+  quota in the database, because a bucket that refuses every request is an
+  outage written as configuration.
+- **A changed quota takes effect without a restart**, within the router's TTL.
+  The numbers are part of the limiter's cache key, so a change builds a new
+  bucket set and drops the old one — which hands the affected subjects a full
+  bucket once. That is the direction to err in: a config change should not
+  retroactively refuse a caller who was inside the old limit.
+- **The `429` body names the tenant's policy**, not the global one, so a
+  refusal stays diagnosable from a client's log alone.
+
+**Everything else in this ADR is unchanged, including the part that matters
+most.** The buckets are still per worker whoever configured the numbers, so a
+four-worker service still admits `workers × limit` for one subject, and the
+Redis-backed shared bucket is still the named follow-up rather than a
+hypothetical upgrade path. Per-tenant limits make the number *expressible* per
+tenant; they do not make it exact. The trigger for the shared bucket is
+unchanged too: the first replica.
+
+One entry in "How we'd know we're wrong" above can now be read as satisfied
+rather than pending — "the first time the answer to 'what is this tenant's
+quota?' is not 'the same as everyone's', the `Settings`-sourced limits are wrong
+and the `public.tenants` column is due". The column is there; the `Settings`
+values are what a row with no override means.

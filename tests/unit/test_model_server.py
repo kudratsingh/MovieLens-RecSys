@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
 import pytest
 from fastapi import HTTPException, Request
 
+from src.config import DEV_MODEL_SERVER_AUTH_TOKEN
 from src.features import FEATURE_COLUMNS
 from src.models.artifacts import ArtifactRef, CandidateIndex, ServingArtifactBundle, ServingManifest
 from src.serving.model_server import (
+    ChampionCoordinates,
+    ChampionMismatchError,
     ModelRankingService,
     RankRequest,
     TenantArtifactMismatchError,
     rank,
 )
+from src.serving.policy import REASON_CHAMPION_MISMATCH
 
 
 @dataclass
@@ -231,3 +236,147 @@ def test_rank_request_defaults_dismissals_to_empty_for_an_older_caller() -> None
     )
 
     assert payload.dismissed_movie_ids == []
+
+
+def _demo_service(store: _FeatureStore) -> ModelRankingService:
+    """A service loaded with the bundle the demo tenant is registered on."""
+    return ModelRankingService(
+        ServingArtifactBundle(
+            manifest=ServingManifest(
+                tenant_id="demo",
+                candidate=ArtifactRef("item-item-cosine", "candidate-v1", "c.json", "hash"),
+                ranker=ArtifactRef("lightgbm-lambdarank", "ranker-v1", "r.txt", "hash"),
+                feature_version="features-v1",
+                trained_at="2026-08-15T00:00:00+00:00",
+            ),
+            candidates=CandidateIndex.build({1: {1, 2, 3}, 2: {1, 2}}),
+            ranker=_Ranker(),  # type: ignore[arg-type]
+        ),
+        store,
+    )
+
+
+def test_a_matching_champion_is_served_normally() -> None:
+    result = _demo_service(_FeatureStore()).rank(
+        tenant_id="demo",
+        user_id=100,
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[],
+        dismissed_movie_ids=[],
+        limit=2,
+        candidate_limit=2,
+        champion=ChampionCoordinates(
+            candidate_version="candidate-v1",
+            ranker_version="ranker-v1",
+            feature_version="features-v1",
+        ),
+    )
+
+    assert result.candidate_version == "candidate-v1"
+
+
+@pytest.mark.parametrize("coordinate", ["candidate_version", "ranker_version", "feature_version"])
+def test_a_champion_that_differs_in_any_coordinate_is_refused(coordinate: str) -> None:
+    """Each coordinate is checked on its own.
+
+    A bundle that swaps the ranker while keeping the candidate index is a real
+    release, and a check that compared only one of the three would serve it
+    under the previous version's name.
+    """
+    store = _FeatureStore()
+    service = _demo_service(store)
+    versions = {
+        "candidate_version": "candidate-v1",
+        "ranker_version": "ranker-v1",
+        "feature_version": "features-v1",
+    }
+    versions[coordinate] = "something-else"
+
+    with pytest.raises(ChampionMismatchError) as error:
+        service.rank(
+            tenant_id="demo",
+            user_id=100,
+            positive_history_movie_ids=[1],
+            excluded_movie_ids=[],
+            dismissed_movie_ids=[],
+            limit=2,
+            candidate_limit=2,
+            champion=ChampionCoordinates(**versions),
+        )
+
+    # Refused before any work: a mismatched deployment must not pay a Redis
+    # round trip per request to arrive at the same answer.
+    assert store.entity_rows == []
+    assert "something-else" in str(error.value)
+    assert "candidate-v1/ranker-v1/features-v1" in str(error.value)
+
+
+def test_a_caller_that_states_no_champion_is_still_served() -> None:
+    """A rolling deploy has one build calling another for a few seconds.
+
+    The tenant boundary still holds; only the version claim is unstated, and
+    refusing every request for the length of a deploy would be worse than the
+    skew it guards against.
+    """
+    result = _demo_service(_FeatureStore()).rank(
+        tenant_id="demo",
+        user_id=100,
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[],
+        dismissed_movie_ids=[],
+        limit=2,
+        candidate_limit=2,
+    )
+
+    assert result.ranker_version == "ranker-v1"
+
+
+@pytest.mark.asyncio
+async def test_rank_endpoint_answers_a_champion_mismatch_with_a_coded_409() -> None:
+    """The status alone cannot carry the meaning — the sidecar has two 409s.
+
+    The cold-start decline is the other one, so the coordinator classifies on
+    the code in the body, and this is where that code is put there.
+    """
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(ranking_service=_demo_service(_FeatureStore())))
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await rank(
+            RankRequest(
+                tenant_id="demo",
+                user_id=100,
+                positive_history_movie_ids=[1],
+                excluded_movie_ids=[],
+                dismissed_movie_ids=[],
+                limit=1,
+                candidate_limit=1,
+                champion=ChampionCoordinates(
+                    candidate_version="candidate-v9",
+                    ranker_version="ranker-v1",
+                    feature_version="features-v1",
+                ),
+            ),
+            cast(Request, request),
+            authorization=f"Bearer {DEV_MODEL_SERVER_AUTH_TOKEN}",
+        )
+
+    assert error.value.status_code == 409
+    detail = error.value.detail
+    assert isinstance(detail, dict)
+    assert detail["code"] == REASON_CHAMPION_MISMATCH
+    assert "candidate-v9" in detail["message"]
+
+
+def test_rank_request_defaults_the_champion_to_absent_for_an_older_caller() -> None:
+    payload = RankRequest(
+        tenant_id="demo",
+        user_id=100,
+        positive_history_movie_ids=[1],
+        excluded_movie_ids=[],
+        limit=1,
+        candidate_limit=1,
+    )
+
+    assert payload.champion is None

@@ -109,8 +109,27 @@ published. A `/metrics` endpoint is deliberately **not** added.
 
 | Path | Method | Purpose |
 |---|---|---|
-| `/whoami` | GET | Echo of the resolved identity: tenant, subject, realm and role set. The cheapest proof that issuer-derived tenancy works |
+| `/whoami` | GET | Echo of the resolved identity: tenant, subject, realm and role set, plus the tenant's champion model. The cheapest proof that issuer-derived tenancy works |
 | `/personas` | GET | The stable synthetic identities in the caller's tenant — the four demo personas |
+
+`/whoami` also reports the champion the caller's tenant is registered on
+(`public.tenants`, migration 0016) as three nullable fields:
+
+| Field | Meaning |
+|---|---|
+| `champion_candidate_version` | The retrieval artifact this tenant's requests may be served by, e.g. `demo-itemitem-v1` |
+| `champion_ranker_version` | The ranker artifact, e.g. `demo-lgbm-v1` |
+| `champion_feature_version` | The feature snapshot the two were trained against, e.g. `feast-phase3-v1` |
+
+Three fields rather than one string because a `ServingManifest`'s coordinates
+version independently — a release can swap the ranker under the same candidate
+index. All three are `null` together and mean the tenant has no learned serving
+at all, which is the one answer that explains a permanent popularity fallback
+without reading a log; it is the state `default` and `synth_cold` are in. The
+quota columns and the A/B bucketing seed on the same row are deliberately not
+reported: the rate limit is already on every response as headers, and the seed
+is an input to a routing decision rather than something a client should be able
+to predict.
 
 ## Recommendations and evidence
 

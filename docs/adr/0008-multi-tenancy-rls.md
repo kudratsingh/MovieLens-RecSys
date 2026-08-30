@@ -103,3 +103,42 @@ through Redis.
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/tenancy-and-auth.dark.svg">
   <img alt="Tenant isolation as implemented: Keycloak realms issuing tokens, the issuer-to-tenant derivation, the impersonation gate, the four Postgres identities, pgBouncer's transaction pool, and the seven forced-RLS tables against the deliberately shared ones." src="../diagrams/tenancy-and-auth.svg" width="100%">
 </picture>
+
+## Registry note — 2026-08-29: the tenant row now carries serving coordinates
+
+Migration `0016_tenant_champion_columns` gives `public.tenants` the columns this
+ADR's decision section always implied and CLAUDE.md's Phase 3 scope names
+explicitly — "one row per tenant, columns include API quotas, current champion
+model versions per stage, A/B bucketing seed":
+
+| Column | Meaning | NULL means |
+|---|---|---|
+| `champion_candidate_version` / `champion_ranker_version` / `champion_feature_version` | The exact `ServingManifest` (`src/models/artifacts.py`) this tenant's requests may be answered by | This tenant has no learned serving; the coordinator answers from popularity and audits `no-champion` |
+| `rate_limit_requests_per_minute` / `rate_limit_burst` | This tenant's own ADR 0014 token bucket | Use the global setting — each column falls back on its own |
+| `ab_bucketing_seed` | The stable input Phase 6's routing layer hashes with a user id | Not nullable; derived from the tenant id by an IMMUTABLE function so two databases that ran these migrations bucket identically |
+
+**Nothing about RLS changes.** The registry is the one cross-tenant table by
+design (see the decision above), so it stays outside RLS and stays `SELECT`-only
+to `app_user` and `admin_user`: a champion moves by migration or by a promotion
+job, never by a request handler. The champion columns are not tenant *data* — a
+tenant reading its own row learns which model serves it, which is what
+`/whoami` now reports, and learns nothing about anyone else's.
+
+Two shapes here are worth naming because they are enforcement rather than
+convention. `ck_tenants_champion_complete` makes a half-named champion
+impossible — all three coordinates or none — because a row that named a ranker
+and no candidate index would be a deployment nobody could reason about, and this
+ADR's whole premise is that the database is the enforcer of last resort. And the
+bucketing seed is applied by a `BEFORE INSERT` trigger rather than a column
+default, because a default expression may not reference the row it is defaulting
+into; NOT NULL is checked after row triggers run, so the column is NOT NULL with
+no default and still never violated.
+
+The read this adds is on the hot path — the recommendation handler and the rate
+limiter both want the row on every request — so `TenantRouter` grew a 30-second
+TTL cache, which is what ADR 0014 was waiting for. The staleness window is not a
+security boundary: RLS and the auth middleware are, and neither reads these
+columns. What it does mean is that a promotion takes effect within a TTL rather
+than instantly, and that a bundle which no longer matches its tenant's champion
+fails closed to popularity with an audited reason for that window rather than
+serving under a version nobody registered.

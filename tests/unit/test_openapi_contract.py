@@ -407,3 +407,40 @@ def test_rating_request_accepts_half_star_values(rating: float) -> None:
 def test_rating_request_rejects_out_of_contract_values(rating: float) -> None:
     with pytest.raises(ValidationError):
         RatingRequest(rating=rating)
+
+
+def test_whoami_publishes_the_tenants_champion_as_three_optional_coordinates() -> None:
+    """Additive and optional, so an existing client is unaffected.
+
+    Three fields rather than one string because the manifest versions
+    independently, and nullable because a tenant with no learned serving has no
+    champion at all — which is the one answer that explains a permanent
+    popularity fallback without reading a log. The quota columns and the
+    bucketing seed are deliberately not here: the rate limit is already on
+    every response as headers, and the seed is an input to a routing decision
+    rather than something a client should be able to predict.
+    """
+    actor = _schema()["components"]["schemas"]["CurrentActorResponse"]
+
+    for coordinate in ("candidate", "ranker", "feature"):
+        field = f"champion_{coordinate}_version"
+        assert field not in actor["required"]
+        assert actor["properties"][field]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+    assert not [name for name in actor["properties"] if "rate_limit" in name or "seed" in name]
+
+
+def test_the_committed_contract_matches_the_live_schema() -> None:
+    """``make api-contract-check`` in one assertion.
+
+    CI runs the generator's own check; this catches the same drift in the unit
+    suite, where it is the first thing to go red rather than the last.
+    """
+    from pathlib import Path
+
+    from scripts.generate_openapi import rendered_schema
+
+    # The generator sorts and re-serializes, so this compares the exact bytes
+    # `make api-contract` writes rather than two dicts that happen to agree.
+    app.openapi_schema = None
+    assert Path("docs/api/openapi.json").read_text() == rendered_schema()

@@ -24,6 +24,8 @@ __all__ = [
     "EXCLUSION_FILTER_POLICY",
     "FILTER_POLICY_NOT_RUN",
     "POLICY_POPULARITY",
+    "REASON_CHAMPION_MISMATCH",
+    "REASON_NO_CHAMPION",
     "SCORE_SCALE_INTERACTION_COUNT",
     "SCORE_SCALE_NOT_RUN",
     "SCORE_SCALE_RANK",
@@ -50,6 +52,17 @@ CANDIDATE_SOURCE_POPULARITY_FALLBACK = "popularity-fallback"
 SCORE_SCALE_RANK = "lightgbm-rank-score"
 SCORE_SCALE_INTERACTION_COUNT = "tenant-interaction-count"
 SCORE_SCALE_NOT_RUN = "not-run"
+
+# The two reason prefixes about the tenant's *registered* champion (migration
+# 0016). The rest of the vocabulary lives beside the gates that emit it in
+# ``src.serving.orchestration``; these two are here because they are the one
+# pair that crosses the sidecar boundary. ``champion-mismatch`` is the machine
+# readable code the sidecar puts in its refusal body so the coordinator can tell
+# "your bundle is not this tenant's champion" from every other way a rank call
+# can fail, without reading prose, and ``no-champion`` is the same question
+# answered before the call is made at all.
+REASON_NO_CHAMPION = "no-champion"
+REASON_CHAMPION_MISMATCH = "champion-mismatch"
 
 
 def id_set_digest(movie_ids: Iterable[int]) -> str:

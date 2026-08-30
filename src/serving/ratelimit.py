@@ -23,11 +23,16 @@ ADR 0014 rather than hidden:
     upgrade path is a Redis-backed shared bucket — the Redis instance already
     exists for the online feature store — and it is deferred because a shared
     bucket puts a network round trip on the p99 path this project has an SLO on.
-  * **The limits are global, not per tenant.** ``public.tenants`` is where a
-    per-tenant quota column belongs, alongside the champion-model-version and
-    A/B-seed columns Phase 6 adds; adding a quota column here would mean
-    reading it on every request before the tenant-config work that makes such
-    a read cached and cheap.
+  * **The limits are global unless the tenant overrides them.** Migration 0016
+    put ``rate_limit_requests_per_minute`` and ``rate_limit_burst`` on
+    ``public.tenants`` and this middleware reads them, so the deferred half of
+    this limitation is done: a tenant with either column set gets its own
+    bucket set at those numbers, a NULL column reads as the corresponding
+    global setting, and a deployment that sets neither behaves exactly as it
+    did before. What has not changed is the first limitation — the buckets are
+    per worker whoever configured them — and the read is the cached
+    tenant-config lookup (``TenantRouter``), so the hot path is still a dict
+    lookup and some arithmetic.
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from starlette.datastructures import MutableHeaders
@@ -43,6 +48,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.auth.middleware import UNAUTHENTICATED_PATHS
+from src.serving.tenancy import TenantRateLimit
 
 LIMIT_HEADER = "X-RateLimit-Limit"
 REMAINING_HEADER = "X-RateLimit-Remaining"
@@ -55,6 +61,16 @@ RETRY_AFTER_HEADER = "Retry-After"
 DEFAULT_MAX_BUCKETS = 4_096
 
 RateLimitKey = tuple[str, str]
+
+# How the middleware asks for a tenant's quota. Async because the answer comes
+# from the tenant registry, and the caller — ``src.serving.app`` — is the only
+# thing that knows how to read it without blocking the event loop. The second
+# argument is the request's own transaction when there is one, so a registry
+# read never asks the pool for a connection while this request holds one. It is
+# typed as an opaque object because this module deliberately imports nothing
+# that can perform I/O — the limiter forwards the handle without knowing what a
+# database connection is.
+TenantLimitResolver = Callable[[str, object | None], Awaitable[TenantRateLimit]]
 
 
 @dataclass(frozen=True)
@@ -190,10 +206,18 @@ class RateLimitMiddleware:
         app: ASGIApp,
         *,
         limiter: TokenBucketLimiter,
+        tenant_limits: TenantLimitResolver | None = None,
         exempt_paths: frozenset[str] = UNAUTHENTICATED_PATHS,
     ) -> None:
         self.app = app
         self._limiter = limiter
+        # How a tenant's own quota is looked up (migration 0016). Absent — as in
+        # every test that only cares about the bucket arithmetic — means every
+        # tenant charges the global limiter, which is what this middleware did
+        # before the columns existed.
+        self._tenant_limits = tenant_limits
+        self._tenant_limiters: dict[str, tuple[int, int, TokenBucketLimiter]] = {}
+        self._tenant_lock = threading.Lock()
         # The same frozenset the auth middleware and the OpenAPI generator use.
         # `/healthz` and `/readyz` carry no identity to key a bucket on, and a
         # throttled liveness probe would take a healthy service out of rotation.
@@ -204,7 +228,8 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        principal = scope.get("state", {}).get("principal")
+        state = scope.get("state", {})
+        principal = state.get("principal")
         if principal is None:
             # Nothing verified this caller, so there is no key to charge. In
             # practice unreachable — the auth middleware answers 401 before
@@ -214,7 +239,11 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        decision = self._limiter.acquire((principal.tenant_id, principal.user_id))
+        # The request transaction the auth middleware opened, handed to the
+        # resolver so a registry read reuses this request's connection instead
+        # of asking the pool for a second one while this one is still held.
+        limiter = await self._limiter_for(principal.tenant_id, state.get("db"))
+        decision = limiter.acquire((principal.tenant_id, principal.user_id))
         headers = {
             LIMIT_HEADER: str(decision.limit),
             REMAINING_HEADER: str(decision.remaining),
@@ -226,7 +255,7 @@ class RateLimitMiddleware:
                 {
                     "detail": (
                         f"rate limit exceeded for this tenant and subject "
-                        f"({self._limiter.describe()}); retry in "
+                        f"({limiter.describe()}); retry in "
                         f"{decision.retry_after_seconds}s"
                     )
                 },
@@ -244,3 +273,38 @@ class RateLimitMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_rate_limit_headers)
+
+    async def _limiter_for(self, tenant_id: str, connection: object | None) -> TokenBucketLimiter:
+        """The bucket set that charges this tenant: its own, or the global one.
+
+        A tenant with no overrides shares the global limiter, so the common
+        deployment allocates nothing per tenant. One that overrides gets a
+        limiter of its own rather than a scaled key, because capacity and
+        refill are properties of the bucket, and the map is bounded by the
+        number of registered tenants — a tenant id here has already been
+        matched against ``public.tenants`` by the auth middleware.
+
+        Re-resolving on every request is what makes a quota change take effect
+        without a restart; the numbers are part of the cache key, so a changed
+        quota builds a new limiter and the old buckets are dropped. That hands
+        the affected subjects a full bucket once, which is the direction to err
+        in: a config change should not retroactively refuse a caller who was
+        inside the old limit.
+        """
+        if self._tenant_limits is None:
+            return self._limiter
+        overrides = await self._tenant_limits(tenant_id, connection)
+        if overrides.is_default:
+            return self._limiter
+        requests_per_minute = overrides.requests_per_minute or self._limiter.requests_per_minute
+        burst = overrides.burst or self._limiter.burst
+        with self._tenant_lock:
+            cached = self._tenant_limiters.get(tenant_id)
+            if cached is not None and cached[0] == requests_per_minute and cached[1] == burst:
+                return cached[2]
+            limiter = TokenBucketLimiter(
+                requests_per_minute=requests_per_minute,
+                burst=burst,
+            )
+            self._tenant_limiters[tenant_id] = (requests_per_minute, burst, limiter)
+            return limiter

@@ -1,4 +1,4 @@
-%% Sources: src/data/schema.py and alembic/versions/0001..0014. Every column,
+%% Sources: src/data/schema.py and alembic/versions/0001..0016. Every column,
 %% type and key below was read from those files. RLS marks a table carrying
 %% ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
 %% tenant_id = current_setting('app.tenant_id', true) on USING and WITH CHECK.
@@ -10,7 +10,14 @@ erDiagram
   tenants {
     TEXT id PK
     TEXT display_name
+    TEXT champion_candidate_version "NULL = no learned serving"
+    TEXT champion_ranker_version "all three or none"
+    TEXT champion_feature_version "ck_tenants_champion_complete"
+    INTEGER rate_limit_requests_per_minute "NULL = global default"
+    INTEGER rate_limit_burst "NULL = global default"
+    BIGINT ab_bucketing_seed "derived from id"
     TIMESTAMPTZ created_at
+    TIMESTAMPTZ updated_at
     NOTE no_rls "shared registry"
   }
 

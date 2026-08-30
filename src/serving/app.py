@@ -49,6 +49,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
@@ -58,6 +59,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import Connection, Engine, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from src.auth import AuthMiddleware, JwksCache
@@ -110,7 +112,13 @@ from src.serving.recommendations import (
 )
 from src.serving.request_id import RequestIdMiddleware
 from src.serving.startup_checks import run_startup_checks
-from src.serving.tenancy import TenantRouter, UnknownTenantError
+from src.serving.tenancy import (
+    NO_TENANT_OVERRIDES,
+    TenantConfig,
+    TenantRateLimit,
+    TenantRouter,
+    UnknownTenantError,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -500,6 +508,16 @@ class CurrentActorResponse(BaseModel):
     roles: list[str]
     tenant_display_name: str
     redis_prefix: str
+    # The champion this tenant's requests may be served by, from the registry
+    # row (migration 0016). All three are null together and mean the tenant has
+    # no learned serving at all, which is why they are reported: it is the one
+    # answer that explains a permanent popularity fallback without reading a
+    # log. Quotas and the bucketing seed stay out — the rate limit is already
+    # on every response as headers, and the seed is an input to a routing
+    # decision rather than something a client should be able to predict.
+    champion_candidate_version: str | None = None
+    champion_ranker_version: str | None = None
+    champion_feature_version: str | None = None
 
 
 class OnlineUserFeaturesResponse(BaseModel):
@@ -786,6 +804,58 @@ def _openapi_schema() -> dict[str, Any]:
 
 app.openapi = _openapi_schema  # type: ignore[method-assign]
 
+
+async def _resolve_tenant(tenant_id: str, connection: Connection | None = None) -> TenantConfig:
+    """The calling tenant's registry row, without stalling the event loop.
+
+    Since migration 0016 the row carries the champion coordinates and the quota
+    overrides, so it is read on the recommendation path and — through
+    ``_tenant_rate_limit`` — on every authenticated request, rather than by
+    ``/whoami`` alone. The cached half is a dict read and runs here; only the
+    miss, once per tenant per TTL, goes to a thread, because a blocking psycopg2
+    round trip on the event loop would delay every other request this worker is
+    holding.
+
+    The request's own transaction is passed down when there is one, so a miss
+    reuses the connection this request already holds rather than asking the pool
+    for a second one — see ``TenantRouter.resolve``.
+
+    ``UnknownTenantError`` is a 403 for the same reason it always was: a
+    verified realm with no registry row is an auth-side misconfiguration. In
+    practice the auth middleware has already refused it.
+    """
+    cached = _tenant_router.cached(tenant_id)
+    if cached is not None:
+        return cached
+    try:
+        return await run_in_threadpool(
+            partial(_tenant_router.resolve, tenant_id, connection=connection)
+        )
+    except UnknownTenantError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _tenant_rate_limit(tenant_id: str, connection: object | None) -> TenantRateLimit:
+    """This tenant's quota overrides for the ADR 0014 limiter, if it has any.
+
+    Fails open to the global settings rather than propagating: the limiter is a
+    protection, and a registry read that failed is not a reason to refuse a
+    request auth has already accepted. It is the same cached read every other
+    caller performs, so on the hot path it is a dict lookup.
+
+    ``connection`` arrives untyped because the limiter forwards it without
+    knowing what it is — that module deliberately imports nothing that can do
+    I/O. Anything that is not a live connection falls back to the engine rather
+    than being handed to SQLAlchemy on trust.
+    """
+    request_connection = connection if isinstance(connection, Connection) else None
+    try:
+        return (await _resolve_tenant(tenant_id, request_connection)).rate_limit
+    except (HTTPException, SQLAlchemyError):
+        logger.warning("tenant_rate_limit_unresolved tenant_id=%s fell_back_to=global", tenant_id)
+        return NO_TENANT_OVERRIDES
+
+
 # Middleware is added at module import, before the first request. Starlette
 # evaluates the last-added middleware first: RequestIdMiddleware resolves the
 # correlation id and owns the response header, AuthMiddleware opens the RLS
@@ -801,7 +871,14 @@ app.add_middleware(RecommendationAuditMiddleware, audits=_audits)
 # amplifies the burst it exists to shed. The cost it cannot avoid from here is
 # the request transaction AuthMiddleware has already opened — see ADR 0014.
 if _settings.rate_limit_active:
-    app.add_middleware(RateLimitMiddleware, limiter=_rate_limiter)
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=_rate_limiter,
+        # Where a tenant's own quota comes from. NULL columns read as the
+        # global settings, so a deployment that sets none behaves exactly as it
+        # did before migration 0016.
+        tenant_limits=_tenant_rate_limit,
+    )
 app.add_middleware(
     AuthMiddleware,
     jwks=_jwks,
@@ -890,10 +967,8 @@ async def readyz(response: Response) -> ReadinessResponse:
 async def whoami(request: Request) -> CurrentActorResponse:
     """Authenticated echo of the resolved identity."""
     principal = request.state.principal
-    try:
-        tenant = _tenant_router.resolve(principal.tenant_id)
-    except UnknownTenantError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    tenant = await _resolve_tenant(principal.tenant_id, request.state.db)
+    champion = tenant.champion
     return CurrentActorResponse(
         tenant_id=principal.tenant_id,
         user_id=principal.user_id,
@@ -902,6 +977,9 @@ async def whoami(request: Request) -> CurrentActorResponse:
         roles=sorted(principal.roles),
         tenant_display_name=tenant.display_name,
         redis_prefix=tenant.redis_prefix,
+        champion_candidate_version=champion.candidate_version if champion else None,
+        champion_ranker_version=champion.ranker_version if champion else None,
+        champion_feature_version=champion.feature_version if champion else None,
     )
 
 
@@ -919,11 +997,16 @@ async def recommendations(
     _require_demo_persona_access(request)
     principal = request.state.principal
     connection: Connection = request.state.db
+    tenant = await _resolve_tenant(principal.tenant_id, connection)
     decision = await _recommendation_coordinator.recommend(
         connection,
         tenant_id=principal.tenant_id,
         user_id=user_id,
         limit=limit,
+        # Which model this tenant is registered on. None means it has none, and
+        # the coordinator answers from popularity with a reason that says so
+        # rather than calling a sidecar that would refuse.
+        champion=tenant.champion,
     )
     request.state.recommendation_audit_context = RecommendationAuditContext(
         policy=decision.policy,

@@ -5,11 +5,31 @@ import pytest
 from sqlalchemy import Connection, bindparam, text
 
 from src.features import FEATURE_COLUMNS
-from src.serving.models import ModelRankingResult, RankedModelItem
+from src.serving.models import (
+    ModelRankingResult,
+    ModelServerChampionMismatchError,
+    RankedModelItem,
+)
 from src.serving.orchestration import RecommendationCoordinator
-from src.serving.policy import EXCLUSION_FILTER_POLICY, id_set_digest
+from src.serving.policy import (
+    EXCLUSION_FILTER_POLICY,
+    REASON_CHAMPION_MISMATCH,
+    REASON_NO_CHAMPION,
+    id_set_digest,
+)
 from src.serving.recommendations import RecommendationService, RecommendedMovie
+from src.serving.tenancy import TenantChampion
 from tests.unit.test_serving_recommendations import _connection
+
+# What the demo tenant's registry row names (migration 0016 seeds the real one
+# from the committed bundle). Every call below passes it, because ``recommend``
+# takes the champion as a required argument — a caller that has not decided
+# which model a tenant is on has not decided whether it may serve.
+DEMO_CHAMPION = TenantChampion(
+    candidate_version="candidate-v1",
+    ranker_version="ranker-v1",
+    feature_version="features-v1",
+)
 
 
 class _LearnedModels:
@@ -159,7 +179,7 @@ async def test_warm_user_routes_through_learned_two_stage_policy() -> None:
         _make_existing_user_warm(connection)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels()
-        ).recommend(connection, tenant_id="demo", user_id=10, limit=5)
+        ).recommend(connection, tenant_id="demo", user_id=10, limit=5, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -177,7 +197,7 @@ async def test_cold_user_routes_to_popularity_without_calling_models() -> None:
     try:
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=999, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=999, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -196,7 +216,7 @@ async def test_short_history_routes_to_cold_start_fallback(history_count: int) -
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -214,7 +234,7 @@ async def test_history_at_or_above_threshold_routes_to_learned_policy(
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -234,7 +254,7 @@ async def test_duplicate_rating_rows_do_not_satisfy_warm_threshold() -> None:
             )
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -249,7 +269,7 @@ async def test_model_failure_routes_warm_user_to_popularity() -> None:
         _make_existing_user_warm(connection)
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=10, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=10, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -281,7 +301,7 @@ async def test_positive_history_and_exclusions_reach_the_sidecar_separately() ->
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         _dismiss(connection, user_id=77, movie_id=9, timestamp=4000)
         await RecommendationCoordinator(RecommendationService(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -311,7 +331,7 @@ async def test_watched_titles_hide_without_being_dropped_as_seeds() -> None:
     try:
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -332,7 +352,7 @@ async def test_dismissals_reach_the_sidecar_on_their_own_field() -> None:
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         _dismiss(connection, user_id=77, movie_id=9, timestamp=4900)
         await RecommendationCoordinator(RecommendationService(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -350,7 +370,7 @@ async def test_a_retrieval_no_seed_reached_is_not_reported_as_learned() -> None:
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11, seed_count=0)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -373,7 +393,7 @@ async def test_reported_seed_count_is_the_number_of_seeds_retrieval_used() -> No
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11, seed_count=2)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -395,7 +415,7 @@ async def test_dismissed_movie_is_never_a_positive_or_a_seed() -> None:
         # positive signal and must not seed retrieval.
         _dismiss(connection, user_id=77, movie_id=2, timestamp=4100)
         decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -414,7 +434,7 @@ async def test_dismissal_does_not_write_a_training_negative() -> None:
         before = connection.execute(text("SELECT COUNT(*) FROM ratings")).scalar_one()
         _dismiss(connection, user_id=77, movie_id=9, timestamp=4200)
         await RecommendationCoordinator(RecommendationService(), _LearnedModels(11)).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
         after = connection.execute(text("SELECT COUNT(*) FROM ratings")).scalar_one()
         negative_rows = connection.execute(
@@ -435,7 +455,7 @@ async def test_dismissed_movie_is_excluded_from_the_popularity_fallback() -> Non
         _dismiss(connection, user_id=999, movie_id=1, timestamp=4300)
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=999, limit=5)
+        ).recommend(connection, tenant_id="demo", user_id=999, limit=5, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -453,7 +473,7 @@ async def test_dismissed_movie_is_dropped_during_metadata_hydration() -> None:
         # The sidecar stub still offers movie 11; hydration must not return it.
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels([11, 10])
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -469,7 +489,7 @@ async def test_final_validation_drops_an_excluded_id_that_survived_hydration() -
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         _dismiss(connection, user_id=77, movie_id=11, timestamp=4500)
         decision = await RecommendationCoordinator(_LeakyHydration(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -490,7 +510,7 @@ async def test_learned_output_holding_only_excluded_ids_fails_closed() -> None:
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         _dismiss(connection, user_id=77, movie_id=11, timestamp=4600)
         decision = await RecommendationCoordinator(_LeakyHydration(), models).recommend(
-            connection, tenant_id="demo", user_id=77, limit=2
+            connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION
         )
     finally:
         connection.close()
@@ -546,7 +566,7 @@ async def test_policy_reports_fallback_below_the_threshold(history_count: int) -
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
             RecommendationService(), _UnavailableModels()
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -569,7 +589,7 @@ async def test_policy_reports_learned_serving_at_or_above_the_threshold(
         _add_catalog_and_history(connection, user_id=77, history_count=history_count)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -592,7 +612,7 @@ async def test_audit_payload_carries_input_state_exclusions_and_freshness() -> N
         _dismiss(connection, user_id=77, movie_id=9, timestamp=4700)
         decision = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -615,14 +635,14 @@ async def test_input_digests_are_order_independent_and_revision_moves_with_state
         _add_catalog_and_history(connection, user_id=77, history_count=6)
         first = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
         second = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
         _dismiss(connection, user_id=77, movie_id=9, timestamp=4800)
         third = await RecommendationCoordinator(
             RecommendationService(), _LearnedModels(movie_id=11)
-        ).recommend(connection, tenant_id="demo", user_id=77, limit=2)
+        ).recommend(connection, tenant_id="demo", user_id=77, limit=2, champion=DEMO_CHAMPION)
     finally:
         connection.close()
 
@@ -631,3 +651,101 @@ async def test_input_digests_are_order_independent_and_revision_moves_with_state
     assert first.input_state_revision == second.input_state_revision
     assert third.exclusion_hash != first.exclusion_hash
     assert third.input_state_revision > first.input_state_revision
+
+
+class _MismatchedChampionModels:
+    """Sidecar stub standing in for one that loaded a bundle nobody registered."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def rank(self, **kwargs) -> ModelRankingResult:  # type: ignore[no-untyped-def]
+        self.calls.append(dict(kwargs))
+        raise ModelServerChampionMismatchError(
+            "tenant 'demo' is registered on candidate-v2/ranker-v1/features-v1 but this "
+            "sidecar loaded candidate-v1/ranker-v1/features-v1"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_tenant_with_no_champion_never_reaches_the_sidecar() -> None:
+    """A registry row with no champion is a decision, not an outage.
+
+    The user is warm and the sidecar would have answered; the response is still
+    popularity, and it says why in terms an operator can act on rather than
+    reporting the sidecar as unavailable.
+    """
+    connection = _connection()
+    models = _LearnedModels()
+    try:
+        _make_existing_user_warm(connection)
+        decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
+            connection, tenant_id="default", user_id=10, limit=2, champion=None
+        )
+    finally:
+        connection.close()
+
+    assert models.calls == []
+    assert decision.policy == "popularity"
+    assert decision.serving_policy.learned is False
+    assert decision.fallback_reason == REASON_NO_CHAMPION
+    assert decision.serving_policy.reason.startswith(f"{REASON_NO_CHAMPION}:")
+
+
+@pytest.mark.asyncio
+async def test_no_champion_is_reported_before_the_cold_start_threshold() -> None:
+    """Precedence matters to the viewer.
+
+    A cold user in a tenant with no champion would be told to collect five
+    signals to unlock something the tenant cannot serve at any history size.
+    The tenant's state is the more specific answer, so it wins.
+    """
+    connection = _connection()
+    try:
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _LearnedModels()
+        ).recommend(connection, tenant_id="default", user_id=999, limit=2, champion=None)
+    finally:
+        connection.close()
+
+    assert decision.fallback_reason == REASON_NO_CHAMPION
+
+
+@pytest.mark.asyncio
+async def test_the_champion_travels_to_the_sidecar_on_every_learned_call() -> None:
+    connection = _connection()
+    models = _LearnedModels()
+    try:
+        _make_existing_user_warm(connection)
+        await RecommendationCoordinator(RecommendationService(), models).recommend(
+            connection, tenant_id="demo", user_id=10, limit=2, champion=DEMO_CHAMPION
+        )
+    finally:
+        connection.close()
+
+    assert models.calls[0]["champion"] is DEMO_CHAMPION
+
+
+@pytest.mark.asyncio
+async def test_a_refused_champion_is_audited_as_a_mismatch_not_an_outage() -> None:
+    """The distinction the reason vocabulary exists for.
+
+    A sidecar that refuses because it loaded a different bundle is healthy; a
+    sidecar that times out is not. Both degrade to popularity, and an operator
+    reading ``fallback_reason`` has to be able to tell a half-finished
+    promotion from an outage without opening a log.
+    """
+    connection = _connection()
+    models = _MismatchedChampionModels()
+    try:
+        _make_existing_user_warm(connection)
+        decision = await RecommendationCoordinator(RecommendationService(), models).recommend(
+            connection, tenant_id="demo", user_id=10, limit=2, champion=DEMO_CHAMPION
+        )
+    finally:
+        connection.close()
+
+    assert len(models.calls) == 1
+    assert decision.policy == "popularity"
+    assert decision.fallback_reason == REASON_CHAMPION_MISMATCH
+    assert "candidate-v2" in decision.serving_policy.reason
