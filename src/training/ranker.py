@@ -15,12 +15,17 @@ Design notes (called out per ADR 0005):
      holdout. A follow-up run swaps in TwoTowerModel once its number
      clears item-item on the ADR 0004 gate.
 
-  2. **Training positive sampling.** Positives are sampled from the
-     trailing window of train (the RANKER_POSITIVE_WINDOW_DAYS most
-     recent days). This keeps the ranker's training-time feature
-     distribution close to what holdout looks like — user histories,
-     item popularities, and genre-affinity fractions reflect the
-     "recent past" rather than a mix of the whole training era.
+  2. **Training positive sampling.** Positives come from the trailing
+     window of train (the RANKER_POSITIVE_WINDOW_DAYS most recent days).
+     This keeps the ranker's training-time feature distribution close to
+     what holdout looks like — user histories, item popularities, and
+     genre-affinity fractions reflect the "recent past" rather than a mix
+     of the whole training era. ``RANKER_POSITIVE_LIMIT``
+     (``src/training/sampling.py``) caps how many of them a run uses; the
+     default sits above the window's own row count, so by default the
+     sample *is* the window and the seed no longer chooses it. That was
+     not true until 2026-08-30, and the 28.68% seed-to-seed spread in the
+     ranker's warm NDCG@10 was the consequence.
 
   3. **Candidate-leakage compromise.** For simplicity this first-pass
      script fits the candidate model on the full train (including the
@@ -57,7 +62,7 @@ from src.features import FeatureIndex
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
-from src.training import seeds
+from src.training import sampling, seeds
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -67,8 +72,13 @@ PHASE_2_RANKER_EXPERIMENT = "phase-2-ranker"
 # Sampling knobs for ranker training. Held as module-level constants so a
 # sweep is a code edit, not a magic-number hunt.
 RANKER_POSITIVE_WINDOW_DAYS = 30  # sample positives from the last N days of train
-RANKER_POSITIVE_LIMIT = 20_000  # cap training set size for fast iteration
 NEGATIVES_PER_POSITIVE = 20  # each LambdaRank group is 1 positive + N negatives
+# Default only. RANKER_POSITIVE_LIMIT overrides it — see src/training/sampling.py.
+# 200,000 against a 30-day window holding 154,003 interactions, so the default
+# does not bind and the run trains on every positive the window has. That is the
+# point of it: below the window's size the seed chooses *which* positives the
+# ranker sees, which is where the 28.68% warm-NDCG spread came from.
+RANKER_POSITIVE_LIMIT = sampling.DEFAULT_POSITIVE_LIMIT
 # Default only. TRAIN_SEED overrides it — see src/training/seeds.py. The seed
 # reaches three places: which positives are sampled, which negatives fill each
 # LambdaRank group, and LightGBM's own tie-breaking, so it is the whole
@@ -81,6 +91,19 @@ _SECONDS_PER_DAY = 24 * 3600
 def _load_movies(engine: Engine) -> pd.DataFrame:
     """Load the movies table for genre features."""
     return pd.read_sql('SELECT "movieId", genres FROM movies', engine)
+
+
+def _trailing_window(train: pd.DataFrame, n_days: int) -> pd.DataFrame:
+    """The slice of train positives are eligible to be drawn from.
+
+    Its row count is the ceiling on ``RANKER_POSITIVE_LIMIT``: a limit at or
+    above it draws the whole window, so the sampling stops being random and
+    two seeds build the identical training set. The trainer logs both numbers
+    on every run rather than assuming which side of the ceiling it is on.
+    """
+    max_ts = int(train["timestamp"].max())
+    cutoff = max_ts - n_days * _SECONDS_PER_DAY
+    return train[train["timestamp"] >= cutoff]
 
 
 def _sample_training_positives(
@@ -97,9 +120,7 @@ def _sample_training_positives(
     and item-popularity-30d at query time ``t`` in the last N days look
     much more like holdout-time features than a mid-train query would.
     """
-    max_ts = int(train["timestamp"].max())
-    cutoff = max_ts - n_days * _SECONDS_PER_DAY
-    window = train[train["timestamp"] >= cutoff]
+    window = _trailing_window(train, n_days)
     if len(window) > limit:
         idx = rng.choice(len(window), size=limit, replace=False)
         window = window.iloc[idx].reset_index(drop=True)
@@ -218,6 +239,8 @@ def main() -> None:
     seed = seeds.resolve_seed(RANKER_SEED)
     logger.info("Seed: %d", seed)
     rng = np.random.default_rng(seed)
+    positive_limit = sampling.resolve_positive_limit(RANKER_POSITIVE_LIMIT)
+    logger.info("Positive-sample limit: %s", f"{positive_limit:,}")
 
     logger.info("Loading ratings + movies from Postgres ...")
     engine = create_engine(settings.database_url)
@@ -241,11 +264,11 @@ def main() -> None:
     # cohort exists to be routed and scored, not to shift an existing metric.
     train_frame, cohort = synth_cold.prepare(split, logger=logger)
 
-    # Default is the index-membership routing the candidate model has always
-    # used; SYNTH_COLD_ROUTING=threshold is the opt-in experiment behind
-    # docs/cold-start-routing-decision.md. It reaches the ranker through its
-    # candidate stage, so a threshold run changes both the candidates the
-    # ranker is trained on and the ones it is scored over.
+    # Since the owner's 2026-08-30 decision the default is ADR 0001's threshold
+    # — the rule the deployed path applies — and SYNTH_COLD_ROUTING=index is the
+    # explicit opt-out (docs/cold-start-routing-decision.md). It reaches the
+    # ranker through its candidate stage, so the policy changes both the
+    # candidates the ranker is trained on and the ones it is scored over.
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
 
@@ -263,10 +286,22 @@ def main() -> None:
     feature_build_seconds = time.perf_counter() - t0
     logger.info("Feature index in %.1fs", feature_build_seconds)
 
+    # The window's own size is the ceiling on the limit, and which side of it a
+    # run lands on decides whether the seed picks the training set at all. It is
+    # measured and logged rather than assumed, because it moves with the dataset.
+    window_rows = len(_trailing_window(split.train, RANKER_POSITIVE_WINDOW_DAYS))
+    limit_binds = window_rows > positive_limit
     logger.info(
-        "Sampling training positives from last %d days of train (limit %d) ...",
+        "Sampling training positives from last %d days of train "
+        "(window holds %s rows, limit %s — %s) ...",
         RANKER_POSITIVE_WINDOW_DAYS,
-        RANKER_POSITIVE_LIMIT,
+        f"{window_rows:,}",
+        f"{positive_limit:,}",
+        (
+            "the limit binds, so the seed chooses the sample"
+            if limit_binds
+            else "the limit does not bind, so the sample is the whole window"
+        ),
     )
     # Positives are sampled from the real train slice, never from the cohort.
     # The cohort's rows all sit inside the trailing window, so they would
@@ -275,7 +310,7 @@ def main() -> None:
     positives = _sample_training_positives(
         split.train,
         n_days=RANKER_POSITIVE_WINDOW_DAYS,
-        limit=RANKER_POSITIVE_LIMIT,
+        limit=positive_limit,
         rng=rng,
     )
     logger.info("Sampled %d positives", len(positives))
@@ -378,7 +413,11 @@ def main() -> None:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_RANKER_EXPERIMENT)
     run_name = seeds.run_name_for(
-        routing.run_name_for("lgbm-lambdarank-itemitem-candidates", routing_policy), seed
+        sampling.run_name_for(
+            routing.run_name_for("lgbm-lambdarank-itemitem-candidates", routing_policy),
+            positive_limit,
+        ),
+        seed,
     )
     with mlflow.start_run(run_name=run_name):
         mlflow.set_tags(
@@ -390,6 +429,12 @@ def main() -> None:
                 "stage": "ranker",
                 "cold_start_routing_policy": routing_policy,
                 "train_seed": str(seed),
+                # Whether the seed had any say in *which* positives this run
+                # trained on. False means the sample is the whole trailing
+                # window and the only stochastic surface left is the negatives
+                # and LightGBM itself — which is what the seed spread of a run
+                # tagged this way is measuring.
+                "ranker_positive_limit_binding": str(limit_binds).lower(),
                 # Called out in ADR 0005 Consequences — candidate model
                 # was fit on all of train including the positive window.
                 "candidate_leakage_compromise": "true",
@@ -407,7 +452,10 @@ def main() -> None:
                 "n_holdout_rows": len(split.holdout),
                 "n_holdout_users": len(holdout_user_ids),
                 "ranker_positive_window_days": RANKER_POSITIVE_WINDOW_DAYS,
-                "ranker_positive_limit": RANKER_POSITIVE_LIMIT,
+                "ranker_positive_window_rows": window_rows,
+                "ranker_positive_limit": positive_limit,
+                "ranker_positive_limit_binding": limit_binds,
+                "n_positives_sampled": len(positives),
                 "n_ranker_positives_used": len(group_sizes),
                 "negatives_per_positive": NEGATIVES_PER_POSITIVE,
                 "n_ranker_training_rows": sum(group_sizes),

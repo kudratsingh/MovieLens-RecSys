@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from src.evaluation.gate import (
+    DEFAULT_SLICE_TOLERANCE,
+    MEASURED_SLICE_TOLERANCE,
     MIN_RELATIVE_GAIN,
     GateInputError,
     SliceTolerance,
@@ -20,6 +22,19 @@ from src.evaluation.gate import (
 from src.evaluation.protocol import EvalResult, UserMetrics
 
 TOLERANCE = SliceTolerance(warm=0.02, cold=0.02)
+
+
+def test_the_shipped_tolerance_is_the_one_the_results_page_derives():
+    """Pins the default to its published derivation, so an edit has to be deliberate.
+
+    2026-08-30, at the default training sample: the largest seed-to-seed NDCG@10
+    range was 2.96% warm (CF/ALS) and 2.10% cold (the ranker); the rule is 2×,
+    rounded up to the next whole percentage point, floor 0.5%. If either number
+    here moves without `docs/results.md` moving with it, the gate has stopped
+    being a measurement and become a preference.
+    """
+    assert MEASURED_SLICE_TOLERANCE == SliceTolerance(warm=0.06, cold=0.05)
+    assert DEFAULT_SLICE_TOLERANCE is MEASURED_SLICE_TOLERANCE
 
 
 def _result(

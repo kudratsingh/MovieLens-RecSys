@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-02
+**Amended:** 2026-08-30 — the training-set subsampling knob this ADR left to run config has a value and a reason. See [the note](#note-2026-08-30--the-training-sample-is-the-whole-trailing-window) at the bottom; nothing above it is retracted.
 
 ## Context
 
@@ -100,3 +101,59 @@ Ships with `src/training/ranker.py` (the load → candidates → features → fi
 - **Feature importances load onto a single feature.** If a single feature (e.g. `item_popularity_all_time`) accounts for > 60 % of feature importance, either that feature is a proxy for a leakage bug or the ranker is not benefiting from the personalized features. Would be caught by inspecting the MLflow-logged feature importances after each run.
 
 - **The point-in-time canary test starts passing spuriously fast.** As in ADR 0006 — the canary is a strict-equality check against a hand-built expected feature value, not a heuristic. If it becomes a rubber-stamp, either the test data got trivialized or the feature computation was reverted to a leakage-friendly path. Guarded by making the fixture deliberately asymmetric (features computed at `t` should differ from features computed at `t + 1` for the same user, and both should be provably reachable from the raw data).
+
+## Note 2026-08-30 — the training sample is the whole trailing window
+
+The Consequences above list *"training-set subsampling is a config knob"* and leave
+the value to run config: **"the full 20 M train interactions are more than the
+ranker needs to converge, and the initial config caps the training set at a fixed
+sample so an iteration cycle stays minutes, not hours."** That reasoning was
+right about cost and silent about variance, and the silence turned out to matter.
+
+`RANKER_POSITIVE_LIMIT` was 20,000. Measuring the promotion gate's noise floor
+([`docs/results.md`](../results.md), 2026-08-30) found the ranker's warm NDCG@10
+moving **28.68% of its own mean** across three seeds and its *overall* NDCG@10
+moving **5.81%** — wider than ADR 0001's own +3% promotion threshold, so a single
+seeded run could not establish the improvement the gate exists to confirm. The
+cause was this knob and not the model: below the eligible window's size the seed
+decides *which* positives are drawn, so a re-seed is a different training set
+rather than a different tie-break.
+
+**The window has a size, and nobody had measured it.**
+`RANKER_POSITIVE_WINDOW_DAYS` is 30, and the last 30 days of MovieLens 25M's
+train slice hold **154,003 interactions**. So 20,000 was 13% of what was already
+eligible — and any limit at or above 154,003 draws the whole window, at which
+point `rng.choice` never runs and two seeds build the identical set of positives.
+
+**The value, and why it is expressed as a limit rather than a sample size.** The
+default is now `RANKER_POSITIVE_LIMIT = 200,000` (`src/training/sampling.py`),
+deliberately above the ceiling, so a default run trains on every positive the
+window holds. It is written as a limit the data does not reach rather than as
+"154,003" because the window's size moves with the dataset — a MovieLens 32M
+upgrade, or a change to `RANKER_POSITIVE_WINDOW_DAYS`, would put the cap back in
+play. The trainer therefore logs `ranker_positive_window_rows`,
+`n_positives_sampled` and the tag `ranker_positive_limit_binding` on every run,
+so "the positives were the entire window" is a recorded fact about that run and
+not an assumption that could quietly stop being true.
+
+**What this does and does not change.** Every other clause of the training-data
+construction rule above stands unaltered: positives are still (user, item,
+timestamp) interactions from the trailing window with strictly-past features,
+negatives are still sampled from the candidate model's top-K for that user,
+groups are still per (user, timestamp), and the point-in-time canary is
+untouched. The only change is how many positives a run uses. The knob remains a
+knob — `RANKER_POSITIVE_LIMIT=20000 make train-ranker` reproduces the smaller
+sample — and the ADR's original claim that the cap keeps the iteration cycle in
+minutes survives the change: the measured cost is roughly linear in the sample
+(the per-positive work is one candidate retrieval plus 21 feature rows), and a
+full-window run stays well inside the stated 30-minute budget on the machine
+`docs/results.md` describes.
+
+**What it leaves open.** Widening the *window* is a different decision and is not
+taken here. Thirty days is a modelling choice about how closely training-time
+features should resemble holdout-time ones, and moving it would change the
+training distribution rather than just how much of it is used — that needs its
+own measurement and, if it changes, its own note. The two consequences already
+listed in this ADR that a larger sample does not address — the candidate-leakage
+compromise, and training-time candidate generation applying no exclusions — are
+unchanged and still open on the Phase 3 platform track.

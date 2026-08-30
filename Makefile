@@ -230,11 +230,21 @@ train-ranker:
 # Three seeds per model is what the promotion gate's slice tolerance was
 # measured from — see src/evaluation/gate.py and docs/results.md.
 
-# ADR 0001's promotion gate over two MLflow runs. Prints the verdict and
-# exits 0 to promote, 1 to refuse, 2 when it cannot decide (a K mismatch, or a
-# killed run with parameters and no metrics).
+# How many positives the ranker trains on. Unset is the whole 30-day trailing
+# window, which is what makes a re-seeded ranker run comparable to the last one
+# — see src/training/sampling.py and docs/results.md's sample-size section.
+# Popularity, item-item, CF/ALS and the two-tower ignore it.
+#
+#   RANKER_POSITIVE_LIMIT=20000 make train-ranker
+
+# ADR 0001's promotion gate over MLflow runs. Prints the verdict and exits 0 to
+# promote, 1 to refuse, 2 when it cannot decide (a K mismatch, or a killed run
+# with parameters and no metrics). Either side takes several space-separated
+# run ids, in which case the gate reads their mean — the comparison to make for
+# a model whose metrics move with the seed.
 #
 #   make gate CANDIDATE=<run id> INCUMBENT=<run id>
+#   make gate CANDIDATE="<id> <id> <id>" INCUMBENT="<id> <id> <id>"
 gate:
 	@test -n "$(CANDIDATE)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
 	@test -n "$(INCUMBENT)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }

@@ -155,10 +155,14 @@ and caveats is in [`docs/results.md`](docs/results.md). Holdout: 1,939 warm user
 
 Three things the table says that a leaderboard would not. Cold NDCG@10 dwarfs warm for every model
 because cold users rate the canonical popular titles — which is why per-policy attribution exists.
-The ranker lifts warm recall@10 by 16.5% over CF/ALS while its warm NDCG@10 *falls* 4.2%, so
-[ADR 0001](docs/adr/0001-evaluation-protocol.md)'s +3% promotion gate clears on the aggregate only
-because of the cold slice; which slice the Phase 4 gate reads is an open decision, and item-item's
-top-500 holds only 56.9% of the ranker's sampled training positives. The two-tower did not finish a
+On this single run the ranker lifted warm recall@10 by 16.5% over CF/ALS while its warm NDCG@10
+*fell* 4.2% — **and that fall turned out to be noise.** Re-seeding showed the ranker's warm NDCG@10
+moving 28.7% of its own mean on the seed alone, because it was training on 20,000 positives sampled
+from a 154,003-row window; trained on the whole window it beats CF/ALS by **+21.2% warm and +15.5%
+overall, seed-averaged and at every individual seed**, and
+[ADR 0001](docs/adr/0001-evaluation-protocol.md)'s gate — which since 2026-08-30 reads overall
+NDCG@10 at +3% with a measured per-slice non-regression clause — promotes it. Item-item's top-500
+still holds only 57.0% of the ranker's training positives. The two-tower did not finish a
 90-minute CPU budget, so [ADR 0004](docs/adr/0004-item-item-before-two-tower.md)'s comparison on the
 full dataset stays open with 0.4001 as the number to beat. On the synthetic cold-start cohort,
 item-item at history sizes 0/1/3/10 scores recall@500 0.4760 / 0.1440 / 0.2880 / 0.3900 with
