@@ -1,6 +1,6 @@
 # Modeling roadmap
 
-**Status:** plan, not commitment. **Last reviewed:** 2026-08-29.
+**Status:** plan, not commitment. **Last reviewed:** 2026-08-30.
 
 The models are this project's main line of work. This page is the ladder from
 the models on `main` today to what a production recommender at Netflix or
@@ -30,7 +30,7 @@ ladder resumes as the primary work.
 | Stage | Model | What it learns | Status |
 |---|---|---|---|
 | Retrieval | Item-item cosine (`implicit`) | Nothing — cosine over co-occurrence counts. The zero-parameter baseline every learned retriever must beat ([ADR 0004](adr/0004-item-item-before-two-tower.md)). Warm recall@500 **0.4001**. | Champion in the served bundle |
-| Retrieval | Two-tower (PyTorch + FAISS) | Item embeddings; the user side is a mean-pool over the last 50 items, no user-id embedding; sampled softmax with log-uniform correction ([ADR 0006](adr/0006-two-tower-retrieval-architecture.md)) | Built; full-dataset comparison against item-item in progress |
+| Retrieval | Two-tower (PyTorch + FAISS) | Item embeddings; the user side is a mean-pool over the last 50 items, no user-id embedding; sampled softmax with log-uniform correction ([ADR 0006](adr/0006-two-tower-retrieval-architecture.md)) | Measured on the full dataset 2026-08-30 and **not promoted**: warm recall@500 0.0466 against item-item's 0.4001. Not the champion |
 | Ranker | LightGBM LambdaRank | A GBDT over eight point-in-time features — counts, popularity windows, item age, genre affinity ([ADR 0005](adr/0005-lightgbm-over-neural-ranker.md)). It sees aggregates of the history, never its order or contents. | Champion in the served bundle |
 
 Retrieval is similarity in an embedding space; ranking is tabular. That shape is
@@ -62,7 +62,12 @@ ADR 0011 cohort's per-bucket recall for cold users; a new cold-*item* slice.
 
 *Skip if.* The full-dataset two-tower v1 already clears ADR 0004's threshold
 and the cold-item slice is not the next thing the product needs. Then go
-straight to Rung 2.
+straight to Rung 2. **As of 2026-08-30 it does not clear it** — warm recall@500
+0.0466 against item-item's 0.4001 — so this skip is not available on that
+ground. The two-tower's loss flattened after its first epoch, which makes a
+training-budget and learning-rate sweep the cheaper experiment to run before any
+architectural rung; see [ADR 0004](adr/0004-item-item-before-two-tower.md)'s
+2026-08-30 note.
 
 ### Rung 2 — Sequential retrieval: SASRec
 
@@ -221,7 +226,7 @@ The system pieces, mapped to the phases that own them:
 |---|---|---|---|---|
 | Two-stage architecture | done | 2026-05-31 | 0003 | The base |
 | Item-item retrieval | done | 2026-06-01 | 0004 | Warm recall@500 0.4001 on 2026-08-29 |
-| Two-tower v1 | done (comparison pending) | 2026-07-02 | 0006 | Full-dataset run in progress 2026-08-29 |
+| Two-tower v1 | done — measured, not promoted | 2026-07-02 | 0006 | Warm recall@500 **0.0466** against item-item's 0.4001 on the full dataset, 2026-08-30 (−88.4%). ADR 0004's gate is not cleared and item-item stays champion; the loss flattened after epoch 1, so this is a verdict on v1 as configured, not on learned retrieval |
 | LightGBM LambdaRank | done | 2026-07-02 | 0005 | Warm NDCG@10 0.0554 on 2026-08-29 |
 | 1 — Two-tower v2 | not proposed | — | — | |
 | 2 — SASRec | not proposed | — | — | The expected next rung; needs approval |

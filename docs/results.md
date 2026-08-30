@@ -10,6 +10,15 @@ not finish, this file says so instead of reporting a partial number.
 **Cold-start cohort:** ADR 0011 `v1`, md5 `9e0c978eff3d45f0985e9e0bbe0551d7`, fingerprint `ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2`
 **Evaluation:** every metric comes from [`src/evaluation/`](../src/evaluation/) — the trainers were run, nothing was computed by hand (non-negotiable #5)
 
+> **A later session appended to this page.** Everything down to "Caveats worth
+> writing down" is the 2026-08-29 measurement and is left exactly as it was
+> written. [The 2026-08-30 session](#2026-08-30--the-two-tower-finished-and-both-cold-start-routing-policies-were-run)
+> at the bottom adds two things that change how one section above should be
+> read: **the two-tower did run to completion**, so "The two-tower did not run
+> to completion" records that session's outcome, not the model's, and both
+> cold-start routing policies were measured, so "Routing: what the cohort
+> actually measured" now has a counterfactual beside it.
+
 ## The machine, and what it was doing at the time
 
 | | |
@@ -460,3 +469,329 @@ rather than fixed — changing the ingestion path is its own unit of work with i
 tests — but anyone reproducing this from raw CSVs should know the committed target
 takes hours where `COPY` takes minutes.
 
+
+## 2026-08-30 — the two-tower finished, and both cold-start routing policies were run
+
+Everything above this line is the 2026-08-29 session and is unchanged. This is a
+second measurement session on the same machine, and it settles two things that
+session left open. Same rules: every metric comes out of
+[`src/evaluation/`](../src/evaluation/) via the trainers, and where something did
+not run this page says so.
+
+**Measured:** 2026-08-30
+**Dataset, split and cohort:** identical to the session above — MovieLens 25M at
+DVC version `c3ce6309f6f0ec347a9e0a662c640021.dir`, `T = 1466837397`, train
+20,000,075 / holdout 129,683 / test 4,870,337 untouched, 2,641 holdout users
+(1,939 warm, 702 cold), ADR 0011 cohort `v1` at fingerprint `ae4475f0e063…`.
+**Machine:** the same Apple M3 / 16 GiB / macOS 26.5.2 box and the same library
+set (numpy 2.4.6, pandas 2.3.3, scipy 1.17.1, implicit 0.7.3, lightgbm 4.7.0,
+torch 2.13.0, faiss-cpu 1.15.0, MLflow client 3.15.1). Postgres 16 in Docker on
+host port 5433; MLflow on 5001.
+**Load:** the host was much quieter than on 2026-08-29 — a 1-minute load average
+between 2.0 and 4.6 on 8 cores, against the 34–50 that session's jobs were
+yielding to. The 25M-row `pd.read_sql` every trainer opens with shows it: 40–50 s
+here against 116–464 s there. Still a shared machine, so the wall-clocks below are
+still upper bounds, just much tighter ones. Every job ran under `nice -n 15`, one
+at a time, thread caps of 4 (1 for the two-tower).
+**Cohort determinism, checked again:** the parquet was regenerated from scratch in
+a fresh working tree before any run here and reproduced the committed DVC md5
+`9e0c978eff3d45f0985e9e0bbe0551d7` and the fingerprint above exactly — an
+independent second confirmation of ADR 0011's determinism claim, on a different
+checkout.
+
+Two independent things were measured:
+
+1. **The two-tower ran to completion** — the run the previous session could not
+   finish inside its budget. That closes the comparison
+   [ADR 0004](adr/0004-item-item-before-two-tower.md) set up.
+2. **Both cold-start routing policies were run** on item-item, CF/ALS and the
+   two-tower, through a new opt-in switch that changes nothing by default. That
+   is the evidence behind
+   [`cold-start-routing-decision.md`](cold-start-routing-decision.md).
+
+### 1. The two-tower ran to completion
+
+**4,687.9 s of fit** — 78 minutes — for three epochs over the same **19,867,692
+(history, positive) pairs across 139,383 users and 34,461 items** the 2026-08-29
+attempt reported before it was killed. Configuration was
+[ADR 0006](adr/0006-two-tower-retrieval-architecture.md)'s, unchanged: embedding
+dim 64, batch 4,096, 3 epochs, Adam at 1e-3, sampled softmax with log-uniform
+negative correction over 16,384 sampled negatives, history window 50, FAISS
+IVF-Flat (`nlist=100`, `nprobe=10`), seed 42.
+
+Nothing was changed to make it finish. What changed was the machine. At a load
+average of 2–4 rather than 34–50 an epoch costs roughly 20 minutes instead of the
+37 min 44 s the previous session measured, and three of them plus the FAISS build
+and the holdout scoring fit inside 78 minutes. The 2026-08-29 budget was not
+wrong about its arithmetic; it was measuring a contended host.
+
+#### Against item-item — the comparison ADR 0004 set up
+
+Both at `K_CANDIDATES = 500`, same holdout, same split, both routing on index
+membership (the default), so the model is the only difference:
+
+| Model | Run | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Cold NDCG@500 | Overall recall@500 | Overall NDCG@500 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Item-item cosine | `itemitem-cosine` | **0.4001** | **0.1392** | 0.5290 | 0.4392 | **0.4344** | **0.2190** |
+| Two-tower | `twotower-sampled-softmax` | 0.0466 | 0.0146 | 0.5281 | 0.4387 | 0.1746 | 0.1273 |
+| | *relative* | **−88.36%** | **−89.53%** | −0.17% | −0.11% | −59.81% | −41.86% |
+
+**The two-tower loses, and not narrowly.** On the warm slice — the only place the
+two retrieval policies actually compete — it returns 11.6% of item-item's
+recall@500. **ADR 0004's promotion gate is not cleared under any threshold that
+ADR could plausibly have named, and item-item remains the champion candidate
+generator.** ADR 0004 carries the dated note; nothing was promoted.
+
+The cold columns are nearly equal because they are nearly the same policy: 701 of
+the 702 cold users are served by the embedded `PopularityModel` under both models,
+so those columns measure the fallback, not retrieval.
+
+For scale — since a recall number in isolation is exactly what ADR 0004's
+rationale #1 says not to trust — drawing 500 of the 34,461 train items uniformly
+at random has an expected recall@500 of **0.014509**. Item-item is at 27.6× that.
+The two-tower is at **3.21×**.
+
+#### Per-policy attribution
+
+| Model | Policy | Users | recall@500 | NDCG@500 |
+|---|---|---:|---:|---:|
+| Item-item | item-item-served | 1,940 | 0.4003 | 0.1394 |
+| Item-item | popularity fallback | 701 | 0.5288 | 0.4393 |
+| Two-tower | two-tower-served | 1,940 | 0.0466 | 0.0146 |
+| Two-tower | popularity fallback | 701 | 0.5288 | 0.4393 |
+
+The two fallback rows are identical to the last digit, which is the check that
+the two models' embedded fallback is the same object doing the same thing.
+
+#### The loss curve, which is the part worth keeping
+
+Mean sampled-softmax loss per epoch: **10.3542 → 10.2726 → 10.2718**. The second
+epoch bought 0.0816 and the third bought 0.0008. The model stopped moving after
+one pass, and it stopped somewhere that retrieves barely better than chance.
+
+That governs how the table above should be read. **This is a measurement of
+two-tower v1 at ADR 0006's configuration, not a finding that learned retrieval
+loses to co-occurrence.** Three epochs at `lr=1e-3` over ~14,600 steps is a thin
+budget, chosen before anyone had run the model at this scale, and a loss that
+flattens after epoch 1 is a hyperparameter symptom before it is an architectural
+one. The cheapest next experiment is a training-budget and learning-rate sweep,
+not a new model — recorded in ADR 0004's note and in
+[`modeling-roadmap.md`](modeling-roadmap.md), where it also removes Rung 1's
+stated skip condition.
+
+The two earlier attempts stay in `phase-2-candidates` with status `RUNNING`, as
+the 2026-08-29 section describes them. Three further abandoned attempts sit
+alongside them and are listed here rather than quietly dropped, because a run
+that exists and is not reported is worse than one reported and dismissed:
+`2f6521f056824c77a5899545c9084589` (two epochs, from a checkout where the ADR 0011
+parquet was absent, so it carries no `synth_cold_*` parameters and is not
+comparable with anything here), and `976eb3e5c43a497e9b7b46926a1246c5` and
+`aa4249d3ad0642f1af7556a37d7bd3ac`, both from this session and both marked
+`KILLED` — the first stopped deliberately once its log showed the cohort parquet
+was missing, the second reaped inside epoch 3 by the process supervisor running
+it, which turned out to close background jobs on an hour boundary. The successful
+threshold run below was launched into its own session with `os.setsid()` for
+exactly that reason, which is the second time on this page a two-tower run has
+been lost to something other than the model.
+
+### 2. Both cold-start routing policies, measured
+
+`src/models/candidates/routing.py` adds an **opt-in, default-off** switch: every
+candidate model takes `cold_start_threshold: int | None`, where `None` — the
+default — is the index-membership rule these models have always used, and an int
+applies ADR 0001's `COLD_START_THRESHOLD`. The trainers read it from
+`SYNTH_COLD_ROUTING` (`index` or `threshold`). Unset reproduces `main`.
+
+**Checked, not assumed.** The index-policy item-item run below and the
+`65faeebb5e0545dcaba9ae703cc67af0` run of record from 2026-08-29 agree on every
+logged metric to the last digit MLflow stores — warm recall@500
+`0.4001438271370617`, warm NDCG@500 `0.13924022499505487`, overall
+`0.43438668830444793` / `0.21896241214812664`. Every one of the four short runs
+below was made twice in this session on two separate checkouts, and each pair
+agrees on **all 38 logged metrics** with no differences at all.
+
+#### Item-item cosine, K_CANDIDATES = 500
+
+| Slice | index | threshold | change |
+|---|---:|---:|---:|
+| Warm recall@500 | 0.400144 | 0.400144 | **0.00%** |
+| Warm NDCG@500 | 0.139240 | 0.139240 | **0.00%** |
+| Cold recall@500 | 0.528969 | 0.528527 | −0.08% |
+| Cold NDCG@500 | 0.439164 | 0.438946 | −0.05% |
+| Overall recall@500 | 0.434387 | 0.434269 | −0.03% |
+| Overall NDCG@500 | 0.218962 | 0.218905 | −0.03% |
+
+#### CF / ALS, K = 10
+
+| Slice | index | threshold | change |
+|---|---:|---:|---:|
+| Warm recall@10 | 0.033841 | 0.033841 | **0.00%** |
+| Warm NDCG@10 | 0.057850 | 0.057850 | **0.00%** |
+| Cold recall@10 | 0.063780 | 0.063829 | +0.08% |
+| Cold NDCG@10 | 0.487981 | 0.488107 | +0.03% |
+| Overall recall@10 | 0.041799 | 0.041812 | +0.03% |
+| Overall NDCG@10 | 0.172182 | 0.172216 | +0.02% |
+
+#### Two-tower, K_CANDIDATES = 500
+
+| Slice | index | threshold | change |
+|---|---:|---:|---:|
+| Warm recall@500 | 0.046581 | 0.046581 | **0.00%** |
+| Warm NDCG@500 | 0.014575 | 0.014575 | **0.00%** |
+| Cold recall@500 | 0.528085 | 0.528527 | +0.08% |
+| Cold NDCG@500 | 0.438672 | 0.438946 | +0.06% |
+| Overall recall@500 | 0.174569 | 0.174686 | +0.07% |
+| Overall NDCG@500 | 0.127304 | 0.127376 | +0.06% |
+
+**The two-tower's cold slice moves up under the threshold where item-item's moves
+down, and it is the same user both times.** Under index membership that one
+1-to-4-interaction holdout user is served by the learned path; item-item served
+them at recall@500 0.6552 — better than the 0.5288 the fallback gives — while the
+two-tower served them at 0.0345, far worse. So routing them to popularity costs
+item-item a little and buys the two-tower a little. It is one user, and it is an
+anecdote rather than a finding; it is recorded because it explains a sign flip
+that would otherwise look like an inconsistency.
+
+Two further checks fall out of this pair. The threshold run's **cold row is
+identical to item-item's threshold cold row to the last digit** (0.5285270914041289
+/ 0.4389458974142213), which it must be: under the threshold every one of the 702
+cold users is fallback-served, so that row is the popularity model and nothing
+else, whichever learned model sits in front of it. And the run's three epoch
+losses are **10.3542 → 10.2726 → 10.2718**, identical to the index run's, which
+is the check that routing changes only where a request goes and never what the
+model learned.
+
+#### Per-policy attribution under both policies
+
+| Model | Policy | Learned-served | recall | NDCG | Fallback-served | recall | NDCG |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Item-item @500 | index | 1,940 | 0.400275 | 0.139354 | 701 | 0.528789 | 0.439278 |
+| Item-item @500 | threshold | 1,939 | 0.400144 | 0.139240 | 702 | 0.528527 | 0.438946 |
+| CF/ALS @10 | index | 1,940 | 0.033841 | 0.057869 | 701 | 0.063822 | 0.488542 |
+| CF/ALS @10 | threshold | 1,939 | 0.033841 | 0.057850 | 702 | 0.063829 | 0.488107 |
+| Two-tower @500 | index | 1,940 | 0.046574 | 0.014575 | 701 | 0.528789 | 0.439278 |
+| Two-tower @500 | threshold | 1,939 | 0.046581 | 0.014575 | 702 | 0.528527 | 0.438946 |
+
+**One holdout user moves. That is the whole difference.** 702 holdout users are
+cold at ADR 0001's threshold; under index membership 701 of them are
+fallback-served, so exactly **one** holdout user has between one and four training
+interactions. The 2026-08-29 section already noticed that user — it is why the CF
+and popularity cold columns differ in the fourth decimal — and this session
+measures the consequence: **on MovieLens's natural holdout the routing policy is
+worth at most 0.08% on any figure, and exactly 0.00% on every warm figure.**
+
+#### ADR 0011 cold-start coverage, both policies
+
+This is the population the decision is actually about, and the only one with users
+in the 1–4 interaction band. Recall per bucket, 500 users each:
+
+| Model / policy | K | h0 | h1 | h3 | h10 | `synth_cold_routing_ok` |
+|---|---:|---:|---:|---:|---:|---|
+| Popularity (control) | 10 | 0.0340 | 0.0420 | 0.0160 | 0.0240 | *no predicate* |
+| CF/ALS — index | 10 | 0.0340 | 0.0160 | 0.0080 | 0.0180 | false |
+| CF/ALS — threshold | 10 | 0.0340 | **0.0420** | **0.0160** | 0.0180 | **true** |
+| Item-item — index | 500 | 0.4760 | 0.1440 | 0.2880 | 0.3900 | false |
+| Item-item — threshold | 500 | 0.4760 | **0.4600** | **0.4560** | 0.3900 | **true** |
+| Two-tower — index | 500 | 0.4760 | 0.1040 | 0.1260 | 0.1280 | false |
+| Two-tower — threshold | 500 | 0.4760 | **0.4600** | **0.4560** | 0.1280 | **true** |
+
+Fallback-served counts. `expected` derives from `COLD_START_THRESHOLD = 5`, not
+from what any model does, so it is one row for every model:
+
+| | h0 | h1 | h3 | h10 |
+|---|---:|---:|---:|---:|
+| expected | 500 | 500 | 500 | 0 |
+| index — all three learned models | 500 | 0 | 0 | 0 |
+| threshold — all three learned models | 500 | 500 | 500 | 0 |
+
+Three things to read off this.
+
+**The cohort sees what the holdout cannot.** Routing h1 to the fallback moves
+item-item's recall@500 from 0.1440 to 0.4600 — 3.2× — and h3 from 0.2880 to
+0.4560. On the holdout the same change was worth 0.08%. ADR 0011's premise was
+that synthetic cold users cover a region MovieLens's natural distribution does
+not; this is the first measurement that demonstrates it rather than asserting it.
+
+**The fallback really is the popularity list.** Under threshold routing CF's h0,
+h1 and h3 buckets read 0.0340 / 0.0420 / 0.0160 — the popularity control's numbers
+on all three, to four decimals. h10 does not match (0.0180 against 0.0240) and
+should not: a 10-interaction user is above the threshold and ALS serves them under
+either policy. That is the embedded-fallback wiring reproduced as a measurement.
+
+**The direction is not a verdict.** ADR 0011's own Risks section warns that the
+cohort's targets are popularity-weighted, so every fallback-served bucket is
+flattered by construction. What these rows establish is that the two policies
+produce very different outcomes for 1- and 3-interaction users, and that the
+holdout cannot tell you which is better. Which one is right is the open decision
+in [`cold-start-routing-decision.md`](cold-start-routing-decision.md); this page
+supplies the numbers and does not take it.
+
+### Runs and wall-clocks for this session
+
+| Model | Policy | Run id | Fit | Recommend | Wall-clock |
+|---|---|---|---:|---:|---:|
+| Item-item cosine | index | `ab1fe49dc21e4c07abc15775fd0cd12d` | 19.7 s | 1.2 s | 62.9 s |
+| Item-item cosine | threshold | `006224c40e6c4d31ac94e0c199b4205c` | 20.1 s | 1.1 s | 69.8 s |
+| CF / ALS | index | `8b8b86d755e44025be95957c66ecdc91` | 45.4 s | 0.8 s | 89.1 s |
+| CF / ALS | threshold | `c491a823bae34e3cbebbe5b8d06e9e45` | 40.5 s | 0.7 s | 86.7 s |
+| Two-tower | index | `5628ab0b24c448a78c6f93440e6360b1` | 4,687.9 s | 3.1 s | 4,694.0 s \* |
+| Two-tower | threshold | `3286c9683f634d428a3481ff9e4b5644` | 3,620.5 s | 2.1 s | 3,670.7 s |
+
+\* The two-tower's index run is the one job on this page whose end-to-end process
+wall-clock was not captured, because it was started before this session's timing
+wrapper existed. 4,694.0 s is the span of its MLflow run, which for this trainer
+covers fit, retrieval, evaluation and logging; the ~45 s Postgres read precedes it.
+Every other row is `time`'s `total`.
+
+**The two two-tower rows are the same computation and differ by 23% in fit time**
+— 4,687.9 s against 3,620.5 s — while producing bit-identical epoch losses. Both
+ran at one OpenMP thread under `nice -n 15`; the only difference is what else the
+laptop was doing. That is the clearest single illustration on this page of why
+every wall-clock here is labelled an upper bound, and why none of them is a
+benchmark of anything but this machine on this morning.
+
+The popularity control is the 2026-08-29 run `d18737c2180a42f28a0a6255fd00d02e`
+already reported above. It has no routing policy to vary, so it was not re-run.
+
+### Reproducing this session
+
+Same prerequisites as the block above — Postgres holding the 25M ratings and the
+ADR 0011 parquet present. Then:
+
+```bash
+# The default policy: identical to what `main` has always done.
+make train-itemitem
+make train-cf
+OMP_NUM_THREADS=1 make train-twotower     # torch and faiss each ship a libomp
+
+# The same three under ADR 0001's threshold. Nothing else changes.
+SYNTH_COLD_ROUTING=threshold make train-itemitem
+SYNTH_COLD_ROUTING=threshold make train-cf
+SYNTH_COLD_ROUTING=threshold OMP_NUM_THREADS=1 make train-twotower
+```
+
+`SYNTH_COLD_ROUTING` accepts `index` (the default, equivalent to leaving it unset)
+and `threshold`. Anything else raises rather than falling back to the default — a
+typo would otherwise produce a run labelled with a policy it did not use. A
+threshold run is named `<base>-threshold-routing` in MLflow and tagged
+`cold_start_routing_policy`, so the runs this page cites by name stay findable.
+
+### What was not run, and why
+
+- **No ranker run under the threshold policy.** `src/training/ranker.py` reads the
+  same switch and passes it to its candidate model, so a threshold-policy ranker
+  run is one environment variable away — but the routing change is worth 0.03% at
+  K = 10 on the models that were run, and the ranker's own comparison against
+  CF/ALS is unaffected by it. It would settle nothing the candidate runs have not,
+  so it was left for whoever takes the decision. The ranker figures above remain
+  the 2026-08-29 run.
+- **No re-seeded runs.** Everything on this page, in both sessions, is one run per
+  cell at seed 42. The 4.16% warm-NDCG question in
+  [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) needs a
+  noise floor before it can be settled, and that means three to five seeds of the
+  same model. Not done here.
+- **No two-tower re-training at a larger budget.** The loss curve says that is the
+  interesting experiment, and ADR 0004's note names it — but changing ADR 0006's
+  configuration is a modelling decision with an approval gate
+  ([`modeling-roadmap.md`](modeling-roadmap.md)), not something to slip into the
+  run that measures the configuration as pinned.

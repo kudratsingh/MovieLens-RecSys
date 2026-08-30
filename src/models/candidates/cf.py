@@ -22,6 +22,7 @@ import pandas as pd
 from implicit.als import AlternatingLeastSquares
 from scipy.sparse import csr_matrix
 
+from . import routing
 from .popularity import PopularityModel
 
 
@@ -34,6 +35,11 @@ class CFModel:
     regularization: float = 0.01
     iterations: int = 15
     random_state: int = 42
+
+    # Opt-in, non-default: where the learned path stops. None keeps the
+    # index-membership rule this model has always used; an int applies
+    # ADR 0001's threshold instead. See src/models/candidates/routing.py.
+    cold_start_threshold: int | None = None
 
     # Populated by fit:
     _als: AlternatingLeastSquares | None = None
@@ -90,11 +96,14 @@ class CFModel:
         Unknown user (no training history) → popularity fallback. Known user →
         ALS scores, with items the user already saw in train filtered out.
         """
-        if self._als is None or user_id not in self._user_to_index:
+        if not self.was_served_by_als(user_id):
             return self._popularity.recommend(user_id, k)
 
         user_idx = self._user_to_index[user_id]
-        assert self._user_items is not None  # implied by self._als is not None
+        # Both implied by was_served_by_als having just returned True; stated
+        # for the type checker, which cannot see through the predicate.
+        assert self._als is not None
+        assert self._user_items is not None
 
         # implicit's filter_already_liked_items pushes seen items to the
         # bottom of the returned ranking but does not remove them — when
@@ -129,10 +138,16 @@ class CFModel:
     def was_served_by_als(self, user_id: int) -> bool:
         """Predicate: would ``recommend(user_id, …)`` go through ALS or popularity?
 
-        True iff this user has any training history and the ALS factors are
-        fitted. Mirrors the routing condition inside ``recommend`` exactly so
-        the training pipeline can attribute metrics to the right policy
-        without re-deriving the predicate. Exposed for per-policy MLflow
-        breakdowns; not used by ``recommend`` itself.
+        ``recommend`` *calls this* rather than restating the condition, so the
+        two cannot drift — which matters now that the condition has a second
+        form. By default: true iff this user has any training history and the
+        ALS factors are fitted. With ``cold_start_threshold`` set, index
+        membership is necessary but no longer sufficient — the user also needs
+        that many distinct training items.
         """
-        return self._als is not None and user_id in self._user_to_index
+        if self._als is None or user_id not in self._user_to_index:
+            return False
+        return routing.learned_path_serves(
+            history_size=len(self._popularity.user_history.get(user_id, ())),
+            cold_start_threshold=self.cold_start_threshold,
+        )

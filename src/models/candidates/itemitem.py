@@ -31,6 +31,7 @@ import pandas as pd
 from implicit.nearest_neighbours import CosineRecommender
 from scipy.sparse import csr_matrix
 
+from . import routing
 from .popularity import PopularityModel
 
 
@@ -43,6 +44,11 @@ class ItemItemModel:
     # larger but still bounded sparse matrix. Logged as an MLflow param so
     # future sweeps can sweep it.
     k_neighbors: int = 200
+
+    # Opt-in, non-default: where the learned path stops. None keeps the
+    # index-membership rule this model has always used; an int applies
+    # ADR 0001's threshold instead. See src/models/candidates/routing.py.
+    cold_start_threshold: int | None = None
 
     # Populated by fit:
     _knn: CosineRecommender | None = None
@@ -101,11 +107,14 @@ class ItemItemModel:
         the candidate list and become a LambdaRank positive; otherwise every
         such positive is silently dropped.
         """
-        if self._knn is None or user_id not in self._user_to_index:
+        if not self.was_served_by_itemitem(user_id):
             return self._popularity.recommend(user_id, k)
 
         user_idx = self._user_to_index[user_id]
-        assert self._user_items is not None  # implied by self._knn is not None
+        # Both implied by was_served_by_itemitem having just returned True;
+        # stated for the type checker, which cannot see through the predicate.
+        assert self._knn is not None
+        assert self._user_items is not None
 
         if filter_seen:
             # Same post-filter pattern CFModel uses: implicit's
@@ -142,10 +151,16 @@ class ItemItemModel:
     def was_served_by_itemitem(self, user_id: int) -> bool:
         """Predicate: would ``recommend(user_id, …)`` go through item-item or popularity?
 
-        True iff this user has any training history and the KNN index is
-        fitted. Mirrors the routing condition inside ``recommend`` exactly so
-        the training pipeline can attribute metrics to the right policy
-        without re-deriving the predicate — same pattern CFModel established
-        for ALS-vs-fallback attribution.
+        ``recommend`` *calls this* rather than restating the condition, so the
+        two cannot drift — which matters now that the condition has a second
+        form. By default: true iff this user has any training history and the
+        KNN index is fitted. With ``cold_start_threshold`` set, index
+        membership is necessary but no longer sufficient — the user also needs
+        that many distinct training items.
         """
-        return self._knn is not None and user_id in self._user_to_index
+        if self._knn is None or user_id not in self._user_to_index:
+            return False
+        return routing.learned_path_serves(
+            history_size=len(self._popularity.user_history.get(user_id, ())),
+            cold_start_threshold=self.cold_start_threshold,
+        )

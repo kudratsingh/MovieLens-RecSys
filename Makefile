@@ -194,6 +194,17 @@ test-integration:
 test-feature-parity:
 	pytest tests/feature_parity/ -v
 
+# The four trainers below take one optional environment variable,
+# SYNTH_COLD_ROUTING, which decides where a learned model's fallback boundary
+# sits. Unset (the default) is the index-membership rule every offline model
+# has always used; `threshold` applies ADR 0001's COLD_START_THRESHOLD, the
+# rule the deployed serving path uses. It exists so the two can be compared —
+# see docs/cold-start-routing-decision.md — and it changes nothing unless set.
+# The popularity baseline ignores it: it *is* the fallback and has no learned
+# path to route away from.
+#
+#   make train-itemitem                            # index membership (default)
+#   SYNTH_COLD_ROUTING=threshold make train-itemitem
 train-popularity:
 	python -m src.training.popularity
 
