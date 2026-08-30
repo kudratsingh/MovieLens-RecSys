@@ -5638,7 +5638,7 @@
                 }
               }
             },
-            "description": "Idempotency, state revision, or transition conflict"
+            "description": "Idempotency or state revision conflict"
           },
           "422": {
             "content": {

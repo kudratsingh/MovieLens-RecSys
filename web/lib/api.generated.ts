@@ -3406,7 +3406,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Idempotency, state revision, or transition conflict */
+            /** @description Idempotency or state revision conflict */
             409: {
                 headers: {
                     [name: string]: unknown;
