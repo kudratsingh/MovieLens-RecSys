@@ -331,12 +331,11 @@ movielens-recsys/
 
 - **Python:** 3.11+, type hints everywhere, ruff for lint, black for format, mypy in CI on `src/`.
 - **TypeScript:** 5+, strict mode, no implicit `any`, ESLint for lint, Prettier for format, `tsc --noEmit` in CI on `web/`.
-- **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Do **not** add `Co-authored-by` trailers, "Generated with Claude Code" footers, or any attribution to Claude / Claude Code / any AI tool in commit messages, PR descriptions, code comments, docstrings, or the README. All commits are authored solely by me.
+- **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
 - **Branches:** trunk-based, short-lived feature branches, PRs to main. Every piece of work — no matter how small — goes on a feature branch and merges via PR. No direct pushes to `main`.
 - **GitHub:** repo is **public** (`kudratsingh/MovieLens-RecSys`), made public for portfolio visibility — so nothing secret ever lives in the tree; the dev-only credentials in compose and the realm seeds are labeled as such. Branch protection on `main` (PRs required, CI must pass, no direct pushes). Default to squash merges. No open-source license is attached — the code is published for portfolio visibility, all rights reserved. README states what the project is, the stack, and the current phase.
 - **Branch naming:** `feat/<short-description>`, `fix/<short-description>`, `docs/<short-description>`, `chore/<short-description>`. Keep branches short-lived; delete after merge.
 - **PR discipline:** small and reviewable, one coherent unit per PR. Bundle related work (an ADR with the code it justifies, code + the CLAUDE.md status update it triggers, multiple closely-related small docs) rather than splitting on every micro-concern — see "How to work with Claude Code" for the longer version. PR description explains *why*, not just what. Never merge a PR with failing CI.
-- **No AI attribution anywhere.** No mention of Claude, Claude Code, or any AI tool in: commit messages, PR titles, PR descriptions, code comments, docstrings, ADRs, the README, or any other file in the repo. All work is attributed solely to me.
 - **Comments:** natural and human-like. Write the kind of comment a thoughtful senior engineer would leave — explain the *why* when it's not obvious, not the *what*. Don't over-comment mechanical code. Don't use aggressive or robotic phrasing.
 - **Testing:** pytest. Every model module has tests. Feature parity tests run in CI.
 - **Logging:** structured (JSON), same approach as the Incident Platform.
