@@ -63,7 +63,7 @@ environments landed (`make up-dev`, `make up-staging`); staging is a thin overla
 stack and, like production, has no host yet. The frontend finish gate passes every
 criterion a reviewer can settle and [holds](docs/frontend/finish-gate-review.md) on moderated
 sessions with real participants, which a reviewer cannot substitute for. The long form is in
-[CLAUDE.md](CLAUDE.md) and [`docs/README.md`](docs/README.md).
+[`docs/status/`](docs/status/README.md) and [`docs/README.md`](docs/README.md).
 
 ## Quickstart
 
