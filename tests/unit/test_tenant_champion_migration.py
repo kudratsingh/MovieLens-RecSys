@@ -14,7 +14,14 @@ from pathlib import Path
 MIGRATION = Path("alembic/versions/0016_tenant_champion_columns.py")
 
 
-def test_the_migration_is_the_linear_head_after_the_synthetic_cold_tenant() -> None:
+def test_the_migration_follows_the_synthetic_cold_tenant_on_one_chain() -> None:
+    """Its own link, plus the invariant every migration shares.
+
+    0016 stopped being the head when 0017 landed; naming the holder here would
+    only mean editing this assertion on every migration that lands afterwards,
+    which proves nothing about this one. The rule that matters — one head,
+    whoever holds it — is the same one `test_audit_migration.py` states.
+    """
     source = MIGRATION.read_text()
 
     assert 'revision: str = "0016_tenant_champion_columns"' in source
@@ -31,7 +38,9 @@ def test_the_migration_is_the_linear_head_after_the_synthetic_cold_tenant() -> N
         if down is not None and down.group(1):
             parents.add(down.group(1))
 
-    assert revisions - parents == {"0016_tenant_champion_columns"}
+    heads = revisions - parents
+    assert len(heads) == 1, f"the migration graph has branched: {sorted(heads)}"
+    assert "0016_tenant_champion_columns" in revisions
 
 
 def test_every_column_the_tenant_router_reads_is_added_here() -> None:
