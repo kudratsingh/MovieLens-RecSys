@@ -1,7 +1,14 @@
 # Which slice does the promotion gate read?
 
 **Date:** 2026-08-29
-**Status:** open — a decision for the owner. Nothing in [ADR 0001](adr/0001-evaluation-protocol.md) is amended by this document.
+**Decision (2026-08-30, owner): (c).** The gate reads **overall NDCG@10 at +3%, and refuses
+any slice that regresses beyond a tolerance measured from seed-to-seed variation.** The
+tolerance was then measured rather than chosen — three seeds per model through the trainers,
+recorded in [`results.md`](results.md)'s 2026-08-30 promotion-gate section — and the rule is
+now code in [`src/evaluation/gate.py`](../src/evaluation/gate.py) with a CLI (`make gate`)
+and a dated amendment on [ADR 0001](adr/0001-evaluation-protocol.md). Everything below is
+left as it was written on 2026-08-29, as the reasoning the decision was taken from.
+**Status:** closed — decided. Nothing below is retracted; ADR 0001 carries the amendment.
 **Companion:** [`cold-start-routing-decision.md`](cold-start-routing-decision.md), the other ADR 0001 question the same measurement session surfaced.
 
 ## The question

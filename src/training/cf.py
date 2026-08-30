@@ -20,6 +20,7 @@ from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K, evaluate
 from src.models.candidates import routing
 from src.models.candidates.cf import CFModel
+from src.training import seeds
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,16 @@ def main() -> None:
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
 
+    # ALS initialises its factor matrices at random, so this is the one knob
+    # that moves this run's metrics without changing the model, the data or
+    # the protocol. TRAIN_SEED unset is the 42 every published run used.
+    seed = seeds.resolve_seed()
+    logger.info("Seed: %d", seed)
+
     logger.info("Fitting CF (ALS) model ...")
     model = CFModel(
-        cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD)
+        random_state=seed,
+        cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD),
     )
     t0 = time.perf_counter()
     model.fit(train_frame)
@@ -160,13 +168,15 @@ def main() -> None:
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(settings.mlflow_experiment)
-    with mlflow.start_run(run_name=routing.run_name_for("cf-als-baseline", routing_policy)):
+    run_name = seeds.run_name_for(routing.run_name_for("cf-als-baseline", routing_policy), seed)
+    with mlflow.start_run(run_name=run_name):
         mlflow.set_tags(
             {
                 "model_family": "baseline",
                 "model_type": "cf_als",
                 "phase": "1",
                 "cold_start_routing_policy": routing_policy,
+                "train_seed": str(seed),
             }
         )
         mlflow.log_params(
