@@ -106,6 +106,7 @@ package was scoped to do. A row is only listed once the PR is on `main`.
 | M1-03 | 2026-09-04 | #128 | Last-item transition baseline — built, not yet run |
 | M0-08 | 2026-09-04 | #131 | Sealed-test and dataset policy, with the run template enforcing a partition declaration |
 | M0-07 | 2026-09-04 | #132 | Rolling-origin windows, leakage assertions, and the clustered user bootstrap |
+| M0-09 | 2026-09-04 | #133 | Per-user recall vectors exported from every run, in the shape the study loads |
 
 Three of these are narrower than their acceptance line reads, and the difference is recorded rather
 than glossed. **M0-04** is executable but cannot return a verdict until its tolerances are measured,

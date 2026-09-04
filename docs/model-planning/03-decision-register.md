@@ -8,7 +8,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 |---|---|---|---|---|
 | D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04 and recorded in ADR 0004; retrieval-tolerance measurement remains required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
-| D-003 | SASRec advance/stop rule | Before the full-data seed-42 run lands | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Open; options costed in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
+| D-003 | SASRec advance/stop rule | **Rule needed before the run landed; it did** | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Seed 42 landed in **band 1** (warm 0.465169, +16.25% over item-item) on 2026-09-04; owner picks the rule in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
 | D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |
 | D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Written up 2026-09-04 in [`memos/sealed-test-and-dataset-policy.md`](memos/sealed-test-and-dataset-policy.md); audit re-verified across all branches and holds, with three named gaps it cannot cover |
 | D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve the exact full-data champion; preserve compact bundle only as an explicit demo fixture | Answered 2026-09-04 |
@@ -57,6 +57,36 @@ and gate the paired system as a new bundle.
 **Owner decision, 2026-09-04:** approved.
 
 ## D-003 — SASRec pilot rule
+
+**2026-09-04, later — the run landed and the predeclared bands fire cleanly.** MLflow run
+`6958fd082af6462da812ddd4708230c1`, status FINISHED, `sasrec-full-bce-neg32`:
+
+| Slice | Item-item | SASRec seed 42 | Relative |
+|---|---:|---:|---:|
+| Warm recall@500 | 0.400144 | **0.465169** | **+16.25%** |
+| Cold recall@500 | 0.528527 | 0.526273 | −0.43% |
+| Overall recall@500 | 0.434269 | 0.481596 | +10.90% |
+
+That clears the gate floor of 0.412148 by 12.86%, which is **band 1: run seeds 7 and 13, and let the
+gate decide.** The scaling hypothesis the memo named before the number existed is not merely met but
+overshot — the same configuration was 12.0% *below* item-item on the 6% subsample and is 16.3% above
+it on the full data.
+
+Four things separate this from a verdict, and none of them are pessimism:
+
+1. **Cold is −0.43%**, which is the guardrail clause going live rather than staying hypothetical. The
+   cold tolerance is exactly the number that does not exist yet, so whether this is noise or a
+   regression is unanswerable today.
+2. **The run does not log `n_warm_users` or `n_cold_users`**, so the gate's population-equality check
+   cannot run and the cold comparison in particular cannot be verified as being over the same users.
+3. **It carries no `evaluation_protocol` tag**, so `retrieval_run_from_mlflow` refuses it and the
+   contract forbids grandfathering. This is strong evidence, not gate-admissible evidence.
+4. **No weights were saved.** The run path logs metrics, params and tags only, so even a passing gate
+   yields a number rather than a servable artifact — M2-02 remains the gap.
+
+The sequencing consequence is concrete: land protocol emission before spending roughly nine hours on
+seeds 7 and 13, or that compute produces more inadmissible evidence.
+
 
 **2026-09-04 update — the pilot already answered part of this.** The full options memo is
 [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md). Its central finding: the 6%
