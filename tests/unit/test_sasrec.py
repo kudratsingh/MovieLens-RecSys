@@ -85,6 +85,22 @@ def test_gbce_endpoints_and_bce_equivalence() -> None:
     assert torch.allclose(sampled_gbce_loss(positive, negative, beta=1.0), expected)
 
 
+def test_config_reads_environment_and_serializes() -> None:
+    config = SASRecConfig.from_env(
+        {
+            "SASREC_HIDDEN_DIM": "32",
+            "SASREC_LOSS": "bce",
+            "SASREC_CALIBRATION_T": "0.25",
+            "SASREC_FAISS_EXACT": "true",
+        }
+    )
+    assert config.hidden_dim == 32
+    assert config.loss == "bce"
+    assert config.calibration_t == 0.25
+    assert config.faiss_exact is True
+    assert config.as_params()["hidden_dim"] == 32
+
+
 def test_fit_is_deterministic_and_recommendations_exclude_history() -> None:
     first = SASRecModel(config=_config(), cold_start_threshold=None).fit(_train())
     second = SASRecModel(config=_config(), cold_start_threshold=None).fit(_train())

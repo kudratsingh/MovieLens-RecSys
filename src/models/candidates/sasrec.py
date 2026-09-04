@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import os
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 import faiss
@@ -37,6 +39,42 @@ class SASRecConfig:
     faiss_nprobe: int = 10
     faiss_exact: bool = False
     seed: int = 42
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> SASRecConfig:
+        source = os.environ if env is None else env
+        defaults = cls()
+
+        def value(name: str, cast: Callable[[str], Any], default: Any) -> Any:
+            raw = source.get(f"SASREC_{name}", "").strip()
+            return default if not raw else cast(raw)
+
+        def boolean(raw: str) -> bool:
+            if raw.lower() not in {"true", "false", "1", "0"}:
+                raise ValueError(f"invalid boolean: {raw}")
+            return raw.lower() in {"true", "1"}
+
+        return cls(
+            max_sequence_length=value("MAX_SEQUENCE_LENGTH", int, defaults.max_sequence_length),
+            hidden_dim=value("HIDDEN_DIM", int, defaults.hidden_dim),
+            num_blocks=value("NUM_BLOCKS", int, defaults.num_blocks),
+            num_heads=value("NUM_HEADS", int, defaults.num_heads),
+            feedforward_dim=value("FEEDFORWARD_DIM", int, defaults.feedforward_dim),
+            dropout=value("DROPOUT", float, defaults.dropout),
+            negative_count=value("NEGATIVE_COUNT", int, defaults.negative_count),
+            loss=value("LOSS", str, defaults.loss),
+            calibration_t=value("CALIBRATION_T", float, defaults.calibration_t),
+            batch_size=value("BATCH_SIZE", int, defaults.batch_size),
+            epochs=value("EPOCHS", int, defaults.epochs),
+            learning_rate=value("LEARNING_RATE", float, defaults.learning_rate),
+            faiss_nlist=value("FAISS_NLIST", int, defaults.faiss_nlist),
+            faiss_nprobe=value("FAISS_NPROBE", int, defaults.faiss_nprobe),
+            faiss_exact=value("FAISS_EXACT", boolean, defaults.faiss_exact),
+            seed=value("SEED", int, defaults.seed),
+        )
+
+    def as_params(self) -> dict[str, Any]:
+        return asdict(self)
 
     def validate(self) -> None:
         if self.max_sequence_length <= 0 or self.hidden_dim <= 0:
@@ -151,7 +189,11 @@ class SASRecModel:
     _faiss_index: Any = None
     _popularity: PopularityModel = field(default_factory=PopularityModel)
 
-    def fit(self, train: pd.DataFrame) -> SASRecModel:
+    def fit(
+        self,
+        train: pd.DataFrame,
+        on_epoch: Callable[[int, float], None] | None = None,
+    ) -> SASRecModel:
         self.config.validate()
         self._popularity = PopularityModel().fit(train)
         if train.empty:
@@ -180,9 +222,12 @@ class SASRecModel:
                 calibration_t=self.config.calibration_t,
             )
         )
-        for _epoch in range(self.config.epochs):
+        for epoch in range(self.config.epochs):
+            permutation = torch.randperm(len(positives))
+            epoch_loss = 0.0
+            batches = 0
             for start in range(0, len(positives), self.config.batch_size):
-                rows = slice(start, start + self.config.batch_size)
+                rows = permutation[start : start + self.config.batch_size]
                 history_batch = histories[rows].long()
                 positive_batch = positives[rows].long()
                 negative_batch = sample_negatives(
@@ -207,6 +252,10 @@ class SASRecModel:
                 optimizer.step()
                 with torch.no_grad():
                     self._encoder.item_embedding.weight[0].zero_()
+                epoch_loss += float(loss.item())
+                batches += 1
+            if on_epoch is not None:
+                on_epoch(epoch + 1, epoch_loss / max(1, batches))
         self.build_index()
         return self
 
