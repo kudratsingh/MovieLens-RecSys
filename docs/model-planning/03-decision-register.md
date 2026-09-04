@@ -8,7 +8,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 |---|---|---|---|---|
 | D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04 and recorded in ADR 0004; retrieval-tolerance measurement remains required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
-| D-003 | SASRec pilot advance/stop margin | Before interpreting the 6% pilot | Must beat same-sample popularity and last-item baseline; do not infer item-item parity from one noisy pilot seed | Open |
+| D-003 | SASRec advance/stop rule | Before the full-data seed-42 run lands | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Open; options costed in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
 | D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |
 | D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Provisionally answered 2026-09-04; repository audit found no test evaluation |
 | D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve the exact full-data champion; preserve compact bundle only as an explicit demo fixture | Answered 2026-09-04 |
@@ -57,6 +57,16 @@ and gate the paired system as a new bundle.
 **Owner decision, 2026-09-04:** approved.
 
 ## D-003 — SASRec pilot rule
+
+**2026-09-04 update — the pilot already answered part of this.** The full options memo is
+[`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md). Its central finding: the 6%
+pilot measured popularity (0.1974), item-item (0.3619) and SASRec-BCE (0.3186) on the *same*
+subsample, so SASRec's arm sits **12.0% below the incumbent**, not above it. The pilot record reads
+as a pass because ADR 0016's stop rule named popularity and never named item-item. The full-data run
+now executing therefore tests one hypothesis — that a 12% same-sample deficit closes and reverses to
+a 3% surplus on 16.7× the data — and the rule for what its single seed authorizes should be fixed
+before the number is visible.
+
 
 The current ADR says the pilot should beat popularity or a last-item nearest-neighbor baseline,
 but the latter has not been established and no margin is named. Recommended interpretation:
