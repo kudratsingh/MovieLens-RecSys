@@ -53,6 +53,16 @@ def test_causal_mask_prevents_future_token_influence() -> None:
     assert torch.equal(first_positions[:, :4], changed_positions[:, :4])
 
 
+def test_training_vectors_are_not_retrieval_normalized() -> None:
+    encoder = SASRecEncoder(10, _config()).eval()
+    sequence = torch.tensor([[0, 1, 2, 3, 4]])
+    with torch.no_grad():
+        training = encoder.training_user_vectors(sequence)
+        retrieval = encoder(sequence)
+    assert not torch.allclose(torch.linalg.vector_norm(training, dim=1), torch.ones(1))
+    assert torch.allclose(torch.linalg.vector_norm(retrieval, dim=1), torch.ones(1))
+
+
 def test_sampled_negatives_exclude_prefix_target_and_duplicates() -> None:
     histories = torch.tensor([[0, 1, 2], [2, 3, 4]])
     positives = torch.tensor([3, 5])

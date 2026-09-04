@@ -132,8 +132,13 @@ class SASRecEncoder(nn.Module):
         """Return the representation at the final (left-padded) position."""
         return F.normalize(self.encode_positions(sequences)[:, -1, :], p=2, dim=-1)
 
-    def item_vectors(self, item_ids: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.item_embedding(item_ids), p=2, dim=-1)
+    def training_user_vectors(self, sequences: torch.Tensor) -> torch.Tensor:
+        """Unconstrained representations used by the BCE-family objective."""
+        return self.encode_positions(sequences)[:, -1, :]
+
+    def item_vectors(self, item_ids: torch.Tensor, *, normalize: bool = True) -> torch.Tensor:
+        vectors = self.item_embedding(item_ids)
+        return F.normalize(vectors, p=2, dim=-1) if normalize else vectors
 
 
 def gbce_beta(*, negative_count: int, catalog_size: int, calibration_t: float) -> float:
@@ -246,14 +251,14 @@ class SASRecModel:
                     count=self.config.negative_count,
                     rng=rng,
                 )
-                user_vectors = self._encoder(history_batch)
-                positive_logits = (user_vectors * self._encoder.item_vectors(positive_batch)).sum(
-                    dim=1
-                )
+                user_vectors = self._encoder.training_user_vectors(history_batch)
+                positive_logits = (
+                    user_vectors * self._encoder.item_vectors(positive_batch, normalize=False)
+                ).sum(dim=1)
                 negative_logits = torch.einsum(
                     "bd,bkd->bk",
                     user_vectors,
-                    self._encoder.item_vectors(negative_batch),
+                    self._encoder.item_vectors(negative_batch, normalize=False),
                 )
                 loss = sampled_gbce_loss(positive_logits, negative_logits, beta=beta)
                 optimizer.zero_grad()
