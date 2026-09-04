@@ -1,7 +1,11 @@
 # ADR 0015 — SASRec for Sequential Retrieval
 
-**Status:** Proposed
+**Status:** Deferred
 **Date:** 2026-09-03
+
+**Decision note (2026-09-03):** Deferred until the remaining Phase 3 platform
+work is closed and two-tower v2 is repaired and measured. SASRec remains the
+next model after that sequence; no implementation work has started.
 
 ## Context
 
@@ -23,9 +27,10 @@ the serving path already reads ordered positive history. Sequence is therefore
 the largest unused signal already present in the system.
 
 Rung 2 of [`docs/modeling-roadmap.md`](../modeling-roadmap.md) names SASRec as
-the expected next model. This ADR proposes that rung. It does not approve it:
-the roadmap requires the owner to change both this status and the decision-log
-row to `approved` before training code begins.
+the expected sequential model. This ADR records its design ahead of that work,
+but the owner has deferred it behind the Phase 3 platform closeout and
+two-tower v2. The roadmap requires the owner to change both this status and the
+decision-log row to `approved` before training code begins.
 
 ## Proposal
 
@@ -249,4 +254,3 @@ stage-specific verdict.
 - Aleksandr Petrov and Craig Macdonald, “gSASRec: Reducing Overconfidence in
   Sequential Recommendation Trained with Negative Sampling,” ACM RecSys 2023,
   DOI 10.1145/3604915.3608783.
-
