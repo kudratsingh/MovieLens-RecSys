@@ -8,11 +8,11 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 |---|---|---|---|---|
 | D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04 and recorded in ADR 0004; retrieval-tolerance measurement remains required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
-| D-003 | SASRec advance/stop rule | Before the full-data seed-42 run lands | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Open; options costed in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
+| D-003 | SASRec advance/stop rule | **Rule needed before the run landed; it did** | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Seed 42 landed in **band 1** (warm 0.465169, +16.25% over item-item) on 2026-09-04; owner picks the rule in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
 | D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |
-| D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Provisionally answered 2026-09-04; repository audit found no test evaluation |
+| D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Written up 2026-09-04 in [`memos/sealed-test-and-dataset-policy.md`](memos/sealed-test-and-dataset-policy.md); audit re-verified across all branches and holds, with three named gaps it cannot cover |
 | D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve the exact full-data champion; preserve compact bundle only as an explicit demo fixture | Answered 2026-09-04 |
-| D-007 | 25M-to-32M migration trigger | Before any dataset expansion | Stay on 25M unless a named slice is underpowered or a model hypothesis needs newer events | Open |
+| D-007 | 25M-to-32M migration trigger | Before any dataset expansion | Stay on 25M, and require M0-07's rolling windows to be tried and shown insufficient first | Open; recommendation and settling conditions in [`memos/sealed-test-and-dataset-policy.md`](memos/sealed-test-and-dataset-policy.md) |
 | D-008 | Registry source of truth | Before M3 | MLflow owns immutable runs/artifacts/versions; Postgres owns tenant assignment and rollout state | Open |
 | D-009 | Feature representation and the training feature source | Before any full-25M materialization, and before M2 | Compact per-user genre-mask counts (measured exact form) plus on-demand computation over the retrieved slate; no user-by-catalog table | Deferred by owner 2026-09-04 to prioritise modeling; costed in [`memos/feature-source-boundary.md`](memos/feature-source-boundary.md) |
 | D-010 | Multi-objective labels and utility | Before M5 | Do not invent completion/click labels from MovieLens; wait for observable product events or constrain the rung to rating-derived research proxies labeled as such | Owner input required |
@@ -58,6 +58,36 @@ and gate the paired system as a new bundle.
 
 ## D-003 — SASRec pilot rule
 
+**2026-09-04, later — the run landed and the predeclared bands fire cleanly.** MLflow run
+`6958fd082af6462da812ddd4708230c1`, status FINISHED, `sasrec-full-bce-neg32`:
+
+| Slice | Item-item | SASRec seed 42 | Relative |
+|---|---:|---:|---:|
+| Warm recall@500 | 0.400144 | **0.465169** | **+16.25%** |
+| Cold recall@500 | 0.528527 | 0.526273 | −0.43% |
+| Overall recall@500 | 0.434269 | 0.481596 | +10.90% |
+
+That clears the gate floor of 0.412148 by 12.86%, which is **band 1: run seeds 7 and 13, and let the
+gate decide.** The scaling hypothesis the memo named before the number existed is not merely met but
+overshot — the same configuration was 12.0% *below* item-item on the 6% subsample and is 16.3% above
+it on the full data.
+
+Four things separate this from a verdict, and none of them are pessimism:
+
+1. **Cold is −0.43%**, which is the guardrail clause going live rather than staying hypothetical. The
+   cold tolerance is exactly the number that does not exist yet, so whether this is noise or a
+   regression is unanswerable today.
+2. **The run does not log `n_warm_users` or `n_cold_users`**, so the gate's population-equality check
+   cannot run and the cold comparison in particular cannot be verified as being over the same users.
+3. **It carries no `evaluation_protocol` tag**, so `retrieval_run_from_mlflow` refuses it and the
+   contract forbids grandfathering. This is strong evidence, not gate-admissible evidence.
+4. **No weights were saved.** The run path logs metrics, params and tags only, so even a passing gate
+   yields a number rather than a servable artifact — M2-02 remains the gap.
+
+The sequencing consequence is concrete: land protocol emission before spending roughly nine hours on
+seeds 7 and 13, or that compute produces more inadmissible evidence.
+
+
 **2026-09-04 update — the pilot already answered part of this.** The full options memo is
 [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md). Its central finding: the 6%
 pilot measured popularity (0.1974), item-item (0.3619) and SASRec-BCE (0.3186) on the *same*
@@ -97,6 +127,18 @@ expanding beyond the frozen three-seed plan requires a new estimate and approval
 ceiling remains open until the 6% profiler establishes a credible full-data projection.
 
 ## D-005 — Test-set policy
+
+**2026-09-04 — re-verified, and three gaps recorded.** The audit holds: searching the entire history
+of every branch for `split.test` returns exactly one added line of source, a row-count log, and
+`src/evaluation/` has no entry point that can receive a test frame. What the audit cannot establish
+is written down in the memo: trainers receive the whole `TemporalSplit` with nothing between them and
+the sealed rows; `src/features/materialize.py` defaults its `as_of` to now and `src/release/bootstrap.py`
+calls it bare, so a materialized source already aggregates over sealed-window rows — meaning the day
+ranker training reads that source, sealed data enters training with no `split.test` reference to grep
+for; and `ProtocolManifest` has no sealed-partition field, so the seal is currently established by
+reasoning from absence rather than asserted per run. That second gap is an argument the D-009 memo did
+not have: deferring Feast-sourced training features also defers a contamination route nothing watches.
+
 
 Recommended trigger: the model family, data snapshot, configuration, seed aggregation, offline
 gates, artifact checks, and serving checks are frozen, and the owner is deciding whether to call
