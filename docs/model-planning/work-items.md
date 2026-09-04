@@ -113,5 +113,6 @@ make train-sasrec
 make train-ranker
 ```
 
-`make gate` remains a ranking/NDCG gate until M0-04 lands. Do not use it to claim a
-retrieval promotion.
+`make gate` remains permanently ranking/NDCG-only. Retrieval comparisons use
+`make gate-retrieval`; missing canonical protocol metadata, a partial seed set, or absent measured
+retrieval tolerances produces no promotion verdict.

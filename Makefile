@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker gate serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-twotower train-ranker gate gate-retrieval serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -249,6 +249,26 @@ gate:
 	@test -n "$(CANDIDATE)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
 	@test -n "$(INCUMBENT)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
 	python -m src.evaluation.gate --candidate $(CANDIDATE) --incumbent $(INCUMBENT) $(GATE_ARGS)
+
+# ADR 0004's retrieval-only gate. Unlike `gate`, this reads recall@500 and
+# requires canonical protocol metadata plus the complete seed set. Retrieval
+# tolerances intentionally have no defaults: they must come from the measured
+# retrieval noise study, never from the ranker's NDCG tolerances.
+#
+#   make gate-retrieval \
+#     CANDIDATE="<seed-42> <seed-7> <seed-13>" INCUMBENT=<item-item> \
+#     RETRIEVAL_COLD_TOLERANCE=<measured fraction> \
+#     RETRIEVAL_OVERALL_TOLERANCE=<measured fraction>
+gate-retrieval:
+	@test -n "$(CANDIDATE)" || { echo "CANDIDATE run id(s) required"; exit 2; }
+	@test -n "$(INCUMBENT)" || { echo "INCUMBENT run id(s) required"; exit 2; }
+	@test -n "$(RETRIEVAL_COLD_TOLERANCE)" || { echo "measured RETRIEVAL_COLD_TOLERANCE required"; exit 2; }
+	@test -n "$(RETRIEVAL_OVERALL_TOLERANCE)" || { echo "measured RETRIEVAL_OVERALL_TOLERANCE required"; exit 2; }
+	python -m src.evaluation.retrieval_gate \
+		--candidate $(CANDIDATE) --incumbent $(INCUMBENT) \
+		--cold-tolerance $(RETRIEVAL_COLD_TOLERANCE) \
+		--overall-tolerance $(RETRIEVAL_OVERALL_TOLERANCE) \
+		$(RETRIEVAL_GATE_ARGS)
 
 # Non-negotiable #5's entry point: a fixed seed and a fixed as-of produce the
 # same artifact hashes. It is the serving-bundle build under the name the

@@ -141,6 +141,10 @@ explicit explanation and decision.
 
 ## Retrieval gate approved on 2026-09-04
 
+Implemented by `src/evaluation/manifest.py`, `src/evaluation/retrieval_gate.py`, and
+`make gate-retrieval`. The operator contract is
+[`../contracts/evaluation-protocol.md`](../contracts/evaluation-protocol.md).
+
 The executable gate should perform these checks in order:
 
 1. Candidate and incumbent are retrieval-stage results at K=500.
@@ -152,9 +156,8 @@ The executable gate should perform these checks in order:
    predeclared hard guardrail.
 7. For serving promotion, the paired LightGBM system preserves NDCG@10 within ADR 0001 tolerances.
 
-Using the current approximate item-item warm score of 0.3991 gives an illustrative floor near
-0.4111. The implementation calculates against the compatible incumbent and does not hard-code
-this example.
+Using the recorded item-item warm score of 0.400144 gives an illustrative floor of 0.412148. The
+implementation calculates against the compatible incumbent and does not hard-code this example.
 
 Retrieval-specific cold/overall tolerances must be measured from repeated stochastic runs or a
 documented deterministic-incumbent comparison before the gate is complete. Do not reuse ranking

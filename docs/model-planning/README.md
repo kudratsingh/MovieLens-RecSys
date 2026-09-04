@@ -80,6 +80,7 @@ ratings alone. M8 may remain a reading list without weakening the project.
 - [`experiments/`](experiments/) — the experiment contract and reusable run template.
 - [`agendas/`](agendas/) — kickoff, pre-run, results, and promotion review agendas.
 - [`scorecards/`](scorecards/) — concise per-model decision records linked to raw results.
+- [`contracts/`](contracts/) — executable model-evaluation contracts and operator rules.
 
 ## How to use the plan
 
