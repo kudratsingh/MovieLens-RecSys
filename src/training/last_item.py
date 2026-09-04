@@ -51,7 +51,13 @@ from sqlalchemy import create_engine
 from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    K_CANDIDATES,
+    PER_USER_RECALL_ARTIFACT,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates import routing
 from src.models.candidates.last_item import LastItemTransitionModel
 from src.training.twotower import subsample_users
@@ -66,6 +72,10 @@ logger = logging.getLogger(__name__)
 PHASE_2_EXPERIMENT = "phase-2-candidates"
 
 BASE_RUN_NAME = "last-item-transition"
+
+# The model identity every consumer keys off — the MLflow tag and the per-user
+# recall artifact. One constant so they cannot drift apart.
+MODEL_TYPE = "last_item_transition"
 
 SAMPLE_FRACTION_ENV_VAR = "LASTITEM_USER_SAMPLE_FRACTION"
 SEED_ENV_VAR = "LASTITEM_SEED"
@@ -284,11 +294,11 @@ def main() -> None:
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
     with mlflow.start_run(
         run_name=run_name_for(routing_policy, os.environ.get(RUN_LABEL_ENV_VAR, "").strip())
-    ):
+    ) as run:
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
-                "model_type": "last_item_transition",
+                "model_type": MODEL_TYPE,
                 "phase": "2",
                 "stage": "candidate",
                 "cold_start_routing_policy": routing_policy,
@@ -343,6 +353,25 @@ def main() -> None:
                 "transitions_only_recall_at_k_candidates": (result_transitions_only.overall.recall),
                 "transitions_only_ndcg_at_k_candidates": result_transitions_only.overall.ndcg,
             }
+        )
+        # The recall behind those means, one row per holdout user. Being the
+        # control is this run's whole job, and "is the sequence model better
+        # than the control?" is a question about the same users on both sides —
+        # which needs the per-user numbers, not the averages.
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                # The model has no random component. The seed is real evidence
+                # only when it chose the users, so a full-data run reports none
+                # rather than a number that changed nothing.
+                seed=sample_seed if sample_fraction != 1.0 else None,
+                configuration_id=(
+                    f"last-item-transition-sample{sample_fraction:g}-{routing_policy}"
+                ),
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             mlflow.log_params(synth_cold.params(cohort))

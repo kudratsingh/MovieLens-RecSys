@@ -27,11 +27,21 @@ from sqlalchemy import create_engine
 from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    PER_USER_RECALL_ARTIFACT,
+    K,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates.popularity import PopularityModel
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
+
+# The model identity every consumer keys off — the MLflow tag and the per-user
+# recall artifact. One constant so they cannot drift apart.
+MODEL_TYPE = "popularity"
 
 
 def main() -> None:
@@ -129,11 +139,11 @@ def main() -> None:
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(settings.mlflow_experiment)
-    with mlflow.start_run(run_name="popularity-baseline"):
+    with mlflow.start_run(run_name="popularity-baseline") as run:
         mlflow.set_tags(
             {
                 "model_family": "baseline",
-                "model_type": "popularity",
+                "model_type": MODEL_TYPE,
                 "phase": "1",
             }
         )
@@ -162,6 +172,21 @@ def main() -> None:
                 "n_warm_users": result.n_warm_users,
                 "n_cold_users": result.n_cold_users,
             }
+        )
+        # The recall behind those means, one row per holdout user. This run is
+        # the bar every other model's fallback-served users are read against,
+        # and reading it per user is what turns "the fallback did as well" into
+        # a claim about the same people.
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                # Nothing here is stochastic: the ranking is a count.
+                seed=None,
+                configuration_id="popularity-train-window-count",
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             mlflow.log_params(synth_cold.params(cohort))

@@ -17,13 +17,23 @@ from sqlalchemy import create_engine
 from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    PER_USER_RECALL_ARTIFACT,
+    K,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates import routing
 from src.models.candidates.cf import CFModel
 from src.training import seeds
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
+
+# The model identity every consumer keys off — the MLflow tag and the per-user
+# recall artifact. One constant so they cannot drift apart.
+MODEL_TYPE = "cf_als"
 
 
 def main() -> None:
@@ -169,11 +179,11 @@ def main() -> None:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(settings.mlflow_experiment)
     run_name = seeds.run_name_for(routing.run_name_for("cf-als-baseline", routing_policy), seed)
-    with mlflow.start_run(run_name=run_name):
+    with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags(
             {
                 "model_family": "baseline",
-                "model_type": "cf_als",
+                "model_type": MODEL_TYPE,
                 "phase": "1",
                 "cold_start_routing_policy": routing_policy,
                 "train_seed": str(seed),
@@ -225,6 +235,26 @@ def main() -> None:
                 "fallback_served_ndcg_at_k": result_fallback.overall.ndcg,
                 "n_fallback_served_users": len(holdout_fallback),
             }
+        )
+        # The recall behind those means, one row per holdout user. ALS is the
+        # one baseline whose seed genuinely moves the metrics, so its runs are
+        # the natural material for a seed-dispersion study — and a study needs
+        # the users, not the averages.
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                seed=seed,
+                # The seed is deliberately not part of the configuration id:
+                # runs at different seeds are the *same* configuration, which
+                # is the only thing a dispersion study can compare.
+                configuration_id=(
+                    f"cf-als-f{model.factors}-i{model.iterations}"
+                    f"-reg{model.regularization:g}-{routing_policy}"
+                ),
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             mlflow.log_params(synth_cold.params(cohort))
