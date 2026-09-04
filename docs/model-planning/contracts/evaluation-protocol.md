@@ -81,7 +81,7 @@ which is the point.
 |---|---|---|
 | `positive_history_filter` | `strict-prior-equal-timestamp-excluded-v1` | Only events strictly before the query timestamp are visible. Interactions sharing a timestamp are excluded from one another's context. |
 | `seen_item_filter` | `watched-strictly-prior-excluded-v1` | The user's already-watched titles as of that timestamp are removed from the candidate/negative pool. |
-| `dismissal_filter` | `not-applicable-no-dismissal-events-v1` | The offline dataset carries no dismissal events, so no dismissal exclusion was applied. |
+| `dismissal_filter` | `dismissals-absent-from-dataset-v1` | The offline dataset carries no dismissal events, so no dismissal exclusion was applied. |
 | `target_filter` | `target-retained-never-negative-v1` | The evaluated item is kept as the positive and is never sampled as a negative for its own group. |
 | `candidate_filter` | `unfiltered-retrieval-then-point-in-time-exclusions-v1` | Retrieval is asked for candidates unfiltered, and exclusions are applied afterwards against the point-in-time history. |
 
