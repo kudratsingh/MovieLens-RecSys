@@ -131,6 +131,7 @@ def _build_ranker_training_set(
     positives: pd.DataFrame,
     candidate_model: ItemItemModel,
     feature_index: FeatureIndex,
+    training_history: pd.DataFrame,
     n_negatives: int,
     rng: np.random.Generator,
 ) -> tuple[pd.DataFrame, list[int], np.ndarray]:
@@ -142,8 +143,10 @@ def _build_ranker_training_set(
          with ``filter_seen=False`` — positives are sampled from train,
          so the serving-shape "filter items the user has already seen"
          would drop 100% of them.
-      2. Filter out the positive from the negatives pool (avoid leaking
-         "user liked X → so X is a negative for X" as a signal).
+      2. Keep the positive, but filter the user's strictly-prior history from
+         the negatives pool. This is the serving exclusion rule at that point
+         in time; using ``filter_seen=True`` directly would also remove the
+         target because the candidate model was fit on the full train frame.
       3. Sample ``n_negatives`` from the filtered candidates.
       4. Compute features for [positive, neg₁, ..., neg_N] as-of ``ts``.
 
@@ -157,6 +160,16 @@ def _build_ranker_training_set(
     group_sizes: list[int] = []
     dropped_missing = 0
 
+    ordered_history = training_history.sort_values(
+        ["userId", "timestamp", "movieId"], kind="stable"
+    )
+    history_by_user: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for user_id, rows in ordered_history.groupby("userId", sort=False):
+        history_by_user[int(user_id)] = (
+            rows["timestamp"].to_numpy(dtype=np.int64, copy=True),
+            rows["movieId"].to_numpy(dtype=np.int64, copy=True),
+        )
+
     for pos in positives.itertuples(index=False):
         user_id = int(pos.userId)
         pos_movie = int(pos.movieId)
@@ -167,7 +180,17 @@ def _build_ranker_training_set(
             dropped_missing += 1
             continue
 
-        negatives_pool = [c for c in candidates if c != pos_movie]
+        timestamps, movie_ids = history_by_user.get(
+            user_id,
+            (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)),
+        )
+        prior_end = int(np.searchsorted(timestamps, as_of, side="left"))
+        serving_exclusions = set(int(movie_id) for movie_id in movie_ids[:prior_end])
+        negatives_pool = [
+            candidate
+            for candidate in candidates
+            if candidate != pos_movie and candidate not in serving_exclusions
+        ]
         if len(negatives_pool) < n_negatives:
             # Pathologically small pool; use what we have.
             sampled_negs = negatives_pool
@@ -324,6 +347,7 @@ def main() -> None:
         positives=positives,
         candidate_model=candidate_model,
         feature_index=feature_index,
+        training_history=train_frame,
         n_negatives=NEGATIVES_PER_POSITIVE,
         rng=rng,
     )
