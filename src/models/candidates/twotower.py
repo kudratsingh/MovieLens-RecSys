@@ -669,7 +669,11 @@ class TwoTowerModel:
             hard_logits = torch.einsum("bd,bhd->bh", user_vecs, hard_vectors)
             if temperature != 1.0:
                 hard_logits = hard_logits / temperature
-            hard_logits = hard_logits - log_p_per_index_t[hard_dense]
+            # These rows are chosen by model score after proposal sampling,
+            # so their effective selection probability is not the original
+            # log-uniform proposal. Applying that proposal correction again
+            # would over-weight popular mined items. Only the independently
+            # sampled random block above receives sampled-softmax correction.
             hard_logits = hard_logits.masked_fill(~hard_valid, float("-inf"))
             logit_blocks.append(hard_logits)
             self._hard_negative_selected += int(hard_valid.sum().item())

@@ -370,6 +370,30 @@ def test_fit_records_deterministic_item_feature_schema() -> None:
     assert len(str(params["item_feature_schema_sha256"])) == 64
 
 
+def test_v2_fit_is_bitwise_deterministic_for_same_seed() -> None:
+    config = TwoTowerConfig(
+        embedding_dim=16,
+        history_window=5,
+        batch_size=8,
+        num_sampled=16,
+        epochs=2,
+        learning_rate=1e-2,
+        hard_negative_count=3,
+        hard_negative_pool_size=12,
+        hard_negative_warmup_epochs=1,
+        faiss_exact=True,
+        seed=42,
+    )
+    first = TwoTowerModel(config=config, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
+    second = TwoTowerModel(config=config, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
+    assert first._item_tower is not None
+    assert second._item_tower is not None
+    for name, first_value in first._item_tower.state_dict().items():
+        assert torch.equal(first_value, second._item_tower.state_dict()[name])
+    assert first.hard_negative_stats() == second.hard_negative_stats()
+    assert first.recommend_for_users([1, 4, 7], k=3) == second.recommend_for_users([1, 4, 7], k=3)
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
