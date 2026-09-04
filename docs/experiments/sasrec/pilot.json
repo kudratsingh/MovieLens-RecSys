@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "ADR 0016 bounded loss pilot on a deterministic 0.5% user sample.",
+    "Both arms share architecture, users, seed, two epochs, and 32 unique",
+    "uniform negatives per positive. Only BCE versus gBCE differs."
+  ],
+  "sample_fraction": 0.005,
+  "cells": [
+    {
+      "label": "bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2
+    },
+    {
+      "label": "gbce-t0.5-neg32",
+      "loss": "gbce",
+      "calibration_t": 0.5,
+      "negative_count": 32,
+      "epochs": 2
+    }
+  ]
+}
