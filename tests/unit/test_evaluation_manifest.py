@@ -30,7 +30,7 @@ def _manifest(**changes: object) -> ProtocolManifest:
         "holdout_start": 1_000,
         "holdout_end": 2_000,
         "sealed_test_boundary": 3_000,
-        "backtest_window_id": "fixed-holdout-v1",
+        "backtest_window_id": "rolling-origin-v1:w0:1000-2000",
         "timestamp_unit": "unix-seconds",
         "timezone": "UTC",
         "label_contract_version": "implicit-positive-v1",

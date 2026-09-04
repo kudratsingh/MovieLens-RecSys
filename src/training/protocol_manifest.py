@@ -42,11 +42,12 @@ import numpy.typing as npt
 import pandas as pd
 import yaml
 
-from src.data.split import TemporalSplit
+from src.data.split import BacktestWindow, BacktestWindowError, TemporalSplit
 from src.evaluation.manifest import (
     PROTOCOL_SCHEMA_VERSION,
     EvaluationStage,
     ProtocolManifest,
+    ProtocolManifestError,
 )
 from src.evaluation.protocol import COLD_START_THRESHOLD
 from src.evaluation.retrieval_gate import (
@@ -133,7 +134,11 @@ SLICE_DEFINITION: Final = "warm-cold-by-train-interaction-count-overall-union-v1
 # manifest carries the boundaries separately: an id that names only a scheme
 # means a different interval the day the cutoff moves, and two runs would then
 # look comparable because their window ids matched.
-FIXED_HOLDOUT_WINDOW_SCHEMA: Final = "fixed-holdout-v1"
+# The window identity is not minted here. ``src/data/split.py`` owns the tiling
+# rule and its schema prefix, and ADR 0001's fixed holdout is window 0 of that
+# tiling — the same interval, so it must carry the same id. Minting a second
+# scheme would let one question hash two ways, which is the exact failure the
+# manifest exists to prevent.
 
 # Versioned prefixes so a change to what goes into a digest is visible as a
 # changed digest rather than as a silent redefinition of an unchanged one.
@@ -315,6 +320,26 @@ def build_protocol(
             most usefully when the split is degenerate or the stage and metric
             disagree.
     """
+    # The same object ``fixed_holdout_window`` returns, built from the split the run
+    # already computed rather than re-derived from the ratings frame — that helper
+    # rescans 25M rows to find a boundary this split has already established. The
+    # dataclass validates the ordering invariants either way, so if these two ever
+    # disagreed it would be the tiling rule that was broken, not the label.
+    try:
+        window = BacktestWindow(
+            index=0,
+            train_cutoff=split.cutoff,
+            holdout_start=split.cutoff,
+            holdout_end=split.holdout_end,
+            test_boundary=split.holdout_end,
+        )
+    except BacktestWindowError as exc:
+        # A degenerate split — an empty frame gives zero boundaries — has no
+        # evaluation question in it. The window happens to notice first now that
+        # it is constructed here, but this function's contract is that such a
+        # split fails as a manifest error, so it is re-raised as one rather than
+        # leaking a second module's exception type to every caller.
+        raise ProtocolManifestError(f"split does not describe an evaluation window: {exc}") from exc
     return ProtocolManifest(
         schema_version=PROTOCOL_SCHEMA_VERSION,
         raw_data_revision=raw_data_revision(dvc_path),
@@ -328,8 +353,8 @@ def build_protocol(
         # embargo between them would be a change of value, not of shape.
         holdout_start=split.cutoff,
         holdout_end=split.holdout_end,
-        sealed_test_boundary=split.holdout_end,
-        backtest_window_id=f"{FIXED_HOLDOUT_WINDOW_SCHEMA}:{split.cutoff}-{split.holdout_end}",
+        sealed_test_boundary=window.test_boundary,
+        backtest_window_id=window.window_id,
         timestamp_unit=TIMESTAMP_UNIT,
         timezone=TIMEZONE,
         label_contract_version=LABEL_CONTRACT_VERSION,

@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data.split import TemporalSplit, temporal_split
+from src.data.split import TemporalSplit, fixed_holdout_window, temporal_split
 from src.evaluation.manifest import (
     PROTOCOL_SCHEMA_VERSION,
     ProtocolManifest,
@@ -284,6 +284,22 @@ def test_the_boundaries_are_the_split_the_run_computed() -> None:
     assert protocol.holdout_end == split.holdout_end
     assert str(split.cutoff) in protocol.backtest_window_id
     assert str(split.holdout_end) in protocol.backtest_window_id
+
+
+def test_the_window_id_is_the_one_the_rolling_origin_tiling_mints() -> None:
+    """ADR 0001's holdout is window 0 of the rolling tiling, so it carries that id.
+
+    A fixed-holdout run and window 0 of a rolling suite are the same interval over
+    the same data. If they minted different ids the gate would treat one question
+    as two, and pooling a rolling window with a fixed-holdout run would look like
+    comparing incompatible protocols. This is the assertion that stops the two
+    definitions drifting apart.
+    """
+    ratings = _ratings()
+    protocol = _protocol(temporal_split(ratings))
+
+    assert protocol.backtest_window_id == fixed_holdout_window(ratings).window_id
+    assert protocol.backtest_window_id.startswith("rolling-origin-v1:w0:")
 
 
 def test_the_sealed_boundary_is_where_this_split_reserves_the_test_partition() -> None:
