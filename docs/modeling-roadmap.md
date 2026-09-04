@@ -230,8 +230,8 @@ The system pieces, mapped to the phases that own them:
 | Item-item retrieval | done | 2026-06-01 | 0004 | Warm recall@500 0.4001 on 2026-08-29 |
 | Two-tower v1 | done — measured, not promoted | 2026-07-02 | 0006 | Warm recall@500 **0.0466** against item-item's 0.4001 on the full dataset, 2026-08-30 (−88.4%). ADR 0004's gate is not cleared and item-item stays champion; the loss flattened after epoch 1, so this is a verdict on v1 as configured, not on learned retrieval |
 | LightGBM LambdaRank | done — promoted over CF/ALS on the gate | 2026-07-02 | 0005 | Warm NDCG@10 **0.0705**, overall 0.1993, seed-averaged over three seeds at the whole trailing window, 2026-08-30. Clears ADR 0001's gate against CF/ALS at **+15.53% overall / +21.21% warm**, and at every seed on its own. (The 0.0554 recorded on 2026-08-29 was one seed of a 20,000-positive sample whose warm slice moved 25% on the seed alone.) |
-| 1 — Two-tower v2 | approved | 2026-09-03 | 0015 | Temperature, hard negatives, and item side features; measure once, then move on if it cannot beat popularity |
-| 2 — SASRec | deferred | 2026-09-03 | 0016 | Designed, but deferred until two-tower v2 is repaired and measured |
+| 1 — Two-tower v2 | done — measured, not promoted | 2026-09-04 | 0015 | Complete v2 warm recall@500 0.0435 on the bounded pilot vs popularity 0.1974; stop rule fired, item-item remains champion |
+| 2 — SASRec | approved | 2026-09-04 | 0016 | Next model after the bounded two-tower v2 result |
 | 3 — Target attention ranker | not proposed | — | — | |
 | 4 — Multi-objective | not proposed | — | — | Reopens ADR 0002 by decision |
 | 5 — Mixing and re-ranking | not proposed | — | — | |

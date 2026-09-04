@@ -1,7 +1,18 @@
 # ADR 0015 — Two-Tower v2 Repair
 
-**Status:** Accepted
+**Status:** Accepted — measured, not promoted
 **Date:** 2026-09-03
+
+**Outcome (2026-09-04):** The deterministic 6% Gate 1 pilot completed all
+five planned arms with no failures. Complete v2 reached warm recall@500 of
+0.0435 (NDCG@500 0.0135), below temperature-only at 0.0445 and far below the
+same pilot's popularity reference of 0.1974. Hard-negative-only reached 0.0443
+with 100% fill across 19,170,576 requested slots, while increasing fit time
+from 89.3 to 222.5 seconds. Complete v2 took 250.5 seconds. The differences
+inside the two-tower band are below the pilot slice's known noise, while the
+4.5x gap to popularity is not. The stop rule fired: Gate 2 is not justified,
+item-item remains champion, and this repair line is closed without promotion.
+The project proceeds to ADR 0016.
 
 **Implementation note (2026-09-04):** Gate 0 uses bounded, current-model
 per-batch mining rather than materializing an epoch-wide neighbour artifact.

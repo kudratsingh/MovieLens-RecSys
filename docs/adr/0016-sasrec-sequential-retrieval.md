@@ -1,11 +1,12 @@
 # ADR 0016 — SASRec for Sequential Retrieval
 
-**Status:** Deferred
+**Status:** Accepted
 **Date:** 2026-09-03
 
-**Decision note (2026-09-03):** Deferred until the remaining Phase 3 platform
-work is closed and two-tower v2 is repaired and measured. SASRec remains the
-next model after that sequence; no implementation work has started.
+**Decision note (2026-09-04):** Approved as the next model after ADR 0015's
+bounded pilot triggered its stop rule. The owner explicitly directed the work
+to move from the repaired two-tower to the next model. Implementation remains
+subject to the staged correctness, pilot, promotion, and serving gates below.
 
 ## Context
 

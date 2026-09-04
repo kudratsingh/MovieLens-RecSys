@@ -2205,6 +2205,41 @@ the run this page has always reported. Two more belong to the run rather than
 the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
 `TWOTOWER_RUN_LABEL` (the suffix on the MLflow run name).
 
+## Two-Tower v2 bounded pilot — 2026-09-04
+
+ADR 0015's five-arm Gate 1 ran locally from the checked-in DVC dataset using
+[`v2-pilot.json`](experiments/twotower-sweep/v2-pilot.json). It used the same
+seed-42 6% user sample in every arm: 9,752 users before the temporal split,
+1,213,918 train rows, 1,198,161 strictly point-in-time training pairs, 19,005
+items, and 115 warm holdout users. Equal-timestamp interactions are no longer
+allowed into one another's prefixes, which explains the small pair-count and
+warm-user difference from the older v1 pilot.
+
+| Arm | Warm recall@500 | Warm NDCG@500 | Fit seconds |
+|---|---:|---:|---:|
+| v1 reproduction, tau 1.0 | 0.0398 | 0.0124 | 85.6 |
+| temperature only, tau 0.05 | **0.0445** | 0.0141 | 89.3 |
+| temperature only, tau 0.1 | 0.0430 | 0.0144 | 88.6 |
+| tau 0.05 + hard negatives | 0.0443 | **0.0147** | 222.5 |
+| complete v2, hard negatives + structured item features | 0.0435 | 0.0135 | 250.5 |
+| prior popularity reference on this deterministic pilot | **0.1974** | 0.0721 | — |
+
+The complete model is 4.5 times below popularity and does not improve on the
+temperature-only arm. Both mined arms filled every one of 19,170,576 requested
+hard-negative slots, so the result is not explained by an empty miner. The
+complete model recorded item-feature schema fingerprint
+`1343d99df33cf8bfd083df2e58241796a921ca746c75ded342457b59989400f9`.
+
+Local MLflow run ids, in table order, are
+`3b41a19854b94b329fd9424a0e65f773`,
+`7e803d6c93d3480aa3c1ff50b824d6ff`,
+`736d1156cd1a414aba1fdb5614a0aeab`,
+`dfa5143725f346859522a72f170a8f19`, and
+`2348ef2b16cc49bd944df4964a9dc6e9`. No external service or paid API was used.
+ADR 0015's stop rule therefore fires: no full-data run, no promotion, and no
+third two-tower tuning cycle. Item-item remains the retrieval champion and the
+modeling track proceeds to SASRec under ADR 0016.
+
 ### What was not run, and why
 
 - **One seed per cell, again.** Everything here is seed 42, and the pilot's
