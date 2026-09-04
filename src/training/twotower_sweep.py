@@ -37,6 +37,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -46,7 +47,7 @@ import mlflow
 
 from src.config import Settings
 from src.models.candidates.twotower import TwoTowerConfig
-from src.training.twotower import load_inputs, run_once
+from src.training.twotower import INPUT_DIR_ENV_VAR, load_inputs, run_once
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Sweep: %d cells at sample_fraction=%s", len(cells), sample_fraction)
 
     settings = Settings()
-    ratings, movies = load_inputs(settings)
+    input_dir_raw = os.environ.get(INPUT_DIR_ENV_VAR, "").strip()
+    ratings, movies = load_inputs(
+        settings, input_dir=Path(input_dir_raw) if input_dir_raw else None
+    )
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
     failures = 0

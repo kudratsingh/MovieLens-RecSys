@@ -31,6 +31,8 @@ belong to the run rather than the model:
       cheap pilot runs. 1.0 (the default) is the full dataset.
   ``TWOTOWER_RUN_LABEL``  appended to the MLflow run name so a sweep cell is
       identifiable without reading its params.
+  ``TWOTOWER_INPUT_DIR``  optional directory containing MovieLens
+      ``ratings.csv`` and ``movies.csv``. When set, training needs no database.
 
 Run with ``make train-twotower`` (or ``python -m src.training.twotower``)
 from project root. Requires Postgres and MLflow reachable per ``Settings``.
@@ -42,6 +44,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import mlflow
 import numpy as np
@@ -65,6 +68,7 @@ PHASE_2_EXPERIMENT = "phase-2-candidates"
 
 SAMPLE_FRACTION_ENV_VAR = "TWOTOWER_USER_SAMPLE_FRACTION"
 RUN_LABEL_ENV_VAR = "TWOTOWER_RUN_LABEL"
+INPUT_DIR_ENV_VAR = "TWOTOWER_INPUT_DIR"
 
 
 def subsample_users(
@@ -374,7 +378,22 @@ def run_once(
             )
 
 
-def load_inputs(settings: Settings) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_inputs(
+    settings: Settings, input_dir: Path | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if input_dir is not None:
+        logger.info("Loading ratings and movie metadata from CSV files in %s ...", input_dir)
+        ratings = pd.read_csv(
+            input_dir / "ratings.csv",
+            usecols=["userId", "movieId", "timestamp"],
+        )
+        movies = pd.read_csv(
+            input_dir / "movies.csv",
+            usecols=["movieId", "title", "genres"],
+        )
+        logger.info("Loaded %s ratings and %s movies", f"{len(ratings):,}", f"{len(movies):,}")
+        return ratings, movies
+
     logger.info("Loading ratings and movie metadata from Postgres ...")
     engine = create_engine(settings.database_url)
     try:
@@ -392,7 +411,9 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     settings = Settings()
-    ratings, movies = load_inputs(settings)
+    input_dir_raw = os.environ.get(INPUT_DIR_ENV_VAR, "").strip()
+    input_dir = Path(input_dir_raw) if input_dir_raw else None
+    ratings, movies = load_inputs(settings, input_dir=input_dir)
 
     config = TwoTowerConfig.from_env()
     logger.info("Config: %s", config)
