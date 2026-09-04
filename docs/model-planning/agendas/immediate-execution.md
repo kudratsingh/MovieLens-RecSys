@@ -10,14 +10,14 @@ Inputs: D-001 through D-006, D-016, and the current SASRec pilot record.
 
 Decide or explicitly defer:
 
-- retrieval gate proposal and end-to-end guardrail;
 - what constitutes a 6% pilot advance;
 - profiler-derived compute/RAM/time projection within the approved local/cloud-GPU policy;
 - final confirmation of the provisionally sealed test partition and its unseal trigger;
-- whether 300–400 ms refers to a latency measurement other than the existing stricter gates.
 
 Already answered on 2026-09-04: production targets the exact full 25M champion, compact bundles
-are fixtures, and SASRec pilots may continue while M0 closes.
+are fixtures, SASRec pilots may continue while M0 closes, retrieval promotion requires a 3%
+three-seed warm recall@500 gain with cold/overall guardrails and final-ranking non-regression, and
+the existing 15 ms encoder / 100 ms service p99 gates remain unchanged as capacity grows.
 
 Output: dated decisions, or a list of exactly which later sessions are blocked.
 

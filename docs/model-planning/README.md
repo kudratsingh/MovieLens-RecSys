@@ -110,5 +110,6 @@ The concrete first-session sequence is in
 Owner direction recorded on 2026-09-04: production targets the exact MovieLens 25M champion;
 local or cloud-GPU training is allowed under a pre-run cost estimate; the test partition is
 provisionally sealed after a repository audit found no test-metric use; and pilot work may continue
-while M0 closes. The requested 300–400 ms runtime still needs its measured operation clarified,
-because the established online gates are stricter.
+while M0 closes. Retrieval promotion requires a three-seed 3% warm recall@500 improvement, cold and
+overall guardrails, and final LightGBM NDCG non-regression. Increasing model capacity or traffic
+does not relax the established 15 ms encoder and 100 ms end-to-end p99 gates.

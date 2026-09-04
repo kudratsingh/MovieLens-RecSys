@@ -6,8 +6,8 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 
 | ID | Decision | Needed by | Recommended default | Status |
 |---|---|---|---|---|
-| D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Open; ADR 0004 amendment required |
-| D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Open |
+| D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04; ADR 0004 amendment and retrieval-tolerance measurement required |
+| D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
 | D-003 | SASRec pilot advance/stop margin | Before interpreting the 6% pilot | Must beat same-sample popularity and last-item baseline; do not infer item-item parity from one noisy pilot seed | Open |
 | D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |
 | D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Provisionally answered 2026-09-04; repository audit found no test evaluation |
@@ -21,7 +21,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-013 | Frontier compute/provider budget | Before M8 | A fixed-cost research spike; no open-ended foundation-model training | Owner input required later |
 | D-014 | Fate of untracked `docs/progress.md` | Before status-doc cleanup | Preserve untouched; owner chooses archive, refresh, or delete in a separate change | Owner input required |
 | D-015 | Phase 4 automation timing | Before M3 | Stabilize SASRec experiment/export contracts first, then automate; SASRec pilots may continue meanwhile, but promotion/serving waits for M0 | Answered 2026-09-04 |
-| D-016 | Meaning of the requested 300–400 ms runtime | Before M2 latency review | Preserve existing stricter p99 targets: SASRec encoder <15 ms and authenticated service <100 ms | Clarification required: training duration is not measured in milliseconds |
+| D-016 | Meaning of the requested 300–400 ms runtime | Before M2 latency review | Preserve existing stricter p99 targets: SASRec encoder <15 ms and authenticated service <100 ms | Answered 2026-09-04; 300–400 ms was an assumption about growth, not a request to relax gates |
 
 ## D-001 — Retrieval promotion gate
 
@@ -40,6 +40,12 @@ Recommended answer: primary warm recall@500, +3% relative over item-item, three-
 positive claim, user bootstrap intervals as supporting uncertainty, cold/overall non-regression,
 and a hard refusal when protocol fingerprints differ.
 
+**Owner decision, 2026-09-04:** approved. Using the current approximate item-item warm
+recall@500 of 0.3991, the illustrative SASRec floor is about 0.4111; the executable gate must
+calculate its threshold from the protocol-compatible incumbent rather than hard-code that example.
+Before implementation closes, measure retrieval-specific seed tolerances for the cold and overall
+guardrails instead of borrowing the ranker's NDCG tolerances.
+
 ## D-002 — Joint system guardrail
 
 A retriever can surface more relevant holdout items yet create a candidate distribution the
@@ -47,6 +53,8 @@ existing ranker orders poorly. Recommended answer: stage-local recall decides wh
 learned anything; serving promotion also requires the champion LightGBM ranker to preserve
 NDCG@10 within ADR 0001's warm/cold tolerances. If it fails, retrain the ranker on the new source
 and gate the paired system as a new bundle.
+
+**Owner decision, 2026-09-04:** approved.
 
 ## D-003 — SASRec pilot rule
 
@@ -110,10 +118,16 @@ scale feature representation, artifact export, and serving equivalence are there
 
 ## D-016 — Runtime clarification
 
-The owner requested runtime below 300–400 ms. Training runs take minutes or hours, so this appears
-to describe online inference. The project already has stricter accepted requirements: SASRec's
-isolated encoder p99 below 15 ms and the authenticated end-to-end service p99 below 100 ms. This
-plan preserves those stricter numbers unless the owner explicitly means a different operation.
+The owner initially expected runtime below 300–400 ms because larger models and higher usage
+normally increase work. On 2026-09-04 the owner approved preserving the project's stricter
+requirements: SASRec's isolated encoder p99 below 15 ms and the authenticated end-to-end service
+p99 below 100 ms.
+
+Capacity or model growth does not automatically relax either SLO. A larger model must use an
+appropriate combination of precomputation, ANN, batching, compilation, quantization, distillation,
+caching, concurrency controls, or additional serving capacity. Measure p50/p95/p99 by concurrency,
+history length, candidate count, and model version. If the unchanged representative-load gate
+fails, the model is not serving eligible even when its offline quality improves.
 
 ## D-010 — Multi-objective truthfulness
 
