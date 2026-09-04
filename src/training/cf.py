@@ -26,7 +26,7 @@ from src.evaluation.protocol import (
 )
 from src.models.candidates import routing
 from src.models.candidates.cf import CFModel
-from src.training import seeds
+from src.training import protocol_manifest, seeds
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -76,11 +76,28 @@ def main() -> None:
     seed = seeds.resolve_seed()
     logger.info("Seed: %d", seed)
 
-    logger.info("Fitting CF (ALS) model ...")
     model = CFModel(
         random_state=seed,
         cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD),
     )
+
+    # Derived before the fit rather than after it: every input the protocol
+    # depends on already exists here, and a missing DVC pointer or an unexpected
+    # column should cost a minute rather than a completed training run.
+    #
+    # Like the popularity baseline this run is scored at K=10 and read against
+    # ADR 0001's NDCG gate, so it declares the ranking stage. Claiming retrieval
+    # would let a top-10 number be pooled with recall@500 evidence.
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="ranking",
+        k=K,
+    )
+    logger.info("Evaluation protocol: %s", protocol.semantic_hash)
+
+    logger.info("Fitting CF (ALS) model ...")
     t0 = time.perf_counter()
     model.fit(train_frame)
     fit_seconds = time.perf_counter() - t0
@@ -210,6 +227,13 @@ def main() -> None:
                 "recommend_seconds": round(recommend_seconds, 1),
             }
         )
+        # The strict envelope from docs/model-planning/contracts/evaluation-protocol.md.
+        # ALS initialises its factors at random, so this is a stochastic run and
+        # the seed is required rather than optional — it is the only thing that
+        # makes a three-seed dispersion reading of these numbers possible.
+        envelope = protocol_manifest.run_envelope(protocol, deterministic=False, seed=seed)
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
         mlflow.log_metrics(
             {
                 "warm_recall_at_k": result.warm.recall,
@@ -253,6 +277,7 @@ def main() -> None:
                     f"cf-als-f{model.factors}-i{model.iterations}"
                     f"-reg{model.regularization:g}-{routing_policy}"
                 ),
+                protocol=protocol.to_dict(),
             ),
             PER_USER_RECALL_ARTIFACT,
         )

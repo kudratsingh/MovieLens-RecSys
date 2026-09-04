@@ -29,7 +29,8 @@ def _manifest(**changes: object) -> ProtocolManifest:
         "train_cutoff": 1_000,
         "holdout_start": 1_000,
         "holdout_end": 2_000,
-        "backtest_window_id": "fixed-holdout-v1",
+        "sealed_test_boundary": 3_000,
+        "backtest_window_id": "rolling-origin-v1:w0:1000-2000",
         "timestamp_unit": "unix-seconds",
         "timezone": "UTC",
         "label_contract_version": "implicit-positive-v1",
@@ -92,6 +93,8 @@ def test_round_trip_is_exact_and_rejects_unknown_or_missing_fields():
         ({"cold_start_threshold": -1}, "cold_start_threshold"),
         ({"holdout_start": 2_000}, "holdout_start must be before holdout_end"),
         ({"train_cutoff": 1_001}, "train_cutoff must not be after holdout_start"),
+        ({"sealed_test_boundary": 1_999}, "past sealed_test_boundary"),
+        ({"sealed_test_boundary": -1}, "non-negative integer timestamp"),
         ({"catalog_fingerprint": ""}, "catalog_fingerprint must be a non-empty string"),
         ({"catalog_fingerprint": " hash "}, "leading or trailing whitespace"),
     ],
@@ -99,6 +102,27 @@ def test_round_trip_is_exact_and_rejects_unknown_or_missing_fields():
 def test_invalid_semantics_fail_closed(changes: dict[str, object], message: str):
     with pytest.raises(ProtocolManifestError, match=message):
         _manifest(**changes)
+
+
+def test_the_seal_may_open_exactly_where_the_holdout_ends():
+    # ADR 0001's single fixed holdout: everything after the 28-day window is
+    # reserved, so the two boundaries coincide. A rolling-origin window would
+    # end well before the seal, which is why they are separate fields rather
+    # than one — but the fixed holdout must not be the case that fails.
+    manifest = _manifest(holdout_end=2_000, sealed_test_boundary=2_000)
+
+    assert manifest.sealed_test_boundary == manifest.holdout_end
+
+
+def test_the_seal_is_a_semantic_difference_and_not_provenance():
+    # Two runs that disagree about where the sealed partition begins are asking
+    # different questions even when every other field matches, so the gate has
+    # to be able to see it — which means it has to move the hash.
+    development = _manifest()
+    later_seal = replace(development, sealed_test_boundary=4_000)
+
+    assert development.semantic_hash != later_seal.semantic_hash
+    assert development.mismatches(later_seal) == {"sealed_test_boundary": (3_000, 4_000)}
 
 
 def test_mismatch_lists_every_different_semantic_field():

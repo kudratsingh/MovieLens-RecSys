@@ -35,6 +35,7 @@ from src.evaluation.protocol import (
     per_user_recall_document,
 )
 from src.models.candidates.popularity import PopularityModel
+from src.training import protocol_manifest
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,24 @@ def main() -> None:
     # appear in holdout, so the warm/cold numbers below are unmoved — the
     # cohort exists to be routed and scored, not to shift an existing metric.
     train_frame, cohort = synth_cold.prepare(split, logger=logger)
+
+    # Derived before the fit rather than after it: every input the protocol
+    # depends on already exists here, and a missing DVC pointer or an unexpected
+    # column should cost a minute rather than a completed training run.
+    #
+    # This baseline answers the top-10 ranking question, not the candidate-stage
+    # one — it evaluates at K, logs `*_at_k` metrics, and is read against ADR
+    # 0001's NDCG gate. Recording `stage="ranking"` is therefore the honest
+    # claim, and it is what keeps the run out of a retrieval promotion decision
+    # it was never scored for.
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.POPULARITY_ONLY_ROUTING,
+        stage="ranking",
+        k=K,
+    )
+    logger.info("Evaluation protocol: %s", protocol.semantic_hash)
 
     logger.info("Fitting popularity model ...")
     t0 = time.perf_counter()
@@ -161,6 +180,11 @@ def main() -> None:
                 "recommend_seconds": round(recommend_seconds, 1),
             }
         )
+        # The strict envelope from docs/model-planning/contracts/evaluation-protocol.md.
+        # Nothing in a count is random, so this run records no seed.
+        envelope = protocol_manifest.run_envelope(protocol, deterministic=True, seed=None)
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
         mlflow.log_metrics(
             {
                 "warm_recall_at_k": result.warm.recall,
@@ -185,6 +209,7 @@ def main() -> None:
                 # Nothing here is stochastic: the ranking is a count.
                 seed=None,
                 configuration_id="popularity-train-window-count",
+                protocol=protocol.to_dict(),
             ),
             PER_USER_RECALL_ARTIFACT,
         )

@@ -50,6 +50,16 @@ class ProtocolManifest:
     Identifiers are values, not filesystem paths.  For example,
     ``raw_data_revision`` is the immutable DVC object hash and
     ``catalog_fingerprint`` is a content hash of the eligible item IDs.
+
+    ``sealed_test_boundary`` is the first timestamp of the reserved test
+    partition, and the run asserts positively that nothing at or after it
+    entered fitting, scoring, feature construction, selection or slicing.  It
+    is a boundary rather than a flag because a flag would say only that some
+    seal was honoured, not *where* — and the whole content of the claim is the
+    where.  It is also deliberately separate from ``holdout_end``: those are
+    equal under the single fixed holdout, and a rolling-origin window ends well
+    before the seal, so collapsing them would make two runs with different
+    windows but the same seal look like disagreements about the seal.
     """
 
     schema_version: int
@@ -59,6 +69,7 @@ class ProtocolManifest:
     train_cutoff: int
     holdout_start: int
     holdout_end: int
+    sealed_test_boundary: int
     backtest_window_id: str
     timestamp_unit: str
     timezone: str
@@ -107,7 +118,7 @@ class ProtocolManifest:
                 "cold_start_threshold must be a non-negative integer, "
                 f"got {self.cold_start_threshold!r}"
             )
-        for name in ("train_cutoff", "holdout_start", "holdout_end"):
+        for name in ("train_cutoff", "holdout_start", "holdout_end", "sealed_test_boundary"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ProtocolManifestError(
@@ -117,12 +128,22 @@ class ProtocolManifest:
             raise ProtocolManifestError("train_cutoff must not be after holdout_start")
         if self.holdout_start >= self.holdout_end:
             raise ProtocolManifestError("holdout_start must be before holdout_end")
+        # Equality is the fixed holdout, where the seal begins exactly where the
+        # evaluation window ends.  Anything beyond it is a run claiming to have
+        # scored on the partition it also claims is sealed.
+        if self.holdout_end > self.sealed_test_boundary:
+            raise ProtocolManifestError(
+                f"holdout_end {self.holdout_end} is past sealed_test_boundary "
+                f"{self.sealed_test_boundary}; development evidence never scores on the "
+                "sealed partition"
+            )
 
         integer_fields = {
             "schema_version",
             "train_cutoff",
             "holdout_start",
             "holdout_end",
+            "sealed_test_boundary",
             "cold_start_threshold",
             "k",
         }
