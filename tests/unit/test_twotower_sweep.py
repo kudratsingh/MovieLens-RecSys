@@ -73,16 +73,14 @@ _FAST_CONFIG = TwoTowerConfig(
 )
 
 
-# --- the defaults did not move --------------------------------------------
+# --- accepted defaults ----------------------------------------------------
 
 
-def test_adr_0006_defaults_are_unchanged() -> None:
-    """The load-bearing test for the sweep.
+def test_accepted_defaults_are_explicit() -> None:
+    """The load-bearing default test for the sweep.
 
-    Every field below is either ADR 0006's stated configuration or the
-    "behave exactly as v1 did" value for a knob v1 did not have. If a sweep
-    result talks anyone into editing one of these, this test is what makes
-    them do it deliberately and in a diff that says so.
+    ADR 0015 deliberately changes temperature; the remaining values still
+    reproduce v1. Any future default movement must be visible in this test.
     """
     config = TwoTowerConfig()
     assert config.embedding_dim == 64
@@ -94,8 +92,7 @@ def test_adr_0006_defaults_are_unchanged() -> None:
     assert config.faiss_nlist == 100
     assert config.faiss_nprobe == 10
     assert config.seed == 42
-    # Knobs the sweep added, at their v1-equivalent values.
-    assert config.logit_temperature == 1.0
+    assert config.logit_temperature == 0.05
     assert config.correct_positive_logit is True
     assert config.early_stopping_patience == 0
     assert config.faiss_exact is False

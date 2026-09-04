@@ -21,7 +21,7 @@ artifact rather than from a diff::
     }
 
 Each cell's keys are ``TwoTowerConfig`` field names; anything absent takes
-ADR 0006's default. ``label`` is the only non-field key and lands in the
+the currently accepted ADR 0015 default. ``label`` is the only non-field key and lands in the
 MLflow run name and the ``sweep_label`` tag.
 
 Usage::

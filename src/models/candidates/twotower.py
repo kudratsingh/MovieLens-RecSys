@@ -69,10 +69,9 @@ class TwoTowerConfig:
     """Hyperparameters. Every field is logged as an MLflow param by the
     training script so a future sweep is a pure config change.
 
-    Every default on this class is ADR 0006's configuration, which is what
-    the 2026-08-30 v1 run measured. :meth:`from_env` is the only way a run
-    departs from them, so a run's MLflow params are a complete description
-    of what produced it.
+    Defaults follow the currently accepted architecture. ADR 0015 changes the
+    v2 temperature to 0.05; a v1 reproduction must explicitly set 1.0. Every
+    value is logged, so the distinction is visible in MLflow.
     """
 
     embedding_dim: int = 64
@@ -84,14 +83,9 @@ class TwoTowerConfig:
     epochs: int = 3
     learning_rate: float = 1e-3
     # Divides the cosine similarity before the log-uniform correction is
-    # applied. 1.0 is v1's behaviour — ADR 0006 pins L2-normalized towers and
-    # a logQ correction but never names a temperature, so v1 ran at an
-    # implicit 1.0. That matters because both towers are unit-normalized, so
-    # the learnable part of a logit is bounded to [-1, 1] while the
-    # correction term spans roughly ten nats; at 1.0 the popularity prior
-    # simply outranks anything the embeddings can say. See ADR 0006's
-    # 2026-08-30 sweep note.
-    logit_temperature: float = 1.0
+    # applied. ADR 0015 adopts 0.05 for v2 from the best full-data sweep cell.
+    # 1.0 remains v1's explicit reproduction value.
+    logit_temperature: float = 0.05
     # Whether the positive's logit gets the same -log P correction the
     # negatives get. True is v1's behaviour and matches TensorFlow's
     # `sampled_softmax_loss`, which corrects the true logit by its expected

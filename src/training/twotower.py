@@ -23,9 +23,9 @@ one MLflow view — the direct comparison ADR 0004's promotion gate requires.
 **Every hyperparameter is env-driven** through ``TwoTowerConfig.from_env``
 (``TWOTOWER_LEARNING_RATE``, ``TWOTOWER_EPOCHS``, ``TWOTOWER_NUM_SAMPLED``,
 ``TWOTOWER_LOGIT_TEMPERATURE``, …). Unset means ADR 0006's default, so
-``make train-twotower`` with a clean environment still reproduces the run
-already recorded in ``docs/results.md``. Two further variables belong to the
-run rather than the model:
+``make train-twotower`` with a clean environment uses ADR 0015's v2 default;
+set ``TWOTOWER_LOGIT_TEMPERATURE=1.0`` to reproduce v1. Two further variables
+belong to the run rather than the model:
 
   ``TWOTOWER_USER_SAMPLE_FRACTION``  a seeded fraction of users to keep, for
       cheap pilot runs. 1.0 (the default) is the full dataset.
