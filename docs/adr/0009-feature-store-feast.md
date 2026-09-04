@@ -5,25 +5,22 @@
 
 _Implementation note (2026-08-21): the Feast repository landed in `src/features/feast_repo/` with `tenant` declared as its own entity joined onto every feature view, and the parity test in `tests/feature_parity/` runs in CI as planned. Two departures from the text below: the `FeatureIndex` prototype in `src/features/pipeline.py` was kept rather than retired (offline ranker training still reads it), and materialization is a direct `src/features/materialize.py` job rather than a Prefect task, since Prefect does not arrive until Phase 4._
 
-_Decision amendment (2026-09-03): `FeatureIndex` is retained as the ranker
-training implementation rather than replaced by `get_historical_features`.
-The deployed Feast offline store contains versioned materialization snapshots;
-it does not contain a feature row for each of the ranker's roughly 154,000
-positive timestamps. Asking Feast for those arbitrary historical rows would
-therefore return an older snapshot or null, not reconstruct the value from raw
-ratings. Persisting every user×item value at every training timestamp would
-make `user_item_features` grow with the training candidate set solely to move
-an already-correct bisect computation behind an SDK call._
+_Amendment withdrawn (2026-09-04): a 2026-09-03 amendment declared `FeatureIndex`
+the permanent ranker-training implementation and marked Decision bullet 6 superseded.
+It is withdrawn because it closed the question in the direction of least work without
+pricing the alternatives — in particular it did not cost the user×item representation
+this project needs at full scale regardless. Decision bullet 6 stands as the target;
+the departure recorded on 2026-08-21 stands as the fact. The costed options and the
+measured numbers are in
+[`../model-planning/memos/feature-source-boundary.md`](../model-planning/memos/feature-source-boundary.md),
+and the decision is D-009 in the model-planning register. What the amendment got right
+survives in that memo: a snapshot-grained source cannot be point-in-time correct at an
+arbitrary timestamp in either direction._
 
-_The boundary is now explicit and tested: `FeatureIndex` reconstructs arbitrary
-point-in-time training rows from the DVC-versioned ratings frame; Feast owns
-versioned Postgres snapshots, the Redis online store, registry, and serving
-contract. `tests/feature_parity/test_online_matches_offline.py` computes all
-eight ranker features through Python at an actual materialization timestamp and
-requires them to equal both Feast's historical snapshot and online value. The
-trainer logs both source versions in MLflow. This supersedes the Decision and
-Consequences bullets below that required deleting `FeatureIndex`; their
-reasoning remains as the historical record._
+_What landed alongside it is unaffected and stays: the feature-parity test now computes
+all eight ranker features in Python at a real materialization timestamp and requires
+them to equal both Feast's historical and online values, and the trainer records both
+source versions in MLflow. Those are facts about the code, not the pending decision._
 
 ## Context
 
