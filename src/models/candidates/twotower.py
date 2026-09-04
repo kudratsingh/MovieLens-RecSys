@@ -47,6 +47,7 @@ from .item_features import (
     fit_item_feature_schema,
 )
 from .popularity import PopularityModel
+from .sequence_data import build_strict_prefix_examples
 
 logger = logging.getLogger(__name__)
 
@@ -534,43 +535,24 @@ class TwoTowerModel:
         """
         n = self.config.history_window
         if train is not None:
-            ordered = train.sort_values(["userId", "timestamp", "movieId"], kind="stable")
-            total = 0
-            for _user_id, group in ordered.groupby("userId", sort=False):
-                first_timestamp = group["timestamp"].min()
-                total += int((group["timestamp"] > first_timestamp).sum())
+            return build_strict_prefix_examples(
+                train,
+                item_to_index=self._item_to_index,
+                max_length=n,
+            )
         else:
-            ordered = None
             total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
         histories = np.zeros((total, n), dtype=np.int32)
         positives = np.empty(total, dtype=np.int32)
 
         row = 0
-        if ordered is not None:
-            for _user_id, group in ordered.groupby("userId", sort=False):
-                prefix: list[int] = []
-                for _timestamp, simultaneous in group.groupby("timestamp", sort=False):
-                    dense_targets = [
-                        self._item_to_index[int(movie_id)]
-                        for movie_id in simultaneous["movieId"].tolist()
-                    ]
-                    if prefix:
-                        window = np.asarray(prefix[-n:], dtype=np.int32)
-                        for target in dense_targets:
-                            histories[row, n - len(window) :] = window
-                            positives[row] = target
-                            row += 1
-                    # Same-time targets become visible only to later timestamp
-                    # groups, never to one another.
-                    prefix.extend(dense_targets)
-        else:
-            for hist in self._user_history.values():
-                dense = np.asarray(hist, dtype=np.int32)
-                for i in range(1, len(dense)):
-                    window = dense[max(0, i - n) : i]
-                    histories[row, n - len(window) :] = window
-                    positives[row] = dense[i]
-                    row += 1
+        for hist in self._user_history.values():
+            dense = np.asarray(hist, dtype=np.int32)
+            for i in range(1, len(dense)):
+                window = dense[max(0, i - n) : i]
+                histories[row, n - len(window) :] = window
+                positives[row] = dense[i]
+                row += 1
 
         return torch.from_numpy(histories), torch.from_numpy(positives)
 
