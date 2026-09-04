@@ -3,6 +3,18 @@
 **Status:** Accepted
 **Date:** 2026-09-03
 
+**Implementation note (2026-09-04):** Gate 0 uses bounded, current-model
+per-batch mining rather than materializing an epoch-wide neighbour artifact.
+After one warm-up epoch, each example selects up to eight valid hard negatives
+from a seeded 256-draw log-uniform pool and mixes them with the existing
+corrected sampled-softmax negatives. This is deterministic, keeps laptop memory
+bounded, and logs selected slots and fill rate. It deliberately supersedes the
+initial 3:1 and once-per-epoch defaults below for the pilot; those settings were
+written for per-example random negatives, while v1 actually shares 16,384
+random samples across a batch. The five-arm pilot decides whether this cheaper
+mining signal merits a materialized epoch pool. The accepted stop and promotion
+rules do not change.
+
 ## Context
 
 [ADR 0006](0006-two-tower-retrieval-architecture.md) defined the first learned
@@ -253,4 +265,3 @@ evidence.
   Networks,” 2020.
 - [ADR 0006](0006-two-tower-retrieval-architecture.md), including its
   2026-08-30 full-data sweep note.
-

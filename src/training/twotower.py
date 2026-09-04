@@ -113,6 +113,7 @@ def run_name_for(policy: str, label: str) -> str:
 
 def run_once(
     ratings: pd.DataFrame,
+    movies: pd.DataFrame,
     config: TwoTowerConfig,
     *,
     sample_fraction: float = 1.0,
@@ -240,7 +241,8 @@ def run_once(
                 spread.get("item_cosine_std", float("nan")),
             )
 
-        model.fit(train_frame, on_epoch=_log_epoch)
+        model.fit(train_frame, movies=movies, on_epoch=_log_epoch)
+        mlflow.log_params(model.item_feature_params())
         fit_seconds = time.perf_counter() - t0 - epoch_eval_seconds
         logger.info(
             "Fit in %.1fs (%d users x %d items, %d of %d epochs; %.1fs of per-epoch eval excluded)",
@@ -360,6 +362,7 @@ def run_once(
                 "fallback_served_recall_at_k_candidates": result_fallback.overall.recall,
                 "fallback_served_ndcg_at_k_candidates": result_fallback.overall.ndcg,
                 "n_fallback_served_users": len(holdout_fallback),
+                **model.hard_negative_stats(),
             }
         )
         if cohort is not None:
@@ -371,12 +374,16 @@ def run_once(
             )
 
 
-def load_inputs(settings: Settings) -> pd.DataFrame:
-    logger.info("Loading ratings from Postgres ...")
+def load_inputs(settings: Settings) -> tuple[pd.DataFrame, pd.DataFrame]:
+    logger.info("Loading ratings and movie metadata from Postgres ...")
     engine = create_engine(settings.database_url)
-    ratings = load_ratings(engine)
-    logger.info("Loaded %s ratings", f"{len(ratings):,}")
-    return ratings
+    try:
+        ratings = load_ratings(engine)
+        movies = pd.read_sql('SELECT "movieId", title, genres FROM movies', engine)
+    finally:
+        engine.dispose()
+    logger.info("Loaded %s ratings and %s movies", f"{len(ratings):,}", f"{len(movies):,}")
+    return ratings, movies
 
 
 def main() -> None:
@@ -385,7 +392,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     settings = Settings()
-    ratings = load_inputs(settings)
+    ratings, movies = load_inputs(settings)
 
     config = TwoTowerConfig.from_env()
     logger.info("Config: %s", config)
@@ -394,6 +401,7 @@ def main() -> None:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     run_once(
         ratings,
+        movies,
         config,
         sample_fraction=resolve_sample_fraction(),
         run_label=os.environ.get(RUN_LABEL_ENV_VAR, "").strip(),

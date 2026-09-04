@@ -94,6 +94,10 @@ def test_accepted_defaults_are_explicit() -> None:
     assert config.seed == 42
     assert config.logit_temperature == 0.05
     assert config.correct_positive_logit is True
+    assert config.use_item_features is True
+    assert config.hard_negative_count == 8
+    assert config.hard_negative_pool_size == 256
+    assert config.hard_negative_warmup_epochs == 1
     assert config.early_stopping_patience == 0
     assert config.faiss_exact is False
 
@@ -122,6 +126,10 @@ def test_from_env_reads_every_field() -> None:
             "TWOTOWER_LEARNING_RATE": "0.05",
             "TWOTOWER_LOGIT_TEMPERATURE": "0.05",
             "TWOTOWER_CORRECT_POSITIVE_LOGIT": "false",
+            "TWOTOWER_USE_ITEM_FEATURES": "false",
+            "TWOTOWER_HARD_NEGATIVE_COUNT": "4",
+            "TWOTOWER_HARD_NEGATIVE_POOL_SIZE": "64",
+            "TWOTOWER_HARD_NEGATIVE_WARMUP_EPOCHS": "2",
             "TWOTOWER_EARLY_STOPPING_PATIENCE": "2",
             "TWOTOWER_EARLY_STOPPING_MIN_DELTA": "0.01",
             "TWOTOWER_FAISS_NLIST": "256",
@@ -139,6 +147,10 @@ def test_from_env_reads_every_field() -> None:
         learning_rate=0.05,
         logit_temperature=0.05,
         correct_positive_logit=False,
+        use_item_features=False,
+        hard_negative_count=4,
+        hard_negative_pool_size=64,
+        hard_negative_warmup_epochs=2,
         early_stopping_patience=2,
         early_stopping_min_delta=0.01,
         faiss_nlist=256,

@@ -328,3 +328,60 @@ def test_recommend_length_bounded_by_k(k: int) -> None:
     model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
     recs = model.recommend(user_id=1, k=k)
     assert len(recs) <= k
+
+
+def test_hard_negative_mining_starts_after_warmup_and_fills_slots() -> None:
+    config = TwoTowerConfig(
+        embedding_dim=16,
+        history_window=5,
+        batch_size=8,
+        num_sampled=16,
+        epochs=2,
+        learning_rate=1e-2,
+        hard_negative_count=3,
+        hard_negative_pool_size=12,
+        hard_negative_warmup_epochs=1,
+        faiss_nlist=4,
+        faiss_nprobe=2,
+        seed=42,
+    )
+    model = TwoTowerModel(config=config, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
+    stats = model.hard_negative_stats()
+    assert stats["hard_negative_slots"] > 0
+    assert 0 < stats["hard_negative_selected"] <= stats["hard_negative_slots"]
+    assert 0.0 < stats["hard_negative_fill_rate"] <= 1.0
+
+
+def test_fit_records_deterministic_item_feature_schema() -> None:
+    movies = pd.DataFrame(
+        {
+            "movieId": sorted(_SYNTHETIC_TRAIN["movieId"].unique()),
+            "title": [f"Movie {index} ({2000 + index})" for index in range(10)],
+            "genres": ["Action|Comedy"] * 5 + ["Drama"] * 5,
+        }
+    )
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None).fit(
+        _SYNTHETIC_TRAIN, movies=movies
+    )
+    params = model.item_feature_params()
+    assert params["item_features_fitted"] is True
+    assert params["item_feature_genre_count"] == 3
+    assert params["item_feature_count"] == 6
+    assert len(str(params["item_feature_schema_sha256"])) == 64
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"hard_negative_count": -1}, "non-negative"),
+        (
+            {"hard_negative_count": 5, "hard_negative_pool_size": 4},
+            "pool_size",
+        ),
+        ({"hard_negative_warmup_epochs": -1}, "warmup"),
+    ],
+)
+def test_invalid_hard_negative_config_fails_loudly(overrides: dict[str, int], message: str) -> None:
+    config = TwoTowerConfig(**overrides)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=message):
+        TwoTowerModel(config=config).fit(_SYNTHETIC_TRAIN)

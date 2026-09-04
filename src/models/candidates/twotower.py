@@ -23,6 +23,8 @@ a (batch, N) tensor cleanly.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import os
@@ -38,6 +40,12 @@ import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias
 from torch import nn
 
 from . import routing
+from .hard_negatives import select_hard_negatives
+from .item_features import (
+    ItemFeatureSchema,
+    build_item_feature_matrix,
+    fit_item_feature_schema,
+)
 from .popularity import PopularityModel
 
 logger = logging.getLogger(__name__)
@@ -93,6 +101,13 @@ class TwoTowerConfig:
     # so the flag exists to let the sweep measure the difference rather
     # than argue about which reading was meant.
     correct_positive_logit: bool = True
+    # ADR 0015 v2. When catalog metadata is supplied, fuse deterministic
+    # genre/year features into the item representation. Direct model callers
+    # may omit metadata to reproduce the id-only v1 ablation.
+    use_item_features: bool = True
+    hard_negative_count: int = 8
+    hard_negative_pool_size: int = 256
+    hard_negative_warmup_epochs: int = 1
     # Epochs to keep going after the best mean loss seen so far. 0 disables
     # early stopping entirely, which is v1's behaviour (it always ran
     # exactly `epochs` passes).
@@ -131,6 +146,18 @@ class TwoTowerConfig:
             logit_temperature=_env_float(e, "TWOTOWER_LOGIT_TEMPERATURE", cls.logit_temperature),
             correct_positive_logit=_env_bool(
                 e, "TWOTOWER_CORRECT_POSITIVE_LOGIT", cls.correct_positive_logit
+            ),
+            use_item_features=_env_bool(e, "TWOTOWER_USE_ITEM_FEATURES", cls.use_item_features),
+            hard_negative_count=_env_int(
+                e, "TWOTOWER_HARD_NEGATIVE_COUNT", cls.hard_negative_count
+            ),
+            hard_negative_pool_size=_env_int(
+                e, "TWOTOWER_HARD_NEGATIVE_POOL_SIZE", cls.hard_negative_pool_size
+            ),
+            hard_negative_warmup_epochs=_env_int(
+                e,
+                "TWOTOWER_HARD_NEGATIVE_WARMUP_EPOCHS",
+                cls.hard_negative_warmup_epochs,
             ),
             early_stopping_patience=_env_int(
                 e, "TWOTOWER_EARLY_STOPPING_PATIENCE", cls.early_stopping_patience
@@ -268,10 +295,14 @@ class TwoTowerModel:
     _user_history: dict[int, list[int]] = field(default_factory=dict)
     _faiss_index: Any = None  # faiss.Index; typed loose because faiss stubs are partial
     _popularity: PopularityModel = field(default_factory=PopularityModel)
+    _item_feature_schema: ItemFeatureSchema | None = None
+    _hard_negative_selected: int = 0
+    _hard_negative_slots: int = 0
 
     def fit(
         self,
         train: pd.DataFrame,
+        movies: pd.DataFrame | None = None,
         on_epoch: Callable[[int, float], None] | None = None,
     ) -> TwoTowerModel:
         """Train both towers, then build the FAISS retrieval index.
@@ -293,10 +324,19 @@ class TwoTowerModel:
             self._index_to_item = {}
             self._user_history = {}
             self._faiss_index = None
+            self._item_feature_schema = None
             return self
 
         torch.manual_seed(self.config.seed)
         np.random.seed(self.config.seed)
+        if self.config.hard_negative_count < 0:
+            raise ValueError("hard_negative_count must be non-negative")
+        if self.config.hard_negative_pool_size < self.config.hard_negative_count:
+            raise ValueError("hard_negative_pool_size must be >= hard_negative_count")
+        if self.config.hard_negative_warmup_epochs < 0:
+            raise ValueError("hard_negative_warmup_epochs must be non-negative")
+        self._hard_negative_selected = 0
+        self._hard_negative_slots = 0
 
         # ---- Vocabulary and history construction ----
         # Item ids are re-indexed starting at 1; index 0 is padding.
@@ -339,7 +379,21 @@ class TwoTowerModel:
         )
 
         # ---- Training loop ----
-        self._item_tower = ItemTower(n_items=n_items, embedding_dim=self.config.embedding_dim)
+        side_features: torch.Tensor | None = None
+        self._item_feature_schema = None
+        if self.config.use_item_features and movies is not None:
+            training_catalog = movies[movies["movieId"].isin(self._item_to_index)].copy()
+            self._item_feature_schema = fit_item_feature_schema(training_catalog)
+            side_features = build_item_feature_matrix(
+                training_catalog,
+                item_to_index=self._item_to_index,
+                schema=self._item_feature_schema,
+            )
+        self._item_tower = ItemTower(
+            n_items=n_items,
+            embedding_dim=self.config.embedding_dim,
+            side_features=side_features,
+        )
         optimizer = torch.optim.Adam(self._item_tower.parameters(), lr=self.config.learning_rate)
 
         best_loss = math.inf
@@ -369,6 +423,10 @@ class TwoTowerModel:
                     rank_probs_t=rank_probs_t,
                     rank_to_dense=rank_to_dense,
                     log_p_per_index_t=log_p_per_index_t,
+                    mine_hard_negatives=(
+                        self.config.hard_negative_count > 0
+                        and epoch >= self.config.hard_negative_warmup_epochs
+                    ),
                 )
                 optimizer.zero_grad()
                 loss.backward()  # type: ignore[no-untyped-call]
@@ -541,6 +599,7 @@ class TwoTowerModel:
         rank_probs_t: torch.Tensor,
         rank_to_dense: np.ndarray,
         log_p_per_index_t: torch.Tensor,
+        mine_hard_negatives: bool = False,
     ) -> torch.Tensor:
         """Sampled softmax with Yi et al. 2019 log-uniform correction.
 
@@ -588,9 +647,65 @@ class TwoTowerModel:
             pos_correction = log_p_per_index_t[positive_batch].unsqueeze(-1)  # (B, 1)
             pos_logits = pos_logits - pos_correction
 
-        logits = torch.cat([pos_logits, neg_logits], dim=1)  # (B, 1 + S)
+        logit_blocks = [pos_logits, neg_logits]
+        if mine_hard_negatives:
+            hard_pool_ranks = torch.multinomial(
+                rank_probs_t,
+                num_samples=self.config.hard_negative_pool_size,
+                replacement=True,
+            )
+            hard_pool_dense = torch.tensor(rank_to_dense[hard_pool_ranks.numpy()], dtype=torch.long)
+            with torch.no_grad():
+                pool_vectors = self._item_tower(hard_pool_dense)
+                pool_scores = user_vecs.detach() @ pool_vectors.T
+                hard_dense, hard_valid = select_hard_negatives(
+                    candidate_ids=hard_pool_dense,
+                    candidate_scores=pool_scores,
+                    positive_ids=positive_batch,
+                    history_ids=history_batch,
+                    k=self.config.hard_negative_count,
+                )
+            hard_vectors = self._item_tower(hard_dense)
+            hard_logits = torch.einsum("bd,bhd->bh", user_vecs, hard_vectors)
+            if temperature != 1.0:
+                hard_logits = hard_logits / temperature
+            hard_logits = hard_logits - log_p_per_index_t[hard_dense]
+            hard_logits = hard_logits.masked_fill(~hard_valid, float("-inf"))
+            logit_blocks.append(hard_logits)
+            self._hard_negative_selected += int(hard_valid.sum().item())
+            self._hard_negative_slots += int(hard_valid.numel())
+
+        logits = torch.cat(logit_blocks, dim=1)  # positive, random, then hard
         target = torch.zeros(logits.shape[0], dtype=torch.long)
         return F.cross_entropy(logits, target)
+
+    def hard_negative_stats(self) -> dict[str, float]:
+        """Coverage of requested hard-negative slots in the latest fit."""
+        fill_rate = (
+            self._hard_negative_selected / self._hard_negative_slots
+            if self._hard_negative_slots
+            else 0.0
+        )
+        return {
+            "hard_negative_selected": float(self._hard_negative_selected),
+            "hard_negative_slots": float(self._hard_negative_slots),
+            "hard_negative_fill_rate": float(fill_rate),
+        }
+
+    def item_feature_params(self) -> dict[str, str | int | float | bool]:
+        """Compact, reproducible metadata for MLflow and future artifacts."""
+        schema = self._item_feature_schema
+        if schema is None:
+            return {"item_features_fitted": False, "item_feature_count": 0}
+        payload = json.dumps(schema.to_dict(), sort_keys=True, separators=(",", ":"))
+        return {
+            "item_features_fitted": True,
+            "item_feature_count": len(schema.feature_names),
+            "item_feature_genre_count": len(schema.genres),
+            "item_feature_release_year_mean": schema.release_year_mean,
+            "item_feature_release_year_std": schema.release_year_std,
+            "item_feature_schema_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        }
 
     def _build_faiss_index(self, n_items: int) -> None:
         """Train and populate a FAISS IVF-Flat index over item embeddings.

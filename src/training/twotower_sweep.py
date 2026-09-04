@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Sweep: %d cells at sample_fraction=%s", len(cells), sample_fraction)
 
     settings = Settings()
-    ratings = load_inputs(settings)
+    ratings, movies = load_inputs(settings)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
     failures = 0
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("=== cell %d/%d: %s === %s", i, len(cells), label, config)
         t0 = time.perf_counter()
         try:
-            run_once(ratings, config, sample_fraction=sample_fraction, run_label=label)
+            run_once(ratings, movies, config, sample_fraction=sample_fraction, run_label=label)
         except Exception:
             failures += 1
             logger.exception("cell %s failed; continuing", label)
