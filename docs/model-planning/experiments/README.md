@@ -60,11 +60,30 @@ identity. Never rely on `latest`.
 ## Run validity
 
 A run is invalid—not merely weak—when it has leakage, a mismatched protocol, incomplete metrics,
-corrupt artifacts, unknown code/data identity, or a failed correctness control. Keep the run for
-audit, tag it invalid/superseded, and exclude it from aggregates.
+corrupt artifacts, unknown code/data identity, a failed correctness control, or a missing or
+contradicted partition declaration. Keep the run for audit, tag it invalid/superseded, and exclude
+it from aggregates.
 
 An interrupted run with params but no final metrics cannot enter a gate. A negative run that
 passes validity checks is valuable evidence.
+
+## Partition discipline
+
+The test partition is sealed, and it is sealed by behaviour rather than by storage: the split is a
+pure function over the full ratings table, so nothing physically prevents a run from reading it. The
+compensating control is that every spec declares, in the template's **Partition declaration**, which
+partition it read and the latest event timestamp that entered it — a number a reviewer can check
+against the run's own logged `holdout_end_timestamp`, rather than a checkbox that only records
+someone's intention.
+
+Two habits make the declaration worth having. Complete the measured rows from the finished run's
+logs, not from the plan; a spec that predicted it would stay inside the boundary is not evidence that
+it did. And declare the feature source with its as-of, because a materialized feature snapshot taken
+at "now" summarises sealed rows while containing no reference to the test partition at all — the one
+contamination route a grep will never find.
+
+The policy behind this, including the unseal trigger and the contamination procedure, is
+[`../memos/sealed-test-and-dataset-policy.md`](../memos/sealed-test-and-dataset-policy.md).
 
 ## Result record
 
@@ -73,6 +92,7 @@ The durable result contains:
 - the question and verdict in the first paragraph;
 - baseline and candidate table;
 - run IDs, spec, protocol/data/code hashes;
+- the completed partition declaration and its affirmation;
 - seed aggregation and uncertainty;
 - resource measurements;
 - diagnostics and failed/omitted work;
