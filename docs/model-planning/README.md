@@ -74,6 +74,8 @@ ratings alone. M8 may remain a reading list without weakening the project.
 - [`03-decision-register.md`](03-decision-register.md) — questions requiring owner decisions.
 - [`work-items.md`](work-items.md) — PR-sized backlog with acceptance evidence.
 - [`risks-and-assumptions.md`](risks-and-assumptions.md) — active risk register.
+- [`workstreams/`](workstreams/) — cross-phase contracts for evaluation, data, artifacts,
+  capacity, observability, and safe isolated execution.
 - [`phases/`](phases/) — detailed scope, agendas, gates, and deliverables by work package.
 - [`experiments/`](experiments/) — the experiment contract and reusable run template.
 - [`agendas/`](agendas/) — kickoff, pre-run, results, and promotion review agendas.
