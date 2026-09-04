@@ -17,7 +17,7 @@ from torch import nn
 
 from . import routing
 from .popularity import PopularityModel
-from .sequence_data import build_strict_prefix_examples
+from .sequence_data import SequenceExampleStats, build_strict_prefix_examples_with_stats
 from .twotower import build_user_history
 
 
@@ -200,6 +200,7 @@ class SASRecModel:
     _index_to_item: dict[int, int] = field(default_factory=dict)
     _user_history: dict[int, list[int]] = field(default_factory=dict)
     _unknown_index: int = 0
+    _training_stats: SequenceExampleStats | None = None
     _faiss_index: Any = None
     _popularity: PopularityModel = field(default_factory=PopularityModel)
 
@@ -219,7 +220,7 @@ class SASRecModel:
         self._index_to_item = {index: item for item, index in self._item_to_index.items()}
         self._unknown_index = len(items) + 1
         self._user_history = build_user_history(train, self._item_to_index)
-        histories, positives = build_strict_prefix_examples(
+        histories, positives, self._training_stats = build_strict_prefix_examples_with_stats(
             train,
             item_to_index=self._item_to_index,
             max_length=self.config.max_sequence_length,

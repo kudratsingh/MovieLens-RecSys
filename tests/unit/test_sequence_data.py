@@ -5,7 +5,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from src.models.candidates.sequence_data import build_strict_prefix_examples
+from src.models.candidates.sequence_data import (
+    build_strict_prefix_examples,
+    build_strict_prefix_examples_with_stats,
+)
 
 
 def test_equal_timestamp_targets_share_strictly_earlier_prefix() -> None:
@@ -44,6 +47,22 @@ def test_prefix_is_truncated_to_latest_items() -> None:
     )
     assert histories[-1].tolist() == [3, 4]
     assert targets[-1].item() == 5
+
+
+def test_sequence_stats_count_omitted_prefix_interactions() -> None:
+    interactions = pd.DataFrame(
+        [(1, item, item) for item in range(1, 6)],
+        columns=["userId", "movieId", "timestamp"],
+    )
+    _histories, _targets, stats = build_strict_prefix_examples_with_stats(
+        interactions,
+        item_to_index={item: item for item in range(1, 6)},
+        max_length=2,
+    )
+    assert stats.n_sequences == 4
+    assert stats.n_targets == 4
+    assert stats.n_truncated_sequences == 2
+    assert stats.n_truncated_interactions == 3
 
 
 @pytest.mark.parametrize("max_length", [0, -1])
