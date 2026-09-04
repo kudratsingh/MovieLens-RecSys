@@ -4,10 +4,12 @@ from pathlib import Path
 
 import mlflow
 import pandas as pd
+import pytest
 
 from src.models.candidates.sasrec import SASRecConfig
 from src.models.candidates.sasrec_artifact import MANIFEST_FILENAME, load_sasrec
-from src.training.sasrec import PHASE_2_EXPERIMENT, retrieval_diagnostics, run_once
+from src.training.sasrec import retrieval_diagnostics, run_once
+from src.training.twotower import PHASE_2_EXPERIMENT
 
 
 def test_retrieval_diagnostics_measure_coverage_rank_and_target_reach() -> None:
@@ -37,7 +39,9 @@ def test_retrieval_diagnostics_handle_empty_policy_slice() -> None:
     }
 
 
-def test_run_keeps_local_artifact_and_logs_mlflow_copy(tmp_path: Path) -> None:
+def test_run_keeps_local_artifact_and_logs_mlflow_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ratings = pd.DataFrame(
         [(user, user * 100 + item, item) for user in range(1, 5) for item in range(8)],
         columns=["userId", "movieId", "timestamp"],
@@ -56,6 +60,10 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(tmp_path: Path) -> None:
     )
     previous_uri = mlflow.get_tracking_uri()
     try:
+        # MLflow 3.8 requires an explicit opt-in for its maintenance-mode file
+        # backend. This isolated test uses it so the artifact copy has a
+        # directly inspectable path and never reaches an external service.
+        monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
         mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
         run_once(ratings, config, run_label="artifact-test", artifact_root=tmp_path / "durable")
         client = mlflow.MlflowClient()
