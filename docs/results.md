@@ -2311,3 +2311,50 @@ mode. In the valid runs, epoch-two and final metrics match exactly.
 This remains a one-seed pilot, not a promotion claim. It chooses the loss for
 the full-data gate; item-item remains champion until SASRec is evaluated on the
 full eligible population and passes ADR 0004 plus the serving latency gate.
+
+## SASRec first full-data run — 2026-09-04
+
+The frozen seed-42 BCE cell ran on all 25,000,095 MovieLens ratings from source
+commit `66e06e1`. It trained 19,739,546 strict-prefix targets over 139,383 real
+and synthetic users and 34,461 items. The two epochs took 17,655 seconds (4 h
+54 min) on an Apple M3 Pro with 36 GiB unified memory, with PyTorch CPU work
+pinned to one thread.
+
+| Metric | Value |
+|---|---:|
+| warm recall@500 | **0.4652** |
+| warm NDCG@500 | 0.1734 |
+| cold recall@500 (popularity-routed) | 0.5263 |
+| overall recall@500 | 0.4816 |
+| learned-policy catalog coverage | 30.70% (10,581 items) |
+| learned-policy holdout-target reachability | 0.3556 |
+| mean retrieved-item popularity rank | 3,564.3 |
+
+The warm result is 16.6% above item-item's 0.3991 reference and 101% above the
+full-data popularity reference of 0.2310. It is a candidate to advance, not a
+promotion result: this is one seed, the comparable protocol/rolling-window gate
+is still being built, the paired-ranker guardrail is unmeasured, and the run
+predates artifact export. Its MLflow run
+`6958fd082af6462da812ddd4708230c1` is `FINISHED` and retains all metrics,
+parameters, tags, and sequence diagnostics, but it contains no weights. M2-02
+therefore requires one exported rerun before serving or latency work.
+
+### Why synthetic h10 is zero
+
+The ADR 0011 cohort routed exactly as specified: h0/h1/h3 sent all 500 users to
+popularity and h10 sent none. Their recalls were 0.476, 0.460, 0.456, and 0.000
+respectively. The h10 zero is not missing catalog data or target leakage:
+
+- all 500 h10 targets occur in the training catalog;
+- no target occurs in its user's ten-item history;
+- 230 targets are in popularity's top 500, with median popularity rank 596.5;
+- every ten-item history has exactly one unique timestamp; and
+- those tied histories create zero eligible strict-prefix training targets.
+
+ADR 0011 holds recency constant by stamping a user's synthetic events at one
+time. That is valid for routing and order-insensitive retrievers, but it does
+not define a causal sequence. SASRec consumes the stable generator row order as
+if it were chronology, making h10 an out-of-distribution probe rather than a
+sequence-quality slice. Keep its routing assertion; version a separate cohort
+with strictly increasing timestamps and transition-aligned targets before
+claiming synthetic sequential quality.

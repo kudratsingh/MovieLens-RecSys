@@ -14,6 +14,11 @@ from src.config import Settings
 from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
 from src.models.candidates.sasrec import SASRecConfig, SASRecModel, gbce_beta
+from src.models.candidates.sasrec_artifact import (
+    ARTIFACT_SCHEMA_VERSION,
+    MANIFEST_FILENAME,
+    export_sasrec,
+)
 from src.training.twotower import (
     INPUT_DIR_ENV_VAR,
     PHASE_2_EXPERIMENT,
@@ -25,11 +30,18 @@ from synthetic.cold_start import harness as synth_cold
 logger = logging.getLogger(__name__)
 RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
 SAMPLE_FRACTION_ENV_VAR = "SASREC_USER_SAMPLE_FRACTION"
+ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
+DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 
 
 def resolve_sasrec_sample_fraction() -> float:
     raw = os.environ.get(SAMPLE_FRACTION_ENV_VAR, "").strip()
     return 1.0 if not raw else float(raw)
+
+
+def resolve_artifact_dir() -> Path:
+    raw = os.environ.get(ARTIFACT_DIR_ENV_VAR, "").strip()
+    return Path(raw) if raw else DEFAULT_ARTIFACT_DIR
 
 
 def retrieval_diagnostics(
@@ -67,6 +79,7 @@ def run_once(
     *,
     sample_fraction: float = 1.0,
     run_label: str = "",
+    artifact_root: Path | None = None,
 ) -> None:
     if sample_fraction != 1.0:
         ratings = subsample_users(ratings, sample_fraction, config.seed)
@@ -119,6 +132,21 @@ def run_once(
         started = time.perf_counter()
         model.fit(train_frame, on_epoch=on_epoch)
         fit_seconds = time.perf_counter() - started
+        active_run = mlflow.active_run()
+        if active_run is None:
+            raise RuntimeError("MLflow run ended before SASRec artifact export")
+        artifact_dir = (artifact_root or resolve_artifact_dir()) / active_run.info.run_id
+        manifest = export_sasrec(model, artifact_dir)
+        # The run-specific local copy is durable even if the tracking upload
+        # fails. MLflow receives a second immutable copy for registry lineage.
+        mlflow.log_artifacts(str(artifact_dir), artifact_path="model")
+        mlflow.set_tags(
+            {
+                "sasrec_artifact_sha256": manifest.model_sha256,
+                "sasrec_vocabulary_sha256": manifest.vocabulary_sha256,
+                "sasrec_manifest": f"model/{MANIFEST_FILENAME}",
+            }
+        )
         recommendations = model.recommend_for_users(user_ids + cohort_user_ids, K_CANDIDATES)
         result = evaluate(
             recommendations,
@@ -154,6 +182,7 @@ def run_once(
                 "n_items_in_train": len(model._index_to_item),
                 "n_users_in_train": len(model._user_history),
                 "gbce_beta": beta,
+                "sasrec_artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
                 "n_training_sequences": (
                     model._training_stats.n_sequences if model._training_stats else 0
                 ),

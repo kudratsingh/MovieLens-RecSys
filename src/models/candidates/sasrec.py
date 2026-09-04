@@ -309,13 +309,75 @@ class SASRecModel:
             return self._popularity.recommend(user_id, k)
         assert self._encoder is not None and self._faiss_index is not None
         full_history = self._user_history[user_id]
-        history = full_history[-self.config.max_sequence_length :]
+        return self._recommend_from_dense_history(full_history, k)
+
+    def encode_movie_history(self, movie_ids: list[int]) -> torch.Tensor:
+        """Encode ordered movie ids without depending on fitted user state.
+
+        This is the artifact/serving boundary. Unknown snapshot items receive
+        the explicit unknown token and can never alias a trained title.
+        """
+        if self._encoder is None:
+            raise RuntimeError("SASRec encoder is not fitted")
+        if not movie_ids:
+            raise ValueError("SASRec history must contain at least one movie")
+        dense_history = [
+            self._item_to_index.get(int(movie_id), self._unknown_index) for movie_id in movie_ids
+        ]
+        sequence = self._sequence_tensor(dense_history)
+        with torch.no_grad():
+            encoded: torch.Tensor = self._encoder(sequence)
+        return encoded
+
+    def recommend_from_history(
+        self,
+        movie_ids: list[int],
+        k: int,
+        *,
+        excluded_movie_ids: set[int] | None = None,
+    ) -> list[int]:
+        """Retrieve from an ordered runtime history using an exported model."""
+        if k <= 0:
+            return []
+        if self._encoder is None or self._faiss_index is None:
+            raise RuntimeError("SASRec model and retrieval index are not loaded")
+        if not movie_ids:
+            raise ValueError("SASRec history must contain at least one movie")
+        dense_history = [
+            self._item_to_index.get(int(movie_id), self._unknown_index) for movie_id in movie_ids
+        ]
+        dense_exclusions = {
+            dense
+            for movie_id in (set(movie_ids) | (excluded_movie_ids or set()))
+            if (dense := self._item_to_index.get(int(movie_id))) is not None
+        }
+        return self._recommend_from_dense_history(
+            dense_history,
+            k,
+            dense_exclusions=dense_exclusions,
+        )
+
+    def _sequence_tensor(self, dense_history: list[int]) -> torch.Tensor:
+        history = dense_history[-self.config.max_sequence_length :]
         sequence = torch.zeros((1, self.config.max_sequence_length), dtype=torch.long)
-        sequence[0, -len(history) :] = torch.tensor(history)
+        if history:
+            sequence[0, -len(history) :] = torch.tensor(history)
+        return sequence
+
+    def _recommend_from_dense_history(
+        self,
+        full_history: list[int],
+        k: int,
+        *,
+        dense_exclusions: set[int] | None = None,
+    ) -> list[int]:
+        assert self._encoder is not None and self._faiss_index is not None
+        history = full_history[-self.config.max_sequence_length :]
+        sequence = self._sequence_tensor(history)
         with torch.no_grad():
             query = self._encoder(sequence).numpy()
         # Exclusions cover the full known history, not only the encoder window.
-        seen = set(full_history)
+        seen = set(full_history) | (dense_exclusions or set())
         search_k = min(len(self._index_to_item), k + len(seen))
         _scores, indices = self._faiss_index.search(query, search_k)
         return [

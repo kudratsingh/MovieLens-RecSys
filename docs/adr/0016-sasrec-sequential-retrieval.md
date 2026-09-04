@@ -15,6 +15,33 @@ each training epoch explicitly restores training mode. Earlier runs are
 diagnostic only because dropout was active during evaluation and the epoch-one
 callback left epoch two in evaluation mode.
 
+**First full-data outcome (2026-09-04):** Seed 42 reached warm recall@500 of
+**0.4652** (NDCG@500 0.1734), 16.6% above item-item's 0.3991 reference, in
+17,655 seconds on a 12-core Apple M3 Pro with 36 GiB unified memory and CPU
+training pinned to one thread. This is promising evidence, not a promotion:
+the run predates M2-02 and saved no weights, the required seed/rolling-window
+gate is incomplete, and no artifact can enter the latency or paired-ranker
+gate. Run id: `6958fd082af6462da812ddd4708230c1`, source commit `66e06e1`.
+
+The run also exposed a cohort-contract issue rather than a routing failure.
+ADR 0011's h10 users routed to SASRec correctly but scored zero recall. All 500
+targets are in the train catalog, none overlap history, 230 sit in the global
+popularity top 500, and the median target popularity rank is 596.5. The actual
+problem is that every synthetic user's history has one timestamp: it has no
+chronological order and produces zero strict-prefix training targets. An
+order-sensitive model is therefore asked to interpret generator order as a
+causal sequence. Preserve this cohort for threshold/routing evidence, but do
+not treat h10 as SASRec quality evidence until a separately versioned,
+transition-aware sequential cohort is approved.
+
+**Artifact implementation note (2026-09-04):** M2-02 writes a deterministic,
+checksum-pinned model archive to a never-overwritten MLflow-run directory
+immediately after fitting, retains that local copy, and uploads a second copy
+to MLflow. Exact embedding and candidate equality, deterministic bytes, and
+fail-closed corruption checks define acceptance. The format and recovery
+boundary are documented in
+[`docs/modeling/sasrec-artifacts.md`](../modeling/sasrec-artifacts.md).
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains

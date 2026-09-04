@@ -60,6 +60,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`status/`](status/README.md) | The project ledger: per-phase detail, remaining work per track, the long-form current step |
 | [`modeling-roadmap.md`](modeling-roadmap.md) | The model ladder and its decision log — every rung needs approval before it starts |
 | [`model-planning/`](model-planning/README.md) | Executable model-only plans, dependencies, decisions, work items, experiment templates, scorecards, and review agendas |
+| [`modeling/sasrec-artifacts.md`](modeling/sasrec-artifacts.md) | The deterministic SASRec archive, checksum manifest, immutable storage layout, and recovery boundary |
 | [`adr/`](adr/README.md) | Backend and cross-cutting ADRs on the flat numeric line; frontend ADRs under [`adr/frontend/`](adr/frontend/) |
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
