@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "ADR 0015 Gate 1 cumulative arms on the deterministic 6% user pilot.",
+    "Every cell uses the same seed, users, three epochs, and 4096 shared random",
+    "negatives. The reduced negative count keeps the five-arm laptop run bounded;",
+    "the 2026-08-30 sweep found no recall loss versus 16384 on this pilot.",
+    "The first three cells disable both v2 architectural additions so they isolate",
+    "temperature. The fourth and fifth add hard negatives, then side features."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "v1-t1.0",
+      "num_sampled": 4096,
+      "logit_temperature": 1.0,
+      "use_item_features": false,
+      "hard_negative_count": 0
+    },
+    {
+      "label": "temperature-t0.05",
+      "num_sampled": 4096,
+      "logit_temperature": 0.05,
+      "use_item_features": false,
+      "hard_negative_count": 0
+    },
+    {
+      "label": "temperature-t0.1",
+      "num_sampled": 4096,
+      "logit_temperature": 0.1,
+      "use_item_features": false,
+      "hard_negative_count": 0
+    },
+    {
+      "label": "temperature-hard-negatives",
+      "num_sampled": 4096,
+      "logit_temperature": 0.05,
+      "use_item_features": false
+    },
+    {
+      "label": "complete-v2",
+      "num_sampled": 4096,
+      "logit_temperature": 0.05,
+      "use_item_features": true
+    }
+  ]
+}

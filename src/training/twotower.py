@@ -23,14 +23,16 @@ one MLflow view — the direct comparison ADR 0004's promotion gate requires.
 **Every hyperparameter is env-driven** through ``TwoTowerConfig.from_env``
 (``TWOTOWER_LEARNING_RATE``, ``TWOTOWER_EPOCHS``, ``TWOTOWER_NUM_SAMPLED``,
 ``TWOTOWER_LOGIT_TEMPERATURE``, …). Unset means ADR 0006's default, so
-``make train-twotower`` with a clean environment still reproduces the run
-already recorded in ``docs/results.md``. Two further variables belong to the
-run rather than the model:
+``make train-twotower`` with a clean environment uses ADR 0015's v2 default;
+set ``TWOTOWER_LOGIT_TEMPERATURE=1.0`` to reproduce v1. Two further variables
+belong to the run rather than the model:
 
   ``TWOTOWER_USER_SAMPLE_FRACTION``  a seeded fraction of users to keep, for
       cheap pilot runs. 1.0 (the default) is the full dataset.
   ``TWOTOWER_RUN_LABEL``  appended to the MLflow run name so a sweep cell is
       identifiable without reading its params.
+  ``TWOTOWER_INPUT_DIR``  optional directory containing MovieLens
+      ``ratings.csv`` and ``movies.csv``. When set, training needs no database.
 
 Run with ``make train-twotower`` (or ``python -m src.training.twotower``)
 from project root. Requires Postgres and MLflow reachable per ``Settings``.
@@ -42,6 +44,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import mlflow
 import numpy as np
@@ -54,6 +57,7 @@ from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
 from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
+from src.training import protocol_manifest
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,7 @@ PHASE_2_EXPERIMENT = "phase-2-candidates"
 
 SAMPLE_FRACTION_ENV_VAR = "TWOTOWER_USER_SAMPLE_FRACTION"
 RUN_LABEL_ENV_VAR = "TWOTOWER_RUN_LABEL"
+INPUT_DIR_ENV_VAR = "TWOTOWER_INPUT_DIR"
 
 
 def subsample_users(
@@ -113,6 +118,7 @@ def run_name_for(policy: str, label: str) -> str:
 
 def run_once(
     ratings: pd.DataFrame,
+    movies: pd.DataFrame,
     config: TwoTowerConfig,
     *,
     sample_fraction: float = 1.0,
@@ -167,6 +173,13 @@ def run_once(
         config=config,
         cold_start_threshold=routing.cold_start_threshold_for(policy, COLD_START_THRESHOLD),
     )
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="retrieval",
+        k=K_CANDIDATES,
+    )
 
     # Eval inputs are built before the fit so the per-epoch callback can score
     # recall without rebuilding them every epoch.
@@ -203,6 +216,13 @@ def run_once(
                 **config.as_params(),
             }
         )
+        envelope = protocol_manifest.run_envelope(
+            protocol,
+            deterministic=False,
+            seed=config.seed,
+        )
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
 
         logger.info("Fitting two-tower model ...")
         t0 = time.perf_counter()
@@ -240,7 +260,8 @@ def run_once(
                 spread.get("item_cosine_std", float("nan")),
             )
 
-        model.fit(train_frame, on_epoch=_log_epoch)
+        model.fit(train_frame, movies=movies, on_epoch=_log_epoch)
+        mlflow.log_params(model.item_feature_params())
         fit_seconds = time.perf_counter() - t0 - epoch_eval_seconds
         logger.info(
             "Fit in %.1fs (%d users x %d items, %d of %d epochs; %.1fs of per-epoch eval excluded)",
@@ -360,6 +381,7 @@ def run_once(
                 "fallback_served_recall_at_k_candidates": result_fallback.overall.recall,
                 "fallback_served_ndcg_at_k_candidates": result_fallback.overall.ndcg,
                 "n_fallback_served_users": len(holdout_fallback),
+                **model.hard_negative_stats(),
             }
         )
         if cohort is not None:
@@ -371,12 +393,31 @@ def run_once(
             )
 
 
-def load_inputs(settings: Settings) -> pd.DataFrame:
-    logger.info("Loading ratings from Postgres ...")
+def load_inputs(
+    settings: Settings, input_dir: Path | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if input_dir is not None:
+        logger.info("Loading ratings and movie metadata from CSV files in %s ...", input_dir)
+        ratings = pd.read_csv(
+            input_dir / "ratings.csv",
+            usecols=["userId", "movieId", "rating", "timestamp"],
+        )
+        movies = pd.read_csv(
+            input_dir / "movies.csv",
+            usecols=["movieId", "title", "genres"],
+        )
+        logger.info("Loaded %s ratings and %s movies", f"{len(ratings):,}", f"{len(movies):,}")
+        return ratings, movies
+
+    logger.info("Loading ratings and movie metadata from Postgres ...")
     engine = create_engine(settings.database_url)
-    ratings = load_ratings(engine)
-    logger.info("Loaded %s ratings", f"{len(ratings):,}")
-    return ratings
+    try:
+        ratings = load_ratings(engine)
+        movies = pd.read_sql('SELECT "movieId", title, genres FROM movies', engine)
+    finally:
+        engine.dispose()
+    logger.info("Loaded %s ratings and %s movies", f"{len(ratings):,}", f"{len(movies):,}")
+    return ratings, movies
 
 
 def main() -> None:
@@ -385,7 +426,9 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     settings = Settings()
-    ratings = load_inputs(settings)
+    input_dir_raw = os.environ.get(INPUT_DIR_ENV_VAR, "").strip()
+    input_dir = Path(input_dir_raw) if input_dir_raw else None
+    ratings, movies = load_inputs(settings, input_dir=input_dir)
 
     config = TwoTowerConfig.from_env()
     logger.info("Config: %s", config)
@@ -394,6 +437,7 @@ def main() -> None:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     run_once(
         ratings,
+        movies,
         config,
         sample_fraction=resolve_sample_fraction(),
         run_label=os.environ.get(RUN_LABEL_ENV_VAR, "").strip(),

@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "ADR 0016 frozen full-data cell selected by the corrected 6% pilot.",
+    "Standard BCE beat matched gBCE by 8.5% relative warm recall@500.",
+    "Do not change this configuration without recording a new pilot."
+  ],
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "full-bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42
+    }
+  ]
+}

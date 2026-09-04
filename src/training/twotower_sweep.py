@@ -21,7 +21,7 @@ artifact rather than from a diff::
     }
 
 Each cell's keys are ``TwoTowerConfig`` field names; anything absent takes
-ADR 0006's default. ``label`` is the only non-field key and lands in the
+the currently accepted ADR 0015 default. ``label`` is the only non-field key and lands in the
 MLflow run name and the ``sweep_label`` tag.
 
 Usage::
@@ -37,6 +37,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -46,7 +47,7 @@ import mlflow
 
 from src.config import Settings
 from src.models.candidates.twotower import TwoTowerConfig
-from src.training.twotower import load_inputs, run_once
+from src.training.twotower import INPUT_DIR_ENV_VAR, load_inputs, run_once
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Sweep: %d cells at sample_fraction=%s", len(cells), sample_fraction)
 
     settings = Settings()
-    ratings = load_inputs(settings)
+    input_dir_raw = os.environ.get(INPUT_DIR_ENV_VAR, "").strip()
+    ratings, movies = load_inputs(
+        settings, input_dir=Path(input_dir_raw) if input_dir_raw else None
+    )
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
     failures = 0
@@ -93,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("=== cell %d/%d: %s === %s", i, len(cells), label, config)
         t0 = time.perf_counter()
         try:
-            run_once(ratings, config, sample_fraction=sample_fraction, run_label=label)
+            run_once(ratings, movies, config, sample_fraction=sample_fraction, run_label=label)
         except Exception:
             failures += 1
             logger.exception("cell %s failed; continuing", label)

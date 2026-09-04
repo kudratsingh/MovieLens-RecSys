@@ -585,6 +585,11 @@ def test_prepare_attaches_only_history_rows(tmp_path: Path) -> None:
         for user_id, targets in users.items():
             assert not {(user_id, target) for target in targets} & pairs
 
+    ratingless = split.train.drop(columns="rating")
+    attached_ratingless = harness.attach_history(ratingless, cohort)
+    assert list(attached_ratingless.columns) == list(ratingless.columns)
+    assert len(attached_ratingless) == len(attached)
+
 
 def test_prepare_refuses_a_cohort_anchored_to_a_different_cutoff(tmp_path: Path) -> None:
     from src.data.split import temporal_split

@@ -23,6 +23,8 @@ a (batch, N) tensor cleanly.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import os
@@ -38,7 +40,14 @@ import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias
 from torch import nn
 
 from . import routing
+from .hard_negatives import select_hard_negatives
+from .item_features import (
+    ItemFeatureSchema,
+    build_item_feature_matrix,
+    fit_item_feature_schema,
+)
 from .popularity import PopularityModel
+from .sequence_data import build_strict_prefix_examples
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +78,9 @@ class TwoTowerConfig:
     """Hyperparameters. Every field is logged as an MLflow param by the
     training script so a future sweep is a pure config change.
 
-    Every default on this class is ADR 0006's configuration, which is what
-    the 2026-08-30 v1 run measured. :meth:`from_env` is the only way a run
-    departs from them, so a run's MLflow params are a complete description
-    of what produced it.
+    Defaults follow the currently accepted architecture. ADR 0015 changes the
+    v2 temperature to 0.05; a v1 reproduction must explicitly set 1.0. Every
+    value is logged, so the distinction is visible in MLflow.
     """
 
     embedding_dim: int = 64
@@ -84,14 +92,9 @@ class TwoTowerConfig:
     epochs: int = 3
     learning_rate: float = 1e-3
     # Divides the cosine similarity before the log-uniform correction is
-    # applied. 1.0 is v1's behaviour — ADR 0006 pins L2-normalized towers and
-    # a logQ correction but never names a temperature, so v1 ran at an
-    # implicit 1.0. That matters because both towers are unit-normalized, so
-    # the learnable part of a logit is bounded to [-1, 1] while the
-    # correction term spans roughly ten nats; at 1.0 the popularity prior
-    # simply outranks anything the embeddings can say. See ADR 0006's
-    # 2026-08-30 sweep note.
-    logit_temperature: float = 1.0
+    # applied. ADR 0015 adopts 0.05 for v2 from the best full-data sweep cell.
+    # 1.0 remains v1's explicit reproduction value.
+    logit_temperature: float = 0.05
     # Whether the positive's logit gets the same -log P correction the
     # negatives get. True is v1's behaviour and matches TensorFlow's
     # `sampled_softmax_loss`, which corrects the true logit by its expected
@@ -99,6 +102,13 @@ class TwoTowerConfig:
     # so the flag exists to let the sweep measure the difference rather
     # than argue about which reading was meant.
     correct_positive_logit: bool = True
+    # ADR 0015 v2. When catalog metadata is supplied, fuse deterministic
+    # genre/year features into the item representation. Direct model callers
+    # may omit metadata to reproduce the id-only v1 ablation.
+    use_item_features: bool = True
+    hard_negative_count: int = 8
+    hard_negative_pool_size: int = 256
+    hard_negative_warmup_epochs: int = 1
     # Epochs to keep going after the best mean loss seen so far. 0 disables
     # early stopping entirely, which is v1's behaviour (it always ran
     # exactly `epochs` passes).
@@ -138,6 +148,18 @@ class TwoTowerConfig:
             correct_positive_logit=_env_bool(
                 e, "TWOTOWER_CORRECT_POSITIVE_LOGIT", cls.correct_positive_logit
             ),
+            use_item_features=_env_bool(e, "TWOTOWER_USE_ITEM_FEATURES", cls.use_item_features),
+            hard_negative_count=_env_int(
+                e, "TWOTOWER_HARD_NEGATIVE_COUNT", cls.hard_negative_count
+            ),
+            hard_negative_pool_size=_env_int(
+                e, "TWOTOWER_HARD_NEGATIVE_POOL_SIZE", cls.hard_negative_pool_size
+            ),
+            hard_negative_warmup_epochs=_env_int(
+                e,
+                "TWOTOWER_HARD_NEGATIVE_WARMUP_EPOCHS",
+                cls.hard_negative_warmup_epochs,
+            ),
             early_stopping_patience=_env_int(
                 e, "TWOTOWER_EARLY_STOPPING_PATIENCE", cls.early_stopping_patience
             ),
@@ -156,7 +178,7 @@ class TwoTowerConfig:
 
 
 class ItemTower(nn.Module):
-    """Id-only item embedding, L2-normalized on the way out.
+    """Item-id embedding with an optional structured-feature residual.
 
     Index 0 is reserved as the padding id so variable-length user histories
     pack cleanly into a ``(batch_size, N)`` integer tensor. The padding row
@@ -165,8 +187,14 @@ class ItemTower(nn.Module):
     divides by the true item count (not by ``N``).
     """
 
-    def __init__(self, n_items: int, embedding_dim: int) -> None:
+    def __init__(
+        self,
+        n_items: int,
+        embedding_dim: int,
+        side_features: torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
+        self.side_features: torch.Tensor | None
         # +1 for the padding row at index 0.
         self.embed = nn.Embedding(n_items + 1, embedding_dim, padding_idx=0)
         # Small-variance init, standard for embedding tables trained with
@@ -175,9 +203,36 @@ class ItemTower(nn.Module):
         nn.init.normal_(self.embed.weight, mean=0.0, std=1.0 / math.sqrt(embedding_dim))
         with torch.no_grad():
             self.embed.weight[0].zero_()
+        if side_features is not None:
+            expected_rows = n_items + 1
+            if side_features.ndim != 2 or side_features.shape[0] != expected_rows:
+                raise ValueError(
+                    "side_features must have shape "
+                    f"({expected_rows}, feature_width), got {tuple(side_features.shape)}"
+                )
+            side_features = side_features.detach().to(dtype=torch.float32).clone()
+            side_features[0].zero_()
+            self.register_buffer("side_features", side_features)
+            self.side_projection: nn.Linear | None = nn.Linear(
+                int(side_features.shape[1]), embedding_dim, bias=False
+            )
+            # Start close to the id-only model while leaving a gradient into
+            # both paths. sigmoid(2) ~= 0.88 id / 0.12 structured features.
+            self.side_gate: nn.Parameter | None = nn.Parameter(torch.tensor(2.0))
+        else:
+            self.register_buffer("side_features", None)
+            self.side_projection = None
+            self.register_parameter("side_gate", None)
 
     def forward(self, item_ids: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.embed(item_ids), p=2, dim=-1)
+        item_vectors = self.embed(item_ids)
+        if self.side_projection is not None and self.side_features is not None:
+            side_vectors = self.side_projection(self.side_features[item_ids])
+            assert self.side_gate is not None
+            gate = torch.sigmoid(self.side_gate)
+            item_vectors = gate * item_vectors + (1.0 - gate) * side_vectors
+            item_vectors = item_vectors.masked_fill((item_ids == 0).unsqueeze(-1), 0.0)
+        return F.normalize(item_vectors, p=2, dim=-1)
 
 
 def build_user_history(
@@ -241,10 +296,14 @@ class TwoTowerModel:
     _user_history: dict[int, list[int]] = field(default_factory=dict)
     _faiss_index: Any = None  # faiss.Index; typed loose because faiss stubs are partial
     _popularity: PopularityModel = field(default_factory=PopularityModel)
+    _item_feature_schema: ItemFeatureSchema | None = None
+    _hard_negative_selected: int = 0
+    _hard_negative_slots: int = 0
 
     def fit(
         self,
         train: pd.DataFrame,
+        movies: pd.DataFrame | None = None,
         on_epoch: Callable[[int, float], None] | None = None,
     ) -> TwoTowerModel:
         """Train both towers, then build the FAISS retrieval index.
@@ -266,10 +325,19 @@ class TwoTowerModel:
             self._index_to_item = {}
             self._user_history = {}
             self._faiss_index = None
+            self._item_feature_schema = None
             return self
 
         torch.manual_seed(self.config.seed)
         np.random.seed(self.config.seed)
+        if self.config.hard_negative_count < 0:
+            raise ValueError("hard_negative_count must be non-negative")
+        if self.config.hard_negative_pool_size < self.config.hard_negative_count:
+            raise ValueError("hard_negative_pool_size must be >= hard_negative_count")
+        if self.config.hard_negative_warmup_epochs < 0:
+            raise ValueError("hard_negative_warmup_epochs must be non-negative")
+        self._hard_negative_selected = 0
+        self._hard_negative_slots = 0
 
         # ---- Vocabulary and history construction ----
         # Item ids are re-indexed starting at 1; index 0 is padding.
@@ -302,7 +370,7 @@ class TwoTowerModel:
         # Position 0 is dropped — a user's first interaction has no history
         # to encode, so it can't feed the mean-pool. That's per ADR 0006's
         # point-in-time rule: the encoder never runs on an empty history.
-        history_tensor, positive_tensor = self._build_training_pairs()
+        history_tensor, positive_tensor = self._build_training_pairs(train)
         n_examples = positive_tensor.shape[0]
         logger.info(
             "Training on %d (history, positive) pairs across %d users, %d items",
@@ -312,7 +380,21 @@ class TwoTowerModel:
         )
 
         # ---- Training loop ----
-        self._item_tower = ItemTower(n_items=n_items, embedding_dim=self.config.embedding_dim)
+        side_features: torch.Tensor | None = None
+        self._item_feature_schema = None
+        if self.config.use_item_features and movies is not None:
+            training_catalog = movies[movies["movieId"].isin(self._item_to_index)].copy()
+            self._item_feature_schema = fit_item_feature_schema(training_catalog)
+            side_features = build_item_feature_matrix(
+                training_catalog,
+                item_to_index=self._item_to_index,
+                schema=self._item_feature_schema,
+            )
+        self._item_tower = ItemTower(
+            n_items=n_items,
+            embedding_dim=self.config.embedding_dim,
+            side_features=side_features,
+        )
         optimizer = torch.optim.Adam(self._item_tower.parameters(), lr=self.config.learning_rate)
 
         best_loss = math.inf
@@ -342,6 +424,10 @@ class TwoTowerModel:
                     rank_probs_t=rank_probs_t,
                     rank_to_dense=rank_to_dense,
                     log_p_per_index_t=log_p_per_index_t,
+                    mine_hard_negatives=(
+                        self.config.hard_negative_count > 0
+                        and epoch >= self.config.hard_negative_warmup_epochs
+                    ),
                 )
                 optimizer.zero_grad()
                 loss.backward()  # type: ignore[no-untyped-call]
@@ -426,7 +512,9 @@ class TwoTowerModel:
             return
         self._build_faiss_index(len(self._index_to_item))
 
-    def _build_training_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _build_training_pairs(
+        self, train: pd.DataFrame | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Materialize the (history, positive) tensors from ``_user_history``.
 
         History is padded with 0 on the *left* so the last N slots are the
@@ -438,9 +526,22 @@ class TwoTowerModel:
         50 columns: as a list-of-lists it is roughly 9 GB of list objects
         before the tensor is even built, and this machine has 16 GB. The
         rows and their order are identical either way.
+
+        When ``train`` is supplied, timestamps are authoritative: every item
+        sharing a timestamp receives the same prefix containing only items at
+        strictly earlier timestamps. The history-only fallback exists for
+        small callers that have no timestamps; production training always
+        supplies the frame.
         """
         n = self.config.history_window
-        total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
+        if train is not None:
+            return build_strict_prefix_examples(
+                train,
+                item_to_index=self._item_to_index,
+                max_length=n,
+            )
+        else:
+            total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
         histories = np.zeros((total, n), dtype=np.int32)
         positives = np.empty(total, dtype=np.int32)
 
@@ -449,8 +550,6 @@ class TwoTowerModel:
             dense = np.asarray(hist, dtype=np.int32)
             for i in range(1, len(dense)):
                 window = dense[max(0, i - n) : i]
-                # Left-pad to N: the array starts zeroed, so writing the
-                # window into the trailing slots is the whole padding step.
                 histories[row, n - len(window) :] = window
                 positives[row] = dense[i]
                 row += 1
@@ -467,7 +566,7 @@ class TwoTowerModel:
         """
         assert self._item_tower is not None
         # (B, N, d) — padding rows contribute the zero vector.
-        item_vecs = self._item_tower.embed(history_batch)
+        item_vecs = self._item_tower(history_batch)
         # (B, N) 1.0 where history is non-padding, 0.0 elsewhere.
         mask = (history_batch != 0).float().unsqueeze(-1)
         summed = (item_vecs * mask).sum(dim=1)
@@ -482,6 +581,7 @@ class TwoTowerModel:
         rank_probs_t: torch.Tensor,
         rank_to_dense: np.ndarray,
         log_p_per_index_t: torch.Tensor,
+        mine_hard_negatives: bool = False,
     ) -> torch.Tensor:
         """Sampled softmax with Yi et al. 2019 log-uniform correction.
 
@@ -529,9 +629,69 @@ class TwoTowerModel:
             pos_correction = log_p_per_index_t[positive_batch].unsqueeze(-1)  # (B, 1)
             pos_logits = pos_logits - pos_correction
 
-        logits = torch.cat([pos_logits, neg_logits], dim=1)  # (B, 1 + S)
+        logit_blocks = [pos_logits, neg_logits]
+        if mine_hard_negatives:
+            hard_pool_ranks = torch.multinomial(
+                rank_probs_t,
+                num_samples=self.config.hard_negative_pool_size,
+                replacement=True,
+            )
+            hard_pool_dense = torch.tensor(rank_to_dense[hard_pool_ranks.numpy()], dtype=torch.long)
+            with torch.no_grad():
+                pool_vectors = self._item_tower(hard_pool_dense)
+                pool_scores = user_vecs.detach() @ pool_vectors.T
+                hard_dense, hard_valid = select_hard_negatives(
+                    candidate_ids=hard_pool_dense,
+                    candidate_scores=pool_scores,
+                    positive_ids=positive_batch,
+                    history_ids=history_batch,
+                    k=self.config.hard_negative_count,
+                )
+            hard_vectors = self._item_tower(hard_dense)
+            hard_logits = torch.einsum("bd,bhd->bh", user_vecs, hard_vectors)
+            if temperature != 1.0:
+                hard_logits = hard_logits / temperature
+            # These rows are chosen by model score after proposal sampling,
+            # so their effective selection probability is not the original
+            # log-uniform proposal. Applying that proposal correction again
+            # would over-weight popular mined items. Only the independently
+            # sampled random block above receives sampled-softmax correction.
+            hard_logits = hard_logits.masked_fill(~hard_valid, float("-inf"))
+            logit_blocks.append(hard_logits)
+            self._hard_negative_selected += int(hard_valid.sum().item())
+            self._hard_negative_slots += int(hard_valid.numel())
+
+        logits = torch.cat(logit_blocks, dim=1)  # positive, random, then hard
         target = torch.zeros(logits.shape[0], dtype=torch.long)
         return F.cross_entropy(logits, target)
+
+    def hard_negative_stats(self) -> dict[str, float]:
+        """Coverage of requested hard-negative slots in the latest fit."""
+        fill_rate = (
+            self._hard_negative_selected / self._hard_negative_slots
+            if self._hard_negative_slots
+            else 0.0
+        )
+        return {
+            "hard_negative_selected": float(self._hard_negative_selected),
+            "hard_negative_slots": float(self._hard_negative_slots),
+            "hard_negative_fill_rate": float(fill_rate),
+        }
+
+    def item_feature_params(self) -> dict[str, str | int | float | bool]:
+        """Compact, reproducible metadata for MLflow and future artifacts."""
+        schema = self._item_feature_schema
+        if schema is None:
+            return {"item_features_fitted": False, "item_feature_count": 0}
+        payload = json.dumps(schema.to_dict(), sort_keys=True, separators=(",", ":"))
+        return {
+            "item_features_fitted": True,
+            "item_feature_count": len(schema.feature_names),
+            "item_feature_genre_count": len(schema.genres),
+            "item_feature_release_year_mean": schema.release_year_mean,
+            "item_feature_release_year_std": schema.release_year_std,
+            "item_feature_schema_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        }
 
     def _build_faiss_index(self, n_items: int) -> None:
         """Train and populate a FAISS IVF-Flat index over item embeddings.

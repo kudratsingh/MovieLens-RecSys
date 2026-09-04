@@ -93,7 +93,14 @@ def attach_history(train: pd.DataFrame, cohort: SyntheticColdCohort) -> pd.DataF
     Only history rows, never targets — the cohort must be fitted the way a real
     low-history user would be, and scored on an item the fit never saw.
     """
-    columns = list(TRAIN_COLUMNS)
+    # Some implicit-feedback trainers intentionally discard rating magnitude
+    # at their CSV boundary. Attach the cohort in the caller's MovieLens-shaped
+    # schema instead of requiring a feature that model does not consume.
+    columns = [column for column in TRAIN_COLUMNS if column in train.columns]
+    required = {"userId", "movieId", "timestamp"}
+    missing = required - set(columns)
+    if missing:
+        raise ValueError(f"train is missing required cohort columns: {sorted(missing)}")
     return pd.concat(
         [train, cohort.history[columns].astype(train[columns].dtypes.to_dict())],
         ignore_index=True,

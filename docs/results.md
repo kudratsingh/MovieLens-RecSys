@@ -2205,6 +2205,41 @@ the run this page has always reported. Two more belong to the run rather than
 the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
 `TWOTOWER_RUN_LABEL` (the suffix on the MLflow run name).
 
+## Two-Tower v2 bounded pilot — 2026-09-04
+
+ADR 0015's five-arm Gate 1 ran locally from the checked-in DVC dataset using
+[`v2-pilot.json`](experiments/twotower-sweep/v2-pilot.json). It used the same
+seed-42 6% user sample in every arm: 9,752 users before the temporal split,
+1,213,918 train rows, 1,198,161 strictly point-in-time training pairs, 19,005
+items, and 115 warm holdout users. Equal-timestamp interactions are no longer
+allowed into one another's prefixes, which explains the small pair-count and
+warm-user difference from the older v1 pilot.
+
+| Arm | Warm recall@500 | Warm NDCG@500 | Fit seconds |
+|---|---:|---:|---:|
+| v1 reproduction, tau 1.0 | 0.0398 | 0.0124 | 85.6 |
+| temperature only, tau 0.05 | **0.0445** | 0.0141 | 89.3 |
+| temperature only, tau 0.1 | 0.0430 | 0.0144 | 88.6 |
+| tau 0.05 + hard negatives | 0.0443 | **0.0147** | 222.5 |
+| complete v2, hard negatives + structured item features | 0.0435 | 0.0135 | 250.5 |
+| prior popularity reference on this deterministic pilot | **0.1974** | 0.0721 | — |
+
+The complete model is 4.5 times below popularity and does not improve on the
+temperature-only arm. Both mined arms filled every one of 19,170,576 requested
+hard-negative slots, so the result is not explained by an empty miner. The
+complete model recorded item-feature schema fingerprint
+`1343d99df33cf8bfd083df2e58241796a921ca746c75ded342457b59989400f9`.
+
+Local MLflow run ids, in table order, are
+`3b41a19854b94b329fd9424a0e65f773`,
+`7e803d6c93d3480aa3c1ff50b824d6ff`,
+`736d1156cd1a414aba1fdb5614a0aeab`,
+`dfa5143725f346859522a72f170a8f19`, and
+`2348ef2b16cc49bd944df4964a9dc6e9`. No external service or paid API was used.
+ADR 0015's stop rule therefore fires: no full-data run, no promotion, and no
+third two-tower tuning cycle. Item-item remains the retrieval champion and the
+modeling track proceeds to SASRec under ADR 0016.
+
 ### What was not run, and why
 
 - **One seed per cell, again.** Everything here is seed 42, and the pilot's
@@ -2244,3 +2279,82 @@ the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
   attach itself to a different one, so a subsampled run skips it and says so in
   its log. Every full-dataset run has it, and the per-bucket table above is from
   those.
+
+## SASRec bounded loss pilot — 2026-09-04
+
+ADR 0016's matched loss ablation ran on the established deterministic 6% user
+sample using [`pilot-6pct.json`](experiments/sasrec/pilot-6pct.json). Both arms
+used seed 42, the ADR's two-block 64-wide causal encoder, two epochs, 32 unique
+uniform negatives per target, and exact inner-product retrieval. The slice has
+1,213,918 train rows, 19,005 train items, 8,316 train users, and 115 warm
+holdout users.
+
+| Loss | Warm recall@500 | Warm NDCG@500 | Overall recall@500 | Fit seconds |
+|---|---:|---:|---:|---:|
+| standard sampled BCE | **0.3186** | **0.1089** | **0.3684** | 1,644.0 |
+| gBCE, calibration t=0.5 | 0.2937 | 0.1022 | 0.3511 | 1,654.4 |
+| prior popularity reference | 0.1974 | 0.0721 | — | — |
+
+BCE beats gBCE by 8.5% relative warm recall and clears the pilot stop rule by
+61.4% relative to popularity. Cold recall is 0.4830 in both arms because users
+below the shared ten-interaction threshold route to the identical popularity
+fallback; it is not evidence about either loss. The frozen full-data cell is
+therefore BCE with 32 negatives, two epochs, seed 42, and exact FAISS.
+
+The valid local MLflow runs are `0c600f9dd15e47a99cb9fa364b23ed02` (BCE) and
+`fb63a3ae96c64205ba5e57e5ca4b0611` (gBCE). Earlier SASRec pilot runs are
+diagnostic only. They exposed two correctness defects subsequently fixed:
+training initially used retrieval-normalized logits, and evaluation initially
+left dropout active while its callback also left the next epoch in evaluation
+mode. In the valid runs, epoch-two and final metrics match exactly.
+
+This remains a one-seed pilot, not a promotion claim. It chooses the loss for
+the full-data gate; item-item remains champion until SASRec is evaluated on the
+full eligible population and passes ADR 0004 plus the serving latency gate.
+
+## SASRec first full-data run — 2026-09-04
+
+The frozen seed-42 BCE cell ran on all 25,000,095 MovieLens ratings from source
+commit `66e06e1`. It trained 19,739,546 strict-prefix targets over 139,383 real
+and synthetic users and 34,461 items. The two epochs took 17,655 seconds (4 h
+54 min) on an Apple M3 Pro with 36 GiB unified memory, with PyTorch CPU work
+pinned to one thread.
+
+| Metric | Value |
+|---|---:|
+| warm recall@500 | **0.4652** |
+| warm NDCG@500 | 0.1734 |
+| cold recall@500 (popularity-routed) | 0.5263 |
+| overall recall@500 | 0.4816 |
+| learned-policy catalog coverage | 30.70% (10,581 items) |
+| learned-policy holdout-target reachability | 0.3556 |
+| mean retrieved-item popularity rank | 3,564.3 |
+
+The warm result is 16.6% above item-item's 0.3991 reference and 101% above the
+full-data popularity reference of 0.2310. It is a candidate to advance, not a
+promotion result: this is one seed, the comparable protocol/rolling-window gate
+is still being built, the paired-ranker guardrail is unmeasured, and the run
+predates artifact export. Its MLflow run
+`6958fd082af6462da812ddd4708230c1` is `FINISHED` and retains all metrics,
+parameters, tags, and sequence diagnostics, but it contains no weights. M2-02
+therefore requires one exported rerun before serving or latency work.
+
+### Why synthetic h10 is zero
+
+The ADR 0011 cohort routed exactly as specified: h0/h1/h3 sent all 500 users to
+popularity and h10 sent none. Their recalls were 0.476, 0.460, 0.456, and 0.000
+respectively. The h10 zero is not missing catalog data or target leakage:
+
+- all 500 h10 targets occur in the training catalog;
+- no target occurs in its user's ten-item history;
+- 230 targets are in popularity's top 500, with median popularity rank 596.5;
+- every ten-item history has exactly one unique timestamp; and
+- those tied histories create zero eligible strict-prefix training targets.
+
+ADR 0011 holds recency constant by stamping a user's synthetic events at one
+time. That is valid for routing and order-insensitive retrievers, but it does
+not define a causal sequence. SASRec consumes the stable generator row order as
+if it were chronology, making h10 an out-of-distribution probe rather than a
+sequence-quality slice. Keep its routing assertion; version a separate cohort
+with strictly increasing timestamps and transition-aligned targets before
+claiming synthetic sequential quality.
