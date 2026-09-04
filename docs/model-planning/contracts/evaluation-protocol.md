@@ -70,6 +70,40 @@ Boundaries are inclusive. An incumbent value of zero cannot support a relative c
 that clause. A retrieval pass still sets `serving_eligible=false`; the paired LightGBM NDCG@10,
 artifact, and latency gates remain mandatory.
 
+## Filtering policy vocabulary
+
+The manifest's five filtering fields exist because a candidate set is defined as much by what was
+removed as by what was retrieved. These are the values that describe the semantics implemented
+today; a run that filters differently records a different value and is therefore not comparable,
+which is the point.
+
+| Field | Value | What it asserts |
+|---|---|---|
+| `positive_history_filter` | `strict-prior-equal-timestamp-excluded-v1` | Only events strictly before the query timestamp are visible. Interactions sharing a timestamp are excluded from one another's context. |
+| `seen_item_filter` | `watched-strictly-prior-excluded-v1` | The user's already-watched titles as of that timestamp are removed from the candidate/negative pool. |
+| `dismissal_filter` | `not-applicable-no-dismissal-events-v1` | The offline dataset carries no dismissal events, so no dismissal exclusion was applied. |
+| `target_filter` | `target-retained-never-negative-v1` | The evaluated item is kept as the positive and is never sampled as a negative for its own group. |
+| `candidate_filter` | `unfiltered-retrieval-then-point-in-time-exclusions-v1` | Retrieval is asked for candidates unfiltered, and exclusions are applied afterwards against the point-in-time history. |
+
+### The one asymmetry, stated rather than assumed
+
+Serving applies `watched-and-dismissed-excluded-v1` (`src/serving/policy.py`): the caller's whole
+never-show set suppresses output, and dismissals additionally remove a retrieval seed. Offline
+training and evaluation apply the watched half of that rule and nothing else, because MovieLens
+ratings contain no dismissal events to apply — a dismissal is a product signal the running system
+collects, not a property of the dataset.
+
+That gap is structural, not an oversight, and naming it is what keeps it honest. It has two
+consequences the gate enforces rather than trusts:
+
+- a future model trained or evaluated on a dataset that *does* carry dismissals records a different
+  `dismissal_filter` value, so its results cannot be compared against these runs by accident;
+- when the running product's dismissal events become training input, changing the value is the
+  visible act that invalidates comparisons against everything measured before it.
+
+What is *not* claimed: that the two filters produce identical candidate sets. They cannot, since one
+of them has an input the other does not. The claim is only that the difference is recorded.
+
 ## Status and exit-code contract
 
 | State | Meaning | Exit |

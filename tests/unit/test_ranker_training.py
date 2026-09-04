@@ -107,6 +107,7 @@ def test_build_ranker_training_set_is_non_empty_when_positives_are_from_train() 
         positives=positives,
         candidate_model=candidate_model,
         feature_index=feature_index,
+        training_history=train,
         n_negatives=5,
         rng=rng,
     )
@@ -115,3 +116,61 @@ def test_build_ranker_training_set_is_non_empty_when_positives_are_from_train() 
     assert sum(group_sizes) == len(features_df) == len(labels)
     # Every group must have exactly one positive; the rest are negatives.
     assert int(labels.sum()) == len(group_sizes)
+
+
+def test_training_negatives_exclude_only_strictly_prior_history() -> None:
+    """Training keeps the target positive while matching serving exclusions.
+
+    The candidate model was fit on the whole train frame, so its unfiltered
+    output can contain the target, earlier watched titles, same-timestamp
+    titles, and fresh titles. Only the strictly earlier title is in serving's
+    exclusion set at this query time.
+    """
+    history = pd.DataFrame(
+        [
+            {"userId": 7, "movieId": 10, "timestamp": 100},
+            {"userId": 7, "movieId": 20, "timestamp": 200},
+            {"userId": 7, "movieId": 30, "timestamp": 200},
+        ]
+    )
+    movies = pd.DataFrame(
+        {
+            "movieId": [10, 20, 30, 40],
+            "genres": ["Drama", "Drama", "Comedy", "Action"],
+        }
+    )
+    candidate_model = ItemItemModel().fit(
+        pd.concat(
+            [
+                history,
+                pd.DataFrame(
+                    [
+                        {"userId": user_id, "movieId": movie_id, "timestamp": 50}
+                        for user_id in range(20, 40)
+                        for movie_id in (10, 20, 30, 40)
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+    )
+    # Make the candidate contract deterministic; the assembly logic is what
+    # this test owns, while ItemItemModel's filtering has separate tests above.
+    candidate_model.recommend = lambda *_args, **_kwargs: [20, 10, 30, 40]  # type: ignore[method-assign]
+
+    feature_index = FeatureIndex.build(history, movies)
+    features, groups, labels = _build_ranker_training_set(
+        positives=history.iloc[[1]],
+        candidate_model=candidate_model,
+        feature_index=feature_index,
+        training_history=history,
+        n_negatives=3,
+        rng=np.random.default_rng(0),
+    )
+
+    assert groups == [3]
+    assert labels.tolist() == [1.0, 0.0, 0.0]
+    # Candidate 10 is strictly prior and is the one removed. Candidate 30
+    # shares the target timestamp, so it is not visible as history yet and
+    # remains; 40 is fresh; and the target remains as the positive row.
+    assert len(features) == 3

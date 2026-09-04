@@ -2,6 +2,30 @@
 
 > Moved out of `CLAUDE.md` on 2026-08-30 so the instruction file stays short; this folder is the full ledger and `CLAUDE.md`'s "Current status" is its summary. Update both when something lands: the ledger with the detail, the summary only when the shape of the project changes.
 
+## 2026-09-03 closeout work
+
+- ✅ **Ranker-training candidates now apply serving-shaped exclusions.**
+  `_build_ranker_training_set` still requests unfiltered item-item candidates
+  so the sampled target can remain the LambdaRank positive. It independently
+  computes the user's history strictly before that target timestamp and removes
+  those titles from the negative pool. Equal-timestamp interactions remain
+  invisible, matching the feature pipeline's point-in-time rule. This closes
+  remaining platform item (b). Item (a) is also closed by ADR 0009's dated
+  amendment: Python owns arbitrary point-in-time training computation, Feast
+  owns persisted snapshots and online serving, and feature-parity CI now proves
+  all eight values across that boundary.
+- 🔲 **Not yet measured: what the new exclusion does to the candidate mix.**
+  Removing already-watched titles from the negative pool changes which negatives
+  LightGBM sees, and the size of that change is unknown until a full
+  `make train-ranker` is compared against the previous run. The exclusion is
+  correct on the point-in-time fixture either way, but until that comparison
+  exists no one should describe the effect on ranking metrics as neutral. The
+  run waits for a machine that is not busy with the SASRec sweep.
+- 🔲 **Dismissals have no offline counterpart.** Serving excludes watched *and*
+  dismissed titles; MovieLens carries no dismissal events, so training applies
+  the watched half and records the gap rather than papering over it. The named
+  values live in `docs/model-planning/contracts/evaluation-protocol.md`.
+
 Serving, auth, multi-tenancy, feature store, and the synthetic-load harness. The platform decisions are pinned by ADRs 0007–0011 (PRs #27–#31) and the serving platform landed in PRs #32–#44; ADR 0012 and frontend ADR 0002 (PR #45) pin the browser-identity and movie-discovery contracts, and the product itself landed as Bundles 1–7 in PRs #47–#65. The vertical-slice milestone and its definition of done are tracked in `docs/records/demo-plan.md`; the frontend redesign bundles in `docs/frontend/implementation-plan.md`, with the written gate in `docs/frontend/finish-gate-review.md`. Bullets are ordered by the PR that landed them. Status:
 
 - ✅ **ADR 0007 + auth foundation** (PRs #27, #32, #33) — Keycloak self-hosted, realm per tenant, with `default` and `demo` realms seeded from `infra/keycloak/realms/`. `src/auth/middleware.py` validates tokens against a TTL-cached JWKS (`src/auth/jwks.py`), derives the tenant from the token issuer, and attaches a `RequestPrincipal` to `request.state`. A dev-only bypass is refused by `Settings.__init__` outside `environment == "dev"`.
