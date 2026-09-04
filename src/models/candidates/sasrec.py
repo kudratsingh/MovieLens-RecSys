@@ -237,6 +237,7 @@ class SASRecModel:
             )
         )
         for epoch in range(self.config.epochs):
+            self._encoder.train()
             permutation = torch.randperm(len(positives))
             epoch_loss = 0.0
             batches = 0
@@ -276,6 +277,10 @@ class SASRecModel:
     def build_index(self) -> None:
         if self._encoder is None:
             return
+        # Retrieval must be deterministic: disable dropout before building the
+        # item index and leave the fitted model in inference mode. ``fit``
+        # explicitly restores training mode at the start of every epoch.
+        self._encoder.eval()
         n_items = len(self._index_to_item)
         with torch.no_grad():
             vectors = self._encoder.item_vectors(torch.arange(1, n_items + 1)).numpy()

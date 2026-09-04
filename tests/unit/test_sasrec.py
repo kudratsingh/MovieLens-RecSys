@@ -123,6 +123,21 @@ def test_fit_is_deterministic_and_recommendations_exclude_history() -> None:
     assert recommendations == second.recommend(1, 3)
 
 
+def test_epoch_evaluation_matches_final_inference_with_dropout() -> None:
+    epoch_recommendations: list[list[int]] = []
+    model = SASRecModel(config=_config(dropout=0.5), cold_start_threshold=None)
+
+    def capture_epoch(_epoch: int, _loss: float) -> None:
+        model.build_index()
+        epoch_recommendations.append(model.recommend(1, 3))
+
+    model.fit(_train(), on_epoch=capture_epoch)
+
+    assert model._encoder is not None
+    assert model._encoder.training is False
+    assert epoch_recommendations == [model.recommend(1, 3)]
+
+
 @pytest.mark.parametrize(
     "config",
     [_config(hidden_dim=7), _config(negative_count=0), _config(calibration_t=1.1)],
