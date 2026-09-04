@@ -15,6 +15,10 @@ decision register. `S/M/L` are relative review-and-implementation sizes, not cal
 | M0-06 | M | Pin Python/Feast training and serving parity boundary | M0-01 | Historical and online values agree on timestamped fixture |
 | M0-07 | M | Add rolling-origin evaluation splits | M0-03, D-005 | At least three windows, no overlap/leakage, aggregate uncertainty |
 | M0-08 | S | Document sealed-test and 25M/32M policies | D-005, D-007 | Dated decision note and run-template enforcement |
+| M0-09 | S | Export per-user recall vectors from `evaluate()` | M0-03 | Vector mean reconstructs the published slice mean; round trip through the study loader |
+| M0-10 | M | Run the retrieval tolerance study and publish the two fractions | M0-09 | Both tolerances recorded with the runs and the derivation that produced them |
+| M0-11 | S | Measure the candidate-mix change the serving-equivalent exclusions cause | M0-05 | Two full ranker runs compared; the effect on ranking metrics stated rather than assumed |
+| M0-12 | M | Emit a protocol manifest from every candidate trainer | M0-03, M0-09 | Emitted envelope round-trips through the gate reader; window identity matches the tiling |
 
 ## M1 — Complete SASRec research
 
@@ -88,6 +92,31 @@ decision register. `S/M/L` are relative review-and-implementation sizes, not cal
 | M7-03 | L | Run bounded contextual-bandit experiment | M7-02 | Safety constraints, regret/utility, instant rollback |
 | M8-01 | M | Approve bounded frontier spike | D-013 | Dataset/compute/value hypothesis and stop rule |
 | M8-02 | L | Compare one generative/foundation approach | M8-01 | Same protocol, downstream representation value, honest cost report |
+
+## What has landed
+
+IDs are closed here rather than removed from the tables above, so a reader can still see what the
+package was scoped to do. A row is only listed once the PR is on `main`.
+
+| ID | Landed | PR | Note |
+|---|---|---|---|
+| M0-03 | 2026-09-04 | #125 | Versioned protocol manifest and semantic hash |
+| M0-04 | 2026-09-04 | #125 | Retrieval recall@500 gate, four states, no tolerance defaults |
+| M0-05 | 2026-09-04 | #126 | Serving-equivalent candidate exclusions in ranker training |
+| M0-06 | 2026-09-04 | #126 | Python/Feast parity boundary tested at a materialization timestamp |
+| M1-03 | 2026-09-04 | #128 | Last-item transition baseline — built, not yet run |
+| M0-08 | 2026-09-04 | #131 | Sealed-test and dataset policy, with the run template enforcing a partition declaration |
+| M0-07 | 2026-09-04 | #132 | Rolling-origin windows, leakage assertions, and the clustered user bootstrap |
+| M0-09 | 2026-09-04 | #133 | Per-user recall vectors exported from every run, in the shape the study loads |
+| M0-12 | 2026-09-04 | #134 | Protocol manifests emitted, plus the sealed-partition field added while it was still free |
+
+Three of these are narrower than their acceptance line reads, and the difference is recorded rather
+than glossed. **M0-04** is executable but cannot return a verdict until its tolerances are measured,
+which is M0-09 and M0-10. **M0-06** landed the parity test rather than the decision it was scoped to
+make: the ADR 0009 amendment that closed the training feature source was withdrawn (#127), and the
+question is deferred as D-009 with its alternatives costed.
+**M0-07** landed the windows and the aggregation but no run is stamped with a window id yet, and the
+bootstrap's interval needs per-user values that only arrive with M0-09.
 
 ## Verification baseline
 
