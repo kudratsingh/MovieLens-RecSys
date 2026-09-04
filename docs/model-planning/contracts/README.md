@@ -5,3 +5,5 @@ evidence. They supplement the ADRs; they do not approve new metrics, thresholds,
 
 - [`evaluation-protocol.md`](evaluation-protocol.md) — canonical semantic identity, MLflow envelope,
   retrieval-gate states, and operator checklist.
+- [`retrieval-tolerance-measurement.md`](retrieval-tolerance-measurement.md) — how the retrieval
+  gate's cold and overall tolerances get measured, and the harness that refuses to guess them.
