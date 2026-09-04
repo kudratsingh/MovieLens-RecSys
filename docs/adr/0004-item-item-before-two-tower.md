@@ -121,3 +121,51 @@ The baseline earned its keep on its first real use.
   learning-rate sweep, because a loss that flattens after one epoch is a
   hyperparameter symptom before it is a model one. That is a re-measurement of
   this ADR's own comparison, not a new rung.
+
+## 2026-09-04 — amendment: protocol-bound retrieval promotion
+
+Status remains **Accepted**. The owner approved the retrieval decision rule that the original
+ADR deferred. It applies to SASRec and later stochastic learned retrievers whose job is to replace
+the deterministic item-item candidate generator.
+
+### Decision
+
+A learned retriever clears the retrieval-quality gate only when all of the following are true:
+
+1. Candidate runs use the complete seed set `42`, `7`, and `13`; the item-item incumbent is one
+   deterministic, seedless run.
+2. Every run is `FINISHED`, identifies its model type, and contains a complete canonical evaluation
+   protocol whose recorded hash can be independently recalculated.
+3. Candidate and incumbent protocols match exactly, including data/snapshot identity, time window,
+   labels, eligible population, catalog, routing, exclusions, feature semantics, stage, metric,
+   slices, and K.
+4. Both sides evaluate the same warm and cold user populations at retrieval-stage recall@500.
+5. Mean candidate warm recall@500 is at least `incumbent × 1.03`.
+6. Mean candidate cold and overall recall@500 do not regress beyond separately measured
+   retrieval-specific tolerances.
+
+Cold and overall tolerances have no default. Until the retrieval noise study records both measured
+fractions, the gate is incomplete and cannot promote. ADR 0001's ranking tolerances must not be
+reused: those describe NDCG@10 variation in a different stage and model pipeline.
+
+The gate returns four distinct states: `promote`, `refuse`, `not_comparable`, and `incomplete`.
+Missing seeds or metadata are incomplete evidence, protocol/population mismatches are not
+comparable, and a valid result below a quality threshold is a refusal. None may be collapsed into a
+pass or into an ordinary model loss.
+
+A retrieval `promote` is stage-local, not permission to serve. The exact candidate sets must also
+pass the paired champion LightGBM NDCG@10 gate under ADR 0001, followed by artifact-equivalence and
+latency gates. The sealed test partition remains untouched until a release candidate is frozen.
+
+### Implementation and historical results
+
+The executable contract is split deliberately:
+
+- `src/evaluation/retrieval_gate.py` reads recall@500 and enforces this amendment.
+- `src/evaluation/gate.py` remains the ranking-only NDCG gate and is unchanged.
+- `src/evaluation/manifest.py` owns canonical protocol serialization and semantic hashing.
+
+The earlier illustrative `0.412148` warm floor came from applying 3% to the historical item-item
+score `0.400144`. It is not a constant. Every decision calculates its floor from the compatible
+incumbent run supplied to the gate. Historical runs that predate the canonical manifest remain
+useful evidence but are intentionally ineligible for an executable promotion verdict.

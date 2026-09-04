@@ -6,7 +6,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 
 | ID | Decision | Needed by | Recommended default | Status |
 |---|---|---|---|---|
-| D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04; ADR 0004 amendment and retrieval-tolerance measurement required |
+| D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04 and recorded in ADR 0004; retrieval-tolerance measurement remains required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
 | D-003 | SASRec pilot advance/stop margin | Before interpreting the 6% pilot | Must beat same-sample popularity and last-item baseline; do not infer item-item parity from one noisy pilot seed | Open |
 | D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |

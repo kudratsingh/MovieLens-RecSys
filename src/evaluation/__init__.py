@@ -3,6 +3,7 @@
 # `__init__` makes runpy warn that it was already in sys.modules before it ran.
 # Import it directly: `from src.evaluation.gate import promotion_decision`.
 from .aggregate import mean_eval_result
+from .manifest import ProtocolManifest, RunIdentity
 from .metrics import ndcg_at_k, recall_at_k
 from .protocol import EvalResult, UserMetrics, evaluate
 
@@ -10,6 +11,8 @@ __all__ = [
     "evaluate",
     "mean_eval_result",
     "EvalResult",
+    "ProtocolManifest",
+    "RunIdentity",
     "UserMetrics",
     "recall_at_k",
     "ndcg_at_k",
