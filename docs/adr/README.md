@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-**Last reviewed:** 2026-08-29 — the index below was checked against every ADR's
+**Last reviewed:** 2026-09-03 — the index below was checked against every ADR's
 own header and notes on that date.
 
 Every significant design choice in this project is written down *before* the code that depends on it lands, so the alternatives get rejected while they are still live options rather than retrofitted as justification. An ADR is a historical record: once accepted, its rationale is not rewritten. When the implementation later diverges from the plan, the ADR gets a short dated *implementation note* under its header, and the original text stays as written.
@@ -27,6 +27,7 @@ The standard each ADR is held to: substantive rather than checkbox — typically
 | 0012 | [Browser Identity, Feedback State, and Online Freshness](0012-browser-identity-feedback-and-online-freshness.md) | `/me/...` resources bound to the OIDC subject with persona access behind a `demo-impersonator` role; PKCE browser flow through the Next.js BFF; a forced-RLS `user_movie_state` projection plus an append-only feedback event log; mutations acknowledged only after commit. | Accepted (see note) | 3 |
 | 0013 | [Production Deployment Target: One Hetzner VPS](0013-production-deployment-target.md) | One Hetzner CX22 running `docker-compose.prod.yml` behind its own Caddy edge, with two public hostnames and everything else on the host's private Docker network; CI publishes SHA-tagged images to GHCR and the box only pulls; a merge to `main` deploys over SSH and rolls back automatically when verification fails; `/readyz` remains a second unauthenticated path and the CI k6 gate remains the SLO's only authority. | Accepted | 3 |
 | 0014 | [Request Rate Limiting](0014-request-rate-limiting.md) | Per-`(tenant, subject)` token bucket keyed on the verified token, never on a client IP; 429 with `X-RateLimit-*`; defaults of 600/minute with a burst of 120. The named follow-up landed on 2026-08-29: the bucket lives in Redis and is charged by one atomic Lua script, so **every worker meets the same bucket** and the limit describes the service; an unreachable Redis fails open onto the per-worker bucket and `/readyz` says so. | Accepted | 3 |
+| 0015 | [SASRec for Sequential Retrieval](0015-sasrec-sequential-retrieval.md) | Proposes a causal Transformer over ordered positive history as the next retrieval rung, judged against item-item at recall@500 and the unchanged p99 gate. | Proposed | Modeling ladder |
 
 Phases map to the plan in [`CLAUDE.md`](../../CLAUDE.md): Phase 1 is baselines and the data foundation, Phase 2 is the offline two-stage architecture, Phase 3 is serving, auth, multi-tenancy, the feature store, and the synthetic-load harness.
 
