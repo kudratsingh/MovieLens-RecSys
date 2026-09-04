@@ -104,12 +104,16 @@ package was scoped to do. A row is only listed once the PR is on `main`.
 | M0-05 | 2026-09-04 | #126 | Serving-equivalent candidate exclusions in ranker training |
 | M0-06 | 2026-09-04 | #126 | Python/Feast parity boundary tested at a materialization timestamp |
 | M1-03 | 2026-09-04 | #128 | Last-item transition baseline — built, not yet run |
+| M0-08 | 2026-09-04 | #131 | Sealed-test and dataset policy, with the run template enforcing a partition declaration |
+| M0-07 | 2026-09-04 | #132 | Rolling-origin windows, leakage assertions, and the clustered user bootstrap |
 
-Two of these are narrower than their acceptance line reads, and the difference is recorded rather
+Three of these are narrower than their acceptance line reads, and the difference is recorded rather
 than glossed. **M0-04** is executable but cannot return a verdict until its tolerances are measured,
 which is M0-09 and M0-10. **M0-06** landed the parity test rather than the decision it was scoped to
 make: the ADR 0009 amendment that closed the training feature source was withdrawn (#127), and the
 question is deferred as D-009 with its alternatives costed.
+**M0-07** landed the windows and the aggregation but no run is stamped with a window id yet, and the
+bootstrap's interval needs per-user values that only arrive with M0-09.
 
 ## Verification baseline
 
