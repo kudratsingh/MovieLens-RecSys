@@ -226,13 +226,45 @@ def test_training_pair_history_excludes_positive() -> None:
     model._index_to_item = {v: k for k, v in model._item_to_index.items()}
     model._user_history = build_user_history(_SYNTHETIC_TRAIN, model._item_to_index)
 
-    histories, positives = model._build_training_pairs()
+    histories, positives = model._build_training_pairs(_SYNTHETIC_TRAIN)
 
     # Every row's positive must not appear in that row's history slice.
     # (Padding is 0 and never equals a positive since dense indices start
     # at 1.)
     for hist_row, pos in zip(histories.tolist(), positives.tolist()):
         assert pos not in hist_row, f"positive {pos} leaked into its own history {hist_row}"
+
+
+def test_equal_timestamp_items_do_not_enter_each_others_history() -> None:
+    """Only strictly earlier timestamps are visible to a training target."""
+    train = _ratings(
+        [
+            (1, 100, 10),
+            (1, 101, 20),
+            (1, 102, 20),
+            (1, 103, 30),
+            (2, 200, 40),
+            (2, 201, 40),  # no earlier timestamp: neither row is trainable
+        ]
+    )
+    model = TwoTowerModel(config=_FAST_CONFIG, cold_start_threshold=None)
+    movie_ids = sorted(train["movieId"].unique())
+    model._item_to_index = {movie_id: i + 1 for i, movie_id in enumerate(movie_ids)}
+    model._index_to_item = {dense: movie for movie, dense in model._item_to_index.items()}
+    model._user_history = build_user_history(train, model._item_to_index)
+
+    histories, positives = model._build_training_pairs(train)
+    rows = list(zip(histories.tolist(), positives.tolist()))
+
+    dense_100 = model._item_to_index[100]
+    dense_101 = model._item_to_index[101]
+    dense_102 = model._item_to_index[102]
+    dense_103 = model._item_to_index[103]
+    assert len(rows) == 3
+    assert [positive for _history, positive in rows] == [dense_101, dense_102, dense_103]
+    assert [value for value in rows[0][0] if value] == [dense_100]
+    assert [value for value in rows[1][0] if value] == [dense_100]
+    assert [value for value in rows[2][0] if value] == [dense_100, dense_101, dense_102]
 
 
 def test_converges_on_two_cluster_synthetic() -> None:

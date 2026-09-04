@@ -302,7 +302,7 @@ class TwoTowerModel:
         # Position 0 is dropped — a user's first interaction has no history
         # to encode, so it can't feed the mean-pool. That's per ADR 0006's
         # point-in-time rule: the encoder never runs on an empty history.
-        history_tensor, positive_tensor = self._build_training_pairs()
+        history_tensor, positive_tensor = self._build_training_pairs(train)
         n_examples = positive_tensor.shape[0]
         logger.info(
             "Training on %d (history, positive) pairs across %d users, %d items",
@@ -426,7 +426,9 @@ class TwoTowerModel:
             return
         self._build_faiss_index(len(self._index_to_item))
 
-    def _build_training_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _build_training_pairs(
+        self, train: pd.DataFrame | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Materialize the (history, positive) tensors from ``_user_history``.
 
         History is padded with 0 on the *left* so the last N slots are the
@@ -438,22 +440,52 @@ class TwoTowerModel:
         50 columns: as a list-of-lists it is roughly 9 GB of list objects
         before the tensor is even built, and this machine has 16 GB. The
         rows and their order are identical either way.
+
+        When ``train`` is supplied, timestamps are authoritative: every item
+        sharing a timestamp receives the same prefix containing only items at
+        strictly earlier timestamps. The history-only fallback exists for
+        small callers that have no timestamps; production training always
+        supplies the frame.
         """
         n = self.config.history_window
-        total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
+        if train is not None:
+            ordered = train.sort_values(["userId", "timestamp", "movieId"], kind="stable")
+            total = 0
+            for _user_id, group in ordered.groupby("userId", sort=False):
+                first_timestamp = group["timestamp"].min()
+                total += int((group["timestamp"] > first_timestamp).sum())
+        else:
+            ordered = None
+            total = sum(max(0, len(hist) - 1) for hist in self._user_history.values())
         histories = np.zeros((total, n), dtype=np.int32)
         positives = np.empty(total, dtype=np.int32)
 
         row = 0
-        for hist in self._user_history.values():
-            dense = np.asarray(hist, dtype=np.int32)
-            for i in range(1, len(dense)):
-                window = dense[max(0, i - n) : i]
-                # Left-pad to N: the array starts zeroed, so writing the
-                # window into the trailing slots is the whole padding step.
-                histories[row, n - len(window) :] = window
-                positives[row] = dense[i]
-                row += 1
+        if ordered is not None:
+            for _user_id, group in ordered.groupby("userId", sort=False):
+                prefix: list[int] = []
+                for _timestamp, simultaneous in group.groupby("timestamp", sort=False):
+                    dense_targets = [
+                        self._item_to_index[int(movie_id)]
+                        for movie_id in simultaneous["movieId"].tolist()
+                    ]
+                    if prefix:
+                        window = np.asarray(prefix[-n:], dtype=np.int32)
+                        for target in dense_targets:
+                            histories[row, n - len(window) :] = window
+                            positives[row] = target
+                            row += 1
+                    # Same-time targets become visible only to later timestamp
+                    # groups, never to one another.
+                    prefix.extend(dense_targets)
+        else:
+            for hist in self._user_history.values():
+                dense = np.asarray(hist, dtype=np.int32)
+                for i in range(1, len(dense)):
+                    window = dense[max(0, i - n) : i]
+                    histories[row, n - len(window) :] = window
+                    positives[row] = dense[i]
+                    row += 1
 
         return torch.from_numpy(histories), torch.from_numpy(positives)
 
