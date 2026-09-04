@@ -18,12 +18,17 @@ from src.training.twotower import (
     INPUT_DIR_ENV_VAR,
     PHASE_2_EXPERIMENT,
     load_inputs,
-    resolve_sample_fraction,
     subsample_users,
 )
 
 logger = logging.getLogger(__name__)
 RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
+SAMPLE_FRACTION_ENV_VAR = "SASREC_USER_SAMPLE_FRACTION"
+
+
+def resolve_sasrec_sample_fraction() -> float:
+    raw = os.environ.get(SAMPLE_FRACTION_ENV_VAR, "").strip()
+    return 1.0 if not raw else float(raw)
 
 
 def run_once(
@@ -122,7 +127,7 @@ def main() -> None:
     run_once(
         ratings,
         SASRecConfig.from_env(),
-        sample_fraction=resolve_sample_fraction(),
+        sample_fraction=resolve_sasrec_sample_fraction(),
         run_label=os.environ.get(RUN_LABEL_ENV_VAR, "").strip(),
     )
 

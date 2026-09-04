@@ -166,14 +166,23 @@ def sample_negatives(
 ) -> torch.Tensor:
     """Uniform seeded negatives excluding padding, prefix, target, and duplicates."""
     output = np.empty((len(positives), count), dtype=np.int64)
-    catalog = np.arange(1, n_items + 1, dtype=np.int64)
     for row, (history, positive) in enumerate(zip(histories.numpy(), positives.numpy())):
         forbidden = set(int(item) for item in history if item)
         forbidden.add(int(positive))
-        eligible = catalog[~np.isin(catalog, list(forbidden))]
-        if len(eligible) < count:
+        if n_items - len(forbidden) < count:
             raise ValueError("not enough eligible unique negatives for requested count")
-        output[row] = rng.choice(eligible, size=count, replace=False)
+        selected: list[int] = []
+        selected_set: set[int] = set()
+        while len(selected) < count:
+            draws = rng.integers(1, n_items + 1, size=max(8, 2 * (count - len(selected))))
+            for candidate_value in draws:
+                candidate = int(candidate_value)
+                if candidate not in forbidden and candidate not in selected_set:
+                    selected.append(candidate)
+                    selected_set.add(candidate)
+                    if len(selected) == count:
+                        break
+        output[row] = selected
     return torch.from_numpy(output)
 
 
