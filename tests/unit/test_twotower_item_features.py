@@ -8,6 +8,7 @@ from src.models.candidates.item_features import (
     build_item_feature_matrix,
     fit_item_feature_schema,
 )
+from src.models.candidates.twotower import ItemTower
 
 
 def _movies() -> pd.DataFrame:
@@ -62,3 +63,36 @@ def test_constant_or_absent_years_use_safe_unit_scale() -> None:
 
     assert fit_item_feature_schema(constant).release_year_std == 1.0
     assert fit_item_feature_schema(missing).release_year_std == 1.0
+
+
+def test_item_tower_combines_id_and_side_features_and_keeps_padding_zero() -> None:
+    side_features = torch.tensor(
+        [
+            [9.0, 9.0],  # constructor must zero padding defensively
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    tower = ItemTower(n_items=2, embedding_dim=4, side_features=side_features)
+    output = tower(torch.tensor([0, 1, 2]))
+
+    assert tower.side_projection is not None
+    assert tower.side_gate is not None
+    assert torch.equal(output[0], torch.zeros(4))
+    assert torch.allclose(output[1:].norm(dim=1), torch.ones(2))
+
+    output.sum().backward()
+    assert tower.side_projection.weight.grad is not None
+    assert tower.side_gate.grad is not None
+
+
+def test_item_tower_without_features_preserves_id_only_shape() -> None:
+    tower = ItemTower(n_items=2, embedding_dim=4)
+    assert tower.side_projection is None
+    assert tower.side_gate is None
+    assert tower(torch.tensor([1, 2])).shape == (2, 4)
+
+
+def test_item_tower_rejects_misaligned_side_feature_rows() -> None:
+    with pytest.raises(ValueError, match="side_features"):
+        ItemTower(n_items=2, embedding_dim=4, side_features=torch.zeros((2, 3)))

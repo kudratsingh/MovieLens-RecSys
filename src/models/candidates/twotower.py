@@ -150,7 +150,7 @@ class TwoTowerConfig:
 
 
 class ItemTower(nn.Module):
-    """Id-only item embedding, L2-normalized on the way out.
+    """Item-id embedding with an optional structured-feature residual.
 
     Index 0 is reserved as the padding id so variable-length user histories
     pack cleanly into a ``(batch_size, N)`` integer tensor. The padding row
@@ -159,8 +159,14 @@ class ItemTower(nn.Module):
     divides by the true item count (not by ``N``).
     """
 
-    def __init__(self, n_items: int, embedding_dim: int) -> None:
+    def __init__(
+        self,
+        n_items: int,
+        embedding_dim: int,
+        side_features: torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
+        self.side_features: torch.Tensor | None
         # +1 for the padding row at index 0.
         self.embed = nn.Embedding(n_items + 1, embedding_dim, padding_idx=0)
         # Small-variance init, standard for embedding tables trained with
@@ -169,9 +175,36 @@ class ItemTower(nn.Module):
         nn.init.normal_(self.embed.weight, mean=0.0, std=1.0 / math.sqrt(embedding_dim))
         with torch.no_grad():
             self.embed.weight[0].zero_()
+        if side_features is not None:
+            expected_rows = n_items + 1
+            if side_features.ndim != 2 or side_features.shape[0] != expected_rows:
+                raise ValueError(
+                    "side_features must have shape "
+                    f"({expected_rows}, feature_width), got {tuple(side_features.shape)}"
+                )
+            side_features = side_features.detach().to(dtype=torch.float32).clone()
+            side_features[0].zero_()
+            self.register_buffer("side_features", side_features)
+            self.side_projection: nn.Linear | None = nn.Linear(
+                int(side_features.shape[1]), embedding_dim, bias=False
+            )
+            # Start close to the id-only model while leaving a gradient into
+            # both paths. sigmoid(2) ~= 0.88 id / 0.12 structured features.
+            self.side_gate: nn.Parameter | None = nn.Parameter(torch.tensor(2.0))
+        else:
+            self.register_buffer("side_features", None)
+            self.side_projection = None
+            self.register_parameter("side_gate", None)
 
     def forward(self, item_ids: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.embed(item_ids), p=2, dim=-1)
+        item_vectors = self.embed(item_ids)
+        if self.side_projection is not None and self.side_features is not None:
+            side_vectors = self.side_projection(self.side_features[item_ids])
+            assert self.side_gate is not None
+            gate = torch.sigmoid(self.side_gate)
+            item_vectors = gate * item_vectors + (1.0 - gate) * side_vectors
+            item_vectors = item_vectors.masked_fill((item_ids == 0).unsqueeze(-1), 0.0)
+        return F.normalize(item_vectors, p=2, dim=-1)
 
 
 def build_user_history(
@@ -493,7 +526,7 @@ class TwoTowerModel:
         """
         assert self._item_tower is not None
         # (B, N, d) — padding rows contribute the zero vector.
-        item_vecs = self._item_tower.embed(history_batch)
+        item_vecs = self._item_tower(history_batch)
         # (B, N) 1.0 where history is non-padding, 0.0 elsewhere.
         mask = (history_batch != 0).float().unsqueeze(-1)
         summed = (item_vecs * mask).sum(dim=1)
