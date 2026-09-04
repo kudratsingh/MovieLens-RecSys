@@ -14,7 +14,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve the exact full-data champion; preserve compact bundle only as an explicit demo fixture | Answered 2026-09-04 |
 | D-007 | 25M-to-32M migration trigger | Before any dataset expansion | Stay on 25M unless a named slice is underpowered or a model hypothesis needs newer events | Open |
 | D-008 | Registry source of truth | Before M3 | MLflow owns immutable runs/artifacts/versions; Postgres owns tenant assignment and rollout state | Open |
-| D-009 | Feature representation at full scale | Before full-data serving | Compact user genre vector + item metadata, joined for retrieved candidates; no user-by-catalog table | Open; ADR 0009 note required |
+| D-009 | Feature representation and the training feature source | Before any full-25M materialization, and before M2 | Compact per-user genre-mask counts (measured exact form) plus on-demand computation over the retrieved slate; no user-by-catalog table | Deferred by owner 2026-09-04 to prioritise modeling; costed in [`memos/feature-source-boundary.md`](memos/feature-source-boundary.md) |
 | D-010 | Multi-objective labels and utility | Before M5 | Do not invent completion/click labels from MovieLens; wait for observable product events or constrain the rung to rating-derived research proxies labeled as such | Owner input required |
 | D-011 | Re-ranking objective | Before M6 | Choose one primary diversity metric plus relevance guardrail; begin with MMR as interpretable baseline | Open |
 | D-012 | M5 versus M6 ordering | After M4 | Prefer M6 first if multiple retrievers are useful; prefer M5 first only when utility and labels are ready | Open later |
@@ -128,6 +128,23 @@ appropriate combination of precomputation, ANN, batching, compilation, quantizat
 caching, concurrency controls, or additional serving capacity. Measure p50/p95/p99 by concurrency,
 history length, candidate count, and model version. If the unchanged representative-load gate
 fails, the model is not serving eligible even when its offline quality improves.
+
+## D-009 — Feature representation and the training feature source
+
+Costed in full in [`memos/feature-source-boundary.md`](memos/feature-source-boundary.md), written
+after the 2026-09-03 ADR 0009 amendment was withdrawn for closing the question without pricing the
+alternatives.
+
+The short form. Seven of the eight ranker features are single-entity; only `user_genre_affinity` is
+user×item, and it is the one that forces the answer. The current materialization cross-joins users
+against the whole catalog — 10,146,296,843 rows at full scale. The exact compact form is a per-user
+map from 20-bit genre mask to count: **11,532,291 distinct (user, mask) pairs across all 25M
+ratings, 880× smaller**, mean 71 masks per user. This corrects the recommended default in the row
+above as originally written: a 20-length per-genre vector cannot reproduce the feature, because the
+definition is a union over the candidate's genres.
+
+Deferred, not decided. The modeling ladder does not touch the materialization path, so the deferral
+is free until a full-data champion is materialized for serving.
 
 ## D-010 — Multi-objective truthfulness
 

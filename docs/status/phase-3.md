@@ -10,10 +10,18 @@
   computes the user's history strictly before that target timestamp and removes
   those titles from the negative pool. Equal-timestamp interactions remain
   invisible, matching the feature pipeline's point-in-time rule. This closes
-  remaining platform item (b). Item (a) is also closed by ADR 0009's dated
-  amendment: Python owns arbitrary point-in-time training computation, Feast
-  owns persisted snapshots and online serving, and feature-parity CI now proves
-  all eight values across that boundary.
+  remaining platform item (b).
+- 🔲 **Item (a), the training feature source, is deferred — not closed.** What
+  landed is the test, not the decision: feature-parity CI now proves all eight
+  values agree across Python, Feast historical, and Feast online at a
+  materialization timestamp, and the trainer records both source versions. A
+  2026-09-03 ADR 0009 amendment declared the boundary permanent; it was withdrawn
+  on 2026-09-04 because it never priced the alternatives. The owner deferred the
+  decision the same day to prioritise the modeling ladder, which does not touch
+  the materialization path. It becomes blocking before any full-25M
+  materialization and before M2 opens the serving path. Costed options and the
+  measured numbers: `docs/model-planning/memos/feature-source-boundary.md`
+  (D-009).
 - 🔲 **Not yet measured: what the new exclusion does to the candidate mix.**
   Removing already-watched titles from the negative pool changes which negatives
   LightGBM sees, and the size of that change is unknown until a full
