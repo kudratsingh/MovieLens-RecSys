@@ -10,14 +10,16 @@
       "label": "bce-neg32",
       "loss": "bce",
       "negative_count": 32,
-      "epochs": 2
+      "epochs": 2,
+      "faiss_exact": true
     },
     {
       "label": "gbce-t0.5-neg32",
       "loss": "gbce",
       "calibration_t": 0.5,
       "negative_count": 32,
-      "epochs": 2
+      "epochs": 2,
+      "faiss_exact": true
     }
   ]
 }
