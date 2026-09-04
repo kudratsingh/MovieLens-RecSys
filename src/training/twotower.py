@@ -57,6 +57,7 @@ from src.data.split import temporal_split
 from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
 from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
+from src.training import protocol_manifest
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,13 @@ def run_once(
         config=config,
         cold_start_threshold=routing.cold_start_threshold_for(policy, COLD_START_THRESHOLD),
     )
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="retrieval",
+        k=K_CANDIDATES,
+    )
 
     # Eval inputs are built before the fit so the per-epoch callback can score
     # recall without rebuilding them every epoch.
@@ -208,6 +216,13 @@ def run_once(
                 **config.as_params(),
             }
         )
+        envelope = protocol_manifest.run_envelope(
+            protocol,
+            deterministic=False,
+            seed=config.seed,
+        )
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
 
         logger.info("Fitting two-tower model ...")
         t0 = time.perf_counter()
@@ -385,7 +400,7 @@ def load_inputs(
         logger.info("Loading ratings and movie metadata from CSV files in %s ...", input_dir)
         ratings = pd.read_csv(
             input_dir / "ratings.csv",
-            usecols=["userId", "movieId", "timestamp"],
+            usecols=["userId", "movieId", "rating", "timestamp"],
         )
         movies = pd.read_csv(
             input_dir / "movies.csv",

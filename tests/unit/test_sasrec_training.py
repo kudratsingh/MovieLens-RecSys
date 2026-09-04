@@ -43,8 +43,8 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ratings = pd.DataFrame(
-        [(user, user * 100 + item, item) for user in range(1, 5) for item in range(8)],
-        columns=["userId", "movieId", "timestamp"],
+        [(user, user * 100 + item, 4.0, item) for user in range(1, 5) for item in range(8)],
+        columns=["userId", "movieId", "rating", "timestamp"],
     )
     config = SASRecConfig(
         max_sequence_length=5,
@@ -86,6 +86,9 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
         assert mlflow_manifest.is_file()
         assert durable_manifest.read_bytes() == mlflow_manifest.read_bytes()
         assert run.data.tags["sasrec_artifact_sha256"]
+        assert run.data.tags["evaluation_protocol"]
+        assert run.data.params["evaluation_protocol_hash"]
+        assert run.data.params["train_seed"] == str(config.seed)
         load_sasrec(durable_manifest)
         load_sasrec(mlflow_manifest)
     finally:

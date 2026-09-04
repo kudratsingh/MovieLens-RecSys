@@ -22,6 +22,14 @@ logs the model checksum, vocabulary checksum, and manifest location as tags.
 Failure to upload cannot erase the local copy; failure later in evaluation
 cannot erase either copy. No cleanup step is part of this workflow.
 
+The same run also records the shared evaluation-protocol envelope before
+training starts: its dataset revision, derived snapshot and catalog hashes,
+split boundaries, routing and filtering contracts, retrieval cutoff, and
+training seed. The model checksum identifies the fitted bytes; the protocol
+hash identifies the question their reported metrics answered. Promotion needs
+both identities, so a reloadable artifact cannot be mistaken for comparable
+evaluation evidence merely because it can serve candidates.
+
 ## Contents and identity
 
 `sasrec-model.zip` is a deterministic archive with fixed member ordering and

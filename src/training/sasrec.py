@@ -19,6 +19,7 @@ from src.models.candidates.sasrec_artifact import (
     MANIFEST_FILENAME,
     export_sasrec,
 )
+from src.training import protocol_manifest
 from src.training.twotower import (
     INPUT_DIR_ENV_VAR,
     PHASE_2_EXPERIMENT,
@@ -92,6 +93,13 @@ def run_once(
     user_ids = list(holdout)
     cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
     model = SASRecModel(config=config, cold_start_threshold=COLD_START_THRESHOLD)
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="retrieval",
+        k=K_CANDIDATES,
+    )
 
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
     run_name = "sasrec" if not run_label else f"sasrec-{run_label}"
@@ -114,6 +122,13 @@ def run_once(
                 "k_candidates": K_CANDIDATES,
             }
         )
+        envelope = protocol_manifest.run_envelope(
+            protocol,
+            deterministic=False,
+            seed=config.seed,
+        )
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
 
         def on_epoch(epoch: int, loss: float) -> None:
             mlflow.log_metric("train_loss", loss, step=epoch)

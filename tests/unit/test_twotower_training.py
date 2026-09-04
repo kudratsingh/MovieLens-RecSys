@@ -29,7 +29,9 @@ def test_load_inputs_can_use_local_movielens_csvs(tmp_path: Path) -> None:
 
     ratings, movies = load_inputs(Settings(), input_dir=tmp_path)
 
-    assert ratings.to_dict("records") == [{"userId": 1, "movieId": 10, "timestamp": 100}]
+    assert ratings.to_dict("records") == [
+        {"userId": 1, "movieId": 10, "rating": 4.0, "timestamp": 100}
+    ]
     assert movies.to_dict("records") == [
         {"movieId": 10, "title": "Example (2000)", "genres": "Drama"}
     ]
