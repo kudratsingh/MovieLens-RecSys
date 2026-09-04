@@ -18,33 +18,37 @@ If you are here to judge whether the engineering holds up, read in this order.
 3. **[`modeling-roadmap.md`](modeling-roadmap.md)** — the model ladder: where the
    models are today, the rungs from here to a Netflix-class stack, and the
    approval each rung needs before it starts.
-4. **[`adr/README.md`](adr/README.md)** — the decision records. It carries a
+4. **[`model-planning/`](model-planning/README.md)** — the executable model
+   program: current gaps, dependencies, owner decisions, PR-sized work items,
+   detailed phase plans, experiment templates, and review agendas. It does not
+   approve a roadmap rung or replace an ADR.
+5. **[`adr/README.md`](adr/README.md)** — the decision records. It carries a
    reading order of its own; the short version is 0001 (the evaluation
    contract), 0003 (why two stages), 0006 (the retrieval model), 0008 (tenant
    isolation), then 0013 if what you care about is how this runs off a laptop.
    ADRs are never rewritten — a correction is a dated note appended to one.
-5. **[`api/overview.md`](api/overview.md)** — every path and method, the auth
+6. **[`api/overview.md`](api/overview.md)** — every path and method, the auth
    rules, the rate-limit and correlation headers, and a worked recommendation
    response. [`api/README.md`](api/README.md) covers the committed OpenAPI
    artifact and its drift checks.
-6. **[`demo-runbook.md`](demo-runbook.md)** — start the whole stack from a clean
+7. **[`demo-runbook.md`](demo-runbook.md)** — start the whole stack from a clean
    checkout, seed it, and walk it. The fastest way to see the claims above
    running.
-7. **[`frontend/README.md`](frontend/README.md)** — the product: design
+8. **[`frontend/README.md`](frontend/README.md)** — the product: design
    contracts, the frontend system, the surface contracts, and the evidence
    index.
-8. **[`frontend/finish-gate-review.md`](frontend/finish-gate-review.md)** — the
+9. **[`frontend/finish-gate-review.md`](frontend/finish-gate-review.md)** — the
    written UI gate and its current verdict, which is HOLD pending moderated
    participant sessions.
-9. **[`deployment-runbook.md`](deployment-runbook.md)** and
+10. **[`deployment-runbook.md`](deployment-runbook.md)** and
    **[ADR 0013](adr/0013-production-deployment-target.md)** — the deployment:
    one Hetzner CX22 running `docker-compose.prod.yml`, images from GHCR, a
    deploy that rolls itself back when verification fails. Specified and
    rehearsed end to end; **not yet provisioned**.
-10. **[`eda.md`](eda.md)** — the dataset, characterised: scale, sparsity, the
+11. **[`eda.md`](eda.md)** — the dataset, characterised: scale, sparsity, the
    popularity tail, the temporal split as it lands on real data, and cold-start
    sizing.
-11. **[`results.md`](results.md)** — the measured offline numbers: baselines,
+12. **[`results.md`](results.md)** — the measured offline numbers: baselines,
     candidate stage, ranker and the cold-start cohort, each with its run, date,
     machine and caveats.
 
@@ -55,6 +59,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`architecture.md`](architecture.md) | The system overview, with diagrams |
 | [`status/`](status/README.md) | The project ledger: per-phase detail, remaining work per track, the long-form current step |
 | [`modeling-roadmap.md`](modeling-roadmap.md) | The model ladder and its decision log — every rung needs approval before it starts |
+| [`model-planning/`](model-planning/README.md) | Executable model-only plans, dependencies, decisions, work items, experiment templates, scorecards, and review agendas |
 | [`adr/`](adr/README.md) | Backend and cross-cutting ADRs on the flat numeric line; frontend ADRs under [`adr/frontend/`](adr/frontend/) |
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
