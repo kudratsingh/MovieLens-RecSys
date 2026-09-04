@@ -6,15 +6,18 @@ an answer implicitly.
 
 ## Session 0 — Owner decisions and scope lock
 
-Inputs: D-001 through D-006 and the current SASRec pilot record.
+Inputs: D-001 through D-006, D-016, and the current SASRec pilot record.
 
 Decide or explicitly defer:
 
 - retrieval gate proposal and end-to-end guardrail;
 - what constitutes a 6% pilot advance;
-- available compute/RAM/time budget;
-- test partition status and unseal trigger;
-- whether full-data production artifacts or a compact demo bundle are the target.
+- profiler-derived compute/RAM/time projection within the approved local/cloud-GPU policy;
+- final confirmation of the provisionally sealed test partition and its unseal trigger;
+- whether 300–400 ms refers to a latency measurement other than the existing stricter gates.
+
+Already answered on 2026-09-04: production targets the exact full 25M champion, compact bundles
+are fixtures, and SASRec pilots may continue while M0 closes.
 
 Output: dated decisions, or a list of exactly which later sessions are blocked.
 

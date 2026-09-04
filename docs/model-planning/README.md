@@ -106,3 +106,9 @@ champion and LightGBM remains ranking champion until every relevant gate passes.
 
 The concrete first-session sequence is in
 [`agendas/immediate-execution.md`](agendas/immediate-execution.md).
+
+Owner direction recorded on 2026-09-04: production targets the exact MovieLens 25M champion;
+local or cloud-GPU training is allowed under a pre-run cost estimate; the test partition is
+provisionally sealed after a repository audit found no test-metric use; and pilot work may continue
+while M0 closes. The requested 300–400 ms runtime still needs its measured operation clarified,
+because the established online gates are stricter.

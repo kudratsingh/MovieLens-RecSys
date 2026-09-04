@@ -9,9 +9,9 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Open; ADR 0004 amendment required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Open |
 | D-003 | SASRec pilot advance/stop margin | Before interpreting the 6% pilot | Must beat same-sample popularity and last-item baseline; do not infer item-item parity from one noisy pilot seed | Open |
-| D-004 | SASRec compute budget | Before full-data run | Profile first; agree maximum wall-clock, peak RAM, and total seed budget; no unbounded local run | Owner input required |
-| D-005 | Test-set unseal trigger | Before first claimed release candidate | Open once, after model family/config/gates are frozen and serving eligibility passes | Open |
-| D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve exact full-data champion when feasible; preserve compact bundle only as an explicit demo fixture | Owner input required |
+| D-004 | SASRec compute budget | Before full-data run | Local machine or a standard single-cloud-GPU run is allowed; estimate cost/time first and keep the three-seed plan bounded | Partially answered 2026-09-04; exact training-time/RAM ceiling follows profiling |
+| D-005 | Test-set unseal trigger | Before first claimed release candidate | Treat as sealed; open once after model/config/gates are frozen and serving eligibility passes | Provisionally answered 2026-09-04; repository audit found no test evaluation |
+| D-006 | Full 25M model versus compact demo fixture in production | Before M2 architecture | Serve the exact full-data champion; preserve compact bundle only as an explicit demo fixture | Answered 2026-09-04 |
 | D-007 | 25M-to-32M migration trigger | Before any dataset expansion | Stay on 25M unless a named slice is underpowered or a model hypothesis needs newer events | Open |
 | D-008 | Registry source of truth | Before M3 | MLflow owns immutable runs/artifacts/versions; Postgres owns tenant assignment and rollout state | Open |
 | D-009 | Feature representation at full scale | Before full-data serving | Compact user genre vector + item metadata, joined for retrieved candidates; no user-by-catalog table | Open; ADR 0009 note required |
@@ -20,7 +20,8 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-012 | M5 versus M6 ordering | After M4 | Prefer M6 first if multiple retrievers are useful; prefer M5 first only when utility and labels are ready | Open later |
 | D-013 | Frontier compute/provider budget | Before M8 | A fixed-cost research spike; no open-ended foundation-model training | Owner input required later |
 | D-014 | Fate of untracked `docs/progress.md` | Before status-doc cleanup | Preserve untouched; owner chooses archive, refresh, or delete in a separate change | Owner input required |
-| D-015 | Phase 4 automation timing | Before M3 | Stabilize SASRec experiment/export contracts first, then automate; manual model experiments may continue meanwhile | Open |
+| D-015 | Phase 4 automation timing | Before M3 | Stabilize SASRec experiment/export contracts first, then automate; SASRec pilots may continue meanwhile, but promotion/serving waits for M0 | Answered 2026-09-04 |
+| D-016 | Meaning of the requested 300–400 ms runtime | Before M2 latency review | Preserve existing stricter p99 targets: SASRec encoder <15 ms and authenticated service <100 ms | Clarification required: training duration is not measured in milliseconds |
 
 ## D-001 — Retrieval promotion gate
 
@@ -70,7 +71,12 @@ The owner should specify:
 - whether overnight unattended local jobs are acceptable;
 - the acceptable peak-memory ceiling and minimum free-space reserve.
 
-Until answered, the plan permits profiling and pilot runs but not an unbounded full-data sweep.
+**Owner direction, 2026-09-04:** use the local machine or cloud GPUs, with a budget typical for
+the model being trained. Operationally, that means local correctness/pilot work first, then the
+smallest standard single-GPU shape that meets the measured memory requirement for full seeds. The
+pre-run review records the provider/instance, hourly price, projected hours, and projected total;
+expanding beyond the frozen three-seed plan requires a new estimate and approval. An exact time/RAM
+ceiling remains open until the 6% profiler establishes a credible full-data projection.
 
 ## D-005 — Test-set policy
 
@@ -79,6 +85,12 @@ gates, artifact checks, and serving checks are frozen, and the owner is deciding
 that bundle a release candidate. Record the unseal commit and do not tune against the result. If
 the test window has already influenced decisions, declare it contaminated and define a new final
 window before proceeding.
+
+**Repository audit, 2026-09-04:** no trainer reads `split.test` for model metrics or decisions.
+Existing trainers only log its row count, and the committed result record describes holdout
+evaluation. Git history likewise contains no test-evaluation path. The plan therefore treats the
+partition as sealed unless the owner later recalls an external/manual inspection that influenced
+model choices.
 
 ## D-006 — What production is proving
 
@@ -91,6 +103,17 @@ The current repository robustly demonstrates the first, not the second. The reco
 keeps both but labels them explicitly and makes the second M2's target. The owner may instead
 choose a compact production demo, in which case full-scale feature/materialization work becomes a
 research-platform goal rather than a deployment blocker.
+
+**Owner direction, 2026-09-04:** production targets the exact full MovieLens 25M champion. The
+compact persona-trained bundle remains useful only as a clearly labeled demo/test fixture. Full-
+scale feature representation, artifact export, and serving equivalence are therefore M2 blockers.
+
+## D-016 — Runtime clarification
+
+The owner requested runtime below 300–400 ms. Training runs take minutes or hours, so this appears
+to describe online inference. The project already has stricter accepted requirements: SASRec's
+isolated encoder p99 below 15 ms and the authenticated end-to-end service p99 below 100 ms. This
+plan preserves those stricter numbers unless the owner explicitly means a different operation.
 
 ## D-010 — Multi-objective truthfulness
 

@@ -8,6 +8,11 @@
 - The active SASRec pilot may complete before M0, but promotion evidence waits for M0.
 - Models continue to be the primary project track; frontend and generic infra are deferred.
 - No decision in this folder approves M4 or later work.
+- Production targets the exact evaluated MovieLens 25M champion; the compact bundle is a fixture.
+- Local or cloud GPU training is allowed, with a pre-run cost projection rather than an open-ended
+  sweep.
+- The test partition is provisionally sealed because repository code/history shows only its row
+  count being logged, not its outcomes being evaluated.
 
 ## Risk register
 

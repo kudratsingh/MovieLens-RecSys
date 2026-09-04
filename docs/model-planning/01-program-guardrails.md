@@ -86,6 +86,8 @@ Only state 3 may change a tenant champion. A research failure skips artifact and
 - A new model must retain tenant isolation, fail-closed exclusions, audit durability, and a
   deterministic fallback.
 - Rollback must not require rebuilding an artifact.
+- A stated 300–400 ms runtime ceiling does not relax the existing 15 ms encoder and 100 ms service
+  p99 gates; clarify the measured operation before introducing any additional latency metric.
 
 ## Approval boundaries
 

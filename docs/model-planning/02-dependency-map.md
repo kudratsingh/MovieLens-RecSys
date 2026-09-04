@@ -94,11 +94,11 @@ spike, never as an assumed production replacement.
 
 | Handoff | Owning area | Model requirement |
 |---|---|---|
-| Full-data deployment target | Platform/infra | Decide whether production serves full 25M artifacts or compact demo fixtures |
+| Full-data deployment target | Platform/infra | Production must serve the exact full 25M champion; compact bundles remain fixtures |
 | Champion/challenger request routing | Phase 6 platform | Stable assignment, shadow execution, atomic rollback |
 | Impression and outcome capture | API/product data | Model/version/rank/assignment join keys and event semantics |
 | Participant/product utility input | Product | Defines multi-objective weights and acceptable diversity trade-offs |
-| Compute provisioning | Owner/platform | Memory, accelerator, wall-clock and spend caps |
+| Compute provisioning | Owner/platform | Local or standard cloud GPU is allowed; profiling must size memory, wall-clock and projected spend |
 
 These handoffs are dependencies, not authorization for this model plan to implement frontend or
 general infrastructure work.
