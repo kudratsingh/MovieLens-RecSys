@@ -2279,3 +2279,35 @@ modeling track proceeds to SASRec under ADR 0016.
   attach itself to a different one, so a subsampled run skips it and says so in
   its log. Every full-dataset run has it, and the per-bucket table above is from
   those.
+
+## SASRec bounded loss pilot — 2026-09-04
+
+ADR 0016's matched loss ablation ran on the established deterministic 6% user
+sample using [`pilot-6pct.json`](experiments/sasrec/pilot-6pct.json). Both arms
+used seed 42, the ADR's two-block 64-wide causal encoder, two epochs, 32 unique
+uniform negatives per target, and exact inner-product retrieval. The slice has
+1,213,918 train rows, 19,005 train items, 8,316 train users, and 115 warm
+holdout users.
+
+| Loss | Warm recall@500 | Warm NDCG@500 | Overall recall@500 | Fit seconds |
+|---|---:|---:|---:|---:|
+| standard sampled BCE | **0.3186** | **0.1089** | **0.3684** | 1,644.0 |
+| gBCE, calibration t=0.5 | 0.2937 | 0.1022 | 0.3511 | 1,654.4 |
+| prior popularity reference | 0.1974 | 0.0721 | — | — |
+
+BCE beats gBCE by 8.5% relative warm recall and clears the pilot stop rule by
+61.4% relative to popularity. Cold recall is 0.4830 in both arms because users
+below the shared ten-interaction threshold route to the identical popularity
+fallback; it is not evidence about either loss. The frozen full-data cell is
+therefore BCE with 32 negatives, two epochs, seed 42, and exact FAISS.
+
+The valid local MLflow runs are `0c600f9dd15e47a99cb9fa364b23ed02` (BCE) and
+`fb63a3ae96c64205ba5e57e5ca4b0611` (gBCE). Earlier SASRec pilot runs are
+diagnostic only. They exposed two correctness defects subsequently fixed:
+training initially used retrieval-normalized logits, and evaluation initially
+left dropout active while its callback also left the next epoch in evaluation
+mode. In the valid runs, epoch-two and final metrics match exactly.
+
+This remains a one-seed pilot, not a promotion claim. It chooses the loss for
+the full-data gate; item-item remains champion until SASRec is evaluated on the
+full eligible population and passes ADR 0004 plus the serving latency gate.

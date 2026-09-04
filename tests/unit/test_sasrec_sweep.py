@@ -29,6 +29,20 @@ def test_established_pilot_uses_same_exact_loss_ablation() -> None:
     assert [config.loss for _label, config in cells] == ["bce", "gbce"]
 
 
+def test_full_run_freezes_winning_pilot_cell() -> None:
+    spec = json.loads(Path("docs/experiments/sasrec/full.json").read_text())
+    fraction, cells = parse_grid(spec)
+    assert fraction == 1.0
+    assert len(cells) == 1
+    label, config = cells[0]
+    assert label == "full-bce-neg32"
+    assert config.loss == "bce"
+    assert config.negative_count == 32
+    assert config.epochs == 2
+    assert config.faiss_exact is True
+    assert config.seed == 42
+
+
 def test_unknown_grid_field_fails_loudly() -> None:
     with pytest.raises(ValueError, match="unknown"):
         parse_grid({"cells": [{"label": "bad", "layers": 2}]})

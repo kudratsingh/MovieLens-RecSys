@@ -3,6 +3,18 @@
 **Status:** Accepted
 **Date:** 2026-09-03
 
+**Pilot outcome (2026-09-04):** The corrected deterministic 6% pilot passed
+its stop rule. With the same seed-42 users, architecture, two-epoch budget, 32
+unique uniform negatives, and exact retrieval, standard BCE reached warm
+recall@500 of **0.3186** (NDCG@500 0.1089), versus gBCE at **0.2937**
+(NDCG@500 0.1022). BCE is 8.5% higher in warm recall and both clear the same
+slice's 0.1974 popularity reference. The frozen full-data configuration is
+therefore BCE, 32 negatives, two epochs, seed 42, and exact FAISS. These runs
+include the fix in commit `1d189a8`: retrieval runs in evaluation mode and
+each training epoch explicitly restores training mode. Earlier runs are
+diagnostic only because dropout was active during evaluation and the epoch-one
+callback left epoch two in evaluation mode.
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains
