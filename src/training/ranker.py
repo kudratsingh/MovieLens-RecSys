@@ -459,6 +459,12 @@ def main() -> None:
                 # and LightGBM itself — which is what the seed spread of a run
                 # tagged this way is measuring.
                 "ranker_positive_limit_binding": str(limit_binds).lower(),
+                # Arbitrary historical timestamps are computed from the
+                # versioned ratings frame. Feast owns persisted snapshots and
+                # online serving; feature-parity CI proves the two boundaries
+                # agree at every materialization timestamp (ADR 0009 note).
+                "training_feature_source": "feature-index-point-in-time-v1",
+                "serving_feature_source": "feast-postgres-redis-v1",
                 # Called out in ADR 0005 Consequences — candidate model
                 # was fit on all of train including the positive window.
                 "candidate_leakage_compromise": "true",
