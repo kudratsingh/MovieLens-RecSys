@@ -1,4 +1,4 @@
-# ADR 0015 — SASRec for Sequential Retrieval
+# ADR 0016 — SASRec for Sequential Retrieval
 
 **Status:** Deferred
 **Date:** 2026-09-03
