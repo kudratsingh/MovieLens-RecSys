@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-twotower train-ranker gate gate-retrieval serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-twotower train-ranker gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -276,6 +276,17 @@ gate-retrieval:
 		--cold-tolerance $(RETRIEVAL_COLD_TOLERANCE) \
 		--overall-tolerance $(RETRIEVAL_OVERALL_TOLERANCE) \
 		$(RETRIEVAL_GATE_ARGS)
+
+# Where the two tolerances `gate-retrieval` demands are supposed to come from.
+# Reads one evidence document of noise-study runs the gate does not read, and
+# either proposes both fractions or refuses and says why -- 0 proposed, 1
+# measured and declined, 2 could not measure. The rule and the evidence schema
+# are docs/model-planning/contracts/retrieval-tolerance-measurement.md.
+#
+#   make retrieval-tolerance-study EVIDENCE=artifacts/sasrec-noise-study.json
+retrieval-tolerance-study:
+	@test -n "$(EVIDENCE)" || { echo "EVIDENCE=<path to study json> required"; exit 2; }
+	python -m src.evaluation.tolerance_study --evidence $(EVIDENCE) $(TOLERANCE_STUDY_ARGS)
 
 # Non-negotiable #5's entry point: a fixed seed and a fixed as-of produce the
 # same artifact hashes. It is the serving-bundle build under the name the
