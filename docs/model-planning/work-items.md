@@ -18,6 +18,7 @@ decision register. `S/M/L` are relative review-and-implementation sizes, not cal
 | M0-09 | S | Export per-user recall vectors from `evaluate()` | M0-03 | Vector mean reconstructs the published slice mean; round trip through the study loader |
 | M0-10 | M | Run the retrieval tolerance study and publish the two fractions | M0-09 | Both tolerances recorded with the runs and the derivation that produced them |
 | M0-11 | S | Measure the candidate-mix change the serving-equivalent exclusions cause | M0-05 | Two full ranker runs compared; the effect on ranking metrics stated rather than assumed |
+| M0-12 | M | Emit a protocol manifest from every candidate trainer | M0-03, M0-09 | Emitted envelope round-trips through the gate reader; window identity matches the tiling |
 
 ## M1 — Complete SASRec research
 
@@ -107,6 +108,7 @@ package was scoped to do. A row is only listed once the PR is on `main`.
 | M0-08 | 2026-09-04 | #131 | Sealed-test and dataset policy, with the run template enforcing a partition declaration |
 | M0-07 | 2026-09-04 | #132 | Rolling-origin windows, leakage assertions, and the clustered user bootstrap |
 | M0-09 | 2026-09-04 | #133 | Per-user recall vectors exported from every run, in the shape the study loads |
+| M0-12 | 2026-09-04 | #134 | Protocol manifests emitted, plus the sealed-partition field added while it was still free |
 
 Three of these are narrower than their acceptance line reads, and the difference is recorded rather
 than glossed. **M0-04** is executable but cannot return a verdict until its tolerances are measured,

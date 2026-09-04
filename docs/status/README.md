@@ -18,7 +18,11 @@ manifest and a semantic hash (#125), a retrieval recall@500 gate with four expli
 tolerance defaults (#125), serving-equivalent candidate exclusions in ranker training plus the tested
 Python/Feast boundary (#126), the ADR 0009 amendment withdrawn and the feature-source options costed
 and deferred (#127), the last-item transition baseline D-003 requires as a control (#128), and the
-instrument that measures the gate's outstanding tolerances (#129).
+instrument that measures the gate's outstanding tolerances (#129), the sealed-test policy with the
+run template enforcing a partition declaration (#131), rolling-origin backtest windows and their
+clustered user bootstrap (#132), the per-user recall vectors the tolerance study consumes (#133),
+and a protocol manifest emitted by every candidate trainer (#134) — which is what makes any future
+run gate-admissible at all.
 
 Three things are true about that run and worth stating before its number arrives. The gate returns
 `incomplete` on one seed by construction, so seed 42 can authorize seeds 7 and 13 or stop the line,
@@ -29,6 +33,16 @@ and 0.3186, which puts SASRec **12.0% below the incumbent** rather than above it
 a pass because ADR 0016's stop rule named popularity and never named item-item. The advance/stop rule
 is therefore the decision that matters most right now, and it is costed in
 [`../model-planning/memos/d003-full-run-stop-rule.md`](../model-planning/memos/d003-full-run-stop-rule.md).
+
+**The run then landed, and the predeclared bands fired cleanly.** Seed 42 scored warm recall@500
+**0.465169** against item-item's 0.400144 — **+16.25%**, clearing ADR 0004's floor by 12.86% — with
+cold at −0.43% and overall at +10.90%. That is band 1: run seeds 7 and 13 and let the gate decide.
+The same configuration was 12.0% *below* item-item on the 6% subsample, so the scaling hypothesis
+was not merely met but overshot. What it is not is a verdict: one seed returns `incomplete` by
+construction, the cold tolerance that would settle that −0.43% is still unmeasured, the run logs no
+user counts so the population check cannot run, it predates the protocol envelope and so is not
+gate-admissible, and no weights were saved. The four gaps are itemised in the D-003 section of
+[`../model-planning/03-decision-register.md`](../model-planning/03-decision-register.md).
 
 The deployment and the moderated sessions below are unchanged and still owed.
 
