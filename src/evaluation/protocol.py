@@ -1,5 +1,6 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from .metrics import ndcg_at_k, recall_at_k
 
@@ -21,6 +22,20 @@ K = 10
 # stage is scored on NDCG@K against its output. Both use the same evaluate()
 # entrypoint with a different k.
 K_CANDIDATES = 500
+
+# The slices a per-user recall vector is published for. "overall" is the union
+# of the other two rather than a third partition of the users, which is why its
+# vector has as many entries as the warm and cold ones together.
+RECALL_SLICES = ("warm", "cold", "overall")
+
+# Where a trainer writes its recall vectors inside an MLflow run. One name for
+# every model, because the tolerance study's evidence document is assembled by
+# hand out of several runs and the operator should not have to guess at four.
+PER_USER_RECALL_ARTIFACT = "per_user_recall.json"
+
+# Versions this artifact's own envelope. The `per_user_recall` object inside it
+# is the study's shape, not ours, and carries the study's schema version.
+PER_USER_RECALL_ARTIFACT_VERSION = 1
 
 
 @dataclass
@@ -66,6 +81,16 @@ class EvalResult:
     # unless the caller passed ``synthetic_cold_users`` — the natural state for
     # every call site that predates the cohort.
     synthetic_cold_slices: dict[int, SyntheticColdSlice] = field(default_factory=dict)
+    # The recall behind each slice mean, keyed by the dataset's own user id:
+    # ``{slice_name: {user_id: recall}}`` over ``RECALL_SLICES``. Kept because
+    # it cannot be recovered later — a finished run publishes means, and the
+    # retrieval tolerance study's population term needs the *paired* per-user
+    # differences between two runs scored on the same users
+    # (docs/model-planning/contracts/retrieval-tolerance-measurement.md).
+    # Empty on an ``EvalResult`` that was not produced by ``evaluate()``: a
+    # mean across seeds has no per-user vector, and pretending otherwise would
+    # hand the study a vector belonging to no run.
+    per_user_recall: dict[str, dict[int, float]] = field(default_factory=dict)
 
 
 def evaluate(
@@ -106,10 +131,20 @@ def evaluate(
     Returns:
         EvalResult with per-slice and overall metrics, ``k`` stamped on the result
         so a downstream consumer (MLflow tags, plots) can never confuse a
-        candidate-stage recall@500 with a recommender-end-to-end recall@10.
+        candidate-stage recall@500 with a recommender-end-to-end recall@10,
+        and ``per_user_recall`` carrying the recall of every evaluated user
+        behind those means.
     """
-    warm_recalls, warm_ndcgs = [], []
-    cold_recalls, cold_ndcgs = [], []
+    # Recall is accumulated per user rather than as a bare list: the means below
+    # are unchanged (a dict preserves insertion order, so they are summed in the
+    # same order and to the same bits), and keeping the user id is what lets a
+    # later study pair this run against another one user by user. One float per
+    # evaluated user per slice — the whole holdout is thousands of users, not
+    # millions, and no candidate list is retained.
+    warm_recalls: dict[int, float] = {}
+    cold_recalls: dict[int, float] = {}
+    warm_ndcgs: list[float] = []
+    cold_ndcgs: list[float] = []
 
     for user_id, relevant in holdout.items():
         retrieved = recommendations.get(user_id, [])
@@ -117,24 +152,26 @@ def evaluate(
         n = ndcg_at_k(relevant, retrieved, k)
 
         if train_interaction_counts.get(user_id, 0) < COLD_START_THRESHOLD:
-            cold_recalls.append(r)
+            cold_recalls[user_id] = r
             cold_ndcgs.append(n)
         else:
-            warm_recalls.append(r)
+            warm_recalls[user_id] = r
             warm_ndcgs.append(n)
 
     warm = UserMetrics(
-        recall=_mean(warm_recalls),
+        recall=_mean(warm_recalls.values()),
         ndcg=_mean(warm_ndcgs),
     )
     cold = UserMetrics(
-        recall=_mean(cold_recalls),
+        recall=_mean(cold_recalls.values()),
         ndcg=_mean(cold_ndcgs),
     )
-    all_recalls = warm_recalls + cold_recalls
+    # Warm and cold partition the holdout, so the union is every evaluated user
+    # exactly once and its mean is the overall recall by construction.
+    all_recalls = {**warm_recalls, **cold_recalls}
     all_ndcgs = warm_ndcgs + cold_ndcgs
     overall = UserMetrics(
-        recall=_mean(all_recalls),
+        recall=_mean(all_recalls.values()),
         ndcg=_mean(all_ndcgs),
     )
 
@@ -151,6 +188,7 @@ def evaluate(
             synthetic_cold_served_by,
             k,
         ),
+        per_user_recall={"warm": warm_recalls, "cold": cold_recalls, "overall": all_recalls},
     )
 
 
@@ -187,5 +225,95 @@ def _synthetic_cold_slices(
     return slices
 
 
-def _mean(values: list[float]) -> float:
+def per_user_recall_document(
+    result: EvalResult,
+    *,
+    run_id: str,
+    model_type: str,
+    seed: int | None,
+    configuration_id: str,
+    protocol: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Serialize one evaluated run into the tolerance study's run-object shape.
+
+    ``src/evaluation/tolerance_study.py`` consumes an evidence document holding
+    one incumbent run object and three or more study run objects. This returns
+    exactly one such object, so assembling the document is a matter of
+    collecting artifacts rather than reformatting them.
+
+    Two details are load-bearing rather than incidental. JSON has no integer
+    keys, so user ids are stringified here and parsed back by the study's
+    loader — they remain the dataset's own ids, never positions, which is what
+    makes the study's user-by-user pairing well defined. And no value is
+    rounded: the study checks that each vector's mean reproduces the slice
+    recall the run published, and rounding would break that check for a vector
+    that is in fact the right one.
+
+    ``protocol`` is the canonical ``ProtocolManifest`` payload, taken as a
+    mapping so this module keeps its distance from the manifest's schema. No
+    candidate trainer emits one today, so the artifact is a complete run object
+    except for that field, and whoever assembles the evidence fills it from the
+    run's ``evaluation_protocol`` tag.
+
+    Raises:
+        ValueError: the result carries no per-user vectors, or vectors that
+            disagree with its own slice counts — evidence the study would
+            refuse later, reported here instead where the run can be re-made.
+    """
+    for name, value in (
+        ("run_id", run_id),
+        ("model_type", model_type),
+        ("configuration_id", configuration_id),
+    ):
+        # The study requires all three and refuses on a blank one, which is an
+        # expensive way to discover a typo three runs into a study.
+        if not value.strip() or value != value.strip():
+            raise ValueError(f"{name} must be a non-empty string without surrounding whitespace")
+
+    missing = [name for name in RECALL_SLICES if name not in result.per_user_recall]
+    if missing:
+        raise ValueError(
+            f"result carries no per-user recall for {', '.join(missing)}; only a result from "
+            "evaluate() can be exported as study evidence"
+        )
+    expected_users = {
+        "warm": result.n_warm_users,
+        "cold": result.n_cold_users,
+        "overall": result.n_warm_users + result.n_cold_users,
+    }
+    for name, expected in expected_users.items():
+        actual = len(result.per_user_recall[name])
+        if actual != expected:
+            raise ValueError(
+                f"{name} vector holds {actual} users but the result reports {expected}"
+            )
+
+    document: dict[str, Any] = {
+        "artifact_schema_version": PER_USER_RECALL_ARTIFACT_VERSION,
+        "run_id": run_id,
+        "model_type": model_type,
+        "seed": seed,
+        "configuration_id": configuration_id,
+        # Not read by the study (it takes K from the protocol), but a recall@10
+        # vector and a recall@500 one look identical on the page, and pasting
+        # the wrong one into an evidence document is the mistake to make.
+        "k": result.k,
+        "metrics": {
+            "warm_recall": result.warm.recall,
+            "cold_recall": result.cold.recall,
+            "overall_recall": result.overall.recall,
+            "n_warm_users": result.n_warm_users,
+            "n_cold_users": result.n_cold_users,
+        },
+        "per_user_recall": {
+            name: {str(user_id): value for user_id, value in result.per_user_recall[name].items()}
+            for name in RECALL_SLICES
+        },
+    }
+    if protocol is not None:
+        document["protocol"] = dict(protocol)
+    return document
+
+
+def _mean(values: Collection[float]) -> float:
     return sum(values) / len(values) if values else 0.0

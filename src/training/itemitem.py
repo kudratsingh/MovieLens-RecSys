@@ -31,12 +31,23 @@ from sqlalchemy import create_engine
 from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    K_CANDIDATES,
+    PER_USER_RECALL_ARTIFACT,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
+
+# The model identity every consumer keys off — the MLflow tag, the retrieval
+# gate's incumbent check, and the per-user recall artifact. One constant so
+# they cannot drift apart.
+MODEL_TYPE = "itemitem_cosine"
 
 # Item-item runs join the new candidate-stage experiment rather than the
 # Phase 1 baselines experiment. Hardcoded here rather than read from
@@ -183,11 +194,11 @@ def main() -> None:
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
-    with mlflow.start_run(run_name=routing.run_name_for("itemitem-cosine", routing_policy)):
+    with mlflow.start_run(run_name=routing.run_name_for("itemitem-cosine", routing_policy)) as run:
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
-                "model_type": "itemitem_cosine",
+                "model_type": MODEL_TYPE,
                 "phase": "2",
                 "stage": "candidate",
                 "cold_start_routing_policy": routing_policy,
@@ -232,6 +243,22 @@ def main() -> None:
                 "fallback_served_ndcg_at_k_candidates": result_fallback.overall.ndcg,
                 "n_fallback_served_users": len(holdout_fallback),
             }
+        )
+        # The recall behind those means, one row per holdout user. Item-item is
+        # the retrieval gate's incumbent, so this run is the denominator every
+        # tolerance study pairs its candidate against — and the pairing needs
+        # per-user numbers the metrics above have already averaged away.
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                # Deterministic: no seed to report, and the gate refuses an
+                # incumbent that claims one.
+                seed=None,
+                configuration_id=f"itemitem-cosine-n{model.k_neighbors}-{routing_policy}",
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             mlflow.log_params(synth_cold.params(cohort))
