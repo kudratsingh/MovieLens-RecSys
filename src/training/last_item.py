@@ -60,6 +60,7 @@ from src.evaluation.protocol import (
 )
 from src.models.candidates import routing
 from src.models.candidates.last_item import LastItemTransitionModel
+from src.training import protocol_manifest
 from src.training.twotower import subsample_users
 from synthetic.cold_start import harness as synth_cold
 
@@ -164,10 +165,29 @@ def main() -> None:
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
 
-    logger.info("Fitting last-item transition counts ...")
     model = LastItemTransitionModel(
         cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD)
     )
+
+    # Derived before the fit rather than after it: every input the protocol
+    # depends on already exists here, and a missing DVC pointer or an unexpected
+    # column should cost a minute rather than a completed training run.
+    #
+    # A subsampled run hashes differently from a full one without anything here
+    # saying so, because the subsample changes the frames and therefore the
+    # derived snapshot. That is the right place for the difference: the eligible
+    # user *rule* did not change, the population did — and a control drawn from
+    # a different population is not a control.
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="retrieval",
+        k=K_CANDIDATES,
+    )
+    logger.info("Evaluation protocol: %s", protocol.semantic_hash)
+
+    logger.info("Fitting last-item transition counts ...")
     t0 = time.perf_counter()
     model.fit(train_frame)
     fit_seconds = time.perf_counter() - t0
@@ -327,6 +347,20 @@ def main() -> None:
                 "recommend_seconds": round(recommend_seconds, 1),
             }
         )
+        # The strict envelope from docs/model-planning/contracts/evaluation-protocol.md.
+        # The model itself has no random component, so a full-data run is
+        # deterministic and records no seed. A subsampled run is not: the seed
+        # chose the users and therefore moved the metrics, and declaring it
+        # deterministic would hide the one thing that varied. Same rule the
+        # per-user recall artifact below applies, so the two cannot disagree.
+        subsampled = sample_fraction != 1.0
+        envelope = protocol_manifest.run_envelope(
+            protocol,
+            deterministic=not subsampled,
+            seed=sample_seed if subsampled else None,
+        )
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
         mlflow.log_metrics(
             {
                 "warm_recall_at_k_candidates": result.warm.recall,
@@ -366,10 +400,11 @@ def main() -> None:
                 # The model has no random component. The seed is real evidence
                 # only when it chose the users, so a full-data run reports none
                 # rather than a number that changed nothing.
-                seed=sample_seed if sample_fraction != 1.0 else None,
+                seed=sample_seed if subsampled else None,
                 configuration_id=(
                     f"last-item-transition-sample{sample_fraction:g}-{routing_policy}"
                 ),
+                protocol=protocol.to_dict(),
             ),
             PER_USER_RECALL_ARTIFACT,
         )

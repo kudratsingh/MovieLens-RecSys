@@ -34,6 +34,7 @@ def _protocol(**changes: object) -> ProtocolManifest:
         "train_cutoff": 1_000,
         "holdout_start": 1_000,
         "holdout_end": 2_000,
+        "sealed_test_boundary": 3_000,
         "backtest_window_id": "fixed-holdout-v1",
         "timestamp_unit": "unix-seconds",
         "timezone": "UTC",

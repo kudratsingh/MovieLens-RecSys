@@ -97,6 +97,7 @@ def _protocol_payload() -> dict[str, object]:
         "train_cutoff": 1_000,
         "holdout_start": 1_000,
         "holdout_end": 2_000,
+        "sealed_test_boundary": 3_000,
         "backtest_window_id": "fixed-holdout-v1",
         "timestamp_unit": "unix-seconds",
         "timezone": "UTC",
@@ -256,8 +257,9 @@ def test_recall_values_are_exported_unrounded() -> None:
 
 
 def test_the_protocol_is_omitted_rather_than_invented_when_absent() -> None:
-    # No trainer emits a protocol manifest yet. Leaving the key out is what
-    # makes the gap visible to whoever assembles the evidence document.
+    # The trainers now pass one, but this function must not manufacture a
+    # protocol for a caller that has none — an absent key is a visible gap in
+    # the evidence document, and a fabricated one is not.
     assert "protocol" not in _document(_run())
 
 

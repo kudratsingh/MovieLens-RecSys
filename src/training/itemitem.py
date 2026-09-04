@@ -40,6 +40,7 @@ from src.evaluation.protocol import (
 )
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
+from src.training import protocol_manifest
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -91,10 +92,23 @@ def main() -> None:
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
 
-    logger.info("Fitting item-item (cosine KNN) model ...")
     model = ItemItemModel(
         cold_start_threshold=routing.cold_start_threshold_for(routing_policy, COLD_START_THRESHOLD)
     )
+
+    # Derived before the fit rather than after it: every input the protocol
+    # depends on already exists here, and a missing DVC pointer or an unexpected
+    # column should cost a minute rather than a completed training run.
+    protocol = protocol_manifest.build_protocol(
+        split=split,
+        fitted_frame=train_frame,
+        learned_routing_policy=protocol_manifest.routing_policy_value(model.cold_start_threshold),
+        stage="retrieval",
+        k=K_CANDIDATES,
+    )
+    logger.info("Evaluation protocol: %s", protocol.semantic_hash)
+
+    logger.info("Fitting item-item (cosine KNN) model ...")
     t0 = time.perf_counter()
     model.fit(train_frame)
     fit_seconds = time.perf_counter() - t0
@@ -221,6 +235,14 @@ def main() -> None:
                 "recommend_seconds": round(recommend_seconds, 1),
             }
         )
+        # The strict envelope from docs/model-planning/contracts/evaluation-protocol.md:
+        # the canonical payload as a tag, its recalculated hash and schema version
+        # as params, and the determinism declaration the retrieval gate refuses a
+        # run without. Item-item has no random component, so it records no seed —
+        # and the gate rejects a deterministic run that claims one.
+        envelope = protocol_manifest.run_envelope(protocol, deterministic=True, seed=None)
+        mlflow.set_tags(envelope.tags)
+        mlflow.log_params(envelope.params)
         mlflow.log_metrics(
             {
                 "warm_recall_at_k_candidates": result.warm.recall,
@@ -257,6 +279,10 @@ def main() -> None:
                 # incumbent that claims one.
                 seed=None,
                 configuration_id=f"itemitem-cosine-n{model.k_neighbors}-{routing_policy}",
+                # Carrying the protocol inside the artifact is what makes the
+                # tolerance study's evidence a matter of collecting files rather
+                # than pasting a tag into each of them by hand.
+                protocol=protocol.to_dict(),
             ),
             PER_USER_RECALL_ARTIFACT,
         )
