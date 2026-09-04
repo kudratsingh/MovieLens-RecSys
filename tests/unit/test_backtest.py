@@ -1,6 +1,6 @@
 import pytest
 
-from src.evaluation.aggregate import (
+from src.evaluation.backtest import (
     BOOTSTRAP_METHOD,
     BacktestAggregationError,
     backtest_summary,

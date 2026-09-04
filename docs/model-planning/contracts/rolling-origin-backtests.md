@@ -13,7 +13,7 @@ Rolling-origin backtests are the development answer. Instead of one window carry
 several do, and a result that only holds in one month is visibly a result that only holds in one
 month. The sealed test partition stays sealed; this contract is about everything before it.
 
-Implemented by `src/data/split.py` (window derivation and slicing) and `src/evaluation/aggregate.py`
+Implemented by `src/data/split.py` (window derivation and slicing) and `src/evaluation/backtest.py`
 (reporting). It changes no gate and promotes nothing on its own.
 
 ## Window definition
