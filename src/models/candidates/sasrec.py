@@ -113,6 +113,13 @@ class SASRecEncoder(nn.Module):
             self.item_embedding.weight[0].zero_()
 
     def encode_positions(self, sequences: torch.Tensor) -> torch.Tensor:
+        # PyTorch's inference fast path propagates NaN from fully masked query
+        # positions through a multi-block encoder. Every left-padded sequence
+        # has such positions. This process-wide switch is the only supported
+        # backend control; setting it here makes training, artifact reload,
+        # evaluation, and serving share the same safe path even if a caller
+        # enabled the optimization after constructing the encoder.
+        torch.backends.mha.set_fastpath_enabled(False)
         length = sequences.shape[1]
         positions = torch.arange(length, device=sequences.device).unsqueeze(0)
         values = self.item_embedding(sequences) + self.position_embedding(positions)
@@ -357,6 +364,40 @@ class SASRecModel:
             dense_exclusions=dense_exclusions,
         )
 
+    def recommend_from_history_scored(
+        self,
+        movie_ids: list[int],
+        k: int,
+        *,
+        excluded_movie_ids: set[int] | None = None,
+    ) -> list[tuple[int, float]]:
+        """Return runtime candidates with their FAISS inner-product scores.
+
+        Candidate selection follows the configured index. The score attached to
+        each returned item is FAISS's exact inner product between the normalized
+        query and that stored item vector; with ``faiss_exact=True`` this is also
+        the exhaustive exact-search ordering used by the pinned artifact.
+        """
+        if k <= 0:
+            return []
+        if self._encoder is None or self._faiss_index is None:
+            raise RuntimeError("SASRec model and retrieval index are not loaded")
+        if not movie_ids:
+            raise ValueError("SASRec history must contain at least one movie")
+        dense_history = [
+            self._item_to_index.get(int(movie_id), self._unknown_index) for movie_id in movie_ids
+        ]
+        dense_exclusions = {
+            dense
+            for movie_id in (set(movie_ids) | (excluded_movie_ids or set()))
+            if (dense := self._item_to_index.get(int(movie_id))) is not None
+        }
+        return self._recommend_scored_from_dense_history(
+            dense_history,
+            k,
+            dense_exclusions=dense_exclusions,
+        )
+
     def retrieve_unfiltered(self, histories: Sequence[Sequence[int]], k: int) -> list[list[int]]:
         """Batch top-k over ordered movie histories with nothing excluded.
 
@@ -414,6 +455,22 @@ class SASRecModel:
         *,
         dense_exclusions: set[int] | None = None,
     ) -> list[int]:
+        return [
+            movie_id
+            for movie_id, _score in self._recommend_scored_from_dense_history(
+                full_history,
+                k,
+                dense_exclusions=dense_exclusions,
+            )
+        ]
+
+    def _recommend_scored_from_dense_history(
+        self,
+        full_history: list[int],
+        k: int,
+        *,
+        dense_exclusions: set[int] | None = None,
+    ) -> list[tuple[int, float]]:
         assert self._encoder is not None and self._faiss_index is not None
         history = full_history[-self.config.max_sequence_length :]
         sequence = self._sequence_tensor(history)
@@ -422,10 +479,10 @@ class SASRecModel:
         # Exclusions cover the full known history, not only the encoder window.
         seen = set(full_history) | (dense_exclusions or set())
         search_k = min(len(self._index_to_item), k + len(seen))
-        _scores, indices = self._faiss_index.search(query, search_k)
+        scores, indices = self._faiss_index.search(query, search_k)
         return [
-            self._index_to_item[int(index) + 1]
-            for index in indices[0]
+            (self._index_to_item[int(index) + 1], float(score))
+            for score, index in zip(scores[0], indices[0])
             if index >= 0 and int(index) + 1 not in seen
         ][:k]
 

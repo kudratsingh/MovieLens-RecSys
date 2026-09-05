@@ -762,10 +762,12 @@ class TwoTowerModel:
         _scores, dense_indices = self._faiss_index.search(user_vec, n_request)
 
         out: list[int] = []
-        for idx in dense_indices[0]:
-            if idx < 1:  # -1 = FAISS's "no neighbor" sentinel; 0 = padding
+        for row_index in dense_indices[0]:
+            if row_index < 0:  # -1 = FAISS's "no neighbor" sentinel
                 continue
-            movie = int(self._index_to_item[int(idx)])
+            # FAISS row 0 stores dense item 1 because padding is not indexed.
+            # Convert the zero-based row back to the one-based dense id.
+            movie = int(self._index_to_item[int(row_index) + 1])
             if movie in seen:
                 continue
             out.append(movie)

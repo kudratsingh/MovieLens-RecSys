@@ -21,10 +21,13 @@ section named:
 
 from __future__ import annotations
 
+import faiss
+import numpy as np
 import pandas as pd
 import pytest
 import torch
 
+from src.evaluation.protocol import evaluate
 from src.models.candidates.twotower import (
     TwoTowerConfig,
     TwoTowerModel,
@@ -118,6 +121,105 @@ def test_recommendations_exclude_already_seen_items() -> None:
     seen = {100, 101, 102}
     recs = model.recommend(user_id=1, k=5)
     assert not (set(recs) & seen)
+
+
+def _sasrec_style_exact_recommend(
+    model: TwoTowerModel,
+    history_movie_ids: list[int],
+    excluded_movie_ids: set[int],
+    k: int,
+) -> list[int]:
+    """Independent exact-FAISS path with SASRec's row-to-dense conversion."""
+    assert model._item_tower is not None
+    n_items = len(model._index_to_item)
+    with torch.no_grad():
+        item_vectors = (
+            model._item_tower(torch.arange(1, n_items + 1, dtype=torch.long))
+            .numpy()
+            .astype(np.float32)
+        )
+    index = faiss.IndexFlatIP(model.config.embedding_dim)
+    index.add(item_vectors)
+    dense_history = [model._item_to_index[movie_id] for movie_id in history_movie_ids]
+    window = dense_history[-model.config.history_window :]
+    padded = [0] * (model.config.history_window - len(window)) + window
+    with torch.no_grad():
+        query = model._encode_user(torch.tensor([padded], dtype=torch.long)).numpy()
+    request = min(k + len(excluded_movie_ids), n_items)
+    _scores, row_indices = index.search(query.astype(np.float32), request)
+    return [
+        movie_id
+        for row_index in row_indices[0]
+        if row_index >= 0
+        and (movie_id := int(model._index_to_item[int(row_index) + 1])) not in excluded_movie_ids
+    ][:k]
+
+
+def test_exact_faiss_path_matches_sasrec_row_mapping_and_evaluator() -> None:
+    config = TwoTowerConfig(**{**_FAST_CONFIG.as_params(), "faiss_exact": True})
+    model = TwoTowerModel(config=config, cold_start_threshold=None).fit(_SYNTHETIC_TRAIN)
+    user_ids = [1, 4, 7]
+    direct = model.recommend_for_users(user_ids, k=5)
+    reference = {
+        user_id: _sasrec_style_exact_recommend(
+            model,
+            [model._index_to_item[dense] for dense in model._user_history[user_id]],
+            set(model._popularity.user_history[user_id]),
+            5,
+        )
+        for user_id in user_ids
+    }
+
+    assert direct == reference
+    holdout = {user_id: {reference[user_id][0]} for user_id in user_ids}
+    counts = {user_id: len(model._user_history[user_id]) for user_id in user_ids}
+    assert evaluate(direct, holdout, counts, k=5) == evaluate(reference, holdout, counts, k=5)
+
+
+def test_tiny_model_overfits_recall_at_10() -> None:
+    n_users = 200
+    rows = [
+        (user_id, 1_000 + 2 * user_id + offset, 100 + 100 * offset)
+        for user_id in range(n_users)
+        for offset in range(2)
+    ]
+    train = _ratings(rows)
+    losses: list[float] = []
+    config = TwoTowerConfig(
+        embedding_dim=128,
+        history_window=1,
+        batch_size=n_users,
+        num_sampled=1,
+        epochs=100,
+        learning_rate=0.05,
+        logit_temperature=0.02,
+        correct_positive_logit=True,
+        use_item_features=False,
+        hard_negative_count=0,
+        early_stopping_patience=0,
+        faiss_exact=True,
+        seed=42,
+    )
+    model = TwoTowerModel(config=config, cold_start_threshold=None).fit(
+        train, on_epoch=lambda _epoch, loss: losses.append(loss)
+    )
+    recommendations = {
+        user_id: _sasrec_style_exact_recommend(
+            model,
+            [1_000 + 2 * user_id],
+            {1_000 + 2 * user_id},
+            10,
+        )
+        for user_id in range(n_users)
+    }
+    holdout = {user_id: {1_001 + 2 * user_id} for user_id in range(n_users)}
+    counts = {user_id: 10 for user_id in range(n_users)}
+    result = evaluate(recommendations, holdout, counts, k=10)
+
+    # CPU kernels differ slightly across supported Torch releases; both the
+    # local 0.000498 and CI's 0.00231 are effectively zero for this objective.
+    assert min(losses) < 0.01
+    assert result.warm.recall == 1.0
 
 
 def test_returns_at_most_k_items() -> None:
