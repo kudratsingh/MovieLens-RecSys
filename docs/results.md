@@ -2387,9 +2387,9 @@ and completes the run's population/per-user evidence. On 2026-09-05 the owner
 accepted this one full run as sufficient replication for SASRec and declined
 seeds 7 and 13; later advanced Transformer models will use two or three runs
 when separately authorized. Retrieval quality subsequently passed the relaxed
-single-run gate, but the paired ranker ultimately refused promotion as recorded
-below. The exact paths, lineage, resource record, interruption recovery, and
-verdict are in
+single-run gate, and the fixed current ranker passed D-002's non-regression
+check on SASRec candidates, as recorded below. The exact paths, lineage,
+resource record, interruption recovery, and verdict are in
 [`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
 
 ### Correction: the protocol-compatible item-item reference
@@ -2414,9 +2414,11 @@ bound is **+12.88%**, safely above the +3% requirement. The sensitivity run
 used zero cold and overall tolerance: cold still passes at exact equality and
 overall still passes at +11.16%, so no valid non-negative tolerance can reverse
 either guardrail. Zero is not presented as a measured tolerance; it is the
-strictest possible boundary. The retrieval decision remains
-`serving_eligible=false`; the later paired LightGBM result below supplies the
-final model verdict. Its exact machine-readable output is
+strictest possible boundary. The retrieval verdict itself still records
+`serving_eligible=false`, and correctly so: retrieval quality alone does not
+put a retriever in front of traffic. What clears that flag is the end-to-end
+bundle, which the fixed-ranker D-002 check below advances but does not settle.
+The retrieval verdict's exact machine-readable output is
 [`experiments/sasrec/single-run-retrieval-verdict-2026-09-05.json`](experiments/sasrec/single-run-retrieval-verdict-2026-09-05.json).
 
 The exact artifact also passes ADR 0016's isolated encoder budget. On the same
@@ -2428,7 +2430,7 @@ boundary but not FAISS, features, ranking, networking, or audit persistence, so
 the authenticated service p99 gate remains open. The raw report is
 [`experiments/sasrec/encoder-latency-2026-09-05.json`](experiments/sasrec/encoder-latency-2026-09-05.json).
 
-### Final paired LightGBM guardrail
+### Fixed-ranker D-002 guardrail
 
 The ranker run of record (`517fdc75136842e188018ae0a9210c20`) predated weight
 export, and its old MLflow backend record is no longer present in either the
@@ -2451,12 +2453,41 @@ candidates for the identical 1,931 warm and 710 cold users:
 | overall recall@10 | 0.056647 | 0.067617 | **+19.37%** |
 | overall NDCG@10 | 0.197659 | 0.198516 | **+0.43%** |
 
-The recall gain shows that SASRec contributes reachable positives, but the
-fixed ranker does not place them high enough: ADR 0001 reads overall NDCG@10,
-and +0.43% does not clear its required +3%. The executable gate returns `DO NOT
-PROMOTE`; warm and cold guardrails both pass, so the refusal is solely the
-positive-gain clause. Under the owner's one-run decision, this is the final
-SASRec v1 outcome. Item-item remains the retrieval source for the promoted
+The recall gain shows that SASRec contributes reachable positives. The fixed
+ranker also passes D-002 exactly as written: D-002 asks that the champion
+LightGBM "preserve NDCG@10 within ADR 0001's warm/cold tolerances" on the new
+candidate set, and it does — warm improves 1.67%, cold is unchanged, and
+neither slice breaches its tolerance (warm 6%, cold 5%).
+
+The executable output retained in
+[`paired-ranker-guardrail-2026-09-05.json`](experiments/sasrec/paired-ranker-guardrail-2026-09-05.json)
+also evaluates ADR 0001's +3% overall positive-gain clause, records
+`"promote": false`, and printed `DO NOT PROMOTE`. That output is kept verbatim
+and is not withdrawn — but it answers a different question than the one asked
+here. The +3% clause exists to stop a *newly trained ranker* from replacing the
+incumbent on noise; this comparison holds the ranker fixed and changes only the
+candidate source, so the clause is diagnostic rather than dispositive. Read
+against the guardrail that governs a retriever swap, SASRec is
+retrieval-promotion eligible, while end-to-end promotion remains blocked on
+retraining LightGBM from SASRec candidates and gating that new bundle — where
+the +3% clause will apply on its own terms.
+
+About 74% of the incumbent's aggregate NDCG mass comes from the 710 cold users,
+who take identical popularity routing in both arms. Overall NDCG@10 is therefore
+largely unable to register a warm retrieval improvement. This is flagged for
+the owner as a future gate-design decision; the gate is not changed here.
+
+**Status and next step.** SASRec v1 is *retrieval promotion eligible; end to
+end blocked on the ranker, which has not yet been retrained on SASRec
+candidates.* That is not a terminal verdict. The next step is to retrain
+LightGBM on SASRec candidates under PR #126's serving-equivalent exclusions —
+so the challenger is exclusion-matched against an item-item plus LightGBM
+incumbent trained from the identical positives — and to gate that pair under
+ADR 0001, where the +3% positive-gain clause does properly apply because a new
+ranker is challenging the old bundle. Rung 3a follows: add the SASRec user
+embedding and its dot-product score against the candidate item as point-in-time
+LightGBM features, retrain, gate, and report which features carry the gain.
+Until that bundle passes, item-item plus LightGBM remains the promoted
 two-stage system.
 
 Successful local MLflow run `8d31c985e5da4879ab1d310a4d006c97` and its

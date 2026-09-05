@@ -8,11 +8,18 @@ source and produced a reloadable artifact. MLflow run
 the earlier metric-only seed-42 run, while its model bytes now exist in two
 independently verified durable locations.
 
-This closes the model-level save/load/export gap. It does **not** promote
-SASRec: rolling-window evidence, measured retrieval tolerances, the isolated
-encoder and end-to-end latency gates, and the paired-ranker guardrail remain
-open. On 2026-09-05 the owner declared this one full run sufficient for SASRec;
-seeds 7 and 13 will not be run.
+This closes the model-level save/load/export gap. On 2026-09-05 the owner
+declared this one full run sufficient for SASRec; seeds 7 and 13 will not be
+run.
+
+As of 2026-09-05 three of the gates below have since closed in SASRec's favour:
+the single-run retrieval-quality gate returned `promote`, the isolated encoder
+budget passed at p99 0.285 ms, and the fixed current LightGBM passed D-002's
+non-regression check on SASRec candidates. What that adds up to is **retrieval
+promotion eligible, end to end blocked on the ranker** — the ranker has not yet
+been retrained on SASRec candidates. Rolling-window evidence, measured retrieval
+tolerances, and the authenticated end-to-end latency gate also remain open. None
+of this is a terminal verdict on SASRec v1.
 
 ## Lineage and frozen configuration
 
@@ -226,7 +233,7 @@ gate. The executable benchmark is `src/evaluation/sasrec_latency.py`, and the
 exact result is retained in
 [`encoder-latency-2026-09-05.json`](encoder-latency-2026-09-05.json).
 
-## Final paired-ranker guardrail — 2026-09-05
+## Fixed-ranker D-002 guardrail — 2026-09-05
 
 The historical full-window ranker run
 `517fdc75136842e188018ae0a9210c20` retained metrics but not weights. Its MLflow
@@ -250,12 +257,19 @@ for both holdout arms:
 | overall recall@10 | 0.056647 | 0.067617 | +19.37% |
 | overall NDCG@10 | 0.197659 | 0.198516 | **+0.43%** |
 
-ADR 0001 requires at least +3% overall NDCG@10. The gate therefore returns
-`DO NOT PROMOTE`; both slice guardrails pass, so tolerance has no role in the
-refusal. SASRec retrieves additional hits but does not yield enough top-ranked
-utility through the fixed production-shaped ranker. This is terminal for
-SASRec v1 under the owner's one-run policy; seeds 7 and 13 and a rolling-window
-run are not required for the verdict, and the service-promotion path stops.
+The fixed ranker passes D-002: both slice guardrails pass, with warm improving
+and cold unchanged. The retained executable output also computes ADR 0001's
++3% overall clause and returns `DO NOT PROMOTE`, but that positive-gain clause
+is diagnostic here because it applies to a newly trained challenger ranker,
+not a fixed-ranker non-regression check. SASRec is retrieval-promotion eligible;
+end-to-end promotion remains blocked on retraining LightGBM from SASRec
+candidates. Seeds 7 and 13 are not required under the owner's one-run policy.
+
+The next step is that retrain: a LightGBM trained on SASRec candidates under
+PR #126's serving-equivalent exclusions, gated as a new bundle against an
+item-item plus LightGBM incumbent built from the identical positives and the
+same exclusions. Rung 3a follows — the SASRec user embedding and its
+dot-product score against the candidate item as point-in-time ranker features.
 
 All records were retained:
 

@@ -48,8 +48,9 @@ the historical first run. A fail-closed post-hoc evaluation also reproduced
 the protocol hash and all six aggregate metrics exactly before adding the
 missing warm/cold counts and per-user recall artifact. This completes the
 seed-42 evidence envelope. The later single-run gate decision below closes the
-retrieval-quality question, and the final paired-ranker decision closes the
-model outcome.
+retrieval-quality question, and the fixed-ranker D-002 decision closes the
+joint-system non-regression question; the end-to-end bundle verdict stays open
+until a ranker trained on SASRec candidates is gated.
 
 **Comparable-incumbent correction (2026-09-05):** The earlier 0.400144
 item-item reference used the five-interaction threshold in force when it was
@@ -78,9 +79,10 @@ cold/overall tolerance. Zero is the strictest sensitivity boundary, not a
 claimed measured tolerance. The gate returned `promote`: warm changed +16.57%
 with a one-sided 95% lower bound of +12.88% against the +3% requirement, cold
 changed exactly 0.00%, and overall changed +11.16%. The last two therefore pass
-for every valid non-negative tolerance. This is retrieval-stage quality only,
-not a model-promotion verdict. The paired LightGBM result below ultimately
-refuses the model.
+for every valid non-negative tolerance. This is retrieval-stage quality only.
+The paired fixed-ranker D-002 check below also passes, making retrieval
+promotion eligible; the end-to-end bundle remains blocked until a ranker
+trained on SASRec candidates clears ADR 0001.
 
 **Isolated latency verdict (2026-09-05):** The exact saved artifact passed a
 single-thread, request-shaped benchmark of 10,000 50-item encodes after 500
@@ -90,18 +92,31 @@ warmups on the Apple M3 Pro. Encoder p50/p95/p99 were
 lookup, ranking, networking, and durable audit work belong to the later
 authenticated service gate.
 
-**Final paired-ranker verdict (2026-09-05):** The deterministic seed-42
+**Fixed-ranker D-002 verdict (2026-09-05):** The deterministic seed-42
 LightGBM ranker of record was reconstructed from its full 154,003-positive
 window (87,794 groups, 1,843,674 rows), persisted with SHA-256 `b010ef…`, and
 first required to reproduce all six incumbent metrics at their retained
 six-decimal precision. Changing only the 500-candidate source from item-item to
 SASRec moved warm NDCG@10 from 0.069967 to 0.071138 (**+1.67%**), cold remained
 0.544948, and overall moved from 0.197659 to 0.198516 (**+0.43%**). The
-executable ADR 0001 gate requires +3% overall and therefore returned `DO NOT
-PROMOTE`. This positive-gain failure is independent of slice tolerance and
-latency. Under the owner's one-run policy, SASRec v1 is complete, measured,
-and not promoted; item-item remains the retrieval source for the promoted
-two-stage system.
+warm and cold non-regression clauses both pass. That is the rule D-002 assigns
+to a fixed current ranker, so SASRec is retrieval-promotion eligible. The same
+output's failed +3% overall clause is retained but is diagnostic rather than
+dispositive here: ADR 0001 reserves that positive-gain clause for a new ranker
+replacing the old one, not for a retriever swap under a fixed one. End-to-end
+promotion remains blocked on retraining LightGBM from SASRec candidates and
+gating that new bundle against the item-item plus LightGBM incumbent.
+
+**Status of SASRec v1 and the next step (2026-09-05):** Retrieval promotion
+eligible; end to end blocked on the ranker, which has not yet been retrained on
+SASRec candidates. Nothing about the model is terminal. The next step is to
+retrain LightGBM on SASRec candidates under PR #126's serving-equivalent
+exclusions, so the challenger bundle is exclusion-matched against an item-item
+plus LightGBM incumbent trained from the identical positives, and to gate that
+pair under ADR 0001. After that, Rung 3a adds the SASRec user embedding and its
+dot-product score against the candidate item as point-in-time LightGBM
+features — encoded strictly from history before the positive's timestamp, from
+artifact `a11af5ed…` alone — and reports which features carry the gain.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work

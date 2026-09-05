@@ -3,7 +3,7 @@
   "history_length": 50,
   "iterations": 10000,
   "machine": "arm64",
-  "manifest_path": "/Users/kudratsingh/Machine Learning Projects/MovieRecSys-MachineLearningProject/artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/sasrec-manifest.json",
+  "manifest_path": "artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/sasrec-manifest.json",
   "p99_budget_ms": 15.0,
   "passed": true,
   "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
