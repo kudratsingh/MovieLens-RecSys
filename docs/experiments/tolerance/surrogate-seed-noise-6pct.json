@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "M0-14: the surrogate seed-noise study behind the retrieval tolerances.",
+    "Three cells differing only in training seed, at ADR 0016's frozen full-data",
+    "configuration reduced to the established 6% subsample. Seeds are disjoint from",
+    "the gate's own seed so the anti-circularity check in tolerance_study.py accepts",
+    "the evidence; reusing the gate's seed at the gate's configuration is refused.",
+    "The subsample population is held fixed by SUBSAMPLE_SEED and does not move with",
+    "these seeds, which is the whole reason this study can mean anything.",
+    "Transfer assumption, stated because it is load-bearing: relative seed dispersion",
+    "does not increase moving from this surrogate to the full configuration."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    { "label": "noise6-bce-neg32-s7",  "loss": "bce", "negative_count": 32, "epochs": 2, "faiss_exact": true, "seed": 7 },
+    { "label": "noise6-bce-neg32-s13", "loss": "bce", "negative_count": 32, "epochs": 2, "faiss_exact": true, "seed": 13 },
+    { "label": "noise6-bce-neg32-s21", "loss": "bce", "negative_count": 32, "epochs": 2, "faiss_exact": true, "seed": 21 }
+  ]
+}
