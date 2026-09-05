@@ -49,6 +49,7 @@ from src.training.sasrec_ranker_bundles import (
     rank_by_route,
 )
 from src.training.twotower import PHASE_2_EXPERIMENT
+from synthetic.cold_start.config import COHORT_PARQUET_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,15 @@ def _write_new(path: Path, document: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def require_cohort_payload(path: Path = COHORT_PARQUET_PATH) -> None:
+    """Fail before loading 25M rows when the pinned snapshot is incomplete."""
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"W17 requires the DVC-pinned cold-start cohort at {path}; "
+            "a pointer without its parquet payload changes the protocol snapshot"
+        )
+
+
 def _log_retrieval(
     shared: SharedInputs,
     *,
@@ -150,6 +160,7 @@ def _log_retrieval(
         k=K_CANDIDATES,
     )
     if protocol.semantic_hash != EXPECTED_PROTOCOL_HASH:
+        logger.error("W17 resolved protocol: %s", protocol.canonical_json())
         raise RuntimeError(
             f"W17 protocol drift: {protocol.semantic_hash} != {EXPECTED_PROTOCOL_HASH}"
         )
@@ -339,6 +350,7 @@ def main() -> None:
         raise RuntimeError(f"{RETRIEVAL_TRACKING_URI_ENV_VAR} is required")
     evidence_dir = Path(os.environ.get(EVIDENCE_DIR_ENV_VAR, str(DEFAULT_EVIDENCE_DIR)))
 
+    require_cohort_payload()
     shared = prepare_shared()
     bundle_tracking_uri = mlflow.get_tracking_uri()
     retrieval_run, retrieval_result, distribution, retrieval_seconds = _log_retrieval(
