@@ -37,6 +37,15 @@ mlartifacts/
 !/data/raw/*.dvc
 !/data/processed/.gitignore
 !/data/processed/*.dvc
+# The TMDB snapshot is one directory per pull date, so its pointer files sit a
+# level deeper than the flat `ml-25m.dvc` and the un-ignores above cannot reach
+# them: git will not re-include anything under a directory it has already
+# excluded. Re-include the directory itself, then ignore its contents and keep
+# the pointers, so each dated snapshot is versioned on its own.
+!/data/raw/tmdb/
+/data/raw/tmdb/*
+!/data/raw/tmdb/.gitignore
+!/data/raw/tmdb/*.dvc
 .dvc/cache/
 .dvc/tmp/
 

@@ -72,6 +72,7 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`deployment-runbook.md`](deployment-runbook.md) | The machine, DNS, host bootstrap, secrets, the one-time SQL, the first deploy, verify, rollback, backups and the restore drill, and §14's plain list of what the deployment does not do |
 | [`production-readiness-review.md`](production-readiness-review.md) | The pre-deployment gap review and the rehearsal record. A record, banner and all, but a useful one |
 | [`eda.md`](eda.md) | Exploratory data analysis on MovieLens 25M |
+| [`data/`](data/tmdb-metadata.md) | Dataset-level documentation beyond the MovieLens CSVs: the TMDB catalog snapshot, what is pulled, the six as-of-pull columns that must never become features, and the coverage report ADR 0017 increment 2 is decided on |
 | [`records/`](records/README.md) | Documents that were accurate on a date and are kept for the reasoning, not the status |
 
 Two READMEs outside this directory belong to the same map:

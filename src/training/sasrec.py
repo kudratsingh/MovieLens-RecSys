@@ -55,10 +55,35 @@ DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 MODEL_TYPE = "sasrec"
 
 
-def _configuration_id(config: SASRecConfig) -> str:
-    """Identify model configuration independently of its training seed."""
+def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> str:
+    """Identify a model configuration independently of its training seed.
+
+    The training seed is excluded on purpose: the id answers "which experiment is
+    this", and a seed sweep is several draws of one experiment. The *sample*
+    fraction is the opposite case and belongs in the id, because a run over 6% of
+    users and a run over all of them are different experiments that happen to
+    share every model hyper-parameter.
+
+    Leaving it out had a concrete cost. The tolerance study distinguishes a
+    surrogate derivation from a same-configuration one by comparing this id
+    against the gate's, and a 6% surrogate carried the *same* id as the full-data
+    gate run — so a study declaring `surrogate_delta` was refused as
+    self-contradictory, and the surrogate route the tolerance protocol documents
+    could not be used end to end for any model. The subsample seed is included
+    for the same reason: two 6% runs drawn at different seeds score different
+    users and are not one experiment either.
+
+    A full-data run keeps a distinct id from any subsampled one, but its id still
+    changes with this commit, so ids recorded before it do not compare equal to
+    ids recorded after. That is correct rather than unfortunate — the earlier ids
+    could not express the distinction — and it is why the protocol hash, not this
+    id, is what binds a comparison.
+    """
     parameters = config.as_params()
     parameters.pop("seed")
+    parameters["sample_fraction"] = sample_fraction
+    if sample_fraction != 1.0:
+        parameters["subsample_seed"] = SUBSAMPLE_SEED
     canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode()
     return f"sasrec-sha256:{hashlib.sha256(canonical).hexdigest()}"
 
@@ -259,7 +284,7 @@ def run_once(
                 run_id=run.info.run_id,
                 model_type=MODEL_TYPE,
                 seed=config.seed,
-                configuration_id=_configuration_id(config),
+                configuration_id=_configuration_id(config, sample_fraction=sample_fraction),
                 protocol=protocol.to_dict(),
             ),
             PER_USER_RECALL_ARTIFACT,

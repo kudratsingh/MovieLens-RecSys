@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -401,6 +401,31 @@ data-ingest-reset:
 
 eda:
 	python -m notebooks.eda
+
+# --- TMDB catalog metadata (ADR 0017 increment 2) ---------------------------
+# One snapshot of every TMDB detail payload the catalog can reach, versioned
+# with DVC like the ratings frame so a model trained on it stays reproducible.
+# Needs TMDB_READ_ACCESS_TOKEN in the environment and nowhere else:
+#
+#   set -a && . /path/to/tmdb.env && set +a
+#   make tmdb-ingest ARGS="--limit 200"      # smoke first, ~10 seconds
+#   make tmdb-ingest                         # ~52 min at the default 20 req/s
+#   dvc add data/raw/tmdb/$(shell date +%F) && dvc push
+#   make db-migrate && make tmdb-load        # into the normalised tables
+#   make tmdb-coverage                       # the number ADR 0017 needs
+#
+# The pull is resumable and idempotent: it skips ids already in the shards, so
+# re-running it after an interruption costs only what is missing. `tmdb-load`
+# and `tmdb-coverage` need no token — they read the snapshot on disk.
+tmdb-ingest:
+	python -m src.data.tmdb_ingest $(ARGS)
+
+tmdb-load:
+	python -m src.data.tmdb_load $(ARGS)
+
+tmdb-coverage:
+	python -m src.data.tmdb_coverage --out docs/data/tmdb-coverage.md \
+		--json-out docs/data/tmdb-coverage.json $(ARGS)
 
 # ADR 0011's synthetic cold-start cohort. Reads ratings from Postgres, the way
 # every train-* target does, and writes the DVC-tracked parquet the trainers
