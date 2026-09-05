@@ -1,0 +1,88 @@
+{
+  "gate": {
+    "failures": [
+      "overall ndcg@10 gained 0.43% (0.197659 \u2192 0.198516) against a required +3.00%"
+    ],
+    "k": 10,
+    "metric": "ndcg",
+    "overall": {
+      "candidate": 0.19851611033517683,
+      "detail": "overall ndcg@10 gained 0.43% (0.197659 \u2192 0.198516) against a required +3.00%",
+      "incumbent": 0.19765937415864532,
+      "metric": "ndcg@10",
+      "passed": false,
+      "relative_change": 0.004334407007905808,
+      "required_gain": 0.03
+    },
+    "promote": false,
+    "slices": [
+      {
+        "candidate": 0.07113839960971866,
+        "candidate_users": 1931,
+        "comparable": true,
+        "detail": "warm ndcg@10 improved 1.67% (0.069967 \u2192 0.071138, n=1931)",
+        "incumbent": 0.06996665427454533,
+        "incumbent_users": 1931,
+        "name": "warm",
+        "passed": true,
+        "relative_change": 0.01674719689432993,
+        "tolerance": 0.06
+      },
+      {
+        "candidate": 0.5449476024631482,
+        "candidate_users": 710,
+        "comparable": true,
+        "detail": "cold ndcg@10 improved 0.00% (0.544948 \u2192 0.544948, n=710)",
+        "incumbent": 0.5449476024631482,
+        "incumbent_users": 710,
+        "name": "cold",
+        "passed": true,
+        "relative_change": 0.0,
+        "tolerance": 0.05
+      }
+    ]
+  },
+  "incumbent": {
+    "k": 10,
+    "metrics": {
+      "cold_ndcg_at_k": 0.5449476024631482,
+      "cold_recall_at_k": 0.07780516798105194,
+      "overall_ndcg_at_k": 0.19765937415864532,
+      "overall_recall_at_k": 0.056647027587966525,
+      "warm_ndcg_at_k": 0.06996665427454533,
+      "warm_recall_at_k": 0.04886749383390612
+    },
+    "n_cold_users": 710,
+    "n_warm_users": 1931
+  },
+  "incumbent_reproduced_to_published_precision": true,
+  "ranker_artifact": {
+    "filename": "ranker.txt",
+    "sha256": "b010ef156c141545058b5cdf7d37290248802ef1ee74cf96488028c986ffd843"
+  },
+  "ranker_training_shape": {
+    "groups": 87794,
+    "positives": 154003,
+    "rows": 1843674
+  },
+  "recovered_ranker_source_run_id": "be8d69130f2a45ee8e690909079d3197",
+  "reference_decimal_places": 6,
+  "reference_ranker_run_id": "517fdc75136842e188018ae0a9210c20",
+  "reference_source": "docs/results.md",
+  "run_id": "8d31c985e5da4879ab1d310a4d006c97",
+  "sasrec": {
+    "k": 10,
+    "metrics": {
+      "cold_ndcg_at_k": 0.5449476024631482,
+      "cold_recall_at_k": 0.07780516798105194,
+      "overall_ndcg_at_k": 0.19851611033517683,
+      "overall_recall_at_k": 0.067617096937495,
+      "warm_ndcg_at_k": 0.07113839960971866,
+      "warm_recall_at_k": 0.06387109463768897
+    },
+    "n_cold_users": 710,
+    "n_warm_users": 1931
+  },
+  "sasrec_run_id": "a11af5ed0f0745f68572407237cfa4b9",
+  "schema_version": 1
+}

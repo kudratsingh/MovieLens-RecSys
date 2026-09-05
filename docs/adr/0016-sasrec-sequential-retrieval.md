@@ -47,8 +47,9 @@ byte-identical and reload successfully. This removes the artifact caveat from
 the historical first run. A fail-closed post-hoc evaluation also reproduced
 the protocol hash and all six aggregate metrics exactly before adding the
 missing warm/cold counts and per-user recall artifact. This completes the
-seed-42 evidence envelope, but does not remove the remaining seed,
-rolling-window, tolerance, latency, or paired-ranker gates.
+seed-42 evidence envelope. The later single-run gate decision below closes the
+retrieval-quality question, and the final paired-ranker decision closes the
+model outcome.
 
 **Comparable-incumbent correction (2026-09-05):** The earlier 0.400144
 item-item reference used the five-interaction threshold in force when it was
@@ -67,8 +68,40 @@ does not authorize seeds 7 or 13. Two or three confirmation runs become the
 default for later, more advanced Transformer models only when the owner asks
 for them. This supersedes ADR 0004's three-seed requirement for SASRec alone;
 it does not waive rolling-window, measured-tolerance, latency, or paired-ranker
-evidence. The executable retrieval gate still encodes the earlier three-seed
-policy and must be brought into line before it can issue this model's verdict.
+evidence. PR #139 subsequently made the seed set explicit, preserving the
+stronger multi-seed route while allowing the owner-approved seed-42 regime.
+
+**Retrieval-quality verdict (2026-09-05):** After PR #143 added a paired
+user-bootstrap band to the warm positive claim, the executable gate was run on
+the recovered SASRec and compatible item-item evidence with seed 42 and zero
+cold/overall tolerance. Zero is the strictest sensitivity boundary, not a
+claimed measured tolerance. The gate returned `promote`: warm changed +16.57%
+with a one-sided 95% lower bound of +12.88% against the +3% requirement, cold
+changed exactly 0.00%, and overall changed +11.16%. The last two therefore pass
+for every valid non-negative tolerance. This is retrieval-stage quality only,
+not a model-promotion verdict. The paired LightGBM result below ultimately
+refuses the model.
+
+**Isolated latency verdict (2026-09-05):** The exact saved artifact passed a
+single-thread, request-shaped benchmark of 10,000 50-item encodes after 500
+warmups on the Apple M3 Pro. Encoder p50/p95/p99 were
+0.260/0.271/**0.285 ms**, with a 5.346 ms maximum, against the unchanged p99
+<15 ms budget. This closes the isolated encoder gate only; FAISS, feature
+lookup, ranking, networking, and durable audit work belong to the later
+authenticated service gate.
+
+**Final paired-ranker verdict (2026-09-05):** The deterministic seed-42
+LightGBM ranker of record was reconstructed from its full 154,003-positive
+window (87,794 groups, 1,843,674 rows), persisted with SHA-256 `b010ef…`, and
+first required to reproduce all six incumbent metrics at their retained
+six-decimal precision. Changing only the 500-candidate source from item-item to
+SASRec moved warm NDCG@10 from 0.069967 to 0.071138 (**+1.67%**), cold remained
+0.544948, and overall moved from 0.197659 to 0.198516 (**+0.43%**). The
+executable ADR 0001 gate requires +3% overall and therefore returned `DO NOT
+PROMOTE`. This positive-gain failure is independent of slice tolerance and
+latency. Under the owner's one-run policy, SASRec v1 is complete, measured,
+and not promoted; item-item remains the retrieval source for the promoted
+two-stage system.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work

@@ -2386,9 +2386,10 @@ This closes the lost-weights risk, demonstrates deterministic reproduction,
 and completes the run's population/per-user evidence. On 2026-09-05 the owner
 accepted this one full run as sufficient replication for SASRec and declined
 seeds 7 and 13; later advanced Transformer models will use two or three runs
-when separately authorized. This is still not a promotion because rolling,
-tolerance, latency, and paired-ranker evidence remain. The exact paths,
-lineage, resource record, interruption recovery, and remaining gates are in
+when separately authorized. Retrieval quality subsequently passed the relaxed
+single-run gate, but the paired ranker ultimately refused promotion as recorded
+below. The exact paths, lineage, resource record, interruption recovery, and
+verdict are in
 [`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
 
 ### Correction: the protocol-compatible item-item reference
@@ -2404,8 +2405,70 @@ measured on the same tracked CSV snapshot. Its protocol hash and all three
 per-user slice populations match the artifact-backed SASRec run exactly. Warm
 recall@500 is 0.3990569036, cold recall is 0.5262729520, and overall recall is
 0.4332573558. Against that admissible incumbent, SASRec is **+16.57% warm**,
-**0.00% cold**, and **+11.16% overall**. The executable gate loads both runs
-and returns `incomplete` solely because candidate seeds 7 and 13 are absent.
-That final reason reflects the gate's now-superseded three-seed SASRec policy,
-not an instruction to run them; the gate must implement the owner's one-run
-decision before issuing a verdict.
+**0.00% cold**, and **+11.16% overall**.
+
+After PR #139 made seed 42 an explicit supported regime and PR #143 required a
+paired user-bootstrap band on the positive claim, the executable gate returned
+`promote` for retrieval quality. Warm's population-only one-sided 95% lower
+bound is **+12.88%**, safely above the +3% requirement. The sensitivity run
+used zero cold and overall tolerance: cold still passes at exact equality and
+overall still passes at +11.16%, so no valid non-negative tolerance can reverse
+either guardrail. Zero is not presented as a measured tolerance; it is the
+strictest possible boundary. The retrieval decision remains
+`serving_eligible=false`; the later paired LightGBM result below supplies the
+final model verdict. Its exact machine-readable output is
+[`experiments/sasrec/single-run-retrieval-verdict-2026-09-05.json`](experiments/sasrec/single-run-retrieval-verdict-2026-09-05.json).
+
+The exact artifact also passes ADR 0016's isolated encoder budget. On the same
+Apple M3 Pro, with PyTorch intra-op and inter-op execution pinned to one thread,
+10,000 request-shaped 50-item encodes after 500 warmups measured p50
+**0.260 ms**, p95 **0.271 ms**, and p99 **0.285 ms** against the unchanged p99
+<15 ms limit; maximum was 5.346 ms. This includes the public history-to-vector
+boundary but not FAISS, features, ranking, networking, or audit persistence, so
+the authenticated service p99 gate remains open. The raw report is
+[`experiments/sasrec/encoder-latency-2026-09-05.json`](experiments/sasrec/encoder-latency-2026-09-05.json).
+
+### Final paired LightGBM guardrail
+
+The ranker run of record (`517fdc75136842e188018ae0a9210c20`) predated weight
+export, and its old MLflow backend record is no longer present in either the
+project Docker backend or local file store. The retained evidence is its exact
+training-set shape and six-decimal metrics in this document. A dedicated
+fail-closed runner therefore reconstructed the deterministic seed-42 booster
+using the historical pre-#126 negative behavior, required the exact 154,003
+positives / 87,794 groups / 1,843,674 rows, saved the booster before evaluation,
+and required all six item-item metrics to reproduce at published precision.
+
+The same recovered ranker then reranked 500 item-item candidates and 500 SASRec
+candidates for the identical 1,931 warm and 710 cold users:
+
+| Metric | Item-item candidates | SASRec candidates | Relative change |
+|---|---:|---:|---:|
+| warm recall@10 | 0.048867 | 0.063871 | **+30.70%** |
+| warm NDCG@10 | 0.069967 | 0.071138 | **+1.67%** |
+| cold recall@10 | 0.077805 | 0.077805 | 0.00% |
+| cold NDCG@10 | 0.544948 | 0.544948 | 0.00% |
+| overall recall@10 | 0.056647 | 0.067617 | **+19.37%** |
+| overall NDCG@10 | 0.197659 | 0.198516 | **+0.43%** |
+
+The recall gain shows that SASRec contributes reachable positives, but the
+fixed ranker does not place them high enough: ADR 0001 reads overall NDCG@10,
+and +0.43% does not clear its required +3%. The executable gate returns `DO NOT
+PROMOTE`; warm and cold guardrails both pass, so the refusal is solely the
+positive-gain clause. Under the owner's one-run decision, this is the final
+SASRec v1 outcome. Item-item remains the retrieval source for the promoted
+two-stage system.
+
+Successful local MLflow run `8d31c985e5da4879ab1d310a4d006c97` and its
+create-only artifact directory retain the result JSON and ranker SHA-256
+`b010ef156c141545058b5cdf7d37290248802ef1ee74cf96488028c986ffd843`.
+The first attempt, run `be8d69130f2a45ee8e690909079d3197`, saved those same
+booster bytes before the Docker MLflow client failed to write `/mlartifacts`;
+that failed run, booster, and console log were preserved. Its verified shape,
+booster checksum, and failure-stage tag were additively backfilled while its
+`FAILED` status remained unchanged. The successful run then resumed from the
+checksum-pinned file without retraining. The raw verdict is
+[`experiments/sasrec/paired-ranker-guardrail-2026-09-05.json`](experiments/sasrec/paired-ranker-guardrail-2026-09-05.json).
+Both MLflow records explicitly disclose that the recovery runner was executed
+from a dirty worktree at base commit `384864d`; the committed runner differs
+only by moving immutable shape logging earlier than artifact transport.

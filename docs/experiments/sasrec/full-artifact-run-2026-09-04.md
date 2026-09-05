@@ -168,8 +168,122 @@ Its console record is retained at
 explicit tags record the CSV input seam and source commit because the temporary
 launcher lived outside Git and MLflow could not infer that metadata.
 
-Running the executable retrieval gate against these two run ids succeeds in
-loading both strict envelopes and returns `incomplete` for one reason only:
-SASRec seeds 7 and 13 are missing. The owner's later one-run decision makes
-that a stale tool-policy mismatch rather than an experiment requirement. No
-tolerance value or population mismatch is being hidden behind the result.
+At the time of the evidence recovery, running the executable retrieval gate
+against these two run ids loaded both strict envelopes and returned
+`incomplete` for one reason only: SASRec seeds 7 and 13 were missing. The
+owner's later one-run decision made that a stale tool-policy mismatch rather
+than an experiment requirement. No tolerance value or population mismatch was
+hidden behind the result. The following section records the verdict after the
+gate was brought into line.
+
+## Single-run retrieval-quality verdict — 2026-09-05
+
+PR #139 made the seed set an explicit gate input, and PR #143 put a paired
+user-bootstrap uncertainty band around the warm positive claim. The recovered
+SASRec and protocol-compatible item-item runs were therefore re-evaluated with
+`--seeds 42` and both cold/overall tolerances set to zero. Zero is not presented
+as a measured tolerance: it is the strictest possible non-regression boundary,
+used to establish whether any valid non-negative tolerance could change the
+decision.
+
+The executable gate returned `promote` for retrieval quality:
+
+- warm recall changed **+16.57%**; the population-only one-sided 95% lower
+  bound is **+12.88%**, above the required +3%;
+- cold recall changed exactly **0.00%** and passes even with no regression
+  allowance; and
+- overall recall changed **+11.16%** and also passes with no allowance.
+
+The exact machine-readable output is retained in
+[`single-run-retrieval-verdict-2026-09-05.json`](single-run-retrieval-verdict-2026-09-05.json).
+Because the two guardrails pass at zero, a measured tolerance greater than or
+equal to zero cannot reverse this retrieval-quality verdict. At this point the
+run still recorded `serving_eligible=false`: paired LightGBM NDCG@10,
+rolling-window, and latency evidence were separate gates, and training-seed
+variability remained unmeasured under the owner-approved single-run regime.
+
+## Isolated encoder latency — 2026-09-05
+
+The checksum-pinned artifact was loaded through `load_sasrec`, its exact FAISS
+index rebuilt, and its public `encode_movie_history` boundary measured with a
+50-item history. The process pinned PyTorch intra-op and inter-op execution to
+one thread, warmed up 500 calls, then recorded 10,000 calls on the same Apple
+M3 Pro host used for training:
+
+| Statistic | Milliseconds |
+|---|---:|
+| mean | 0.2642 |
+| p50 | 0.2600 |
+| p95 | 0.2710 |
+| p99 | **0.2846** |
+| maximum | 5.3457 |
+
+The isolated encoder therefore passes ADR 0016's unchanged **p99 <15 ms**
+budget. The benchmark includes history-to-index mapping and tensor creation but
+not FAISS search, feature lookup, ranking, networking, or audit persistence; it
+closes the isolated encoder gate, not the authenticated service's p99 <100 ms
+gate. The executable benchmark is `src/evaluation/sasrec_latency.py`, and the
+exact result is retained in
+[`encoder-latency-2026-09-05.json`](encoder-latency-2026-09-05.json).
+
+## Final paired-ranker guardrail — 2026-09-05
+
+The historical full-window ranker run
+`517fdc75136842e188018ae0a9210c20` retained metrics but not weights. Its MLflow
+record is no longer present in the current Docker backend or the local file
+store, so reconstruction admits only what remains verifiable in
+`docs/results.md`: seed 42, the exact training shape, and all six metrics at
+their published six-decimal precision. The dedicated runner also restores the
+pre-#126 training-negative behavior used by that run.
+
+The reconstruction produced exactly 154,003 positives, 87,794 groups, and
+1,843,674 rows, then saved the ranker before evaluation. Its item-item results
+reproduced all six published metrics. The same immutable booster was then used
+for both holdout arms:
+
+| Metric | Item-item | SASRec | Relative change |
+|---|---:|---:|---:|
+| warm recall@10 | 0.048867 | 0.063871 | +30.70% |
+| warm NDCG@10 | 0.069967 | 0.071138 | **+1.67%** |
+| cold recall@10 | 0.077805 | 0.077805 | 0.00% |
+| cold NDCG@10 | 0.544948 | 0.544948 | 0.00% |
+| overall recall@10 | 0.056647 | 0.067617 | +19.37% |
+| overall NDCG@10 | 0.197659 | 0.198516 | **+0.43%** |
+
+ADR 0001 requires at least +3% overall NDCG@10. The gate therefore returns
+`DO NOT PROMOTE`; both slice guardrails pass, so tolerance has no role in the
+refusal. SASRec retrieves additional hits but does not yield enough top-ranked
+utility through the fixed production-shaped ranker. This is terminal for
+SASRec v1 under the owner's one-run policy; seeds 7 and 13 and a rolling-window
+run are not required for the verdict, and the service-promotion path stops.
+
+All records were retained:
+
+- failed Docker-MLflow attempt `be8d69130f2a45ee8e690909079d3197`, whose
+  artifact upload failed only because the client resolved `/mlartifacts` on the
+  read-only host filesystem; its `FAILED` status was retained and its three
+  verified shape params, booster checksum, and `failure_stage` tag were added
+  without replacing any prior field;
+- its already-saved booster at
+  `artifacts/sasrec-ranker-guardrail/be8d69130f2a45ee8e690909079d3197/ranker.txt`;
+- successful resumed local-MLflow run `8d31c985e5da4879ab1d310a4d006c97`;
+- byte-identical booster copies in the successful local artifact and MLflow
+  store, SHA-256
+  `b010ef156c141545058b5cdf7d37290248802ef1ee74cf96488028c986ffd843`;
+- result JSON SHA-256
+  `72f3e683b81cb5537ec7c8c89d5bcdb5234326af4eead898d0426bc3d496e0e4`;
+- complete logs at
+  `artifacts/sasrec/logs/paired-ranker-guardrail-20260905T0425PDT.log` and
+  `artifacts/sasrec/logs/paired-ranker-guardrail-resume-20260905T0430PDT.log`;
+  and
+- the source-controlled raw verdict in
+  [`paired-ranker-guardrail-2026-09-05.json`](paired-ranker-guardrail-2026-09-05.json).
+
+The successful MLflow store is retained under
+`artifacts/mlflow-sasrec-recovery/`. No run, artifact, log, or failed-attempt
+record was overwritten or deleted. Both run records explicitly carry
+`source_worktree_dirty=true`, base commit `384864d`, and a source-status tag:
+the runner had not yet been committed when executed, and the only subsequent
+source change moved the three immutable shape params ahead of artifact
+transport so a future failed upload retains them automatically. The modeling,
+artifact, evaluation, and gate paths are unchanged.

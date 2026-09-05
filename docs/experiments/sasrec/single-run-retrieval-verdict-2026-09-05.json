@@ -1,0 +1,64 @@
+{
+  "candidate_run_ids": [
+    "a11af5ed0f0745f68572407237cfa4b9"
+  ],
+  "clauses": [
+    {
+      "band": {
+        "basis": "population-only",
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20260904,
+        "half_width": 0.03687870035286543,
+        "lower_bound": 0.12879298366077918,
+        "n_users": 1931,
+        "population_half_width": 0.03687870035286543,
+        "seed_half_width": null
+      },
+      "candidate": 0.4651693328168597,
+      "detail": "warm recall@500 changed +16.57% (0.399057 → 0.465169); one-sided 95% lower bound +12.88% (half-width 3.69%, population-only, n=1931); required at least +3.00%",
+      "incumbent": 0.3990569035829944,
+      "name": "warm",
+      "passed": true,
+      "relative_change": 0.1656716840136446,
+      "required_change": 0.03
+    },
+    {
+      "band": null,
+      "candidate": 0.5262729520330651,
+      "detail": "cold recall@500 changed +0.00% (0.526273 → 0.526273); minimum allowed -0.00%",
+      "incumbent": 0.5262729520330651,
+      "name": "cold",
+      "passed": true,
+      "relative_change": 0.0,
+      "required_change": 0.0
+    },
+    {
+      "band": null,
+      "candidate": 0.4815962808075851,
+      "detail": "overall recall@500 changed +11.16% (0.433257 → 0.481596); minimum allowed -0.00%",
+      "incumbent": 0.43325735583575864,
+      "name": "overall",
+      "passed": true,
+      "relative_change": 0.11157092735005063,
+      "required_change": 0.0
+    }
+  ],
+  "incumbent_run_ids": [
+    "4b342e87dbf54834be5c719eae9a4e6c"
+  ],
+  "k": 500,
+  "metric": "recall",
+  "promote": true,
+  "protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+  "reasons": [
+    "retrieval passed; serving remains blocked until paired LightGBM NDCG@10 passes"
+  ],
+  "required_seeds": [
+    42
+  ],
+  "seed_regime": "single_seed",
+  "serving_eligible": false,
+  "stage": "retrieval",
+  "status": "promote",
+  "uncertainty_basis": "one training run: the supplied tolerances can only have covered evaluation-population sampling (a paired user-level bootstrap). Training stochasticity is unmeasured, so a model whose seeds genuinely disagree is not caught by this verdict, and the warm claim is a single draw rather than a mean. Its uncertainty band is measured on that same population term alone and inherits the same blind spot: it says how far the gain would move on a different sample of users, not on a different training seed."
+}
