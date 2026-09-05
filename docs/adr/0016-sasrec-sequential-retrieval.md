@@ -118,6 +118,54 @@ dot-product score against the candidate item as point-in-time LightGBM
 features — encoded strictly from history before the positive's timestamp, from
 artifact `a11af5ed…` alone — and reports which features carry the gain.
 
+**Paired-ranker outcome (2026-09-05):** The end-to-end guardrail was re-run with
+the ranker *retrained on SASRec's own candidates* rather than inherited from
+item-item's. Two boosters were fitted from the identical 154,003 positives under
+#126's exclusions, seed 42, with the same split, cohort and feature index, so the
+candidate stage is the only difference between them: item-item incumbent
+`bff5f86e6ae14e6b9c19d9c426e3b6ec`, SASRec challenger
+`50d9718802f949d98c5d8d4d6315bb1a`, both carrying protocol hash
+`sha256:0bc91de6a77dd088267b3eac995c8141e7dbbc8231647d042b49e45a1752b593` and the
+same 1,931 warm / 710 cold users.
+
+Retraining is worth roughly fifteen times what the fixed booster measured: warm
+NDCG@10 rises **+25.96%** (0.072792 → 0.091688) and warm recall@10 **+60.50%**,
+against the +1.67% the champion booster managed on the same candidates. **The
+ADR 0001 gate still refuses**, because overall NDCG@10 falls 32.15% and the cold
+slice falls 53.11% against a 5% tolerance. Nothing is promoted; item-item plus the
+champion LightGBM remain champion.
+
+The cold regression is not a retrieval effect and should not be read as one.
+Below the cold-start threshold both arms route to the popularity fallback and hold
+the *same fitted fallback object*, so a cold user's 500 candidates are
+byte-identical between the runs — asserted in `tests/unit/test_sasrec_ranker.py`,
+not inferred. The whole move belongs to the booster: the incumbent's total-gain
+importances are dominated by `item_popularity_30d` (260,507, 2.5× its next
+feature), which is exactly the rule that orders a popularity slate; the
+SASRec-trained booster, fitted where popularity discriminates poorly, comes out
+flat and has nothing to rank that slate with. One booster trained on one candidate
+distribution cannot serve two.
+
+Two follow-on arms measured the obvious repairs, both with their hypotheses
+recorded before they ran. A **per-route bundle** that trains nothing and keys the
+two saved boosters on the route serving already takes
+(`566f5309767a4076a4f5e8151be16645`) reproduces the incumbent's cold slice
+bit-identically and the challenger's warm slice bit-identically, and **passes the
+gate** at +6.88% overall / +25.96% warm / 0.00% cold. A **union booster** trained
+on the concatenation of both arms' training sets — 171,332 groups, 3,597,616 rows,
+zero duplicated groups (`cf475086bab941aeb6e4519ff021fc94`) — also **passes**, at
++6.30% overall / **+26.69% warm** / −1.05% cold, and its importances show
+`item_popularity_30d` restored to the top (284,345) while the warm gain survives:
+one model can carry both candidate distributions.
+
+**A passing gate is a measurement, not a promotion.** ADR 0001 changes a champion
+by decision. The two arms are close enough on overall that the trade is
+operational rather than metric — two boosters plus a routing rule against one
+model plus a retrain — and both still owe the rolling-window, tolerance and
+latency evidence SASRec itself owes; the k6 gate has seen neither. The numbers,
+the predeclared hypotheses and the gate JSONs are in `docs/results.md` and
+`docs/experiments/sasrec/`.
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains
