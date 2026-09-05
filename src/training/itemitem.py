@@ -145,6 +145,11 @@ def main() -> None:
         holdout,
         train_counts,
         k=K_CANDIDATES,
+        # The champion's cold-item number is the baseline the content retriever is
+        # measured against, and it is zero by construction — an index built from
+        # co-occurrence cannot surface an item that never co-occurred. Reporting it
+        # rather than assuming it is what makes "from a prior of zero" a measurement.
+        train_items=train_frame["movieId"].unique(),
         synthetic_cold_users=cohort.targets_by_bucket if cohort is not None else None,
         synthetic_cold_served_by=model.was_served_by_itemitem if cohort is not None else None,
     )
@@ -205,6 +210,18 @@ def main() -> None:
     if cohort is not None:
         synth_cold.log_summary(result, logger=logger, k=K_CANDIDATES)
 
+    if result.cold_item is not None and result.cold_item.metrics is not None:
+        logger.info(
+            "Cold-item slice (n=%d users, %d targets): recall@%d=%.4f ndcg@%d=%.4f "
+            "— coverage evidence only, gates nothing",
+            result.cold_item.n_users,
+            result.cold_item.n_targets,
+            K_CANDIDATES,
+            result.cold_item.metrics.recall,
+            K_CANDIDATES,
+            result.cold_item.metrics.ndcg,
+        )
+
     logger.info("Logging to MLflow at %s ...", settings.mlflow_tracking_uri)
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
@@ -250,6 +267,19 @@ def main() -> None:
                 "cold_recall_at_k_candidates": result.cold.recall,
                 "cold_ndcg_at_k_candidates": result.cold.ndcg,
                 "overall_recall_at_k_candidates": result.overall.recall,
+                # Absent rather than zero when nobody looked: a run that did not compute
+                # the slice must not be readable as a run that measured it and found
+                # nothing. See ColdItemSlice for why this number gates nothing.
+                **(
+                    {
+                        "cold_item_recall_at_k_candidates": result.cold_item.metrics.recall,
+                        "cold_item_ndcg_at_k_candidates": result.cold_item.metrics.ndcg,
+                        "n_cold_item_users": float(result.cold_item.n_users),
+                        "n_cold_item_targets": float(result.cold_item.n_targets),
+                    }
+                    if result.cold_item is not None and result.cold_item.metrics is not None
+                    else {}
+                ),
                 "overall_ndcg_at_k_candidates": result.overall.ndcg,
                 "n_warm_users": result.n_warm_users,
                 "n_cold_users": result.n_cold_users,

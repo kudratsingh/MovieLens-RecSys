@@ -241,6 +241,47 @@ Two gaps this run exposed, recorded rather than left to be rediscovered:
   that a global newness prior would systematically demote the pre-2000 titles the offline cold
   population is made of. Defensible, and a deviation: either this ADR or the code should move.
 
+## The falsification condition fired, 2026-09-05
+
+This ADR's "how we would know we are wrong" said: *if the cold-item slice's recall under content
+retrieval is indistinguishable from zero, the representation is too coarse and increment 2 is
+mandatory rather than optional.* The slice was built, wired into both trainers, and measured. The
+condition fired.
+
+Both runs on the full 25M, threshold routing, same 2,641 holdout users, cold-item slice over the 313
+users holding at least one of the 829 targets the training data never contained:
+
+| | Item-item | Content (genres + year) |
+|---|---:|---:|
+| Warm recall@500 | **0.3991** | **0.0388** |
+| Cold-item recall@500 | **0.0000** | **0.0001** |
+| Cold items per 500-slate | 0 | 115.3 (23.1%) |
+| Distinct cold items retrieved | 0 | 4,998 |
+
+**The baseline is measured, not assumed.** Item-item scores exactly 0.0000 on the slice, which is
+what an index built from co-occurrence must score on items that never co-occurred. That is what makes
+"from a prior of zero" a measurement rather than an argument.
+
+**And the increment fails on its own terms.** It pays a tenfold collapse in warm recall to move
+cold-item recall from 0.0000 to 0.0001. The coverage is real but *indiscriminate*: it floods a
+quarter of every slate with cold items and retrieves 4,998 distinct ones, while almost never
+retrieving the one the user actually watched. Genre-and-year similarity cannot pick the right obscure
+film out of 24,549 candidates, which is precisely the "genres are a weak signal" risk this ADR
+listed.
+
+Read the two coverage numbers together and the shape is clear: 4,998 items reached, 0.0001 recall.
+Reporting the first without the second would have made a failed increment look like a success, and
+the whole reason the falsification condition was written before the run was to make that impossible.
+
+**Consequence, per this ADR's own text.** Increment 1 does not stand on its own. Either increment 2
+becomes required — TMDB metadata, which also covers the 3,413 items with no genres at all — or the
+rung stops here with a recorded negative result. That is an owner decision, and it should be taken
+knowing that nothing about this measurement argues the *mechanism* is wrong: cold items became
+reachable exactly as designed. What failed is the representation used to choose among them.
+
+Item-item remains the retrieval champion. Nothing here is promoted, and the content retriever should
+not be added to the serving slate in this form.
+
 ## Scope of the first increment
 
 Genres and release year only; a content retriever with its own source label; a cold-item evaluation
