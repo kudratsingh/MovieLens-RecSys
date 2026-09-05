@@ -188,6 +188,12 @@ class RoutingCounts:
     #: cold-start threshold. Not an error — routing follows the full history by
     #: design — but the measure of how often it does, which Rung 3a will want.
     learned_with_short_prefix: int = 0
+    #: Learned-path positives whose strict prefix held fewer items than the
+    #: encoder's window. Under O-9 these are exactly the positives the encoder
+    #: currently returns NaN for, so their slate comes back empty and they are
+    #: dropped: the count is the size of what a fix would change. It is a
+    #: sequence-model quantity, so the item-item arm leaves it at zero.
+    learned_below_encoder_window: int = 0
 
     def as_params(self, prefix: str) -> dict[str, int]:
         return {
@@ -195,6 +201,7 @@ class RoutingCounts:
             f"{prefix}_fallback": self.fallback,
             f"{prefix}_empty_prefix": self.empty_prefix,
             f"{prefix}_learned_short_prefix": self.learned_with_short_prefix,
+            f"{prefix}_learned_below_encoder_window": self.learned_below_encoder_window,
         }
 
 
@@ -324,6 +331,12 @@ class SasrecSource:
             self.routing_counts.learned += 1
             if len(query.prior_movie_ids) < COLD_START_THRESHOLD:
                 self.routing_counts.learned_with_short_prefix += 1
+            if len(query.prior_movie_ids) < max_length:
+                # O-9: a prefix shorter than the encoder's window is left-padded,
+                # and a left-padded sequence encodes to NaN today, so this row's
+                # slate comes back empty and the positive is dropped. Counted so
+                # the re-measurement knows how many rows a fix puts back.
+                self.routing_counts.learned_below_encoder_window += 1
             learned_rows.append(row)
             learned_histories.append(
                 [int(movie_id) for movie_id in query.prior_movie_ids[-max_length:]]
