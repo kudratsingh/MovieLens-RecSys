@@ -22,6 +22,70 @@ proposal can pre-commit. A passing increment 1 therefore does not start incremen
 momentum: it starts a conversation whose output is a number written down before any DIN code
 exists.
 
+## Result — 2026-09-05: increment 1 measured, stop rule 1 fired
+
+Increment 1 ran the same day it was approved. Run
+`eee531bb16d943f5a2213dd9b7a8dc1a`, one new ten-column learned-route booster
+(`7eba8851926bc88d…`) composed with the untouched fallback booster
+`05610e604cb2650a…`, gated against PR #151's per-route bundle
+`566f5309767a4076a4f5e8151be16645`.
+
+| | bundle (1b) | increment 1 | change |
+|---|---:|---:|---:|
+| warm NDCG@10 | 0.091688 | 0.092550 | **+0.94%** |
+| cold NDCG@10 | 0.549002 | 0.549002 | 0.00% (bit-identical) |
+| overall NDCG@10 | 0.214631 | 0.215261 | +0.29% |
+| warm recall@10 | 0.077431 | 0.076266 | −1.50% |
+
+**Stop rule 1 fired.** +0.94% warm is well under the +3% this ADR named, so
+increment 1 is recorded and stopped, and under the amendment above **increment 2
+is not built** — its first precondition failed, and the owner is never asked for
+the warm target the second one requires. Both gate readings refuse and agree, so
+O-1 does not have to be settled to interpret the result: ADR 0001's overall
+clause reads +0.29% against +3.00%, and the warm-primary reading computed beside
+it reads +0.94% against +3.00% with cold non-regression satisfied by
+construction.
+
+**Risk 1 is what happened, in the exact form it was written down.** The two new
+columns took **77.5% of the model's total gain** (`sasrec_user_item_logit`
+588,958 and `sasrec_user_item_score` 272,887, against 250,264 for all eight
+aggregates together, every one of which fell). This ADR predicted that shape
+before the run: *"a large feature gain and a small NDCG gain"*, because the
+candidate set is SASRec's own top-500 and the score is therefore a monotone
+function of the rank within a group by construction, so a listwise GBDT can
+learn nothing from it but "trust the retriever". The −1.50% warm recall@10 is
+the same effect seen from the other side — deferring to the retriever's ordering
+costs some of the reordering the ranker used to do.
+
+The falsification listed under "How we would know this decision is wrong" is
+therefore satisfied twice over: warm moved less than +3%, and the rank-only
+control does not need running, because the score *is* the quantity the rank was
+computed from. `sasrec_candidate_rank` was deliberately excluded from the arm so
+that rank could not be the explanation; it turned out to be the explanation
+anyway, carried by the required features.
+
+**What this does not establish.** Not that sequence information is useless to a
+ranker — that the encoder's *scalar verdict* is useless to a ranker scoring the
+encoder's *own* candidates, which is narrower and, in hindsight, nearly
+circular. Two readings survive for a future rung to take, neither of them
+increment 2 as specified: score these features against a slate the encoder did
+not choose (item-item's, or a mixed pool), where they stop restating the
+ordering; or give the ranker the history itself rather than a summary of it.
+The second is what target attention was for, and this result cannot speak to it
+either way, which is why the rung stops rather than concluding.
+
+**Both arms were measured under O-9.** A left-padded sequence encodes to NaN in
+`eval()` mode — PyTorch's fused attention path returns NaN for a query position
+whose keys are all masked — so any history shorter than the 50-item window
+retrieves nothing. **34,190 of 153,947 learned-route positives (22.2%)** are
+affected. Increment 1 and its incumbent were measured under it on identical
+candidates and identical groups, so this comparison is internally valid, but the
+fix and the re-measurement of the SASRec line are a separate work item (W17).
+Every SASRec number on record understates the retriever, this one included.
+
+Full record: [`docs/results.md`](../results.md#the-ranker-given-the-sasrec-score--2026-09-05-adr-0018-rung-3-increment-1)
+and [`docs/experiments/sasrec/ranker-sasrec-score-features-2026-09-05.json`](../experiments/sasrec/ranker-sasrec-score-features-2026-09-05.json).
+
 The rest of this document is the proposal as written on 2026-09-05 and is not rewritten.
 
 ## Context

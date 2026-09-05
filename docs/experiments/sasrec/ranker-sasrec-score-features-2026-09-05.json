@@ -1,0 +1,59 @@
+{
+  "candidate_run_ids": [
+    "eee531bb16d943f5a2213dd9b7a8dc1a"
+  ],
+  "failures": [
+    "overall ndcg@10 gained 0.29% (0.214631 \u2192 0.215261) against a required +3.00%"
+  ],
+  "incumbent_run_ids": [
+    "566f5309767a4076a4f5e8151be16645"
+  ],
+  "k": 10,
+  "metric": "ndcg",
+  "overall": {
+    "candidate": 0.21526144536884784,
+    "detail": "overall ndcg@10 gained 0.29% (0.214631 \u2192 0.215261) against a required +3.00%",
+    "incumbent": 0.21463117342226065,
+    "metric": "ndcg@10",
+    "passed": false,
+    "relative_change": 0.002936534970841361,
+    "required_gain": 0.03
+  },
+  "promote": false,
+  "slices": [
+    {
+      "candidate": 0.09255000412305918,
+      "candidate_users": 1931,
+      "comparable": true,
+      "detail": "warm ndcg@10 improved 0.94% (0.091688 \u2192 0.092550, n=1931)",
+      "incumbent": 0.09168799054929602,
+      "incumbent_users": 1931,
+      "name": "warm",
+      "passed": true,
+      "relative_change": 0.009401597402221346,
+      "tolerance": 0.06
+    },
+    {
+      "candidate": 0.5490019989542251,
+      "candidate_users": 710,
+      "comparable": true,
+      "detail": "cold ndcg@10 improved 0.00% (0.549002 \u2192 0.549002, n=710)",
+      "incumbent": 0.5490019989542251,
+      "incumbent_users": 710,
+      "name": "cold",
+      "passed": true,
+      "relative_change": 0.0,
+      "tolerance": 0.05
+    }
+  ],
+  "warm_primary_reading": {
+    "cold_passed": true,
+    "cold_relative_change": 0.0,
+    "cold_tolerance": 0.05,
+    "reading": "warm-primary (O-1, undecided)",
+    "required_warm_gain": 0.03,
+    "warm_passed": false,
+    "warm_relative_change": 0.009401597402221346,
+    "would_promote": false
+  }
+}
