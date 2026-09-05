@@ -524,6 +524,7 @@ class ServingManifest:
             ref = self.rankers[name]
             _verify_artifact(artifact_dir, ref.artifact)
             _validate_ranker_contract(name, ref, artifact_dir)
+        _validate_route_permutation(self.rankers)
 
     def to_dict(self) -> dict[str, object]:
         if self.schema_version == LEGACY_MANIFEST_SCHEMA_VERSION:
@@ -836,6 +837,39 @@ def _validate_ranker_contract(route: str, ref: RankerRef, artifact_dir: Path) ->
         raise ValueError(
             f"ranker route {route!r} declares feature order {list(declared)} but "
             f"{ref.artifact.filename} was trained on {list(names)}"
+        )
+
+
+def _validate_route_permutation(rankers: Mapping[str, RankerRef]) -> None:
+    """Refuse two routes that declare the same features in a different order.
+
+    TEMPORARY, and deliberately not a check on names. ``_validate_ranker_contract``
+    above can only hold a booster to its *width* whenever LightGBM recorded
+    placeholder names, which is every booster this repo trains today — so a
+    learned route carrying the fallback's contract, permuted, passes every other
+    check in this module and then scores each column against the splits learned
+    for a different one. Comparing the two routes to each other needs no names
+    at all, which is why it can be done now rather than after the training-side
+    fix.
+
+    Only an equal multiset in a different order is refused. A strict superset is
+    the expected shape once the learned route grows sequence features while the
+    fallback stays on the incumbent contract, so widening must stay legal; and a
+    schema 1 bundle points both routes at one ``RankerRef``, so the two orders
+    are identical there and this never fires.
+
+    Delete it once every booster is trained from a named frame — at that point
+    the name check is strictly stronger, because it catches a permutation on a
+    single route as well as one between two.
+    """
+    learned = rankers[RANKER_ROUTE_LEARNED].feature_columns
+    fallback = rankers[RANKER_ROUTE_FALLBACK].feature_columns
+    if learned != fallback and Counter(learned) == Counter(fallback):
+        raise ValueError(
+            f"ranker routes {RANKER_ROUTE_LEARNED!r} and {RANKER_ROUTE_FALLBACK!r} declare the "
+            f"same {len(learned)} features in a different order, which no booster in this repo "
+            f"carries the names to detect: {RANKER_ROUTE_LEARNED} is {list(learned)} and "
+            f"{RANKER_ROUTE_FALLBACK} is {list(fallback)}"
         )
 
 

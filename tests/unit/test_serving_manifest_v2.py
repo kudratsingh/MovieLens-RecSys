@@ -459,24 +459,89 @@ class TestRankerFeatureContract:
         # `Column_0 … Column_n` for a booster trained from a bare matrix, which
         # is a placeholder and not a feature order, so a same-width reordering
         # is undetectable. Training from a named frame is what closes this.
+        #
+        # Both routes carry the permutation here, which is what is left of the
+        # gap: the cross-route guard below catches a reordering only when the
+        # two routes disagree, and two routes that are wrong in the same way
+        # agree with each other.
         ranker = _ranker(tmp_path / "ranker.txt")
-        permuted = [FEATURE_COLUMNS[1], FEATURE_COLUMNS[0], *FEATURE_COLUMNS[2:]]
+        permuted = tuple([FEATURE_COLUMNS[1], FEATURE_COLUMNS[0], *FEATURE_COLUMNS[2:]])
+        route = RankerRef(artifact=ranker, feature_columns=permuted)
+        path = _published(
+            _v2_manifest(
+                tmp_path,
+                rankers={RANKER_ROUTE_LEARNED: route, RANKER_ROUTE_FALLBACK: route},
+            ),
+            tmp_path,
+        )
+
+        assert ServingManifest.load(path).route(RANKER_ROUTE_LEARNED).feature_columns == permuted
+
+
+class TestRouteContractsAgainstEachOther:
+    """The name-independent half of the feature-order check.
+
+    Temporary, and tied to `_validate_route_permutation`: while every booster
+    carries placeholder names, the two routes can only be held to their widths
+    individually — but they can still be compared to *each other*, and an equal
+    multiset in a different order is a bundle nobody meant to publish.
+    """
+
+    def test_two_routes_that_permute_the_same_features_are_refused(self, tmp_path: Path) -> None:
+        ranker = _ranker(tmp_path / "ranker.txt")
+        permuted = tuple([FEATURE_COLUMNS[1], FEATURE_COLUMNS[0], *FEATURE_COLUMNS[2:]])
         path = _published(
             _v2_manifest(
                 tmp_path,
                 rankers={
-                    RANKER_ROUTE_LEARNED: RankerRef(
-                        artifact=ranker, feature_columns=tuple(permuted)
-                    ),
+                    RANKER_ROUTE_LEARNED: RankerRef(artifact=ranker, feature_columns=permuted),
                     RANKER_ROUTE_FALLBACK: RankerRef(artifact=ranker),
                 },
             ),
             tmp_path,
         )
 
-        assert ServingManifest.load(path).route(RANKER_ROUTE_LEARNED).feature_columns == tuple(
-            permuted
+        with pytest.raises(ValueError, match="in a different order"):
+            ServingManifest.load(path)
+
+    def test_a_learned_route_that_strictly_widens_the_fallback_is_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        # The expected shape once the learned route grows sequence features: the
+        # fallback keeps the incumbent contract and the learned one is a strict
+        # superset of it. Refusing this would block the next rung.
+        narrow = tuple(FEATURE_COLUMNS[:3])
+        fallback_path = tmp_path / "fallback.txt"
+        _unnamed_booster(fallback_path, n_features=len(narrow))
+        path = _published(
+            _v2_manifest(
+                tmp_path,
+                rankers={
+                    RANKER_ROUTE_LEARNED: RankerRef(artifact=_ranker(tmp_path / "ranker.txt")),
+                    RANKER_ROUTE_FALLBACK: RankerRef(
+                        artifact=ArtifactRef(
+                            artifact_type="lightgbm-lambdarank",
+                            version="fallback-v0",
+                            filename=fallback_path.name,
+                            sha256=file_sha256(fallback_path),
+                        ),
+                        feature_columns=narrow,
+                    ),
+                },
+            ),
+            tmp_path,
         )
+
+        manifest = ServingManifest.load(path)
+
+        assert manifest.route(RANKER_ROUTE_FALLBACK).feature_columns == narrow
+
+    def test_a_schema_one_bundle_cannot_trip_the_guard(self, tmp_path: Path) -> None:
+        # Both routes are the same ref there, so their orders are identical by
+        # construction and the guard has nothing to compare.
+        path = _published(_v1_manifest(tmp_path), tmp_path)
+
+        assert ServingManifest.load(path).schema_version == 1
 
 
 class TestRetrieverValidation:
