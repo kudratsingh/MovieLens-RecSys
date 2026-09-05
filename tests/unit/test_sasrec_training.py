@@ -117,7 +117,13 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
         assert run.data.metrics["n_warm_users"] + run.data.metrics["n_cold_users"] == 4
         recall_document = json.loads(recall_artifact.read_text())
         assert recall_document["run_id"] == run.info.run_id
-        assert recall_document["configuration_id"] == _configuration_id(config)
+        # 0.99 is the fraction this run used, and the id must say so: before the
+        # sample entered it, this passed against the full-data id and a surrogate
+        # was indistinguishable from the gate configuration.
+        assert recall_document["configuration_id"] == _configuration_id(
+            config, sample_fraction=0.99
+        )
+        assert recall_document["configuration_id"] != _configuration_id(config)
         assert recall_document["protocol"]["k"] == 500
         assert len(recall_document["per_user_recall"]["overall"]) == 4
         load_sasrec(durable_manifest)
@@ -164,3 +170,59 @@ def test_the_subsample_seed_reproduces_every_run_already_measured() -> None:
     already been recorded.
     """
     assert sasrec_training.SUBSAMPLE_SEED == 42
+
+
+def test_a_surrogate_and_the_gate_configuration_cannot_share_an_id() -> None:
+    """The distinction the tolerance study needs to tell derivation A from B.
+
+    A 6% run and a full-data run share every model hyper-parameter, so before the
+    sample entered this id they hashed identically — and a study declaring
+    `surrogate_delta` was refused as self-contradictory, which made the surrogate
+    route in the tolerance protocol unusable end to end for any model.
+    """
+    config = SASRecConfig(
+        max_sequence_length=8,
+        hidden_dim=8,
+        num_blocks=1,
+        num_heads=2,
+        feedforward_dim=16,
+        dropout=0.0,
+        negative_count=2,
+        batch_size=4,
+        epochs=1,
+        faiss_exact=True,
+        seed=42,
+    )
+
+    full = sasrec_training._configuration_id(config, sample_fraction=1.0)
+    surrogate = sasrec_training._configuration_id(config, sample_fraction=0.06)
+
+    assert full != surrogate
+    assert full == sasrec_training._configuration_id(config)
+
+
+def test_the_training_seed_still_does_not_move_the_configuration_id() -> None:
+    """A seed sweep is several draws of one experiment, not several experiments.
+
+    This is the other direction of the same contract, and it is what lets the
+    study aggregate seeds at all. Pinned because widening the id to cover the
+    sample is exactly the change that could break it by accident.
+    """
+    base = dict(
+        max_sequence_length=8,
+        hidden_dim=8,
+        num_blocks=1,
+        num_heads=2,
+        feedforward_dim=16,
+        dropout=0.0,
+        negative_count=2,
+        batch_size=4,
+        epochs=1,
+        faiss_exact=True,
+    )
+    ids = {
+        sasrec_training._configuration_id(SASRecConfig(**base, seed=seed), sample_fraction=0.06)
+        for seed in (7, 13, 21)
+    }
+
+    assert len(ids) == 1

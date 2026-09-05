@@ -2280,6 +2280,52 @@ modeling track proceeds to SASRec under ADR 0016.
   its log. Every full-dataset run has it, and the per-bucket table above is from
   those.
 
+## SASRec seed dispersion at 6% — 2026-09-05 (M0-14, raw; not a certified tolerance)
+
+Three runs of ADR 0016's frozen cell at `sample_fraction = 0.06`, differing only in training seed,
+against the item-item incumbent on the identical subsample. Machine: local, `OMP_NUM_THREADS=1`,
+~18 minutes per run. The subsample population is held fixed by `SUBSAMPLE_SEED` (#147), so what is
+measured here is training stochasticity and tie-breaking rather than sample variation — before that
+fix each seed scored a different 6% of users and this study was not possible.
+
+| Run | Seed | Warm recall@500 | Cold recall@500 | Overall recall@500 |
+|---|---:|---:|---:|---:|
+| `itemitem-cosine` (incumbent) | — | 0.3586651775 | 0.4829587027 | 0.3963298821 |
+| `sasrec-noise6-bce-neg32-s7` | 7 | 0.3103315582 | 0.4829587027 | 0.3626428141 |
+| `sasrec-noise6-bce-neg32-s13` | 13 | 0.3258245274 | 0.4829587027 | 0.3734409441 |
+| `sasrec-noise6-bce-neg32-s21` | 21 | 0.2956681362 | 0.4829587027 | 0.3524228533 |
+
+Warm: mean 0.310608, sample sd 0.015080, **relative range 9.71%**. Overall relative range 5.79%.
+115 warm and 50 cold users throughout.
+
+**Cold dispersion is exactly zero, and it is zero by construction.** All three seeds and the
+incumbent agree to ten decimal places, because every threshold-routed retriever hands cold users to
+the same popularity fallback. No SASRec seed can move that number. The consequence is about the gate
+rather than about SASRec: **its cold clause cannot separate two models in this class.** It is not
+decorative — it still catches a model that changes the routing policy and serves cold users from the
+learned path — but it cannot do the discriminating job its shape implies.
+
+**Read the warm figure with its scale.** One warm user flipping on 115 is 0.0087 absolute recall,
+and the observed range is 0.0302 — about three and a half users. Per-user seed effects average down
+over more users, so the full-data spread over 1,931 warm users should be materially smaller. That
+makes the surrogate's transfer assumption conservative rather than optimistic. **No full-data figure
+is extrapolated here**, and this rests on three draws.
+
+**The SASRec verdict survives the worst case.** Applying this 6% dispersion unchanged at full scale
+gives a seed half-width of 7.09%, combined with the run's 3.69% population term to 7.99%. The
+measured warm gain of +16.57% less 7.99% is **+8.58%**, still far above the +3% bar. These numbers
+do not reopen it.
+
+**No certified tolerance exists, and this is why.** The tolerance study refuses seeds 7 and 13 as
+the gate's own, leaving seed 21 alone — below its three-seed minimum. Separately, until #149 the
+surrogate route was unusable end to end for *any* model: a 6% run and the full-data gate run carried
+byte-identical configuration ids, so a study declaring `surrogate_delta` was refused as
+self-contradictory. Both guardrails currently pass at a zero tolerance, so no certified value is
+load-bearing for anything on the table; the first model whose claim lands near its threshold is the
+one that should pay for a certified derivation, at full scale.
+
+Spec: [`experiments/tolerance/surrogate-seed-noise-6pct.json`](experiments/tolerance/surrogate-seed-noise-6pct.json).
+
 ## SASRec bounded loss pilot — 2026-09-04
 
 ADR 0016's matched loss ablation ran on the established deterministic 6% user
