@@ -15,6 +15,25 @@
 # pre-deploy would wait out its whole timeout and fail the deploy. Pinned to
 # the same version as infra/api/requirements.txt so both images agree on what
 # a revision graph is.
+# torch and faiss are here because the model sidecar loads a SASRec encoder and
+# rebuilds its exact FAISS index at startup (ADR 0013's bundle, O-12). Two things
+# about these three lines are load-bearing rather than stylistic.
+#
+# The `--extra-index-url` and the `+cpu` local version are the pin. On linux/amd64
+# a plain `torch==2.12.0` resolves to the default PyPI wheel, which bundles the
+# CUDA runtime and drags in a set of `nvidia-*` packages — roughly an order of
+# magnitude larger than the CPU build, on an image ADR 0013 ships to a 40 GB box
+# that has no GPU. macOS has no CUDA build at all, so a developer machine cannot
+# reproduce that mistake; only the amd64 build can, which is why the image asserts
+# on it rather than trusting the pin to be copied correctly next time.
+#
+# The API image must never gain any of this. It holds the serving contract modules
+# and nothing that imports a model; `tests/unit/test_serving_image_imports.py` is
+# what keeps that true.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.0+cpu
+faiss-cpu==1.14.3
+
 alembic==1.19.1
 feast[postgres,redis]==0.65.0
 fastapi==0.141.1

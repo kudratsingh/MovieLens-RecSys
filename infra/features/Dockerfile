@@ -27,6 +27,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY infra/features/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --requirement requirements.txt
+
+# The CPU pin above is easy to lose in a future edit — a plain `torch==` line
+# resolves to the CUDA wheel on this platform and inflates the image by roughly
+# an order of magnitude. A developer machine cannot catch that: macOS has no
+# CUDA build, so the mistake is invisible until it reaches a linux/amd64 build.
+# So the build asserts on the result rather than trusting the pin, and fails
+# here instead of shipping a GPU runtime to a box that has no GPU.
+RUN set -eu; \
+    if pip list --format=freeze | grep -qi '^nvidia-'; then \
+        echo "refusing: CUDA packages present; the torch pin lost its +cpu build" >&2; \
+        pip list --format=freeze | grep -i '^nvidia-' >&2; \
+        exit 1; \
+    fi; \
+    python -c "import torch, faiss; print('torch', torch.__version__, '| faiss', faiss.__version__)"
 COPY src ./src
 
 # feature_store.yaml interpolates these unconditionally, so `feast apply` fails
