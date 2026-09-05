@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import lightgbm as lgb
 
@@ -41,6 +41,13 @@ from src.serving.policy import (
     CANDIDATE_SOURCE_POPULARITY_FILL,
     CANDIDATE_SOURCE_SIMILARITY,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Imported for the annotation alone. ``src.serving.sequence_retrieval``
+    # imports this module, so a runtime import here would be a cycle; ``load``
+    # reaches into it lazily instead, which is also what keeps torch and FAISS
+    # out of the import graph of anything that merely reads a manifest.
+    from src.serving.sequence_retrieval import SidecarRetriever
 
 MANIFEST_SCHEMA_VERSION = 2
 LEGACY_MANIFEST_SCHEMA_VERSION = 1
@@ -738,10 +745,21 @@ class CandidateIndex:
 
 @dataclass(frozen=True)
 class ServingArtifactBundle:
+    """Everything a sidecar worker needs, fully realised or not constructed at all.
+
+    ``candidates`` is the item-item index and is ``None`` for any other family;
+    ``retriever`` is the family-neutral retrieval stage the sidecar actually
+    serves from. Both are kept rather than collapsed because the item-item index
+    has readers that want the index itself — the baked-bundle test asserts on its
+    neighbour and popularity tables — and narrowing them to the retrieval
+    protocol would lose that.
+    """
+
     manifest: ServingManifest
-    candidates: CandidateIndex
+    candidates: CandidateIndex | None
     ranker: LGBMRanker
     rankers: Mapping[str, LGBMRanker] = field(default_factory=dict)
+    retriever: SidecarRetriever | None = None
 
     def __post_init__(self) -> None:
         # A bundle handed a single booster is the normalised schema 1 shape:
@@ -754,17 +772,6 @@ class ServingArtifactBundle:
     def load(cls, manifest_path: Path) -> ServingArtifactBundle:
         manifest = ServingManifest.load(manifest_path)
         artifact_dir = manifest_path.parent
-        family = manifest.retriever.family
-        if family != RETRIEVER_FAMILY_ITEM_ITEM:
-            # The manifest vocabulary runs ahead of the loader on purpose: a
-            # SASRec bundle can be published and validated before this process
-            # can rebuild its encoder. Refusing to boot is the fail-closed half
-            # of that — a sidecar that cannot serve the family it was given must
-            # not start and answer with something else.
-            raise ValueError(
-                f"this build loads only the {RETRIEVER_FAMILY_ITEM_ITEM!r} retriever family; "
-                f"the manifest at {manifest_path.name} declares {family!r}"
-            )
         # One booster per distinct file. The normalised schema 1 shape points
         # both routes at the same artifact, and loading it twice would double a
         # sidecar's resident model memory to hold two copies of one model.
@@ -775,12 +782,44 @@ class ServingArtifactBundle:
             if filename not in by_filename:
                 by_filename[filename] = LGBMRanker.load_model(artifact_dir / filename)
             rankers[name] = by_filename[filename]
+        candidates, retriever = _load_retrieval_stage(manifest, artifact_dir, manifest_path.name)
         return cls(
             manifest=manifest,
-            candidates=CandidateIndex.load(artifact_dir / manifest.retriever.primary.filename),
+            candidates=candidates,
             ranker=rankers[RANKER_ROUTE_LEARNED],
             rankers=rankers,
+            retriever=retriever,
         )
+
+
+def _load_retrieval_stage(
+    manifest: ServingManifest, artifact_dir: Path, manifest_name: str
+) -> tuple[CandidateIndex | None, SidecarRetriever | None]:
+    """Realise the retrieval stage a manifest declares, or refuse the whole bundle.
+
+    Still fail-closed, and for the same reason it was when this refused SASRec
+    outright: a sidecar that cannot serve the family it was handed must not boot
+    and answer with something else. What changed is only *which* families can be
+    realised — the refusal below is now about families this build has no loader
+    for at all, and it is the last line rather than the first.
+
+    A SASRec bundle is rebuilt by ``src.serving.sequence_retrieval``, imported
+    here and not at module scope. That module owns the torch and FAISS imports,
+    so an item-item deployment never pays for them, and anything that only wants
+    to read a manifest — the release verifier, the reproducibility check — keeps
+    working in an environment that has neither library installed.
+    """
+    if manifest.retriever.family == RETRIEVER_FAMILY_ITEM_ITEM:
+        return CandidateIndex.load(artifact_dir / manifest.retriever.primary.filename), None
+    if manifest.retriever.family == RETRIEVER_FAMILY_SASREC:
+        from src.serving.sequence_retrieval import load_sequence_retriever
+
+        return None, load_sequence_retriever(manifest.retriever, artifact_dir)
+    raise ValueError(
+        f"this build has no loader for the {manifest.retriever.family!r} retriever family; the "
+        f"manifest at {manifest_name} declares it and every family this build serves is "
+        f"{[RETRIEVER_FAMILY_ITEM_ITEM, RETRIEVER_FAMILY_SASREC]}"
+    )
 
 
 def file_sha256(path: Path) -> str:

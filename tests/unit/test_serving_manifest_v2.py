@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from src.feature_contract import FEATURE_COLUMNS
+from src.models import artifacts
 from src.models.artifacts import (
     INDEX_TYPE_FLAT_IP_EXACT,
     RANKER_ROUTE_FALLBACK,
@@ -591,12 +592,30 @@ class TestRetrieverValidation:
         with pytest.raises(ValueError, match="unsupported retriever family"):
             ServingManifest.load(path)
 
-    def test_a_bundle_refuses_to_load_a_family_this_build_cannot_serve(
-        self, tmp_path: Path
+    def test_a_bundle_refuses_to_load_a_family_this_build_has_no_loader_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        path = _published(_v2_manifest(tmp_path, retriever=_sasrec_retriever(tmp_path)), tmp_path)
+        """The fail-closed rule outlived the family it was written for.
 
-        with pytest.raises(ValueError, match="loads only the 'item-item-cosine'"):
+        This previously refused ``sasrec`` outright, because the loader could not
+        rebuild an encoder. It can now (``tests/unit/test_sidecar_sasrec_load.py``),
+        so the refusal moved down to families the manifest vocabulary knows and
+        the loader does not. That gap is not hypothetical — it is precisely the
+        state SASRec was published in — so the vocabulary is widened here to
+        reach the branch that catches it.
+
+        The property is unchanged and is the important one: a sidecar that cannot
+        fully realise the bundle it was handed must refuse to boot rather than
+        start and answer with something else.
+        """
+        family = "two-tower"
+        monkeypatch.setitem(artifacts._REQUIRED_RETRIEVER_ARTIFACTS, family, ("index",))
+        monkeypatch.setitem(artifacts._PRIMARY_RETRIEVER_ARTIFACT, family, "index")
+        monkeypatch.setitem(artifacts._REQUIRED_RETRIEVER_PARAMS, family, ())
+        path = _published(_v2_manifest(tmp_path), tmp_path)
+        _edit(path, lambda document: document["retriever"].update({"family": family}))
+
+        with pytest.raises(ValueError, match="no loader for the 'two-tower' retriever family"):
             ServingArtifactBundle.load(path)
 
 
