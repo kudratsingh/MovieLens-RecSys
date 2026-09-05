@@ -148,6 +148,22 @@ The fix is to draw the subsample from a fixed seed independent of the training s
 population is held constant while the model's randomness varies. Until then the retrieval tolerances
 rest on the population term alone, and any verdict built on them is precise about sampling noise and
 silent about model instability.
+## C — Content-based cold-item retrieval (ADR 0017, accepted 2026-09-05)
+
+Approved 2026-09-05 with its roadmap row logged. Sized for the first increment only:
+genres and release year, no TMDB ingestion, no serving integration until an offline number exists.
+
+| ID | Size | Work item | Depends on | Acceptance evidence |
+|---|---:|---|---|---|
+| C-01 | S | Add a cold-item evaluation slice | — | Slice is holdout targets unseen in train; 829 rows / 313 users reproduced from the committed snapshot |
+| C-02 | M | Build the content item representation | C-01 | Genre mask plus release year per catalog item, derived not hardcoded; coverage reported including the 14.6% with no genres |
+| C-03 | M | Build the content retriever and score it | C-02 | Reachability and recall on the cold-item slice, against the honest baseline of zero |
+| C-04 | S | Publish the coverage and relevance result | C-03 | Coverage is the primary claim; relevance recorded with its interval and its thinness stated |
+
+The rung's own risk, recorded up front: 313 users is thin, and under the one-run policy there is no
+seed spread either, so this rung is far better placed to demonstrate *coverage* — cold items become
+reachable at all — than *relevance*. If the slice cannot separate two designs at any plausible effect
+size, it is judged on coverage and latency, with relevance recorded as unproven rather than inferred.
 
 ## Verification baseline
 
