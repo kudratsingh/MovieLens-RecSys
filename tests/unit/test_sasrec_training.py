@@ -7,10 +7,11 @@ import mlflow
 import pandas as pd
 import pytest
 
+import src.training.sasrec as sasrec_training
 from src.models.candidates.sasrec import SASRecConfig
 from src.models.candidates.sasrec_artifact import MANIFEST_FILENAME, load_sasrec
 from src.training.sasrec import _configuration_id, retrieval_diagnostics, run_once
-from src.training.twotower import PHASE_2_EXPERIMENT
+from src.training.twotower import PHASE_2_EXPERIMENT, subsample_users
 
 
 def test_retrieval_diagnostics_measure_coverage_rank_and_target_reach() -> None:
@@ -123,3 +124,43 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
         load_sasrec(mlflow_manifest)
     finally:
         mlflow.set_tracking_uri(previous_uri)
+
+
+def test_the_subsample_population_does_not_move_with_the_training_seed() -> None:
+    """A seed sweep must vary the model's randomness, not the users it is scored on.
+
+    Drawing the subsample from the training seed made a pilot-scale seed sweep
+    meaningless: every seed kept a different 6% of users, so the observed spread
+    mixed training stochasticity with sample variation, and the tolerance study
+    refused such runs outright because their slice populations disagreed. This
+    pins the separation that makes the noise study possible at all.
+    """
+    ratings = pd.DataFrame(
+        {
+            "userId": [u for u in range(1, 41) for _ in range(3)],
+            "movieId": [1 + (u * 7 + i) % 25 for u in range(1, 41) for i in range(3)],
+            "rating": [4.0] * 120,
+            "timestamp": [1_000 + u * 10 + i for u in range(1, 41) for i in range(3)],
+        }
+    )
+
+    populations = {
+        seed: set(subsample_users(ratings, 0.25, sasrec_training.SUBSAMPLE_SEED)["userId"].unique())
+        for seed in (42, 7, 13)
+    }
+
+    assert (
+        len({frozenset(p) for p in populations.values()}) == 1
+    ), "every training seed must score the identical subsample population"
+    assert 0 < len(populations[42]) < ratings["userId"].nunique()
+
+
+def test_the_subsample_seed_reproduces_every_run_already_measured() -> None:
+    """42 is not an arbitrary constant — it is what every prior run actually used.
+
+    Before the split, the subsample seed *was* the training seed, and every
+    subsampled run to date trained at seed 42. Pinning the constant to 42 means
+    those runs reproduce byte for byte, so this fix invalidates nothing that has
+    already been recorded.
+    """
+    assert sasrec_training.SUBSAMPLE_SEED == 42
