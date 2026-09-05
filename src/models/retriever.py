@@ -216,7 +216,19 @@ class SASRecRetriever:
         excluded = set(excluded_movie_ids)
         dismissed = set(dismissed_movie_ids)
         hidden = excluded | dismissed
-        seeds = [movie_id for movie_id in positive_history_movie_ids if movie_id not in dismissed]
+        # The wire order is *newest first*: the coordinator builds this list with
+        # `ORDER BY watched_at DESC` because item-item's seed attribution wants
+        # the most recent title first. SASRec is trained oldest-to-newest, so the
+        # window has to be reversed before the encoder sees it. Getting this
+        # wrong is silent in both directions — the model would read a user's
+        # oldest title as their most recent, and a history longer than the window
+        # would keep the *oldest* `max_sequence_length` items instead of the
+        # newest. Neither shows up as an error, only as worse recommendations.
+        seeds = [
+            movie_id
+            for movie_id in reversed(positive_history_movie_ids)
+            if movie_id not in dismissed
+        ]
         # An empty seed set is an ordinary outcome online — a user whose whole
         # history was dismissed — and ``CandidateIndex`` answers it with an
         # empty retrieval. ``recommend_from_history`` raises on it instead, so
@@ -250,6 +262,8 @@ class SASRecRetriever:
         # truncates to ``max_sequence_length`` — so a longer history must not be
         # counted whole. ``seed_count`` is the number of seeds that reached a
         # candidate, and a retrieval that returned nothing was reached by none.
+        # `seeds` is oldest-to-newest by the time it reaches here, so the tail is
+        # the newest window — which is what the encoder truncates to.
         window = seeds[-self.model.config.max_sequence_length :]
         return CandidateRetrieval(
             contributions=contributions,

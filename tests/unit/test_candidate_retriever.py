@@ -197,7 +197,10 @@ class TestSASRecAdapter:
         seeds, _limit, excluded = model.calls[0]
         # ``excluded_movie_ids`` contains the watched history by construction,
         # so using it to filter seeds is what would silently empty retrieval.
-        assert seeds == [1, 2]
+        # Reversed because the wire order is newest-first and the encoder is
+        # trained oldest-to-newest. The point of this test is membership —
+        # an excluded title is still a seed — and both ids survive.
+        assert seeds == [2, 1]
         assert excluded == {2, 10}
         assert 10 not in retrieval.movie_ids
         assert retrieval.excluded_count == 2
@@ -248,3 +251,37 @@ class TestSASRecAdapter:
         assert all(c.seed_movie_id is None for c in retrieval.contributions)
         # Unscored retrieval: the mass is a placeholder, not a similarity.
         assert all(c.contribution == 0.0 for c in retrieval.contributions)
+
+
+def test_the_encoder_window_is_the_newest_titles_in_training_order() -> None:
+    """The wire order is newest-first; SASRec is trained oldest-to-newest.
+
+    `src/serving/recommendations.py` builds `positive_history_movie_ids` with
+    `ORDER BY watched_at DESC`, because item-item's seed attribution wants the
+    most recent title first. Handing that straight to a model trained
+    oldest-to-newest reverses the sequence, and for a history longer than the
+    window it keeps the *oldest* items rather than the newest. Both failures are
+    silent — no error, just worse recommendations — which is why this is pinned
+    rather than left to a reviewer to notice.
+    """
+    window = 3
+    seen: list[list[int]] = []
+
+    class _Recorder:
+        class config:  # noqa: N801 - mirrors SASRecConfig's attribute access
+            max_sequence_length = window
+
+        def recommend_from_history(
+            self, movie_ids: list[int], k: int, *, excluded_movie_ids: object = ()
+        ) -> list[int]:
+            seen.append(list(movie_ids))
+            return [901, 902][:k]
+
+    # Newest first on the wire: 50 was watched most recently, 10 longest ago.
+    retriever = SASRecRetriever(_Recorder())  # type: ignore[arg-type]
+    retriever.retrieve([50, 40, 30, 20, 10], limit=2)
+
+    passed = seen[0]
+    assert passed == [10, 20, 30, 40, 50], "the encoder must see oldest-to-newest"
+    assert passed[-window:] == [30, 40, 50], "the window must hold the newest titles"
+    assert 10 not in passed[-window:], "the oldest title must fall out of the window first"
