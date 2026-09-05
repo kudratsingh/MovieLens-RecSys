@@ -26,14 +26,14 @@ from src.models.artifacts import (
     CandidateIndex,
 )
 from src.models.candidates.itemitem import ItemItemModel
-from src.models.candidates.retriever import (
+from src.models.candidates.sasrec import SASRecConfig, SASRecModel
+from src.models.retriever import (
     CandidateRetriever,
     HistoryRetriever,
     ItemItemRetriever,
     SASRecRetriever,
     UserRetriever,
 )
-from src.models.candidates.sasrec import SASRecConfig, SASRecModel
 
 # Three items apiece across two taste clusters, which is under ADR 0001's
 # threshold, so these models are built with the documented index-membership
