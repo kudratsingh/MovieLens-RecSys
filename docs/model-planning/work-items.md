@@ -19,6 +19,8 @@ decision register. `S/M/L` are relative review-and-implementation sizes, not cal
 | M0-10 | M | Run the retrieval tolerance study and publish the two fractions | M0-09 | Both tolerances recorded with the runs and the derivation that produced them |
 | M0-11 | S | Measure the candidate-mix change the serving-equivalent exclusions cause | M0-05 | Two full ranker runs compared; the effect on ranking metrics stated rather than assumed |
 | M0-12 | M | Emit a protocol manifest from every candidate trainer | M0-03, M0-09 | Emitted envelope round-trips through the gate reader; window identity matches the tiling |
+| M0-13 | S | Decouple the pilot subsample seed from the training seed | — | Two runs at different training seeds score the identical user population |
+| M0-14 | M | Run the surrogate seed-noise study and publish the measured spread | M0-13 | Three same-population runs at one configuration; spread recorded with its transfer assumption |
 
 ## M1 — Complete SASRec research
 
@@ -117,6 +119,35 @@ make: the ADR 0009 amendment that closed the training feature source was withdra
 question is deferred as D-009 with its alternatives costed.
 **M0-07** landed the windows and the aggregation but no run is stamped with a window id yet, and the
 bootstrap's interval needs per-user values that only arrive with M0-09.
+
+## Deferred, with the reason
+
+**M0-13 / M0-14 — the surrogate seed-noise study is blocked on a sampling bug, deferred 2026-09-05.**
+
+The one-run-per-configuration policy means a tolerance can only be founded on evaluation-population
+sampling noise, not on training stochasticity. The cheap way to recover the missing half was to
+measure seed spread once at the 6% pilot scale and carry it as a declared transfer assumption — the
+surrogate derivation the tolerance protocol already supports.
+
+That cannot be run as the code stands. `src/training/sasrec.py` draws its subsample with the training
+seed:
+
+```python
+ratings = subsample_users(ratings, sample_fraction, config.seed)
+```
+
+So three runs at seeds 7, 13 and 21 would score three *different* 6% populations, and the measured
+spread would confound sample variation with training stochasticity. The tolerance study would refuse
+the runs regardless, because its population-equality check would see three different user sets.
+
+This does not affect any comparison made so far: the 6% pilot's BCE and gBCE arms both used seed 42
+and therefore shared a population. It only bites when the training seed is the thing being varied,
+which is exactly what a noise study does.
+
+The fix is to draw the subsample from a fixed seed independent of the training seed, so the
+population is held constant while the model's randomness varies. Until then the retrieval tolerances
+rest on the population term alone, and any verdict built on them is precise about sampling noise and
+silent about model instability.
 
 ## Verification baseline
 
