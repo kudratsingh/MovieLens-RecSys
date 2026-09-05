@@ -25,6 +25,7 @@ Four things are pinned here, and only the first is about SASRec at all:
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -377,6 +378,33 @@ class TestTheDefectItself:
             assert bool(torch.isfinite(_encode_at_depth(blocks, WINDOW)).all())
 
 
+@contextlib.contextmanager
+def _without_the_shared_fix() -> Iterator[None]:
+    """Run the real encoder as if W17 had never landed.
+
+    W17 put `torch.backends.mha.set_fastpath_enabled(False)` inside
+    `SASRecEncoder.encode_positions`, so it applies on *every* encode. That is
+    the right place for it, and it has a side effect worth naming: the defect can
+    no longer be observed through this project's encoder at all, which would
+    leave the fixtures below unable to show they are exercising a genuinely
+    broken path.
+
+    Neutralising that one call — rather than rebuilding a parallel transformer
+    stack — keeps these tests measuring the real class, and makes them a
+    regression test for W17 itself: if someone deletes that line, the tests that
+    assert corruption *stop* failing and the ones asserting a clean encode start
+    to. Either way the suite notices.
+    """
+    original = torch.backends.mha.set_fastpath_enabled
+    torch.backends.mha.set_fastpath_enabled = lambda _enabled: None  # type: ignore[assignment]
+    original(True)
+    try:
+        yield
+    finally:
+        torch.backends.mha.set_fastpath_enabled = original  # type: ignore[assignment]
+        original(False)
+
+
 def _encode_at_depth(num_blocks: int, history_length: int) -> torch.Tensor:
     """Encode a left-padded history through an untrained encoder of a given depth."""
     torch.manual_seed(0)
@@ -387,7 +415,7 @@ def _encode_at_depth(num_blocks: int, history_length: int) -> torch.Tensor:
     encoder.eval()
     sequence = torch.zeros((1, WINDOW), dtype=torch.long)
     sequence[0, -history_length:] = torch.arange(1, history_length + 1)
-    with torch.no_grad():
+    with _without_the_shared_fix(), torch.no_grad():
         return encoder(sequence)
 
 
@@ -437,11 +465,9 @@ class TestTheFastpathGuardIsADependency:
             "_resolve_fastpath_guard",
             lambda: sequence_retrieval.GUARD_SOURCE_CALL_TIME,
         )
-        monkeypatch.setattr(torch.backends.mha, "set_fastpath_enabled", lambda _enabled: None)
-        torch.backends.mha.set_fastpath_enabled(True)
-
-        with pytest.raises(EncoderProducesNonFiniteVectorsError) as error:
-            ServingArtifactBundle.load(path)
+        with _without_the_shared_fix():
+            with pytest.raises(EncoderProducesNonFiniteVectorsError) as error:
+                ServingArtifactBundle.load(path)
 
         # Actionable at 3am by someone who has never heard of this defect.
         assert "fastpath" in str(error.value).lower()
@@ -492,8 +518,11 @@ class TestTheFastpathGuardIsADependency:
         )
         path = _publish_sasrec_bundle(tmp_path / "bundle")
 
-        with pytest.raises(EncoderProducesNonFiniteVectorsError, match="non-finite query vector"):
-            ServingArtifactBundle.load(path)
+        with _without_the_shared_fix():
+            with pytest.raises(
+                EncoderProducesNonFiniteVectorsError, match="non-finite query vector"
+            ):
+                ServingArtifactBundle.load(path)
 
 
 # --- 3. equivalence with the offline path -----------------------------------
@@ -591,7 +620,8 @@ class TestOfflineEquivalence:
         """
         fitted = _fitted_sasrec()
 
-        assert fitted.recommend_from_history(_model_history(12), RETRIEVAL_LIMIT) == []
+        with _without_the_shared_fix():
+            assert fitted.recommend_from_history(_model_history(12), RETRIEVAL_LIMIT) == []
         # And the boundary from the other side: a full window still works, so a
         # deployment would have looked healthy for its longest-history users.
         assert len(fitted.recommend_from_history(_model_history(WINDOW), RETRIEVAL_LIMIT)) == (
@@ -893,18 +923,10 @@ class TestTopUpToLimit:
 
 
 class TestRetrievalScoresReachTheAudit:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "SASRecModel has no scored retrieval method yet — Megatron is adding "
-            "recommend_from_history_scored, returning (movie_id, score) from the same exact FAISS "
-            "search. The sidecar already consumes it when present and falls back to zeroed "
-            "contributions until then. STRICT on purpose: this test turns from xfail into a "
-            "FAILURE the moment that method lands, which is the signal to delete the unscored "
-            "branch in src/serving/sequence_retrieval._scored_retrieval. Do not delete this test "
-            "to make the suite green."
-        ),
-    )
+    # This was a strict xfail while `recommend_from_history_scored` did not exist.
+    # W17 (#162) landed it, the tripwire flipped to a failure exactly as intended,
+    # and it is now an ordinary assertion — the unscored branch in
+    # `_scored_retrieval` remains only for a bundle whose model predates the method.
     def test_sasrec_candidates_carry_a_real_retrieval_score(
         self, tmp_path: Path, fastpath_guard: None
     ) -> None:
