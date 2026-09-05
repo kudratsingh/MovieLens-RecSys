@@ -47,6 +47,7 @@ Requires Postgres and MLflow reachable per ``Settings``.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import mlflow
@@ -79,6 +80,17 @@ NEGATIVES_PER_POSITIVE = 20  # each LambdaRank group is 1 positive + N negatives
 # point of it: below the window's size the seed chooses *which* positives the
 # ranker sees, which is where the 28.68% warm-NDCG spread came from.
 RANKER_POSITIVE_LIMIT = sampling.DEFAULT_POSITIVE_LIMIT
+
+# Whether training negatives drop the titles serving would have excluded. On by
+# default because that is the rule serving applies, and training on a candidate
+# mix serving never produces is the skew this was fixed to remove (#126). The
+# knob exists because the fix shipped with its effect on the candidate mix
+# unmeasured, and "measure it rather than assume it is neutral" needs both arms
+# runnable from one build — the same reason RANKER_POSITIVE_LIMIT became an env
+# var when its seed sensitivity turned out to be a sampling artefact.
+RANKER_APPLY_SERVING_EXCLUSIONS = (
+    os.environ.get("RANKER_APPLY_SERVING_EXCLUSIONS", "true").strip().lower() != "false"
+)
 # Default only. TRAIN_SEED overrides it — see src/training/seeds.py. The seed
 # reaches three places: which positives are sampled, which negatives fill each
 # LambdaRank group, and LightGBM's own tie-breaking, so it is the whole
@@ -347,7 +359,10 @@ def main() -> None:
         positives=positives,
         candidate_model=candidate_model,
         feature_index=feature_index,
-        training_history=train_frame,
+        # An empty history frame reproduces the pre-#126 behaviour exactly: no
+        # user has prior items, so nothing is excluded and the pool is the
+        # candidate list minus the positive.
+        training_history=train_frame if RANKER_APPLY_SERVING_EXCLUSIONS else train_frame.iloc[0:0],
         n_negatives=NEGATIVES_PER_POSITIVE,
         rng=rng,
     )
@@ -467,6 +482,7 @@ def main() -> None:
                 "serving_feature_source": "feast-postgres-redis-v1",
                 # Called out in ADR 0005 Consequences — candidate model
                 # was fit on all of train including the positive window.
+                "ranker_serving_exclusions_applied": str(RANKER_APPLY_SERVING_EXCLUSIONS).lower(),
                 "candidate_leakage_compromise": "true",
             }
         )
