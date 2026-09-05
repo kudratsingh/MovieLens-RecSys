@@ -2383,9 +2383,12 @@ copies of `per_user_recall.json` (151,097 bytes; SHA-256
 The MLflow run remains `FINISHED` and carries explicit backfill provenance.
 
 This closes the lost-weights risk, demonstrates deterministic reproduction,
-and completes the run's population/per-user evidence. It remains one seed and
-is not a promotion. The exact paths, lineage, resource record, interruption
-recovery, and remaining gates are in
+and completes the run's population/per-user evidence. On 2026-09-05 the owner
+accepted this one full run as sufficient replication for SASRec and declined
+seeds 7 and 13; later advanced Transformer models will use two or three runs
+when separately authorized. This is still not a promotion because rolling,
+tolerance, latency, and paired-ranker evidence remain. The exact paths,
+lineage, resource record, interruption recovery, and remaining gates are in
 [`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
 
 ### Correction: the protocol-compatible item-item reference
@@ -2403,3 +2406,6 @@ recall@500 is 0.3990569036, cold recall is 0.5262729520, and overall recall is
 0.4332573558. Against that admissible incumbent, SASRec is **+16.57% warm**,
 **0.00% cold**, and **+11.16% overall**. The executable gate loads both runs
 and returns `incomplete` solely because candidate seeds 7 and 13 are absent.
+That final reason reflects the gate's now-superseded three-seed SASRec policy,
+not an instruction to run them; the gate must implement the owner's one-run
+decision before issuing a verdict.

@@ -9,9 +9,10 @@ the earlier metric-only seed-42 run, while its model bytes now exist in two
 independently verified durable locations.
 
 This closes the model-level save/load/export gap. It does **not** promote
-SASRec: seeds 7 and 13, rolling-window evidence, measured retrieval tolerances,
-the isolated encoder and end-to-end latency gates, and the paired-ranker
-guardrail remain open.
+SASRec: rolling-window evidence, measured retrieval tolerances, the isolated
+encoder and end-to-end latency gates, and the paired-ranker guardrail remain
+open. On 2026-09-05 the owner declared this one full run sufficient for SASRec;
+seeds 7 and 13 will not be run.
 
 ## Lineage and frozen configuration
 
@@ -136,8 +137,8 @@ read-only and write records remain in the adjacent `-attempt2.log` and
 `seed42-evidence-backfill-20260905.log`. No prior run record was replaced.
 
 The run now has the population and paired-user evidence needed by the retrieval
-gate and tolerance instrument. It still produces an `incomplete` one-seed
-verdict by construction; the remaining seeds, rolling windows, tolerance
+gate and tolerance instrument. The owner subsequently accepted one full run as
+the complete replication set for this SASRec model. Rolling windows, tolerance
 derivation, latency, and paired-ranker checks are unchanged.
 
 ## Comparable threshold-10 incumbent — 2026-09-05
@@ -169,5 +170,6 @@ launcher lived outside Git and MLflow could not infer that metadata.
 
 Running the executable retrieval gate against these two run ids succeeds in
 loading both strict envelopes and returns `incomplete` for one reason only:
-SASRec seeds 7 and 13 are missing. No tolerance value or population mismatch is
-being hidden behind that result.
+SASRec seeds 7 and 13 are missing. The owner's later one-run decision makes
+that a stale tool-policy mismatch rather than an experiment requirement. No
+tolerance value or population mismatch is being hidden behind the result.

@@ -61,6 +61,15 @@ changes are therefore **+16.57% warm, 0.00% cold, and +11.16% overall**. The
 advance band is unchanged, but the old cross-threshold comparison is not gate
 evidence.
 
+**Replication-budget decision (2026-09-05):** The owner accepts the completed
+seed-42 full-data run as the complete replication set for this SASRec model and
+does not authorize seeds 7 or 13. Two or three confirmation runs become the
+default for later, more advanced Transformer models only when the owner asks
+for them. This supersedes ADR 0004's three-seed requirement for SASRec alone;
+it does not waive rolling-window, measured-tolerance, latency, or paired-ranker
+evidence. The executable retrieval gate still encodes the earlier three-seed
+policy and must be brought into line before it can issue this model's verdict.
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains
@@ -293,7 +302,8 @@ stage-specific verdict.
 - A deterministic pilot cannot beat popularity@500 or a last-item nearest-
   neighbour baseline after data and leakage checks pass.
 - Full-data warm recall@500 fails ADR 0004's promotion criterion against
-  item-item across the required seeds. SASRec is then measured, not promoted.
+  item-item across the owner-approved replication set. SASRec is then measured,
+  not promoted.
 - Gains disappear when already-seen items and training-prefix collisions are
   removed, showing that the result depended on leakage.
 - Recall improves but catalog coverage collapses enough that the model is only
