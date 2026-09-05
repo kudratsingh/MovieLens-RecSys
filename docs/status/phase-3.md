@@ -22,13 +22,23 @@
   materialization and before M2 opens the serving path. Costed options and the
   measured numbers: `docs/model-planning/memos/feature-source-boundary.md`
   (D-009).
-- 🔲 **Not yet measured: what the new exclusion does to the candidate mix.**
-  Removing already-watched titles from the negative pool changes which negatives
-  LightGBM sees, and the size of that change is unknown until a full
-  `make train-ranker` is compared against the previous run. The exclusion is
-  correct on the point-in-time fixture either way, but until that comparison
-  exists no one should describe the effect on ranking metrics as neutral. The
-  run waits for a machine that is not busy with the SASRec sweep.
+- ✅ **Measured 2026-09-05: the exclusion's effect on the candidate mix is small,
+  and its effect on ranking metrics is inside seed noise.** Two full-data runs,
+  identical but for `RANKER_APPLY_SERVING_EXCLUSIONS`, on the same 154,003
+  sampled positives. Both build **87,787 groups** — the same positives survive —
+  and the training set differs by **356 rows out of 1.84M (0.019%)**, which is
+  the handful of groups whose negative pool fell below 20 after exclusion.
+  End-to-end at K=10: warm recall −1.61%, warm NDCG −0.14%, cold recall +0.75%,
+  cold NDCG +0.54%, overall recall −0.86%, overall NDCG +0.39% (exclusions on
+  relative to off). Every one of those sits at or inside the ranker's own
+  measured seed spread at these settings — warm NDCG@10 relative range 1.68%,
+  cold 2.10% — so **at one run per arm the difference is not distinguishable
+  from noise**, and the honest claim is "no measurable harm", not "improvement".
+  Two caveats kept rather than dropped: row counts understate the change,
+  because the exclusion also alters *which* negatives are drawn in groups whose
+  pool stayed at or above 20, and that composition shift was not counted
+  directly; and under the 2026-09-05 one-run policy neither arm has a seed
+  spread of its own, so the comparison inherits the limitation it illustrates.
 - 🔲 **Dismissals have no offline counterpart.** Serving excludes watched *and*
   dismissed titles; MovieLens carries no dismissal events, so training applies
   the watched half and records the gap rather than papering over it. The named
