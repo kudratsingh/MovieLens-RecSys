@@ -1,10 +1,28 @@
 # ADR 0018 — A ranker that reads the sequence (Rung 3)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-05
 
-This is a proposal. Roadmap Rung 3 begins only when the owner marks its decision-log
-row *approved*; nothing here authorises training code.
+## Decision — 2026-09-05
+
+Approved by the owner 2026-09-05. Roadmap Rung 3's decision-log row reads *approved* against
+this ADR, and increment 1 is authorised to build.
+
+One amendment is recorded with the approval, and it tightens stop rule 3:
+
+> **Increment 2 (DIN) is not built unless increment 1 gains at least 3% warm NDCG@10 over the
+> per-route bundle AND the owner names a warm NDCG@10 target after increment 1's number
+> exists.**
+
+Both conditions are necessary. The first is this ADR's own stop rule 1 read as a precondition
+rather than only as a stopping condition; the second is new, and exists because the band the
+proposal identifies — +3% to +9.6% warm, where the warm-primary and overall readings of ADR
+0001 disagree — is a judgement the owner takes with the measurement in hand, not one a
+proposal can pre-commit. A passing increment 1 therefore does not start increment 2 by
+momentum: it starts a conversation whose output is a number written down before any DIN code
+exists.
+
+The rest of this document is the proposal as written on 2026-09-05 and is not rewritten.
 
 ## Context
 
