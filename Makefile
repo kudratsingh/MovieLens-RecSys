@@ -237,6 +237,14 @@ train-sasrec:
 train-ranker:
 	python -m src.training.ranker
 
+# Both arms of step 1 in one process: an item-item + LightGBM incumbent and a
+# SASRec + LightGBM challenger, trained from the identical 30-day positives with
+# #126's exclusions, then put through ADR 0001's gate. Reads the pinned SASRec
+# artifact from SASREC_RANKER_ARTIFACT_DIR and writes each booster, before it is
+# scored, under SASREC_RANKER_BOOSTER_DIR.
+train-sasrec-ranker:
+	python -m src.training.sasrec_ranker
+
 # The seed the two stochastic trainers use. CF/ALS initialises its factors at
 # random and the ranker samples its positives, its negatives and its splits;
 # popularity and item-item have no random component and ignore this entirely.
