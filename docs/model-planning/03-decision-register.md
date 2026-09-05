@@ -6,6 +6,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 
 | ID | Decision | Needed by | Recommended default | Status |
 |---|---|---|---|---|
+| D-017 | Experiment cost policy | Standing | One run per configuration; no repeated runs for seed confirmation until modern advanced transformer-based models | **Answered 2026-09-05**; recorded in CLAUDE.md and ADR 0004's suspension note |
 | D-001 | Exact retrieval promotion gate | Before SASRec full-data verdict | Three-seed mean warm recall@500 >= item-item by 3% relative, cold/overall non-regression within measured tolerances | Approved by owner 2026-09-04 and recorded in ADR 0004; retrieval-tolerance measurement remains required |
 | D-002 | End-to-end guardrail for retriever promotion | Before serving any new retriever | Current LightGBM NDCG@10 must not regress outside ADR 0001 tolerances on the new candidate set | Approved by owner 2026-09-04 |
 | D-003 | SASRec advance/stop rule | **Rule needed before the run landed; it did** | Predeclared bands anchored on item-item's 0.400144 and the pilot's own 12.0% same-sample deficit | Seed 42 landed in **band 1** (warm 0.465169, +16.25% over item-item) on 2026-09-04; owner picks the rule in [`memos/d003-full-run-stop-rule.md`](memos/d003-full-run-stop-rule.md) |
@@ -22,6 +23,34 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-014 | Fate of untracked `docs/progress.md` | Before status-doc cleanup | Preserve untouched; owner chooses archive, refresh, or delete in a separate change | Owner input required |
 | D-015 | Phase 4 automation timing | Before M3 | Stabilize SASRec experiment/export contracts first, then automate; SASRec pilots may continue meanwhile, but promotion/serving waits for M0 | Answered 2026-09-04 |
 | D-016 | Meaning of the requested 300–400 ms runtime | Before M2 latency review | Preserve existing stricter p99 targets: SASRec encoder <15 ms and authenticated service <100 ms | Answered 2026-09-04; 300–400 ms was an assumption about growth, not a request to relax gates |
+
+## D-017 — Decisions taken 2026-09-05
+
+Four settled in one sitting, recorded so none is re-litigated:
+
+- **Experiment cost policy.** One run per configuration. No repeating a run for seed confirmation
+  until the ladder reaches modern advanced transformer-based models — a full-data seed is ~4.5 hours
+  and a three-seed set ~13.5, and the priority is reaching advanced architectures. The gate was
+  relaxed to accept a stated single-seed policy; the multi-seed path is preserved for when the policy
+  reverses.
+- **The last-item control keeps its popularity fill.** When an obscure last item has too few recorded
+  successors to fill K, the tail comes from the popularity ranking. It matches what serving does
+  (`CANDIDATE_SOURCE_POPULARITY_FILL`), keeps the comparison honest at a fixed K, and
+  `transitions_only_*` preserves the pure view in the same run. No code change; this ratifies the
+  default.
+- **The tolerance study's derivation is accepted as designed** — Student-t for small samples, the 3%
+  cap borrowed from the gate's own gain requirement, and rounding to 0.1pp. With the standing
+  instruction that a tolerance must be founded in data and neither too wide nor too thin, which is
+  what M0-13 and M0-14 are about.
+- **The `configuration_id` vocabulary is accepted.** The four patterns stand as written; the field is
+  load-bearing for the study's anti-circularity check, so it needed a real answer rather than a
+  deferral.
+
+One consequence is deliberately left open: the tolerance has only ever guarded the cold and overall
+non-regression clauses, so **the warm +3% promotion claim carries no uncertainty band at all**. Under
+three seeds it at least read a mean; under one it reads a single draw. Putting a band on the positive
+claim is new policy rather than a seed-count relaxation, and it is the place a wrong promotion would
+come from.
 
 ## D-001 — Retrieval promotion gate
 
