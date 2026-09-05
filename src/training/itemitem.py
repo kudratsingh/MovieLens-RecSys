@@ -23,7 +23,9 @@ from project root. Requires Postgres and MLflow to be reachable per
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections.abc import Mapping
 
 import mlflow
 from sqlalchemy import create_engine
@@ -41,6 +43,7 @@ from src.evaluation.protocol import (
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from src.training import protocol_manifest
+from src.training.twotower import subsample_users
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,38 @@ logger = logging.getLogger(__name__)
 # gate's incumbent check, and the per-user recall artifact. One constant so
 # they cannot drift apart.
 MODEL_TYPE = "itemitem_cosine"
+
+# A subsample is a property of the comparison, not of this model — item-item has no
+# random component at all, so at the default fraction these change nothing. They exist
+# because the tolerance study requires its incumbent and its study runs to score the
+# *same* population, and a study run at pilot scale cannot be met by a full-data
+# incumbent. Same two variables and the same default seed as the last-item control, so a
+# pilot-sized incumbent and a pilot-sized candidate see the identical users.
+SAMPLE_FRACTION_ENV_VAR = "ITEMITEM_USER_SAMPLE_FRACTION"
+SEED_ENV_VAR = "ITEMITEM_SEED"
+DEFAULT_SAMPLE_SEED = 42
+
+
+def resolve_sample_fraction(env: Mapping[str, str] | None = None) -> float:
+    """Read the user subsample fraction for this run out of the environment.
+
+    Validated here rather than left to ``subsample_users`` so the error names the
+    variable the operator actually set.
+    """
+    raw = (env if env is not None else os.environ).get(SAMPLE_FRACTION_ENV_VAR, "").strip()
+    if not raw:
+        return 1.0
+    fraction = float(raw)
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"{SAMPLE_FRACTION_ENV_VAR} must be in (0, 1], got {fraction}")
+    return fraction
+
+
+def resolve_sample_seed(env: Mapping[str, str] | None = None) -> int:
+    """Read the seed the user subsample is drawn at."""
+    raw = (env if env is not None else os.environ).get(SEED_ENV_VAR, "").strip()
+    return DEFAULT_SAMPLE_SEED if not raw else int(raw)
+
 
 # Item-item runs join the new candidate-stage experiment rather than the
 # Phase 1 baselines experiment. Hardcoded here rather than read from
@@ -69,6 +104,18 @@ def main() -> None:
     engine = create_engine(settings.database_url)
     ratings = load_ratings(engine)
     logger.info("Loaded %s ratings", f"{len(ratings):,}")
+
+    sample_fraction = resolve_sample_fraction()
+    sample_seed = resolve_sample_seed()
+    if sample_fraction != 1.0:
+        ratings = subsample_users(ratings, sample_fraction, sample_seed)
+        logger.info(
+            "Subsampled to %.1f%% of users at seed %d: %s ratings over %s users",
+            100 * sample_fraction,
+            sample_seed,
+            f"{len(ratings):,}",
+            f"{ratings['userId'].nunique():,}",
+        )
 
     logger.info("Splitting on time per ADR 0001 ...")
     split = temporal_split(ratings)

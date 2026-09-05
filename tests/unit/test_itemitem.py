@@ -13,6 +13,7 @@ candidate models are held to the same bar.
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from src.models.candidates.itemitem import ItemItemModel
 
@@ -173,3 +174,29 @@ def test_action_user_recommendations_lean_action() -> None:
     first_action = next((i for i, r in enumerate(recs) if r in action_items), len(recs))
     first_drama = next((i for i, r in enumerate(recs) if r in drama_items), len(recs))
     assert first_action < first_drama
+
+
+def test_the_subsample_matches_the_control_trainers_default_seed() -> None:
+    """A pilot-sized incumbent must see the same users as the candidate it is compared to.
+
+    The tolerance study refuses a study whose incumbent and study runs score
+    different populations, so a 6% candidate cannot be met by a full-data
+    incumbent. Sharing `DEFAULT_SAMPLE_SEED` with the last-item control is what
+    makes a pilot-sized comparison well posed at all.
+    """
+    from src.training import itemitem as itemitem_training
+    from src.training import last_item as last_item_training
+
+    assert itemitem_training.DEFAULT_SAMPLE_SEED == last_item_training.DEFAULT_SAMPLE_SEED
+
+
+def test_sample_fraction_defaults_to_the_whole_dataset_and_rejects_nonsense() -> None:
+    from src.training import itemitem as itemitem_training
+
+    assert itemitem_training.resolve_sample_fraction({}) == 1.0
+    assert (
+        itemitem_training.resolve_sample_fraction({"ITEMITEM_USER_SAMPLE_FRACTION": "0.06"}) == 0.06
+    )
+    for bad in ("0", "-0.1", "1.5"):
+        with pytest.raises(ValueError, match="ITEMITEM_USER_SAMPLE_FRACTION"):
+            itemitem_training.resolve_sample_fraction({"ITEMITEM_USER_SAMPLE_FRACTION": bad})
