@@ -100,14 +100,42 @@ MLflow run `85f77ebbe0034f7d9664ac511da3501b` is marked `FAILED`; and the origin
 zero-byte interrupted metadata file is preserved beside its reconstructed
 `meta.yaml` as `meta.yaml.interrupted-zero-byte-20260904T1040PDT`.
 
-## Remaining evidence gap
+## Recovered gate evidence — 2026-09-05
 
-The completed artifact run predates learned-trainer export of
-`per_user_recall.json` and the warm/cold user-count metrics. Therefore it is
-protocol-identified and servable, but not yet admissible to the paired-user
-tolerance study. The follow-up implementation exports those records for every
-future SASRec and two-tower run. Any post-hoc recovery for this run must reload
-the exact artifact, rebuild runtime histories from the same split, reproduce
-all stored aggregate metrics exactly, refuse to overwrite existing evidence,
-and record that it is a backfill. A new multi-hour fit is not required merely
-to recover deterministic evaluation vectors.
+The completed artifact run predated learned-trainer export of
+`per_user_recall.json` and the warm/cold user-count metrics. These were recovered
+without retraining under a fail-closed sequence:
+
+1. reload the checksum-pinned model and rebuild its exact index;
+2. rebuild runtime history and popularity fallback from the same frozen split;
+3. derive the existing protocol through `protocol_manifest.build_protocol`;
+4. require its semantic hash to match the stored protocol hash;
+5. require all six recomputed recall/NDCG aggregates to equal the stored values
+   exactly; and
+6. refuse to write if a destination metric, tag, or evidence file already
+   exists.
+
+The read-only pass completed in 27.45 seconds. The guarded write pass repeated
+the checks in 27.94 seconds, retained the run's `FINISHED` status, and recorded:
+
+- 1,931 warm users and 710 cold users, 2,641 overall;
+- configuration identity
+  `sasrec-sha256:635f76bf6b1d7b284a0385c5b7fdba832f631fc84ccd9126d4f4934b844747b7`;
+- a local recovery copy at
+  `artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/evaluation/per_user_recall.json`;
+- a second copy at the MLflow run's `per_user_recall.json` artifact path; and
+- backfill tags that pin the source model SHA-256 and state that aggregates
+  matched exactly.
+
+Both evidence files are 151,097 bytes and have SHA-256
+`971fcbb908330b46f693d1c27c654cdf08045d99aa8cdf4732942459b14f269a`.
+The first dry-run command failed before data loading because its temporary
+script did not expose the worktree on `PYTHONPATH`; that traceback remains in
+`artifacts/sasrec/logs/seed42-evidence-dry-run-20260905.log`. The successful
+read-only and write records remain in the adjacent `-attempt2.log` and
+`seed42-evidence-backfill-20260905.log`. No prior run record was replaced.
+
+The run now has the population and paired-user evidence needed by the retrieval
+gate and tolerance instrument. It still produces an `incomplete` one-seed
+verdict by construction; the remaining seeds, rolling windows, tolerance
+derivation, latency, and paired-ranker checks are unchanged.

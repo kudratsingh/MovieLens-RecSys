@@ -44,8 +44,11 @@ recovery boundary are documented in
 run `a11af5ed0f0745f68572407237cfa4b9` completed under that contract and exactly
 reproduced the earlier seed-42 metrics. Its local and MLflow archives are
 byte-identical and reload successfully. This removes the artifact caveat from
-the historical first run, but does not remove the seed, rolling-window,
-tolerance, latency, or paired-ranker gates.
+the historical first run. A fail-closed post-hoc evaluation also reproduced
+the protocol hash and all six aggregate metrics exactly before adding the
+missing warm/cold counts and per-user recall artifact. This completes the
+seed-42 evidence envelope, but does not remove the remaining seed,
+rolling-window, tolerance, latency, or paired-ranker gates.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work

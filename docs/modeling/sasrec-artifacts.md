@@ -80,6 +80,9 @@ copies have SHA-256
 `43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6`,
 and a clean load rebuilt the exact index over 34,461 items. The run reproduced
 the earlier metric-only run's warm recall@500 of 0.4651693328 exactly.
+Its population counts and per-user recall vectors were subsequently recovered
+from the exact artifact only after all six aggregate metrics and the protocol
+hash reproduced exactly; local and MLflow evidence copies are byte-identical.
 
 The earlier run `6958fd082af6462da812ddd4708230c1` remains preserved as
 historical quality evidence, but no weights can be reconstructed from its

@@ -2375,7 +2375,15 @@ the artifact reloads successfully and rebuilds exact retrieval over 34,461
 items. Fit time was 24,293.3 seconds (6 h 44 min 53 s) with approximately
 8.8 GiB peak resident memory observed on the same 36 GiB Apple M3 Pro.
 
-This closes the lost-weights risk and demonstrates deterministic reproduction.
-It remains one seed and is not a promotion. The exact paths, lineage, resource
-record, interruption recovery, and remaining gates are in
+A fail-closed artifact reload subsequently reproduced the protocol hash and all
+six stored aggregate metrics exactly in 27.45 seconds. The guarded backfill
+added counts for 1,931 warm and 710 cold users and byte-identical local/MLflow
+copies of `per_user_recall.json` (151,097 bytes; SHA-256
+`971fcbb908330b46f693d1c27c654cdf08045d99aa8cdf4732942459b14f269a`).
+The MLflow run remains `FINISHED` and carries explicit backfill provenance.
+
+This closes the lost-weights risk, demonstrates deterministic reproduction,
+and completes the run's population/per-user evidence. It remains one seed and
+is not a promotion. The exact paths, lineage, resource record, interruption
+recovery, and remaining gates are in
 [`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
