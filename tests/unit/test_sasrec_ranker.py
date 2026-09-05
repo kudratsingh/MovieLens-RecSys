@@ -19,6 +19,7 @@ otherwise have to take on trust from a six-figure-positive training run:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -583,6 +584,9 @@ class _RecordingSource:
 
     def identity(self) -> dict[str, str]:
         return self._inner.identity()
+
+    def ranking_features(self, row: int, movie_ids: Sequence[int]) -> pd.DataFrame | None:
+        return self._inner.ranking_features(row, movie_ids)
 
 
 def test_cold_start_threshold_is_the_one_the_system_uses() -> None:
