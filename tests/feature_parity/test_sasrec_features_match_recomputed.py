@@ -23,16 +23,14 @@ a different model or a different history and neither would show up as a number:
 * the encoded slice is the strict prefix — the same `searchsorted(..., "left")`
   cut the #126 exclusion path takes — asserted item for item, not inferred.
 
-One property of the pinned encoder is pinned here rather than assumed: in
-`eval()` mode PyTorch takes a fused attention path that returns NaN for a query
-row whose keys are all masked, which every **left-padded** sequence has at its
-first position, and that NaN propagates into the real positions. So a history
-shorter than `max_sequence_length` currently encodes to NaN and retrieves
-nothing. That is a pre-existing defect in the retrieval path, not in these
-features — it predates ADR 0018 and every recorded SASRec number was measured
-under it. It is written down as a test here so it cannot be rediscovered by
-accident; see `.coordination/DECISIONS.md` O-9 for the repair decision, which is
-the owner's because fixing it re-measures the whole SASRec line.
+One regression is covered here rather than assumed. Until PR #162, `eval()`
+mode took a fused attention path that returned NaN for a query row whose keys
+were all masked — the first position of every **left-padded** sequence — and the
+NaN reached the real positions, so a history shorter than `max_sequence_length`
+encoded to NaN and retrieved nothing (O-9). These features consume exactly that
+vector, and a NaN would have become the missing sentinel rather than a value, so
+the short-history case is asserted here from the feature path's side as well as
+in `tests/unit/test_sasrec.py`.
 
 Skipped when the pinned artifact directory is absent, which is the normal state
 of a fresh checkout and of CI: the archive is run-scoped and DVC-managed rather
@@ -117,9 +115,9 @@ def test_batched_offline_features_match_a_single_recompute(model) -> None:  # ty
     features = SasrecScoreFeatures(model)
     vocabulary = sorted(model._item_to_index)
     rng = np.random.default_rng(0)
-    # At or above `max_sequence_length`, so no row is left-padded. Shorter
-    # histories encode to NaN today — see the module docstring and the test
-    # below, which pins that separately rather than hiding it in a tolerance.
+    # At or above `max_sequence_length`, so no row is left-padded — the
+    # call-shape tolerance is measured on the simple case, and the padded case
+    # gets its own test below rather than being folded into a tolerance.
     length = model.config.max_sequence_length
     histories = [
         [int(movie) for movie in rng.choice(vocabulary, size=size, replace=False)]
@@ -172,34 +170,38 @@ def test_score_is_bounded_and_matches_the_retrieval_order(model) -> None:  # typ
     assert np.all(np.diff(score) <= SCORE_ABS_TOLERANCE)
 
 
-def test_left_padded_sequences_encode_to_nan_today(model) -> None:  # type: ignore[no-untyped-def]
-    """A recorded defect, pinned so it cannot be rediscovered by accident.
+def test_left_padded_sequences_encode_and_retrieve(model) -> None:  # type: ignore[no-untyped-def]
+    """O-9's regression, from the feature path's side.
 
-    `build_index` puts the encoder in `eval()` mode so retrieval is
-    deterministic (commit 1d189a8, correctly). PyTorch then takes a fused
-    attention path which, unlike the training-mode path, yields NaN for a query
-    position whose keys are all masked — and the first position of every
-    left-padded sequence is exactly that. The NaN propagates through the second
-    block into the real positions, so the query vector is NaN and FAISS returns
-    nothing.
+    This test began life asserting the *defect*: `build_index` puts the encoder
+    in `eval()` mode so retrieval is deterministic (commit 1d189a8, correctly),
+    PyTorch then took a fused attention path that yields NaN for a query position
+    whose keys are all masked — the first position of every left-padded sequence
+    — and the NaN reached the real positions, so any history shorter than the
+    encoder's window retrieved **nothing**. It is inverted here because PR #162
+    disabled that path, and a test that pinned the old behaviour would now be
+    pinning the bug.
 
-    The effect is that any user or positive with fewer than
-    `max_sequence_length` items of history retrieves an **empty** slate from the
-    learned path. Every SASRec number on record was measured under this, so all
-    of them understate the retriever rather than flatter it. The repair is the
-    owner's call (`.coordination/DECISIONS.md` O-9) because it re-measures the
-    whole line, and until then this test states the behaviour honestly.
+    `tests/unit/test_sasrec.py` covers the encoder itself. This one covers what
+    the ranker features need from it: a short history has to produce a usable
+    vector *and* a usable slate, because both feed
+    `sasrec_user_item_score`/`_logit`, and a NaN vector here would silently
+    become the missing sentinel rather than a value.
     """
     vocabulary = sorted(model._item_to_index)
-    short = [int(movie) for movie in vocabulary[: model.config.max_sequence_length - 1]]
-    normalized, _unnormalized = model.encode_histories([short])
-    assert np.isnan(normalized[0]).any()
-    assert model.retrieve_from_queries(normalized, 500)[0] == []
+    window = model.config.max_sequence_length
+    features = SasrecScoreFeatures(model)
 
-    full = [int(movie) for movie in vocabulary[: model.config.max_sequence_length]]
-    normalized_full, _ = model.encode_histories([full])
-    assert not np.isnan(normalized_full[0]).any()
-    assert len(model.retrieve_from_queries(normalized_full, 500)[0]) == 500
+    for length in (1, 3, 12, window - 1, window):
+        history = [int(movie) for movie in vocabulary[:length]]
+        normalized, unnormalized = model.encode_histories([history])
+        assert not np.isnan(normalized[0]).any(), f"length {length} encoded to NaN"
+
+        candidates = model.retrieve_from_queries(normalized, 500)[0]
+        assert len(candidates) == 500, f"length {length} retrieved {len(candidates)}"
+
+        score, logit = features.scores_for(normalized[0], unnormalized[0], candidates)
+        assert not np.isnan(score).any() and not np.isnan(logit).any()
 
 
 def test_artifact_directory_is_configurable() -> None:
