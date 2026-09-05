@@ -10,7 +10,11 @@ ADR 0001 pins as the recommender-end-to-end success criterion.
 Contract:
 
   - ``fit(features_df, group_sizes, labels)`` — features come from the
-    ``FEATURE_COLUMNS`` schema pinned in ``src/feature_contract.py``.
+    ordered schema in ``self.feature_columns``, which defaults to
+    ``FEATURE_COLUMNS`` from ``src/feature_contract.py``. Since ADR 0018
+    there are two of these: the fallback route reads the eight
+    aggregates, the learned route reads those plus the two SASRec score
+    columns, and a booster carries the contract it was fitted against.
     ``group_sizes`` is a list where each entry is the number of rows in
     that group (one group per (user, query-time) query). ``labels`` is
     1 for positives, 0 for negatives.
@@ -39,7 +43,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from src.features import FEATURE_COLUMNS
+from src.feature_contract import FEATURE_COLUMNS
 
 
 @dataclass
@@ -95,6 +99,13 @@ class LGBMRanker:
     """
 
     config: LGBMRankerConfig = field(default_factory=LGBMRankerConfig)
+    #: The ordered feature schema this booster is fitted against. Defaults to
+    #: the eight-column fallback contract, so every caller that predates ADR
+    #: 0018 keeps the behaviour it had. A learned-route booster is constructed
+    #: with ``LEARNED_ROUTE_FEATURE_COLUMNS`` and carries it through save/load,
+    #: which is what makes "right model, wrong columns" a loud failure rather
+    #: than a quiet misprediction.
+    feature_columns: list[str] = field(default_factory=lambda: list(FEATURE_COLUMNS))
 
     _booster: lgb.Booster | None = None
 
@@ -118,12 +129,24 @@ class LGBMRanker:
 
         # Enforce column order — the ranker learns splits by column index,
         # and a downstream caller reordering columns would silently score
-        # candidates against the wrong feature per split. FEATURE_COLUMNS
-        # is the schema of record; anything else on the DataFrame is dropped.
-        feature_matrix = features_df[FEATURE_COLUMNS].to_numpy(dtype=np.float64)
+        # candidates against the wrong feature per split. `feature_columns` is
+        # this booster's schema of record; anything else on the DataFrame is
+        # dropped, which is what lets one feature frame serve both routes.
+        feature_matrix = features_df[self.feature_columns].to_numpy(dtype=np.float64)
 
+        # Name the columns in the Dataset, not only in this object. A booster
+        # fitted from a bare matrix saves `Column_0..N`, which means the model
+        # file cannot say which contract it was fitted against and a
+        # booster-vs-contract check downstream degrades to a width check —
+        # exactly the "right model, wrong columns" failure that per-route
+        # rankers make possible. The names are metadata: they change the saved
+        # text, never the trees.
         train_set = lgb.Dataset(
-            feature_matrix, label=labels, group=group_sizes, free_raw_data=False
+            feature_matrix,
+            label=labels,
+            group=group_sizes,
+            feature_name=list(self.feature_columns),
+            free_raw_data=False,
         )
         params: dict[str, Any] = {
             "objective": "lambdarank",
@@ -157,7 +180,7 @@ class LGBMRanker:
         cross-group calibration.
         """
         assert self._booster is not None, "call fit() before predict()"
-        feature_matrix = features_df[FEATURE_COLUMNS].to_numpy(dtype=np.float64)
+        feature_matrix = features_df[self.feature_columns].to_numpy(dtype=np.float64)
         # LGBM's predict return type is a union of ndarray / Any / list depending
         # on prediction mode; the LambdaRank objective returns dense scores, so
         # normalize to ndarray here.
@@ -213,7 +236,7 @@ class LGBMRanker:
         """
         assert self._booster is not None, "call fit() before feature_importances()"
         raw = self._booster.feature_importance(importance_type=importance_type)
-        return dict(zip(FEATURE_COLUMNS, (float(v) for v in raw), strict=False))
+        return dict(zip(self.feature_columns, (float(v) for v in raw), strict=False))
 
     def save_model(self, path: Path) -> None:
         """Persist the fitted booster in LightGBM's portable text format."""
@@ -227,13 +250,29 @@ class LGBMRanker:
         path: Path,
         *,
         config: LGBMRankerConfig | None = None,
+        feature_columns: list[str] | None = None,
     ) -> LGBMRanker:
-        """Load a trained booster without fitting during process startup."""
-        ranker = cls(config=config or LGBMRankerConfig())
+        """Load a trained booster without fitting during process startup.
+
+        ``feature_columns`` names the contract the caller expects the booster to
+        carry, and the arity check below is what turns a route/booster mix-up
+        into a startup failure. It defaults to the eight-column fallback
+        contract, so nothing that predates ADR 0018 changes.
+        """
+        columns = list(FEATURE_COLUMNS if feature_columns is None else feature_columns)
+        ranker = cls(config=config or LGBMRankerConfig(), feature_columns=columns)
         ranker._booster = lgb.Booster(model_file=str(path))
-        if ranker._booster.num_feature() != len(FEATURE_COLUMNS):
+        if ranker._booster.num_feature() != len(columns):
             raise ValueError(
                 f"ranker has {ranker._booster.num_feature()} features; "
-                f"serving contract requires {len(FEATURE_COLUMNS)}"
+                f"serving contract requires {len(columns)}"
             )
+        # Boosters fitted before feature names were written out carry
+        # `Column_0..N`; those are still loadable and the width check above is
+        # all they can support. A booster that *does* name its features must
+        # name the ones the caller expects, in order — a width match with a
+        # different order is the silent misprediction this exists to stop.
+        saved = list(ranker._booster.feature_name())
+        if saved and not all(name.startswith("Column_") for name in saved) and saved != columns:
+            raise ValueError(f"ranker was fitted on {saved}; serving contract requires {columns}")
         return ranker
