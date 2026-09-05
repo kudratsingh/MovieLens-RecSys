@@ -2503,3 +2503,198 @@ checksum-pinned file without retraining. The raw verdict is
 Both MLflow records explicitly disclose that the recovery runner was executed
 from a dirty worktree at base commit `384864d`; the committed runner differs
 only by moving immutable shape logging earlier than artifact transport.
+
+## The ranker retrained on SASRec candidates — 2026-09-05
+
+The artifact-backed SASRec run retrieves 16.57% more warm holdout targets than
+item-item at K=500. Handing those candidates to the *champion* booster bought
++1.67% warm NDCG@10 and +0.43% overall, which was never a verdict on sequential
+retrieval: that booster was fitted on item-item's candidate distribution and has
+no sequence feature, so it was being asked to order a slate it had never been
+trained to see. This is the paired measurement that removes the confound — **two
+boosters, trained from the identical positives, differing only in the candidate
+stage that produced their groups** — plus two follow-on arms that answer the
+question the result raised.
+
+All arms ran from `src/training/sasrec_ranker.py` and
+`src/training/sasrec_ranker_bundles.py`, which share one `prepare_shared()`
+prologue, so the ratings load, the ADR 0001 split, the ADR 0011 cohort, the
+point-in-time `FeatureIndex` and the 154,003 sampled positives are the same
+objects everywhere. Seed 42. #126's serving-equivalent exclusions in every arm —
+the runner refuses to start without them. Every run carries the identical protocol
+hash `sha256:0bc91de6a77dd088267b3eac995c8141e7dbbc8231647d042b49e45a1752b593`
+and the same 1,931 warm / 710 cold users. MLflow experiment `phase-2-ranker` in
+`artifacts/mlflow-sasrec-recovery`; step 1 took 11 min 14 s on the 12-core Apple
+M3 Pro with 36 GiB unified memory, `OMP_NUM_THREADS=1`, ~8 GiB peak resident.
+
+### The four arms
+
+| | incumbent | challenger | per-route bundle | union booster |
+|---|---:|---:|---:|---:|
+| candidates, warm | item-item | SASRec | SASRec | SASRec |
+| candidates, cold | popularity | popularity | popularity | popularity |
+| booster, warm | item-item-trained | SASRec-trained | SASRec-trained | union-trained |
+| booster, cold | item-item-trained | SASRec-trained | **item-item-trained** | union-trained |
+| new boosters | 1 | 1 | **0** | 1 |
+| run id | `bff5f86e6ae14e6b9c19d9c426e3b6ec` | `50d9718802f949d98c5d8d4d6315bb1a` | `566f5309767a4076a4f5e8151be16645` | `cf475086bab941aeb6e4519ff021fc94` |
+| warm NDCG@10 | 0.072792 | **0.091688** | 0.091688 | **0.092221** |
+| cold NDCG@10 | 0.549002 | 0.257423 | **0.549002** | 0.543248 |
+| overall NDCG@10 | 0.200815 | 0.136244 | **0.214631** | 0.213474 |
+| warm recall@10 | 0.048244 | **0.077431** | 0.077431 | 0.076582 |
+| cold recall@10 | 0.077638 | 0.023539 | 0.077638 | 0.077638 |
+| overall recall@10 | 0.056146 | 0.062943 | **0.077487** | 0.076866 |
+| ADR 0001 gate | — | refuse | **promote** | **promote** |
+
+Relative to the incumbent, on the metric ADR 0001's gate reads:
+
+| Arm | warm NDCG@10 | cold NDCG@10 | overall NDCG@10 | Verdict |
+|---|---:|---:|---:|---|
+| challenger — SASRec candidates, retrained booster | **+25.96%** | −53.11% | −32.15% | refuse |
+| per-route bundle | +25.96% | 0.00% | **+6.88%** | **promote** |
+| union booster | **+26.69%** | −1.05% | +6.30% | **promote** |
+
+Every booster was written to `artifacts/sasrec-ranker-step1/<name>/ranker.txt`
+**before** its holdout evaluation, so the weights are a fact independent of what
+the holdout later said about them. Incumbent `05610e604cb2650a…`, challenger
+`7e2052c17a413899…`, union `f140e825a40c77e1…`.
+
+### Step 1: retraining works, and the gate still refuses
+
+[`experiments/sasrec/ranker-on-sasrec-candidates-2026-09-05.json`](experiments/sasrec/ranker-on-sasrec-candidates-2026-09-05.json)
+is the machine-readable verdict — **do not promote**, exit 1. The overall clause
+fails at −32.15% against a required +3%, and the cold clause fails at −53.11%
+against a 5% tolerance. The warm clause passes, and passes large: **+25.96%
+NDCG@10 and +60.50% recall@10** over an exclusion-matched incumbent trained the
+same day on the same rows.
+
+That is the effect retraining was supposed to buy. The fixed-ranker guardrail
+measured +1.67% warm because the booster was wrong for the candidates; a booster
+fitted on SASRec's own candidate distribution recovers fifteen times as much.
+The challenger's training set is 83,538 groups over 1,754,298 rows against the
+incumbent's 87,794 over 1,843,318 — 4.8% smaller, because SASRec's own retrieval
+misses slightly more of its positives — so the warm gain is not bought with more
+training data.
+
+### The cold regression is a training-mix effect, not a retrieval one
+
+Below `COLD_START_THRESHOLD` every arm routes to the popularity fallback, and all
+arms hold the *same fitted fallback object*, so a cold user's 500 candidates are
+byte-identical across all four runs. `tests/unit/test_sasrec_ranker.py` asserts
+this rather than leaving it to be reasoned about. The entire −53.11% therefore
+belongs to the booster, not to SASRec.
+
+The total-gain importances say what happened:
+
+| Feature | incumbent | challenger |
+|---|---:|---:|
+| `item_popularity_30d` | **260,507** | 64,954 |
+| `user_interaction_count` | 148,467 | 51,644 |
+| `item_popularity_all_time` | 105,201 | 53,680 |
+| `user_days_active` | 98,539 | **77,521** |
+| `item_age_days` | 74,323 | 52,640 |
+| `user_genre_affinity` | 70,953 | 41,277 |
+| `item_popularity_7d` | 62,558 | 38,499 |
+| `user_days_since_last_interaction` | 42,856 | 43,582 |
+
+The incumbent is dominated by trailing-30-day popularity — 2.5× its next feature —
+which is exactly the rule that orders a popularity slate well. The challenger's
+importances are flat, because in SASRec's deep-catalog candidate mix popularity
+discriminates poorly, so the booster never learned to lean on it. It then meets a
+popularity slate at serving time and has nothing to rank it with. One booster
+trained on one candidate distribution cannot serve two.
+
+### Routing symmetry, and what it cost
+
+Training-time routing follows the whole training history in every arm — the rule
+`ranker.py` applies and the rule every model's holdout `recommend()` applies.
+Only the SASRec *query* is point-in-time: the items strictly before the
+positive's timestamp, with equal-timestamp events excluded from each other's
+context, checked against `build_strict_prefix_examples` in the unit tests. The
+counts confirm the arms saw the same population:
+
+| | item-item | SASRec |
+|---|---:|---:|
+| positives routed to the learned path | 153,947 | 153,090 |
+| positives routed to popularity | 56 | 56 |
+| positives with an empty strict prefix | 0 | 857 |
+| learned-path positives whose prefix held fewer than 10 items | 7,949 | 7,092 |
+
+The 857 empty-prefix positives are users whose earliest events all share one
+timestamp: they have no causal context yet, the encoder cannot take a
+zero-length sequence, and popularity is what serving would return for them.
+That is 0.56% of the sample and cannot account for a 53% cold move.
+
+### How the incumbent compares to what was already recorded
+
+The seed-42 ranker at 200,000 positives recorded above
+(`517fdc75136842e188018ae0a9210c20`: warm 0.069967, cold 0.544948, overall
+0.197659) predates #126 and is not exclusion-matched with anything measured
+here. This run's incumbent is **+4.04% warm, +0.74% cold, +1.60% overall**
+against it — the direction and size the M0-11 exclusion ablation reported, and
+inside ADR 0001's slice tolerances on both slices. The M0-11 post-#126 run
+`615f81bb363443cca05683dc3a1a8870` is the nearer comparison and differs mainly
+in not attaching the ADR 0011 cohort: it built 87,787 groups where this one
+builds **87,794**, and scored warm 0.071743 / cold 0.563722 / overall 0.204005.
+Neither is a reproduction target, because neither was measured under this run's
+exact frame; the point of running the incumbent here was to have a comparison
+that is.
+
+### The ADR 0011 cohort
+
+Routing is unchanged and correct in every arm — h0/h1/h3 send all 500 users to
+popularity and h10 sends none. Per-bucket recall@10 moves from 0.0320 / 0.0200 /
+0.0200 / 0.0200 (incumbent) to 0.0120 / 0.0260 / 0.0240 / 0.0000 (challenger).
+The h10 zero repeats what ADR 0016 already established about this cohort: every
+h10 history carries a single timestamp, so it defines no causal sequence and is
+an out-of-distribution probe for a sequence model rather than a quality slice.
+
+### Both repairs work, and both were predicted before they were run
+
+The diagnosis above makes two predictions, and both were written into
+`.coordination/reports/megatron.md` before either arm was launched.
+
+**The per-route bundle** (`566f5309767a4076a4f5e8151be16645`) keys the two
+already-saved boosters on the route serving already takes: SASRec candidates and
+the SASRec-trained booster for a warm user, the popularity fallback and the
+incumbent booster for a cold one. It trains **nothing**. Because the cold slate
+and the cold booster are then exactly the incumbent's, cold had to come back
+bit-identical, and the arm refuses to write a result if it does not — it came back
+at 0.5490019989542251, the same float. Warm likewise reproduced the challenger's
+0.09168799054929602 exactly. Overall is then arithmetic:
+(1931 × 0.091688 + 710 × 0.549002) / 2641 = **0.214631**, against a predeclared
+0.2146312. **The gate promotes it**: +6.88% overall, +25.96% warm, 0.00% cold.
+
+**The union booster** (`cf475086bab941aeb6e4519ff021fc94`) is one new model
+trained on the concatenation of both arms' training sets — 171,332 groups over
+3,597,616 rows, with **zero** duplicated groups between the halves, so no
+deduplication was needed and none was done (a LambdaRank group is the unit
+LightGBM segments on; a row cannot leave one without corrupting it). Both halves
+were rebuilt from `default_rng(42)` and reproduced step 1's shapes exactly, which
+the arm also refuses to continue without. **The gate promotes it too**: +6.30%
+overall, **+26.69% warm — the best warm number of the four** — and cold −1.05%,
+inside the 5% tolerance.
+
+The union's importances are the mechanism closing:
+
+| Feature | incumbent | challenger | union |
+|---|---:|---:|---:|
+| `item_popularity_30d` | **260,507** | 64,954 | **284,345** |
+| `user_interaction_count` | 148,467 | 51,644 | 210,422 |
+| `user_days_active` | 98,539 | 77,521 | 161,982 |
+| `item_popularity_all_time` | 105,201 | 53,680 | 138,294 |
+| `item_popularity_7d` | 62,558 | 38,499 | 109,034 |
+| `user_genre_affinity` | 70,953 | 41,277 | 102,271 |
+| `item_age_days` | 74,323 | 52,640 | 100,655 |
+| `user_days_since_last_interaction` | 42,856 | 43,582 | 79,364 |
+
+Trailing-30-day popularity is back on top, learned from the item-item half, while
+the warm gain the SASRec half taught survives intact. That is the hypothesis the
+diagnosis predicted, and it is why one model turns out to be enough.
+
+**Neither is promoted here.** The gate passing is a measurement; ADR 0001 says a
+champion changes by decision, and the two arms are close enough on overall (+6.88%
+against +6.30%) that the real trade is operational rather than metric: the
+per-route bundle needs no new training but ships and versions two boosters and a
+routing rule between them, while the union ships one model at the cost of a
+retrain over both candidate sources. Both still owe the rolling-window, tolerance
+and latency evidence SASRec itself owes, and the k6 gate has not seen either.
