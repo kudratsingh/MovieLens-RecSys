@@ -122,6 +122,24 @@ The baseline earned its keep on its first real use.
   hyperparameter symptom before it is a model one. That is a re-measurement of
   this ADR's own comparison, not a new rung.
 
+## 2026-09-05 — the three-seed requirement is suspended
+
+The owner set a standing experiment-cost policy: **one run per configuration**, with no repeated runs
+for seed confirmation, until the modeling ladder reaches modern advanced transformer-based models. A
+full-data seed is about 4.5 hours and a three-seed set about 13.5, and the priority is reaching
+advanced architectures rather than re-confirming a result already believed.
+
+Clause 1 and clause 5 of the amendment below therefore do not currently apply. Everything else in it
+stands — the protocol identity, the population equality checks, the four decision states, and the
+rule that a retrieval pass is not permission to serve.
+
+This leaves a live inconsistency, recorded rather than papered over: `src/evaluation/retrieval_gate.py`
+requires seeds 42, 7 and 13 and returns `incomplete` on a partial set, so **under this policy the gate
+cannot issue a verdict at all**. Two ways out, and the choice is the owner's: relax the gate's required
+seed set to one and replace the across-seed dispersion term with a user-level bootstrap over the single
+run, or leave the gate as written and accept that retrieval promotion stays a manual judgement until
+the policy changes. Until one is chosen, a single-seed result is evidence and not a promotion.
+
 ## 2026-09-04 — amendment: protocol-bound retrieval promotion
 
 Status remains **Accepted**. The owner approved the retrieval decision rule that the original
