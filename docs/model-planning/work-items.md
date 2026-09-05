@@ -158,7 +158,7 @@ genres and release year, no TMDB ingestion, no serving integration until an offl
 | C-01 | S | Add a cold-item evaluation slice | — | Slice is holdout targets unseen in train; 829 rows / 313 users reproduced from the committed snapshot |
 | C-02 | M | Build the content item representation | C-01 | Genre mask plus release year per catalog item, derived not hardcoded; coverage reported including the 14.6% with no genres |
 | C-03 | M | Build the content retriever and score it | C-02 | Reachability and recall on the cold-item slice, against the honest baseline of zero |
-| C-04 | S | Publish the coverage and relevance result | C-03 | Coverage is the primary claim; relevance recorded with its interval and its thinness stated |
+| C-04 | S | ~~Publish the coverage and relevance result~~ — **done 2026-09-05**, recorded in ADR 0017 | C-03 | Coverage achieved (4,998 cold items, from zero); warm recall 10.3× below item-item at 23.1% of the slate. Not promoted |
 
 The rung's own risk, recorded up front: 313 users is thin, and under the one-run policy there is no
 seed spread either, so this rung is far better placed to demonstrate *coverage* — cold items become

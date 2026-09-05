@@ -194,6 +194,53 @@ are not a rounding error and the design should say what happens to them: today, 
   this rung cannot be gated and should be judged on coverage and latency alone, with relevance
   recorded as unproven.
 
+## Result, 2026-09-05 — coverage achieved, slate quality regressed
+
+The first increment was built and measured on the full 25M under threshold routing, 2,641 holdout
+users.
+
+| | Content retriever | Item-item |
+|---|---:|---:|
+| Warm recall@500 | **0.0388** | **0.400144** |
+| Warm NDCG@500 | 0.0122 | 0.139240 |
+| Overall recall@500 | 0.1698 | 0.434269 |
+
+| Coverage | |
+|---|---:|
+| Items with no interaction in train | 27,962 |
+| — servable by this increment (have genres) | 24,549 |
+| — not servable, by construction | 3,413 |
+| **Distinct cold items retrieved** | **4,998 (17.9%)** |
+| Cold items per 500-slate | **115.3 (23.1%)** |
+| Reachable by any interaction-derived retriever before | **0** |
+
+**The claim this ADR was approved on holds.** 4,998 items that no interaction-derived retriever could
+ever surface are now retrievable, against a prior of exactly zero. The mechanism works.
+
+**And standalone it is not a usable retriever.** Warm retrieval is 10.3× worse than the champion, and
+the reason is visible in the same table: 23.1% of every slate is cold items, so obscure titles are
+displacing good ones wholesale. The coverage figure read on its own would be badly misleading, which
+is why it is recorded here beside the recall it cost.
+
+The question this rung cannot answer is the one that matters next: does a *bounded budget* of content
+candidates add reachability without displacing good ones? That is source mixing with an allocation
+policy — rung 5 — and it needs union, dedupe and attribution machinery that does not exist yet. This
+measurement is the argument for building it, and the argument against shipping content retrieval as a
+standalone source. **Item-item remains the retrieval champion; nothing here is promoted.**
+
+Two gaps this run exposed, recorded rather than left to be rediscovered:
+
+- **`catalog_fingerprint` under-describes a whole-catalog retriever.** It is derived from the fitted
+  frame, because every other retriever ranks only within its training data. This one ranks the entire
+  catalog — that difference *is* the rung — so the recorded fingerprint names a smaller catalog than
+  the model retrieves from. `n_catalog_items` and `n_items_in_train` are logged as explicit params in
+  the meantime, but the protocol contract exists precisely so that runs answering different questions
+  do not compare equal, and here it does not do its job.
+- **The implementation uses era *proximity*, not the recency prior this ADR specified.** Proximity to
+  the nearest year the user actually watched, rather than a bias toward newer films, on the reasoning
+  that a global newness prior would systematically demote the pre-2000 titles the offline cold
+  population is made of. Defensible, and a deviation: either this ADR or the code should move.
+
 ## Scope of the first increment
 
 Genres and release year only; a content retriever with its own source label; a cold-item evaluation
