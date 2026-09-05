@@ -39,6 +39,17 @@ from synthetic.cold_start import harness as synth_cold
 logger = logging.getLogger(__name__)
 RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
 SAMPLE_FRACTION_ENV_VAR = "SASREC_USER_SAMPLE_FRACTION"
+
+# Which users a subsample keeps is a property of the *experiment*, not of the model's
+# randomness, so it is drawn from its own fixed seed rather than from the training seed.
+# Sharing them made a seed sweep at pilot scale meaningless: each seed scored a different
+# 6% of users, so the spread mixed training stochasticity with sample variation, and the
+# tolerance study refused the runs outright on its population-equality check. Holding the
+# population fixed while the model's randomness varies is the whole point of a seed sweep.
+#
+# The value is 42 because that is the seed every existing subsampled run already used, so
+# those runs are reproduced byte for byte and nothing already measured is invalidated.
+SUBSAMPLE_SEED = 42
 ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 MODEL_TYPE = "sasrec"
@@ -100,7 +111,7 @@ def run_once(
     artifact_root: Path | None = None,
 ) -> None:
     if sample_fraction != 1.0:
-        ratings = subsample_users(ratings, sample_fraction, config.seed)
+        ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
     split = temporal_split(ratings)
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
