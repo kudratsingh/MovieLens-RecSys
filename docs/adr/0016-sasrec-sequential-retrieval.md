@@ -166,6 +166,31 @@ latency evidence SASRec itself owes; the k6 gate has seen neither. The numbers,
 the predeclared hypotheses and the gate JSONs are in `docs/results.md` and
 `docs/experiments/sasrec/`.
 
+**Evaluation fast-path correction (2026-09-05):** The recorded two-block model
+was trained correctly, but PyTorch's fused evaluation path propagated NaN from
+fully masked positions in every left-padded history shorter than 50. Those 131
+warm users stayed on the learned route and received empty slates; none fell back
+to popularity. The shared encoder now disables that unsafe path for training,
+artifact reload, evaluation and serving. Regression coverage exercises history
+lengths 1, 3, 12, 49 and 50 at the configured two-block depth, and the pinned
+artifact's full-length output changes by only `5.96e-08` (below `1e-6`).
+
+Inference-only run `528b14513d9a49e098a0525417f23285` reloaded the immutable
+artifact and reproduced protocol hash `sha256:b4ed5afa…` over the identical
+1,931 warm / 710 cold users. Warm recall@500 moved from 0.465169 to **0.509171**,
+cold stayed 0.526273, and overall moved from 0.481596 to **0.513769**. The formal
+retrieval gate against item-item `4b342e87…` promotes: +27.59% warm with a
+one-sided 95% lower bound of +24.38%, +0.00% cold and +18.58% overall.
+
+Bundle 1b was then recomposed without retraining from the same checksum-pinned
+boosters. Run `c1d742c8485d4e54b66746a65f7705d0` moves warm NDCG@10 from
+0.091688 to **0.101441**, leaves cold exactly 0.549002, and moves overall from
+0.214631 to **0.221762**. It promotes under both readings of ADR 0001: +10.64%
+warm under learned-route scope and +3.32% overall under all-routes scope. The
+pre-fix retrieval and bundle numbers remain above as historical evidence but are
+superseded for quality claims. The complete before/after record is
+[`fastpath-reevaluation-2026-09-05.json`](../experiments/sasrec/fastpath-reevaluation-2026-09-05.json).
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains
