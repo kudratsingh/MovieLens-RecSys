@@ -357,6 +357,79 @@ class SASRecModel:
             dense_exclusions=dense_exclusions,
         )
 
+    def encode_histories(self, histories: Sequence[Sequence[int]]) -> tuple[np.ndarray, np.ndarray]:
+        """Batch-encode ordered movie histories into both representations.
+
+        Returns ``(normalized, unnormalized)``: the L2-normalised query vectors
+        FAISS searches with, and the unconstrained representations the
+        BCE-family objective calibrated. Both come out of a *single*
+        ``encode_positions`` pass, because ``forward`` is literally
+        ``F.normalize(encode_positions(x)[:, -1, :])`` — so the normalised half
+        returned here is bit-identical to the query
+        ``retrieve_unfiltered`` would have built, and the two ADR 0018 ranker
+        features cannot drift from the retrieval they are supposed to describe.
+
+        Batching is part of the contract, not an optimisation detail. Rows do
+        not interact — causal attention plus the padding mask keeps each
+        sequence independent — but float32 matmul is not associative, so a
+        row's values depend on the batch size the caller chose. Callers pin and
+        log it.
+        """
+        if self._encoder is None:
+            raise RuntimeError("SASRec encoder is not fitted")
+        if any(len(movie_ids) == 0 for movie_ids in histories):
+            raise ValueError("SASRec history must contain at least one movie")
+        max_length = self.config.max_sequence_length
+        batch = torch.zeros((len(histories), max_length), dtype=torch.long)
+        for row, movie_ids in enumerate(histories):
+            dense = [
+                self._item_to_index.get(int(movie_id), self._unknown_index)
+                for movie_id in movie_ids[-max_length:]
+            ]
+            batch[row, max_length - len(dense) :] = torch.tensor(dense, dtype=torch.long)
+        return self._encode_batch(batch)
+
+    def encode_dense_history(self, dense_history: list[int]) -> tuple[np.ndarray, np.ndarray]:
+        """The batch-of-one counterpart, over an already-dense history.
+
+        ``recommend`` and ``_recommend_from_dense_history`` encode one sequence
+        at a time, so the holdout-time ranker features have to as well: matching
+        the call *shape* rather than only the call site is what makes the
+        feature equal to the score that ordered the candidate, instead of merely
+        close to it.
+        """
+        if self._encoder is None:
+            raise RuntimeError("SASRec encoder is not fitted")
+        sequence = self._sequence_tensor(dense_history[-self.config.max_sequence_length :])
+        return self._encode_batch(sequence)
+
+    def _encode_batch(self, batch: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+        assert self._encoder is not None
+        with torch.no_grad():
+            raw = self._encoder.encode_positions(batch)[:, -1, :]
+            normalized = F.normalize(raw, p=2, dim=-1)
+        return normalized.numpy(), raw.numpy()
+
+    def item_matrices(self) -> tuple[np.ndarray, np.ndarray]:
+        """``(normalized, unnormalized)`` item embeddings for dense ids 1..n.
+
+        Row ``d - 1`` holds dense item ``d``, which is the same layout the FAISS
+        index was built with (``build_index`` adds ``item_vectors(arange(1, n +
+        1))`` in order), so a lookup here and a FAISS hit refer to the same
+        vector without a second mapping to get wrong.
+        """
+        if self._encoder is None:
+            raise RuntimeError("SASRec encoder is not fitted")
+        item_ids = torch.arange(1, len(self._index_to_item) + 1)
+        with torch.no_grad():
+            normalized = self._encoder.item_vectors(item_ids).numpy()
+            unnormalized = self._encoder.item_vectors(item_ids, normalize=False).numpy()
+        return normalized, unnormalized
+
+    def dense_index_for(self, movie_id: int) -> int | None:
+        """The encoder's dense id for a movie id, or ``None`` if unknown."""
+        return self._item_to_index.get(int(movie_id))
+
     def retrieve_unfiltered(self, histories: Sequence[Sequence[int]], k: int) -> list[list[int]]:
         """Batch top-k over ordered movie histories with nothing excluded.
 
@@ -381,19 +454,25 @@ class SASRecModel:
             return []
         if k <= 0:
             return [[] for _ in histories]
-        if any(len(movie_ids) == 0 for movie_ids in histories):
-            raise ValueError("SASRec history must contain at least one movie")
+        # One encode, shared with the ADR 0018 ranker features: the normalised
+        # half is the query, and a caller that wants the features asks
+        # `encode_histories` for the same pair rather than running the encoder
+        # a second time and hoping the two agree.
+        queries, _unnormalized = self.encode_histories(histories)
+        return self.retrieve_from_queries(queries, k)
 
-        max_length = self.config.max_sequence_length
-        batch = torch.zeros((len(histories), max_length), dtype=torch.long)
-        for row, movie_ids in enumerate(histories):
-            dense = [
-                self._item_to_index.get(int(movie_id), self._unknown_index)
-                for movie_id in movie_ids[-max_length:]
-            ]
-            batch[row, max_length - len(dense) :] = torch.tensor(dense, dtype=torch.long)
-        with torch.no_grad():
-            queries = self._encoder(batch).numpy()
+    def retrieve_from_queries(self, queries: np.ndarray, k: int) -> list[list[int]]:
+        """Search the index with query vectors the caller already encoded.
+
+        Split out of ``retrieve_unfiltered`` so a caller that also needs the
+        ADR 0018 ranker features encodes **once** and uses the same vectors for
+        both jobs. Anything else would make the feature a re-derivation of the
+        score rather than the score itself.
+        """
+        if self._faiss_index is None:
+            raise RuntimeError("SASRec retrieval index is not loaded")
+        if k <= 0 or len(queries) == 0:
+            return [[] for _ in range(len(queries))]
         search_k = min(len(self._index_to_item), k)
         _scores, indices = self._faiss_index.search(queries, search_k)
         return [
