@@ -30,6 +30,12 @@ Fail-closed is the whole design.  Insufficient or incomparable evidence
 produces a status and a reason, never a number, and
 `ToleranceStudyReport.as_tolerance()` raises rather than handing an
 unestablished value to the gate.
+
+**Where the arithmetic lives.**  The bootstrap resampler, the Student-t table
+and the vector-reconstruction tolerances are imported from
+`src/evaluation/retrieval_gate.py`, which uses the same rule to put an
+uncertainty band on the warm claim.  The rule in the document is one rule; two
+implementations of it would be one rule and a near-miss.
 """
 
 from __future__ import annotations
@@ -43,18 +49,26 @@ from enum import StrEnum
 from typing import Any, Final
 
 import numpy as np
-import numpy.typing as npt
 
 from .manifest import ProtocolManifest, ProtocolManifestError, validate_metric_value
 from .protocol import K_CANDIDATES, EvalResult, UserMetrics
 from .retrieval_gate import (
+    _MEAN_RECONSTRUCTION_ABS_TOL,
+    _MEAN_RECONSTRUCTION_REL_TOL,
+    DEFAULT_BOOTSTRAP_REPLICATES,
+    DEFAULT_BOOTSTRAP_SEED,
     GATE_METRIC,
     GATE_STAGE,
     ITEMITEM_MODEL_TYPE,
+    MIN_BOOTSTRAP_REPLICATES,
     MIN_WARM_RELATIVE_GAIN,
+    ONE_SIDED_Z_95,
     REQUIRED_SEEDS,
     RetrievalTolerance,
     SeedRegime,
+    _bootstrap_replicate_means,
+    _paired_differences,
+    _t_quantile,
 )
 
 STUDY_SCHEMA_VERSION: Final = 1
@@ -79,15 +93,13 @@ MIN_STUDY_SEEDS: Final = 3
 # wider than the evidence supports.
 SINGLE_RUN_STUDY_SIZE: Final = 1
 
-# Enough replicates that the bootstrap's own Monte-Carlo error is far below the
-# quantity it estimates. Chunked when drawn (see `_bootstrap_replicate_means`).
-DEFAULT_BOOTSTRAP_REPLICATES: Final = 10_000
-MIN_BOOTSTRAP_REPLICATES: Final = 1_000
-
-# Fixed on the day the protocol was written. It is a resampling seed and has
-# nothing to do with the training seeds the study varies — naming it after the
-# date keeps the two from being confused.
-DEFAULT_BOOTSTRAP_SEED: Final = 20_260_904
+# The bootstrap defaults, the Student-t table, the resampler and the vector
+# reconstruction tolerances now live in `retrieval_gate` and are imported above:
+# the gate measures the warm claim's uncertainty band with the same instrument
+# this module measures the guardrails' tolerances with, and two copies of that
+# arithmetic would eventually stop being the same arithmetic. The names are
+# re-exported from here unchanged, because this is the module the measurement
+# protocol document points at.
 
 # Below this, a tolerance is finer than the resolution these numbers are
 # published and reproduced at, and a tolerance of exactly zero would fail on
@@ -106,61 +118,10 @@ TOLERANCE_CAP: Final = MIN_WARM_RELATIVE_GAIN
 # policy decision.
 TOLERANCE_ROUNDING_STEP: Final = 0.001
 
-ONE_SIDED_Z_95: Final = 1.6448536269514722
-
-# One-sided 95% Student-t critical values indexed by degrees of freedom. The
-# seed term is a mean over m runs, so df = m - 1; beyond df 30 the difference
-# from the normal quantile is smaller than anything else in this calculation.
-_T_95_ONE_SIDED: Final = (
-    math.nan,
-    6.314,
-    2.920,
-    2.353,
-    2.132,
-    2.015,
-    1.943,
-    1.895,
-    1.860,
-    1.833,
-    1.812,
-    1.796,
-    1.782,
-    1.771,
-    1.761,
-    1.753,
-    1.746,
-    1.740,
-    1.734,
-    1.729,
-    1.725,
-    1.721,
-    1.717,
-    1.714,
-    1.711,
-    1.708,
-    1.706,
-    1.703,
-    1.701,
-    1.699,
-    1.697,
-)
-
 # How far apart two half-widths must be before one is called dominant. Under
 # quadrature the smaller of two terms in this band contributes under ~12% of
 # the total, so calling either one "the" source would misdirect effort.
 _DOMINANCE_RATIO: Final = 1.25
-
-# Replicates are drawn in blocks so a 10,000 x n index matrix never has to
-# exist at once. The block size is a constant rather than a parameter because
-# it participates in the random stream: change it and the same seed produces
-# different (equally valid) replicates.
-_BOOTSTRAP_BLOCK: Final = 512
-
-# Slack allowed when checking that a per-user vector reproduces the slice mean
-# the run published. Wide enough for float accumulation over thousands of
-# users, far too narrow for a vector that belongs to a different run.
-_MEAN_RECONSTRUCTION_REL_TOL: Final = 1e-6
-_MEAN_RECONSTRUCTION_ABS_TOL: Final = 1e-9
 
 _EXIT_PROPOSED: Final = 0
 _EXIT_DECLINED: Final = 1
@@ -860,47 +821,11 @@ def _dominant(seed_half_width: float | None, bootstrap_half_width: float) -> str
     return "balanced"
 
 
-def _t_quantile(degrees_of_freedom: int) -> float:
-    if degrees_of_freedom < 1:
-        raise ValueError("a dispersion estimate needs at least two observations")
-    if degrees_of_freedom >= len(_T_95_ONE_SIDED):
-        return ONE_SIDED_Z_95
-    return _T_95_ONE_SIDED[degrees_of_freedom]
-
-
 def _round_up(value: float, step: float) -> float:
     # The epsilon keeps a value that is already an exact multiple of the step
     # from being pushed up a whole step by float representation.
     steps = math.ceil(value / step - 1e-9)
     return round(max(steps, 0) * step, 12)
-
-
-def _paired_differences(
-    candidate: Mapping[int, float], incumbent: Mapping[int, float]
-) -> npt.NDArray[np.float64]:
-    users = sorted(candidate)
-    return np.array([candidate[user] - incumbent[user] for user in users], dtype=np.float64)
-
-
-def _bootstrap_replicate_means(
-    differences: npt.NDArray[np.float64], replicates: int, seed: int
-) -> npt.NDArray[np.float64]:
-    """Resample users with replacement; return the mean difference per replicate.
-
-    Drawn in blocks so the index matrix stays small. The block size is fixed
-    (`_BOOTSTRAP_BLOCK`) because it is part of the random stream: the same seed
-    reproduces the same replicates only for the same block size.
-    """
-    rng = np.random.default_rng(seed)
-    n = int(differences.size)
-    means = np.empty(replicates, dtype=np.float64)
-    filled = 0
-    while filled < replicates:
-        block = min(_BOOTSTRAP_BLOCK, replicates - filled)
-        indices = rng.integers(0, n, size=(block, n))
-        means[filled : filled + block] = np.mean(differences[indices], axis=1)
-        filled += block
-    return means
 
 
 def _slice_recall(result: EvalResult, slice_name: str) -> float:
