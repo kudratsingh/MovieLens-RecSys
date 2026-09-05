@@ -56,9 +56,9 @@ make gate-retrieval \
 ```
 
 The CLI intentionally has no tolerance defaults. Candidate runs must be one stochastic model at
-exactly seeds 42, 7, and 13. The incumbent must be one seedless `itemitem_cosine` run. Run IDs may
-not overlap, model identities may not be mixed, protocols and slice populations must match, and all
-results must use retrieval recall@500.
+exactly the seeds the caller states — by default 42, 7, and 13. The incumbent must be one seedless
+`itemitem_cosine` run. Run IDs may not overlap, model identities may not be mixed, protocols and
+slice populations must match, and all results must use retrieval recall@500.
 
 After validation, the arithmetic mean across candidate seeds must satisfy:
 
@@ -69,6 +69,46 @@ After validation, the arithmetic mean across candidate seeds must satisfy:
 Boundaries are inclusive. An incumbent value of zero cannot support a relative claim and refuses
 that clause. A retrieval pass still sets `serving_eligible=false`; the paired LightGBM NDCG@10,
 artifact, and latency gates remain mandatory.
+
+## The seed regime is the caller's stated policy
+
+How many training runs a verdict rests on is an argument, not a constant. `RETRIEVAL_SEEDS`
+(`--seeds`) names the exact seeds the candidate run set must contain; the gate holds the run set to
+that list with no missing, extra, or repeated seeds, and reports a partial set as `incomplete`.
+
+The default is the three-seed set, so nobody obtains a one-run verdict by inheriting a default. The
+**2026-09-05 standing policy — one run per configuration until the ladder reaches the transformer
+rungs** — is exercised by stating a single seed:
+
+```bash
+make gate-retrieval \
+  CANDIDATE="<seed-42-run>" INCUMBENT="<deterministic-item-item-run>" \
+  RETRIEVAL_SEEDS=42 \
+  RETRIEVAL_COLD_TOLERANCE=<measured> RETRIEVAL_OVERALL_TOLERANCE=<measured>
+```
+
+Every decision carries two fields recording which regime produced it:
+
+| Field | `single_seed` | `multi_seed` |
+|---|---|---|
+| `seed_regime` | one required seed | two or more |
+| `uncertainty_basis` | states that the tolerances could only have covered evaluation-population sampling, that training stochasticity is unmeasured, and that the warm claim is a single draw rather than a mean | states that the tolerances cover across-seed dispersion and population sampling in quadrature |
+
+They are derived from `required_seeds` rather than passed in, so a decision cannot record a regime
+that disagrees with the seed set it was issued under. **What the single-seed regime gives up is
+stated rather than implied: a model whose seeds genuinely disagree is not caught.** The paired
+user-level bootstrap that replaces the seed term measures sampling noise over the evaluated
+population — a different quantity, not a cheaper estimate of the same one. The warm `+3%` clause
+never consumed a tolerance in either regime, so under one seed it is read off a single draw whose
+spread is unknown in both directions: a genuinely better model can fail on an unlucky seed, and a
+genuinely equal one can pass on a lucky one.
+
+Nothing else varies with the seed count. Protocol identity and hash recalculation, population
+equality, model identity, the deterministic-incumbent requirement, the four states, the `+3%`
+threshold, and `serving_eligible=false` are identical for one seed and for three.
+
+The policy is a pause, not a repeal. A caller who supplies three seeds gets the stronger decision
+unchanged, and the intent is to return to it at the transformer rungs.
 
 ## Filtering policy vocabulary
 
@@ -113,7 +153,9 @@ of them has an input the other does not. The claim is only that the difference i
 | `not_comparable` | Protocol, stage, K, population, or value validity differs | 2 |
 | `incomplete` | Runs, seeds, required metadata, or measured tolerances are absent | 2 |
 
-Automation must branch on the state, not merely treat every nonzero exit as model failure.
+Automation must branch on the state, not merely treat every nonzero exit as model failure. It must
+also read `seed_regime`: a `promote` under `single_seed` and a `promote` under `multi_seed` are not
+the same claim, and anything that records or forwards a verdict should carry the regime with it.
 
 ## Operator checklist
 
@@ -123,6 +165,11 @@ Before running the gate:
 2. Confirm the test partition was not read or used for selection.
 3. Verify all run code/data/config identities and successful terminal states.
 4. Derive and publish retrieval tolerances independently; do not tune them to the candidate result.
+   Match the regimes: a `single_seed` verdict must be given tolerances from a one-run study
+   (`seed_regime: single_seed` in the study report), because a three-seed study's tolerance is wider
+   by a term the single-seed verdict has no right to. The gate takes bare floats and cannot check
+   this — see the residual gaps in
+   [`retrieval-tolerance-measurement.md`](retrieval-tolerance-measurement.md).
 5. Run the retrieval gate and retain its JSON output with the experiment record.
 6. If it passes, build the identical candidate sets for the paired LightGBM evaluation.
 7. Do not move a registry alias or serving assignment until every downstream gate passes.

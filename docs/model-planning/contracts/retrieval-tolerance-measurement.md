@@ -15,6 +15,15 @@ recorded. Nothing here may be short-circuited by picking a value that looks reas
 The executable half is [`src/evaluation/tolerance_study.py`](../../../src/evaluation/tolerance_study.py)
 and `make retrieval-tolerance-study`.
 
+**2026-09-05 — the standing one-run policy.** The owner set a standing policy of one run per
+configuration until the modeling ladder reaches the transformer rungs: a full-data seed costs ~4.5
+hours and a three-seed set ~13.5, and reaching advanced architectures is worth more than
+re-confirming a believed result. A study of `m ≥ 3` seeds is therefore unaffordable for the moment,
+and this document now describes two regimes rather than one. The multi-seed rule below is unchanged
+and remains the stronger instrument; the one-run regime is a named, declared weakening whose cost is
+spelled out in [§ The one-run regime](#the-one-run-regime-what-it-measures-and-what-it-gives-up)
+rather than absorbed quietly into the arithmetic.
+
 ## What the tolerance actually is
 
 `RetrievalTolerance` validates two finite fractions in `[0, 1]`, and
@@ -74,6 +83,12 @@ seed term is a property of the candidate side alone.
 Because the gate reads the mean of `m` seeds and not a single run, the relevant quantity is the
 standard error of that mean, `σ_seed/√m`, not the spread of individual runs.
 
+**Under the one-run policy this term is not measurable at all.** It does not become zero and it does
+not become small — it becomes unknown, and the study reports it as `null` rather than `0.0` for
+exactly that reason. A zero would be the `degenerate` finding (a seed that is not wired through),
+which is a measurement, and conflating the two is the specific mistake this paragraph exists to
+prevent.
+
 ### 2. Evaluation-population sampling — in scope, for a different reason
 
 The holdout is a finite set of users. Even with the model held perfectly fixed, the mean of a
@@ -132,6 +147,55 @@ effort belongs entirely on the larger one. If seed noise dominates, the fix is m
 run or a less sample-sensitive training configuration — not more seeds, which only buys `√m`. If
 population noise dominates, the fix is a larger or better-powered evaluation slice, and no amount of
 retraining helps.
+
+## The one-run regime: what it measures and what it gives up
+
+Under the standing policy `m = 1`, so `A_s` does not exist and `H_s = B_s`. The bootstrap term
+carries the whole tolerance. The arithmetic is trivial; the honesty is not, so it is written out.
+
+**What is lost, stated without hedging.** A paired user-level bootstrap measures how much the
+candidate-minus-incumbent difference would move if a different sample of users had been drawn from
+the same population. It says nothing whatever about how much that difference would move if the model
+had been trained with a different seed. These are different random mechanisms, and one is not a
+proxy for the other. Concretely:
+
+- **A model whose seeds genuinely disagree is no longer caught.** Two candidates — one whose slice
+  recall is stable to 0.1% across seeds and one that swings 15% — produce the *same* tolerance under
+  this regime, because the only thing measured is the holdout's user count and per-user spread. The
+  ranker episode in §1 above is the standing counterexample in this repository: 28.68% relative seed
+  movement, an order of magnitude beyond anything a bootstrap over thousands of users would report.
+  A one-run study in that situation would have proposed a ~0.5% tolerance and been wrong by 50×.
+- **The warm `+3%` clause was never protected by the tolerance and is now unprotected by anything
+  else either.** The tolerance feeds only the cold and overall non-regression clauses. Under three
+  seeds the warm clause at least read a mean, which shrinks seed variance by `√3`. Under one seed it
+  reads a single draw from a distribution of unknown width, so a genuinely better model can fail on
+  an unlucky seed and a genuinely equal one can pass on a lucky one. Neither error is detectable from
+  the verdict.
+- **The guardrails get *tighter*, not looser, and that is not a consolation.** Dropping `A_s` shrinks
+  `H_s`, so the cold and overall tolerances come out smaller — often at the 0.5% floor. That is the
+  velocity-error direction this document prefers (§ Which direction of error is safe), so the
+  non-regression clauses do not become permissive. The loss is entirely on the other axis: the
+  verdict is *precise about the wrong uncertainty*, and its precision must not be read as strength.
+
+**What is retained.** The population term is still measured paired, on the same users, at the same
+protocol, against the same incumbent run, and every structural check that makes a study comparable is
+unchanged. The regime affects one term and nothing else.
+
+**The anti-circularity rule is not relaxed with it.** A study whose configuration matches the gate's
+and whose seed is one of `REQUIRED_SEEDS` is still refused, one run or three. Under the standing
+policy that leaves two admissible one-run routes: a surrogate configuration with `surrogate_delta`
+declared (the realistic one — a cheaper pilot the policy already paid for), or the gate
+configuration at a seed the gate does not read, which costs a second full run and is therefore the
+thing the policy exists to avoid. That the cheap route is a surrogate matters: the population term is
+then measured on the surrogate's per-user error structure and transferred, and it is now the *entire*
+tolerance rather than one of two contributions. The transfer assumption is carrying more weight than
+it was designed to.
+
+**This is a pause, not a repeal.** `MIN_STUDY_SEEDS` is unchanged at 3, the multi-seed path is
+unchanged and untouched, and the intent is to return to it at the transformer rungs. Two runs remain
+inadmissible under either declaration: two is neither a one-run population study nor an adequate
+dispersion basis, and `t(0.95, 1) = 6.314` would buy a tolerance far wider than the evidence
+supports.
 
 ## The circularity, and how it is resolved
 
@@ -199,10 +263,14 @@ tolerance stands as a refusal on record and is recomputed openly rather than qui
   about the other. The incumbent's determinism differs too: the ranking tolerances were doubled
   explicitly because *both* sides were stochastic there.
 - **Population-only: bootstrap one run, skip the seed term.** Cheapest, needs no extra training, and
-  makes no transfer assumption. Rejected because the ranker episode is a direct counterexample —
-  seed noise on this pipeline reached 28.68% relative, an order of magnitude beyond anything a
-  user bootstrap over thousands of users would produce, and a tolerance blind to it would be far
-  too tight for a stochastic candidate.
+  makes no transfer assumption. Originally rejected because the ranker episode is a direct
+  counterexample — seed noise on this pipeline reached 28.68% relative, an order of magnitude beyond
+  anything a user bootstrap over thousands of users would produce, and a tolerance blind to it is
+  far too tight for a stochastic candidate. **The 2026-09-05 standing policy adopts it anyway**, as
+  a declared regime rather than a silent fallback, because a three-seed study is not affordable at
+  the current compute budget. The objection above is not withdrawn — it is the recorded cost, and
+  the reason the study refuses to run this way without `single_run_justification` and the reason the
+  verdict carries `seed_regime`.
 - **Seed-only: skip the bootstrap.** Rejected for the reason given in §2 above; it makes the verdict
   reproducible without making it meaningful, and the cold slice is small enough for the omission to
   matter.
@@ -230,6 +298,12 @@ refuse to propose when H_s > 0.03
 `SE_bootstrap` is the standard deviation of the resampled means of `d_u = c_u − i_u`, over a fixed
 number of user-level bootstrap replicates at a fixed seed. When more than one study run carries
 per-user vectors, the per-run standard errors are averaged and their min/max reported.
+
+**At `m = 1`, `A_s` is undefined and the rule degenerates to `H_s = B_s`.** The floor, the rounding,
+and the cap apply unchanged. `A_s` is reported as `null` — not `0.0` — and the slice's
+`dominant_component` reads `population-only` rather than `population`, because "the seed term lost
+the comparison" and "there was no seed term" are different findings and the report must not say the
+first when it means the second.
 
 ### Why each piece
 
@@ -311,15 +385,20 @@ Required:
 - **One incumbent run.** `model_type` exactly `itemitem_cosine`, no seed, a complete canonical
   `ProtocolManifest`, its warm/cold/overall recalls and slice user counts, and per-user recall
   vectors for every gating slice.
-- **At least three candidate study runs.** One `model_type` (matching the declared candidate family
-  and differing from the incumbent's), one `configuration_id`, distinct integer seeds, the same
-  complete protocol, the same slice populations, and per-user recall vectors for at least one of them
-  on every gating slice.
+- **At least three candidate study runs, or exactly one.** One `model_type` (matching the declared
+  candidate family and differing from the incumbent's), one `configuration_id`, distinct integer
+  seeds, the same complete protocol, the same slice populations, and per-user recall vectors for at
+  least one of them on every gating slice. Two runs are inadmissible.
 - **`gate_configuration_id`** — the configuration the tolerance is destined to gate.
 - **`surrogate_delta`** — required, and required to be non-empty, exactly when the study's
   `configuration_id` differs from `gate_configuration_id`. It is the machine-recorded statement of
   what the transfer assumption is being asked to span.
 - **`zero_seed_variance_justification`** — required only when a slice's seed spread is exactly zero.
+- **`single_run_justification`** — required, and required to be non-empty, exactly when the study
+  carries one run; supplying it alongside a multi-run study is a contradiction and refuses. It is the
+  recorded reason this tolerance is allowed to rest on the population term alone — normally the
+  standing one-run-per-configuration policy. Its job is to make the weaker regime something the
+  evidence document *states* rather than something a reader has to infer from an array length.
 
 The per-user vectors are not decoration. They are checked against the published slice means: a vector
 whose mean does not reproduce the run's reported slice recall means the evidence document does not
@@ -334,8 +413,9 @@ describe the run it claims to, and the study refuses rather than bootstrapping t
   "gate_configuration_id": "sasrec-full-25m-v1",
   "surrogate_delta": null,
   "zero_seed_variance_justification": null,
+  "single_run_justification": null,
   "incumbent": { "…one run object…" },
-  "study_runs": [ "…three or more run objects…" ]
+  "study_runs": [ "…three or more run objects, or exactly one…" ]
 }
 ```
 
@@ -352,18 +432,23 @@ reproduces every digit.
 
 ### What the harness does when evidence is missing
 
-It refuses, with a state and a reason, and emits no tolerance. There is no partial mode, no
-"population-only" fallback, and no default. `ToleranceStudyReport.as_tolerance()` raises rather than
-returning a `RetrievalTolerance` unless the status is `proposed`, so a caller cannot accidentally
-carry an unestablished number into the gate.
+It refuses, with a state and a reason, and emits no tolerance. There is no partial mode, no default,
+and — this is the point of `single_run_justification` — no *undeclared* population-only fallback:
+the one-run regime is reachable only by asking for it in writing.
+`ToleranceStudyReport.as_tolerance()` raises rather than returning a `RetrievalTolerance` unless the
+status is `proposed`, so a caller cannot accidentally carry an unestablished number into the gate.
 
 | State | Meaning | Exit |
 |---|---|---:|
 | `proposed` | Complete comparable evidence; both gating tolerances derived | 0 |
 | `too_noisy` | Measured, but a slice's half-width exceeds the cap; no number is safe to publish | 1 |
 | `degenerate` | A slice's seed spread is exactly zero and unexplained — usually a seed not wired through | 1 |
-| `insufficient_evidence` | Too few seeds, missing vectors, missing declarations, gate seeds reused | 2 |
+| `insufficient_evidence` | Too few seeds, an undeclared or contradicted one-run study, missing vectors, missing declarations, gate seeds reused | 2 |
 | `not_comparable` | Protocol, stage, metric, K, populations, or user sets differ | 2 |
+
+Every report also carries `seed_regime` (`single_seed` / `multi_seed`) and echoes
+`single_run_justification`, so a published proposal says which instrument produced it without the
+reader counting run ids.
 
 The split between 1 and 2 mirrors `retrieval_gate`: 1 is "we measured and decline", 2 is "we could
 not measure".
@@ -376,14 +461,21 @@ not measure".
    result here is a reproducibility bug (non-negotiable #5) and blocks the study.
 3. Choose derivation B if the compute budget allows, A otherwise, and record which.
 4. Run `m ≥ 3` study runs under the gate's exact protocol — same holdout, same slices, same K,
-   same eligible population. Cheapen training only.
+   same eligible population. Cheapen training only. Under the standing one-run policy, run exactly
+   one and declare `single_run_justification`; two runs are inadmissible either way.
 5. Export per-user recall vectors alongside the slice means into the evidence document.
 6. Run `make retrieval-tolerance-study EVIDENCE=<path>` and keep its JSON output.
-7. Publish the report — the two tolerances, the derivation, the seeds, both half-widths, and the
-   incumbent run id — **before** running the gate's seeds.
-8. Run `make gate-retrieval` against that same incumbent run, passing the published tolerances.
+7. Publish the report — the two tolerances, the derivation, the seed regime, the seeds, both
+   half-widths (one of which may be `null`), and the incumbent run id — **before** running the
+   gate's seeds.
+8. Run `make gate-retrieval` against that same incumbent run, passing the published tolerances and
+   the matching `RETRIEVAL_SEEDS`. A `single_seed` verdict takes a `single_seed` study's tolerances
+   and a `multi_seed` verdict takes a `multi_seed` study's; crossing them is an operator error the
+   gate cannot detect.
 9. After the gate's seeds land, recompute their observed relative range and compare it against the
-   study's. Record the comparison whether or not it falsifies the transfer assumption.
+   study's. Record the comparison whether or not it falsifies the transfer assumption. Under the
+   one-run regime there is no range to recompute, so this check is unavailable — record that it was
+   skipped rather than letting its absence read as a pass.
 
 ## How we would know this protocol is wrong
 
@@ -399,6 +491,12 @@ not measure".
   champion/challenger comparison.** Then the tolerance is too permissive in a way the offline study
   did not see, most likely because the study's population term was measured on a surrogate whose
   per-user error structure differs from the full model's.
+- **A verdict issued under the one-run regime does not reproduce when the transformer rungs restore
+  multi-seed runs.** This is the falsification the one-run regime is buying time against, and it is
+  the reason the regime is recorded on every report and every decision rather than inferred. If the
+  first multi-seed re-measurement of a model promoted under one seed lands outside what that verdict
+  implied, the policy's premise — that seed confirmation was re-confirming a believed result — was
+  wrong for this model family, and the one-run regime should be withdrawn rather than re-justified.
 
 ## Residual gaps, recorded rather than papered over
 
@@ -406,13 +504,22 @@ not measure".
   comparing to.** The study records the incumbent run id; `retrieval_gate` takes two bare floats and
   has no way to verify their provenance. Closing this means changing the gate's signature, which is
   out of scope here. Until then it is an operator-checklist item (step 8).
+- **Nor can it check that the tolerance's seed regime matches the verdict's.** Both sides now record
+  a `seed_regime`, which makes a mismatch visible to a reader comparing the two published artifacts,
+  but nothing joins them mechanically. The dangerous direction is a `single_seed` verdict handed a
+  `multi_seed` study's tolerance: that tolerance is wider by a seed term the one-run verdict has no
+  right to, so the guardrails would be more permissive than the rule prescribes. Same fix, same
+  scope note: it needs the gate's signature to take a provenance-carrying tolerance rather than two
+  floats.
 - **The publication-order protection is procedural.** See derivation B above.
 - **Per-user recall vectors are not currently produced by `src/evaluation/protocol.py`.** `evaluate()`
   returns slice means only; the study consumes vectors as evidence and does not compute them. Wiring
   their export is a separate change to the trainers' evaluation call sites.
 - **`m = 3` is a very thin basis for a standard deviation**, and the `t` multiplier makes that
   visible rather than fixing it. A study that can afford five seeds should run five; the harness
-  accepts any `m ≥ 3` and the multiplier tightens automatically.
+  accepts any `m ≥ 3` and the multiplier tightens automatically. `m = 1` is not a thinner version of
+  this gap — it is a different one, and the `t` multiplier has nothing to make visible because there
+  is no estimate to widen.
 - **The bootstrap assumes users are exchangeable.** They are not perfectly — heavy users contribute
   more targets — and a user-level bootstrap of a user-averaged metric is nonetheless the right
   resampling unit for the estimand the gate reads. A target-weighted metric would need a different

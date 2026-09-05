@@ -4,6 +4,15 @@ The existing :mod:`src.evaluation.gate` is intentionally ranking-only: it
 reads NDCG and ADR 0001's ranker tolerances.  This module is a separate API so
 a retrieval result can never be promoted by accidentally passing through the
 ranking gate.
+
+**Seed policy.**  How many training runs a verdict rests on is an argument, not
+a constant: the caller passes ``required_seeds`` and the gate holds the run set
+to exactly that.  The default stays the three-seed set, so nobody obtains a
+one-run verdict without asking for one.  The 2026-09-05 standing policy — one
+run per configuration until the ladder reaches the transformer rungs — is
+exercised by passing a single seed, and the decision then records
+``seed_regime=single_seed`` and says in ``uncertainty_basis`` what a single run
+cannot tell anyone.  Nothing else about the gate changes with the seed count.
 """
 
 from __future__ import annotations
@@ -46,6 +55,45 @@ class RetrievalGateStatus(StrEnum):
     REFUSE = "refuse"
     NOT_COMPARABLE = "not_comparable"
     INCOMPLETE = "incomplete"
+
+
+class SeedRegime(StrEnum):
+    """How many training runs a verdict rests on, and therefore what it can see.
+
+    This is not a knob of its own — it is read off ``required_seeds`` so it can
+    never disagree with the seed set the verdict was actually issued under.  It
+    exists so an operator reading the JSON can tell a one-run decision from a
+    three-run one without counting run ids.
+    """
+
+    SINGLE_SEED = "single_seed"
+    MULTI_SEED = "multi_seed"
+
+
+# Spelled out rather than left implicit because this is the whole cost of the
+# 2026-09-05 policy, and a verdict that does not state it invites being read as
+# the stronger thing it looks like.
+_SINGLE_SEED_BASIS: Final = (
+    "one training run: the supplied tolerances can only have covered evaluation-population "
+    "sampling (a paired user-level bootstrap). Training stochasticity is unmeasured, so a "
+    "model whose seeds genuinely disagree is not caught by this verdict, and the warm claim "
+    "is a single draw rather than a mean."
+)
+_MULTI_SEED_BASIS: Final = (
+    "{count} training runs: the supplied tolerances cover across-seed training dispersion and "
+    "evaluation-population sampling combined in quadrature, and every clause reads a mean "
+    "over the seed set."
+)
+
+
+def _seed_regime(required_seeds: Sequence[int]) -> SeedRegime:
+    return SeedRegime.SINGLE_SEED if len(required_seeds) == 1 else SeedRegime.MULTI_SEED
+
+
+def _uncertainty_basis(required_seeds: Sequence[int]) -> str:
+    if len(required_seeds) == 1:
+        return _SINGLE_SEED_BASIS
+    return _MULTI_SEED_BASIS.format(count=len(required_seeds))
 
 
 @dataclass(frozen=True)
@@ -111,7 +159,16 @@ class RetrievalGateDecision:
     incumbent_run_ids: tuple[str, ...]
     clauses: tuple[RecallClause, ...]
     reasons: tuple[str, ...]
+    # Derived, never passed: a decision that could be constructed with a regime
+    # disagreeing with its own seed set would be exactly the silent weakening
+    # this field exists to prevent.
+    seed_regime: SeedRegime = field(init=False)
+    uncertainty_basis: str = field(init=False)
     serving_eligible: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "seed_regime", _seed_regime(self.required_seeds))
+        object.__setattr__(self, "uncertainty_basis", _uncertainty_basis(self.required_seeds))
 
     @property
     def promote(self) -> bool:
@@ -120,7 +177,11 @@ class RetrievalGateDecision:
 
     def summary(self) -> str:
         headline = self.status.value.upper().replace("_", " ")
-        lines = [f"{headline} — {self.metric}@{self.k} ({self.stage})"]
+        lines = [
+            f"{headline} — {self.metric}@{self.k} ({self.stage})",
+            f"  seed regime: {self.seed_regime.value} {list(self.required_seeds)}",
+            f"  uncertainty: {self.uncertainty_basis}",
+        ]
         lines.extend(f"  {clause.name}: {clause.detail}" for clause in self.clauses)
         lines.extend(f"  reason: {reason}" for reason in self.reasons)
         if self.promote and not self.serving_eligible:
@@ -130,6 +191,7 @@ class RetrievalGateDecision:
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
         payload["status"] = self.status.value
+        payload["seed_regime"] = self.seed_regime.value
         payload["promote"] = self.promote
         return payload
 
@@ -146,7 +208,19 @@ def retrieval_promotion_decision(
     min_warm_relative_gain: float = MIN_WARM_RELATIVE_GAIN,
     required_seeds: tuple[int, ...] = REQUIRED_SEEDS,
 ) -> RetrievalGateDecision:
-    """Apply the owner-approved retrieval gate without permissive fallbacks."""
+    """Apply the owner-approved retrieval gate without permissive fallbacks.
+
+    ``required_seeds`` is the caller's stated seed policy and the candidate run
+    set must match it exactly — no missing, extra, or repeated seeds.  Passing a
+    single seed is how the 2026-09-05 one-run-per-configuration policy reaches a
+    verdict; it is deliberately not the default, because a weaker evidence base
+    should be something a caller asks for rather than something it inherits.
+    The decision records which regime produced it either way.
+
+    Nothing else about the gate varies with the seed count.  The clauses, the
+    protocol and population checks, the deterministic-incumbent requirement and
+    ``serving_eligible=False`` are identical for one seed and for three.
+    """
     if (
         not isinstance(min_warm_relative_gain, (int, float))
         or isinstance(min_warm_relative_gain, bool)
@@ -611,17 +685,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.evaluation.retrieval_gate",
         description=(
-            "Strict retrieval gate: three-seed mean warm recall@500 must improve by 3%, "
-            "with measured cold and overall non-regression tolerances."
+            "Strict retrieval gate: mean warm recall@500 over the stated seed set must improve "
+            "by 3%, with measured cold and overall non-regression tolerances."
         ),
     )
     parser.add_argument("--candidate", required=True, nargs="+", metavar="RUN_ID")
     parser.add_argument("--incumbent", required=True, nargs="+", metavar="RUN_ID")
     parser.add_argument("--cold-tolerance", required=True, type=float)
     parser.add_argument("--overall-tolerance", required=True, type=float)
+    parser.add_argument(
+        "--seeds",
+        nargs="+",
+        type=int,
+        metavar="SEED",
+        default=list(REQUIRED_SEEDS),
+        help=(
+            "the exact training seeds the candidate run set must contain "
+            f"(default: {' '.join(str(seed) for seed in REQUIRED_SEEDS)}). Pass one seed to "
+            "gate a single run under the one-run-per-configuration policy; the decision then "
+            "reports seed_regime=single_seed and the tolerances must have been measured "
+            "without a seed term."
+        ),
+    )
     parser.add_argument("--tracking-uri", default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+    required_seeds = tuple(args.seeds)
 
     import mlflow
 
@@ -652,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
                 cold=args.cold_tolerance,
                 overall=args.overall_tolerance,
             ),
+            required_seeds=required_seeds,
         )
     except (RetrievalRunNotUsableError, ValueError, mlflow.exceptions.MlflowException) as exc:
         decision = _decision(
@@ -659,6 +749,9 @@ def main(argv: list[str] | None = None) -> int:
             args.candidate,
             args.incumbent,
             reasons=(str(exc),),
+            # Report the policy that was asked for, not the default, so a refusal
+            # to even load the runs still says which regime was being attempted.
+            required_seeds=required_seeds,
         )
 
     print(
