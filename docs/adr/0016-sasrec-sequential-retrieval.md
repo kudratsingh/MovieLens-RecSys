@@ -34,13 +34,41 @@ causal sequence. Preserve this cohort for threshold/routing evidence, but do
 not treat h10 as SASRec quality evidence until a separately versioned,
 transition-aware sequential cohort is approved.
 
-**Artifact implementation note (2026-09-04):** M2-02 writes a deterministic,
-checksum-pinned model archive to a never-overwritten MLflow-run directory
-immediately after fitting, retains that local copy, and uploads a second copy
-to MLflow. Exact embedding and candidate equality, deterministic bytes, and
-fail-closed corruption checks define acceptance. The format and recovery
-boundary are documented in
-[`docs/modeling/sasrec-artifacts.md`](../modeling/sasrec-artifacts.md).
+**Artifact implementation and run note (2026-09-04):** M2-02 writes a
+deterministic, checksum-pinned model archive to a never-overwritten MLflow-run
+directory immediately after fitting, retains that local copy, and uploads a
+second copy to MLflow. Exact embedding and candidate equality, deterministic
+bytes, and fail-closed corruption checks define acceptance. The format and
+recovery boundary are documented in
+[`docs/modeling/sasrec-artifacts.md`](../modeling/sasrec-artifacts.md). Full-data
+run `a11af5ed0f0745f68572407237cfa4b9` completed under that contract and exactly
+reproduced the earlier seed-42 metrics. Its local and MLflow archives are
+byte-identical and reload successfully. This removes the artifact caveat from
+the historical first run. A fail-closed post-hoc evaluation also reproduced
+the protocol hash and all six aggregate metrics exactly before adding the
+missing warm/cold counts and per-user recall artifact. This completes the
+seed-42 evidence envelope, but does not remove the remaining seed,
+rolling-window, tolerance, latency, or paired-ranker gates.
+
+**Comparable-incumbent correction (2026-09-05):** The earlier 0.400144
+item-item reference used the five-interaction threshold in force when it was
+measured, producing 1,939 warm / 702 cold users. The current threshold of ten
+produces 1,931 / 710. Current-code item-item run
+`4b342e87dbf54834be5c719eae9a4e6c` has the same protocol hash and exact per-user
+slice populations as the artifact-backed SASRec run: warm recall@500
+0.3990569036, cold 0.5262729520, and overall 0.4332573558. SASRec's comparable
+changes are therefore **+16.57% warm, 0.00% cold, and +11.16% overall**. The
+advance band is unchanged, but the old cross-threshold comparison is not gate
+evidence.
+
+**Replication-budget decision (2026-09-05):** The owner accepts the completed
+seed-42 full-data run as the complete replication set for this SASRec model and
+does not authorize seeds 7 or 13. Two or three confirmation runs become the
+default for later, more advanced Transformer models only when the owner asks
+for them. This supersedes ADR 0004's three-seed requirement for SASRec alone;
+it does not waive rolling-window, measured-tolerance, latency, or paired-ranker
+evidence. The executable retrieval gate still encodes the earlier three-seed
+policy and must be brought into line before it can issue this model's verdict.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
@@ -274,7 +302,8 @@ stage-specific verdict.
 - A deterministic pilot cannot beat popularity@500 or a last-item nearest-
   neighbour baseline after data and leakage checks pass.
 - Full-data warm recall@500 fails ADR 0004's promotion criterion against
-  item-item across the required seeds. SASRec is then measured, not promoted.
+  item-item across the owner-approved replication set. SASRec is then measured,
+  not promoted.
 - Gains disappear when already-seen items and training-prefix collisions are
   removed, showing that the result depended on leakage.
 - Recall improves but catalog coverage collapses enough that the model is only

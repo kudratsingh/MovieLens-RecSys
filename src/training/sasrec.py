@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import time
@@ -12,7 +14,13 @@ import pandas as pd
 
 from src.config import Settings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    K_CANDIDATES,
+    PER_USER_RECALL_ARTIFACT,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates.sasrec import SASRecConfig, SASRecModel, gbce_beta
 from src.models.candidates.sasrec_artifact import (
     ARTIFACT_SCHEMA_VERSION,
@@ -33,6 +41,15 @@ RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
 SAMPLE_FRACTION_ENV_VAR = "SASREC_USER_SAMPLE_FRACTION"
 ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
+MODEL_TYPE = "sasrec"
+
+
+def _configuration_id(config: SASRecConfig) -> str:
+    """Identify model configuration independently of its training seed."""
+    parameters = config.as_params()
+    parameters.pop("seed")
+    canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode()
+    return f"sasrec-sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def resolve_sasrec_sample_fraction() -> float:
@@ -103,11 +120,11 @@ def run_once(
 
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
     run_name = "sasrec" if not run_label else f"sasrec-{run_label}"
-    with mlflow.start_run(run_name=run_name):
+    with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
-                "model_type": "sasrec",
+                "model_type": MODEL_TYPE,
                 "stage": "candidate",
                 "sweep_label": run_label,
             }
@@ -220,8 +237,21 @@ def run_once(
                 "cold_ndcg_at_k_candidates": result.cold.ndcg,
                 "overall_recall_at_k_candidates": result.overall.recall,
                 "overall_ndcg_at_k_candidates": result.overall.ndcg,
+                "n_warm_users": result.n_warm_users,
+                "n_cold_users": result.n_cold_users,
                 **diagnostics,
             }
+        )
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                seed=config.seed,
+                configuration_id=_configuration_id(config),
+                protocol=protocol.to_dict(),
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             synth_cold.log_summary(result, logger=logger, k=K_CANDIDATES)

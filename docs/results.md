@@ -2337,7 +2337,8 @@ is still being built, the paired-ranker guardrail is unmeasured, and the run
 predates artifact export. Its MLflow run
 `6958fd082af6462da812ddd4708230c1` is `FINISHED` and retains all metrics,
 parameters, tags, and sequence diagnostics, but it contains no weights. M2-02
-therefore requires one exported rerun before serving or latency work.
+therefore required the exported rerun recorded below before serving or latency
+work.
 
 ### Why synthetic h10 is zero
 
@@ -2358,3 +2359,53 @@ if it were chronology, making h10 an out-of-distribution probe rather than a
 sequence-quality slice. Keep its routing assertion; version a separate cohort
 with strictly increasing timestamps and transition-aligned targets before
 claiming synthetic sequential quality.
+
+## SASRec artifact-backed full-data reproduction — 2026-09-04
+
+After model-level save/load/export landed, the frozen full-data cell was rerun
+as MLflow run `a11af5ed0f0745f68572407237cfa4b9`. It reproduced every final
+aggregate from metric-only run `6958fd082af6462da812ddd4708230c1`, including
+warm recall@500 **0.4651693328**, warm NDCG@500 0.1734004197, cold recall@500
+0.5262729520, and overall recall@500 0.4815962808.
+
+The run retained a 9,458,477-byte model archive locally and in MLflow. Both
+copies have SHA-256
+`43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6`;
+the artifact reloads successfully and rebuilds exact retrieval over 34,461
+items. Fit time was 24,293.3 seconds (6 h 44 min 53 s) with approximately
+8.8 GiB peak resident memory observed on the same 36 GiB Apple M3 Pro.
+
+A fail-closed artifact reload subsequently reproduced the protocol hash and all
+six stored aggregate metrics exactly in 27.45 seconds. The guarded backfill
+added counts for 1,931 warm and 710 cold users and byte-identical local/MLflow
+copies of `per_user_recall.json` (151,097 bytes; SHA-256
+`971fcbb908330b46f693d1c27c654cdf08045d99aa8cdf4732942459b14f269a`).
+The MLflow run remains `FINISHED` and carries explicit backfill provenance.
+
+This closes the lost-weights risk, demonstrates deterministic reproduction,
+and completes the run's population/per-user evidence. On 2026-09-05 the owner
+accepted this one full run as sufficient replication for SASRec and declined
+seeds 7 and 13; later advanced Transformer models will use two or three runs
+when separately authorized. This is still not a promotion because rolling,
+tolerance, latency, and paired-ranker evidence remain. The exact paths,
+lineage, resource record, interruption recovery, and remaining gates are in
+[`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
+
+### Correction: the protocol-compatible item-item reference
+
+The earlier 0.400144 item-item reference partitioned 1,939 warm and 702 cold
+users because it was measured while the cold-start threshold was five. The
+current threshold of ten moves exactly eight users with 5–9 training events:
+the SASRec evidence recovery reports 1,931 warm and 710 cold. The old headline
+comparison is useful historical context but cannot enter the executable gate.
+
+Current-code item-item run `4b342e87dbf54834be5c719eae9a4e6c` was therefore
+measured on the same tracked CSV snapshot. Its protocol hash and all three
+per-user slice populations match the artifact-backed SASRec run exactly. Warm
+recall@500 is 0.3990569036, cold recall is 0.5262729520, and overall recall is
+0.4332573558. Against that admissible incumbent, SASRec is **+16.57% warm**,
+**0.00% cold**, and **+11.16% overall**. The executable gate loads both runs
+and returns `incomplete` solely because candidate seeds 7 and 13 are absent.
+That final reason reflects the gate's now-superseded three-seed SASRec policy,
+not an instruction to run them; the gate must implement the owner's one-run
+decision before issuing a verdict.

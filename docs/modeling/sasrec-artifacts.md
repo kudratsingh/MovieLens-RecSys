@@ -71,11 +71,20 @@ The acceptance test requires exact user-embedding equality and identical
 candidate ids before and after the round trip. A second export of the same
 model must have the same archive and manifest bytes.
 
-## Existing full run
+## Full-data artifact run
 
-Run `6958fd082af6462da812ddd4708230c1` predates this contract. It remains valid
-quality evidence and its MLflow metrics, parameters, and tags remain stored,
-but its weights existed only in process memory. No code can reconstruct those
-weights from the metrics. A servable seed-42 artifact therefore requires one
-new full fit after this change lands; future fits retain both local and MLflow
-copies before evaluation starts.
+Run `a11af5ed0f0745f68572407237cfa4b9` exercised this contract on the frozen
+seed-42 full-data configuration. Its 9,458,477-byte archive is retained both
+under `artifacts/sasrec/<run-id>/` and the run's MLflow `model/` path. Both
+copies have SHA-256
+`43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6`,
+and a clean load rebuilt the exact index over 34,461 items. The run reproduced
+the earlier metric-only run's warm recall@500 of 0.4651693328 exactly.
+Its population counts and per-user recall vectors were subsequently recovered
+from the exact artifact only after all six aggregate metrics and the protocol
+hash reproduced exactly; local and MLflow evidence copies are byte-identical.
+
+The earlier run `6958fd082af6462da812ddd4708230c1` remains preserved as
+historical quality evidence, but no weights can be reconstructed from its
+metrics. The complete rerun record, including resource use and recovery notes,
+is [`../experiments/sasrec/full-artifact-run-2026-09-04.md`](../experiments/sasrec/full-artifact-run-2026-09-04.md).
