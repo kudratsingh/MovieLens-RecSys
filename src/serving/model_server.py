@@ -342,9 +342,9 @@ class ModelRankingService:
             "ranker_latency_ms=%.3f latency_ms=%.3f",
             tenant_id,
             user_id,
-            manifest.candidate.artifact_type,
-            manifest.candidate.version,
-            manifest.ranker.version,
+            manifest.retriever.family,
+            manifest.retriever.version,
+            manifest.ranker_version,
             manifest.feature_version,
             len(candidate_ids),
             len(items),
@@ -360,9 +360,9 @@ class ModelRankingService:
         )
         return RankingResult(
             items=items,
-            candidate_policy=manifest.candidate.artifact_type,
-            candidate_version=manifest.candidate.version,
-            ranker_version=manifest.ranker.version,
+            candidate_policy=manifest.retriever.family,
+            candidate_version=manifest.retriever.version,
+            ranker_version=manifest.ranker_version,
             feature_version=manifest.feature_version,
             candidate_latency_ms=candidate_latency_ms,
             feature_latency_ms=feature_latency_ms,
@@ -431,9 +431,13 @@ class ChampionCoordinates(BaseModel):
     feature_version: str = Field(min_length=1)
 
     def matches(self, manifest: ServingManifest) -> bool:
+        # ``candidate_version`` is the registry's name for the retrieval stage
+        # and stays as it is on the wire; what it is compared against is now the
+        # retriever's version, which is the same string a schema 1 bundle put in
+        # its candidate ref.
         return (
-            self.candidate_version == manifest.candidate.version
-            and self.ranker_version == manifest.ranker.version
+            self.candidate_version == manifest.retriever.version
+            and self.ranker_version == manifest.ranker_version
             and self.feature_version == manifest.feature_version
         )
 
@@ -521,8 +525,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "warmup_ms=%.1f seeds=%s candidates=%s ranked=%s seed_count=%s "
         "feature_event_time=%s workers=%s",
         bundle.manifest.tenant_id,
-        bundle.manifest.candidate.version,
-        bundle.manifest.ranker.version,
+        bundle.manifest.retriever.version,
+        bundle.manifest.ranker_version,
         bundle.manifest.feature_version,
         report.warmup_ms,
         len(report.seed_movie_ids),
@@ -569,8 +573,8 @@ async def healthz(request: Request, response: Response) -> dict[str, Any]:
     }
     if service is not None:
         payload["tenant_id"] = service.manifest.tenant_id
-        payload["candidate_version"] = service.manifest.candidate.version
-        payload["ranker_version"] = service.manifest.ranker.version
+        payload["candidate_version"] = service.manifest.retriever.version
+        payload["ranker_version"] = service.manifest.ranker_version
         payload["feature_version"] = service.manifest.feature_version
     if report is None:
         response.status_code = 503
@@ -696,7 +700,7 @@ def _assert_online_features_are_materialized(
 
 def _describe_manifest(manifest: ServingManifest) -> str:
     """The loaded bundle in the same shape a champion is written down in."""
-    return f"{manifest.candidate.version}/{manifest.ranker.version}/{manifest.feature_version}"
+    return f"{manifest.retriever.version}/{manifest.ranker_version}/{manifest.feature_version}"
 
 
 def _declared_workers() -> int | None:
