@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "purpose": "Bounded correctness diagnostic after fixing FAISS row-to-dense-id conversion",
+  "defect": {
+    "description": "FAISS rows 0..N-1 store dense item ids 1..N; recommend() dropped row 0 and used every other row directly as a dense id",
+    "fix": "Accept every non-negative FAISS row and map it to dense item id row + 1",
+    "cross_path_users_checked": 3,
+    "cross_path_users_matching_before_fix": 0,
+    "tiny_overfit": {
+      "users": 200,
+      "items": 400,
+      "minimum_loss": 0.0004979919176548719,
+      "recall_at_10": 1.0
+    }
+  },
+  "run": {
+    "run_id": "8a22ed513b8f457eb0d5f93b826dc82a",
+    "experiment": "phase-2-candidates",
+    "status": "FINISHED",
+    "source_commit": "5929c0f277ad622b36fc9aecb86154c1f7354f71",
+    "protocol_hash": "sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629",
+    "sample_fraction": 0.06,
+    "seed": 42,
+    "faiss_exact": true,
+    "num_sampled": 16384,
+    "epochs": 3,
+    "fit_seconds": 583.7,
+    "recommend_seconds": 0.1,
+    "log_path": "artifacts/sasrec/logs/twotower-faiss-mapping-fixed-20260905.log",
+    "mlflow_store": "artifacts/mlflow-sasrec-recovery"
+  },
+  "population": {
+    "users_before_split": 9752,
+    "train_rows": 1213918,
+    "training_pairs": 1198161,
+    "items": 19005,
+    "warm_users": 115,
+    "cold_users": 50
+  },
+  "metrics_at_500": {
+    "warm": {
+      "recall": 0.3759484158672824,
+      "ndcg": 0.14839975118338375
+    },
+    "cold": {
+      "recall": 0.48295870268712504,
+      "ndcg": 0.3844085561908767
+    },
+    "overall": {
+      "recall": 0.4083757755096589,
+      "ndcg": 0.21991757088262404
+    }
+  },
+  "historical_context": {
+    "old_complete_v2_warm_recall_at_500": 0.0435,
+    "popularity_warm_recall_at_500": 0.1974,
+    "item_item_warm_recall_at_500": 0.3619,
+    "warning": "The corrected run uses exact retrieval and 16384 sampled negatives; the old complete-v2 arm used IVF and 4096. This is diagnostic evidence, not an isolated causal estimate or promotion decision."
+  }
+}
