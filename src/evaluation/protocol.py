@@ -28,6 +28,14 @@ K_CANDIDATES = 500
 # vector has as many entries as the warm and cold ones together.
 RECALL_SLICES = ("warm", "cold", "overall")
 
+# The name the cold-item per-user vectors are published under inside
+# `EvalResult.per_user_recall`. Deliberately *not* a member of RECALL_SLICES:
+# that tuple is the tolerance study's vocabulary and the shape of the
+# per_user_recall.json artifact, and the study's loader refuses a document
+# carrying a slice it does not recognise. Teaching the study about cold items is
+# a change to its contract, made there, not a side effect of adding a slice here.
+COLD_ITEM_SLICE = "cold_item"
+
 # Where a trainer writes its recall vectors inside an MLflow run. One name for
 # every model, because the tolerance study's evidence document is assembled by
 # hand out of several runs and the operator should not have to guess at four.
@@ -63,6 +71,44 @@ class SyntheticColdSlice:
 
 
 @dataclass
+class ColdItemSlice:
+    """Holdout targets whose item the training frame never contained.
+
+    The warm/cold split above is by *user* history length. This one is by *item*
+    novelty, and nothing reported it before: every interaction-derived retriever
+    scores zero here by construction — item-item builds neighbours from
+    co-occurrence and the learned towers embed items from consumption, so an
+    item nobody consumed has no entry to rank and adding a row for it changes
+    nothing. The slice exists because a failure that is measured and zero is a
+    different thing from a failure nobody can see.
+
+    **Read it as coverage, not quality, and do not gate on it.** The first
+    content retriever to move the number off zero made that distinction
+    concrete: it reached 4,998 distinct cold items against a prior of exactly
+    none, and paid 23.1% of every slate for them while warm recall@500 fell from
+    item-item's 0.400144 to 0.0388. Reachability was demonstrated; slate quality
+    regressed badly. A number that can improve while the product gets worse is a
+    diagnostic, not a gate — and ADR 0017 reaches the same conclusion from the
+    other side, since 313 affected users over 829 holdout rows is thin enough
+    that relevance is weakly measured at best.
+
+    ``metrics`` is ``None`` when the holdout held no cold target at all: the
+    slice was measured and found empty, which is not the claim a slice whose
+    users all scored zero makes, and the two must not share a representation. It
+    is ``None`` exactly when ``n_users`` is 0.
+
+    ``n_targets`` and ``n_distinct_items`` sit beside ``n_users`` because the
+    mean is per user over a population defined by interactions — only the three
+    together say how thin the slice is and how much of the catalog it reached.
+    """
+
+    metrics: UserMetrics | None
+    n_users: int
+    n_targets: int
+    n_distinct_items: int
+
+
+@dataclass
 class EvalResult:
     """
     Structured result from a single evaluation run.
@@ -91,6 +137,12 @@ class EvalResult:
     # mean across seeds has no per-user vector, and pretending otherwise would
     # hand the study a vector belonging to no run.
     per_user_recall: dict[str, dict[int, float]] = field(default_factory=dict)
+    # The cold-*item* slice, as distinct from the cold *user* slice above.
+    # ``None`` when the caller passed no ``train_items`` — the natural state for
+    # every call site that predates ADR 0017, and a claim ("nobody looked") that
+    # has to stay separate from the empty slice ("we looked; there was nothing
+    # there") the dataclass itself carries.
+    cold_item: ColdItemSlice | None = None
 
 
 def evaluate(
@@ -99,6 +151,7 @@ def evaluate(
     train_interaction_counts: dict[int, int],
     k: int = K,
     *,
+    train_items: Collection[int] | None = None,
     synthetic_cold_users: Mapping[int, Mapping[int, set[int]]] | None = None,
     synthetic_cold_served_by: Callable[[int], bool] | None = None,
 ) -> EvalResult:
@@ -115,6 +168,17 @@ def evaluate(
                                   recommender end-to-end; callers evaluating the
                                   candidate stage in isolation should pass
                                   ``K_CANDIDATES`` (500) instead.
+        train_items: every item id present in the training frame the model was
+                                  actually fitted on — including ADR 0011's
+                                  synthetic cohort history when that cohort was
+                                  attached, because those rows are part of what
+                                  the model saw and an item is only cold if
+                                  nothing it trained on held one. A holdout
+                                  target outside this set is a cold item.
+                                  Passing it is what turns the cold-item slice
+                                  on; omitting it leaves ``cold_item`` at
+                                  ``None`` rather than scoring a slice against
+                                  an assumed catalog.
         synthetic_cold_users: ADR 0011's cohort as
                                   ``{history_size: {user_id: {target_item}}}``.
                                   Scored into ``synthetic_cold_slices`` and
@@ -133,7 +197,9 @@ def evaluate(
         so a downstream consumer (MLflow tags, plots) can never confuse a
         candidate-stage recall@500 with a recommender-end-to-end recall@10,
         and ``per_user_recall`` carrying the recall of every evaluated user
-        behind those means.
+        behind those means. ``cold_item`` is populated only when ``train_items``
+        was supplied, and carries the same per-user vector shape under
+        ``COLD_ITEM_SLICE``.
     """
     # Recall is accumulated per user rather than as a bare list: the means below
     # are unchanged (a dict preserves insertion order, so they are summed in the
@@ -146,6 +212,16 @@ def evaluate(
     warm_ndcgs: list[float] = []
     cold_ndcgs: list[float] = []
 
+    # ``None`` rather than an empty set, because "the caller said nothing about
+    # the training frame" and "the training frame was empty" must not collapse
+    # into the same behaviour. Materialised once here rather than per user: the
+    # catalog is tens of thousands of ids and the holdout is thousands of users.
+    train_item_set = None if train_items is None else frozenset(train_items)
+    cold_item_recalls: dict[int, float] = {}
+    cold_item_ndcgs: list[float] = []
+    cold_items_seen: set[int] = set()
+    n_cold_targets = 0
+
     for user_id, relevant in holdout.items():
         retrieved = recommendations.get(user_id, [])
         r = recall_at_k(relevant, retrieved, k)
@@ -157,6 +233,18 @@ def evaluate(
         else:
             warm_recalls[user_id] = r
             warm_ndcgs.append(n)
+
+        if train_item_set is not None:
+            # Scored over this user's unseen targets alone, not their whole
+            # holdout set. A user with nine warm hits and one cold miss would
+            # otherwise post 0.9 here and hide precisely the failure the slice
+            # exists to expose.
+            cold_targets = relevant - train_item_set
+            if cold_targets:
+                cold_item_recalls[user_id] = recall_at_k(cold_targets, retrieved, k)
+                cold_item_ndcgs.append(ndcg_at_k(cold_targets, retrieved, k))
+                cold_items_seen.update(cold_targets)
+                n_cold_targets += len(cold_targets)
 
     warm = UserMetrics(
         recall=_mean(warm_recalls.values()),
@@ -175,6 +263,34 @@ def evaluate(
         ndcg=_mean(all_ndcgs),
     )
 
+    # Three states, not two: ``None`` (no train_items, so nobody looked), a
+    # slice carrying ``metrics=None`` (looked, nothing to score), and a scored
+    # slice — which for every interaction-derived retriever built so far reads
+    # zero, and is reported anyway so that zero is on the page.
+    cold_item = (
+        None
+        if train_item_set is None
+        else ColdItemSlice(
+            metrics=(
+                UserMetrics(
+                    recall=_mean(cold_item_recalls.values()),
+                    ndcg=_mean(cold_item_ndcgs),
+                )
+                if cold_item_recalls
+                else None
+            ),
+            n_users=len(cold_item_recalls),
+            n_targets=n_cold_targets,
+            n_distinct_items=len(cold_items_seen),
+        )
+    )
+
+    per_user_recall = {"warm": warm_recalls, "cold": cold_recalls, "overall": all_recalls}
+    if cold_item is not None:
+        # Absent rather than empty when unmeasured, so no consumer can read
+        # "nobody looked" as "no user had a cold target".
+        per_user_recall[COLD_ITEM_SLICE] = cold_item_recalls
+
     return EvalResult(
         warm=warm,
         cold=cold,
@@ -188,7 +304,8 @@ def evaluate(
             synthetic_cold_served_by,
             k,
         ),
-        per_user_recall={"warm": warm_recalls, "cold": cold_recalls, "overall": all_recalls},
+        per_user_recall=per_user_recall,
+        cold_item=cold_item,
     )
 
 
