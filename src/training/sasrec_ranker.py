@@ -91,6 +91,7 @@ from src.models.candidates.sasrec_artifact import (
     SASRecArtifactManifest,
     load_sasrec,
 )
+from src.models.candidates.sasrec_ranking_features import SasrecScoreFeatures
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
 from src.training import protocol_manifest, sampling, seeds
 from src.training.ranker import (
@@ -219,6 +220,16 @@ class CandidateSource(Protocol):
 
     def identity(self) -> dict[str, str]: ...
 
+    def ranking_features(self, row: int, movie_ids: Sequence[int]) -> pd.DataFrame | None:
+        """Extra ranker columns for one group, or ``None`` for none at all.
+
+        ``row`` indexes the batch the last ``training_candidates`` call was made
+        with, which is how a source that encoded something during retrieval hands
+        the *same* vectors to the feature path. ADR 0018's whole point is that
+        these are not recomputed.
+        """
+        ...
+
 
 @dataclass
 class ItemItemSource:
@@ -247,6 +258,11 @@ class ItemItemSource:
     def identity(self) -> dict[str, str]:
         return {"candidate_k_neighbors": str(self.model.k_neighbors)}
 
+    def ranking_features(self, row: int, movie_ids: Sequence[int]) -> pd.DataFrame | None:
+        # The fallback route's contract is the eight aggregates and nothing
+        # else; the sequence scores are undefined for a slate no encoder chose.
+        return None
+
     def _count(self, query: TrainingQuery) -> None:
         if self.model.was_served_by_itemitem(query.user_id):
             self.routing_counts.learned += 1
@@ -272,12 +288,24 @@ class SasrecSource:
     name: str = CHALLENGER_ARM
     candidate_model_tag: str = "sasrec_artifact"
     routing_counts: RoutingCounts = field(default_factory=RoutingCounts)
+    #: Set only by ADR 0018's increment-1 runner. When present, the vectors this
+    #: source encodes to retrieve are kept for the batch and handed to
+    #: `ranking_features`, so the feature is the score that ordered the
+    #: candidate rather than a second opinion about it. Left unset, this class
+    #: behaves exactly as it did in PR #151.
+    score_features: SasrecScoreFeatures | None = None
+    #: Batch row -> (normalized, unnormalized) user vector, for the most recent
+    #: `training_candidates` call only. Deliberately not accumulated: 154k rows
+    #: of 2x64 float32 is a gigabyte for no reason, and the feature path runs
+    #: inside the same batch iteration.
+    _batch_vectors: dict[int, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
 
     def training_candidates(self, queries: Sequence[TrainingQuery], k: int) -> list[list[int]]:
         out: list[list[int]] = [[] for _ in queries]
         learned_rows: list[int] = []
         learned_histories: list[list[int]] = []
         max_length = self.model.config.max_sequence_length
+        self._batch_vectors = {}
 
         for row, query in enumerate(queries):
             if not self.model.was_served_by_sasrec(query.user_id):
@@ -302,13 +330,30 @@ class SasrecSource:
             )
 
         if learned_histories:
-            retrieved = self.model.retrieve_unfiltered(learned_histories, k)
-            for row, candidates in zip(learned_rows, retrieved, strict=True):
+            # One encode for both jobs. `retrieve_unfiltered` would do the same
+            # work internally, but then the query it searched with would be a
+            # different object from the one the features are computed against —
+            # equal today, free to drift tomorrow.
+            normalized, unnormalized = self.model.encode_histories(learned_histories)
+            retrieved = self.model.retrieve_from_queries(normalized, k)
+            for position, (row, candidates) in enumerate(zip(learned_rows, retrieved, strict=True)):
                 out[row] = candidates
+                if self.score_features is not None:
+                    self._batch_vectors[row] = (normalized[position], unnormalized[position])
         return out
 
     def holdout_candidates(self, user_id: int, k: int) -> list[int]:
         return self.model.recommend(user_id, k)
+
+    def ranking_features(self, row: int, movie_ids: Sequence[int]) -> pd.DataFrame | None:
+        if self.score_features is None:
+            return None
+        normalized, unnormalized = self._batch_vectors.get(row, (None, None))
+        # A row absent from `_batch_vectors` took the popularity fallback: no
+        # encodable prefix, or a user below the routing threshold. Both columns
+        # are missing for it, which is the honest answer and the one ADR 0018
+        # asks the GBDT to split on.
+        return self.score_features.frame_for(normalized, unnormalized, movie_ids)
 
     def served_by_learned_path(self, user_id: int) -> bool:
         return self.model.was_served_by_sasrec(user_id)
@@ -436,7 +481,9 @@ def build_ranker_training_set(
             )
         candidate_lists = source.training_candidates(queries, k_candidates)
 
-        for pos, query, candidates in zip(rows, queries, candidate_lists, strict=True):
+        for row_in_batch, (pos, query, candidates) in enumerate(
+            zip(rows, queries, candidate_lists, strict=True)
+        ):
             pos_movie = int(pos.movieId)
             if pos_movie not in candidates:
                 dropped_missing += 1
@@ -462,7 +509,17 @@ def build_ranker_training_set(
                     "as_of_timestamp": [query.as_of] * len(group_items),
                 }
             )
-            feature_rows.append(feature_index.features_for(group_query))
+            group_features = feature_index.features_for(group_query)
+            # ADR 0018's learned route adds two columns here. The row index is
+            # the batch position, which is how the source hands back the very
+            # vectors it retrieved with. A source with nothing extra to say
+            # returns None and the frame is the eight aggregates, unchanged.
+            extra = source.ranking_features(row_in_batch, group_items)
+            if extra is not None:
+                group_features = pd.concat(
+                    [group_features, extra.set_index(group_features.index)], axis=1
+                )
+            feature_rows.append(group_features)
             labels.extend([1, *([0] * len(sampled_negs))])
             group_sizes.append(len(group_items))
 
