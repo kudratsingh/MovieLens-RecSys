@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -110,3 +111,46 @@ def test_stateless_boundary_rejects_empty_history(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="at least one"):
         loaded.recommend_from_history([], 5)
+
+
+def test_pinned_two_block_artifact_retrieves_500_for_short_histories() -> None:
+    """Exercise the production artifact locally; CI has no run-scoped archive."""
+    raw_manifest = os.environ.get("SASREC_PINNED_MANIFEST", "").strip()
+    if not raw_manifest:
+        pytest.skip("SASREC_PINNED_MANIFEST is not available")
+    model = load_sasrec(Path(raw_manifest))
+    assert model.config.num_blocks == 2
+    assert model.config.faiss_exact is True
+    movie_ids = sorted(model._item_to_index)
+
+    for length in (1, 3, 12, 49, 50):
+        history = movie_ids[:length]
+        scored = model.recommend_from_history_scored(history, 500)
+        assert torch.isfinite(model.encode_movie_history(history)).all()
+        assert len(scored) == 500
+        assert model.recommend_from_history(history, 500) == [movie_id for movie_id, _ in scored]
+
+
+def test_scored_retrieval_matches_exact_dot_products(tmp_path: Path) -> None:
+    model = _model()
+    history = [110, 111, 112]
+    excluded = {120}
+    manifest = export_sasrec(model, tmp_path / "run")
+    loaded = load_sasrec(tmp_path / "run" / MANIFEST_FILENAME)
+
+    scored = loaded.recommend_from_history_scored(history, 5, excluded_movie_ids=excluded)
+    query = loaded.encode_movie_history(history)[0]
+    assert loaded._encoder is not None
+    dense_ids = torch.tensor([loaded._item_to_index[movie_id] for movie_id, _ in scored])
+    with torch.no_grad():
+        expected = loaded._encoder.item_vectors(dense_ids) @ query
+
+    assert [movie_id for movie_id, _ in scored] == loaded.recommend_from_history(
+        history, 5, excluded_movie_ids=excluded
+    )
+    assert [score for _, score in scored] == pytest.approx(expected.tolist(), abs=1e-6)
+    assert [score for _, score in scored] == sorted((score for _, score in scored), reverse=True)
+    assert (
+        manifest.model_sha256
+        == SASRecArtifactManifest.load(tmp_path / "run" / MANIFEST_FILENAME).model_sha256
+    )
