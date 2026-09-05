@@ -1,7 +1,8 @@
 # ADR 0017 — Content-based retrieval for cold items
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-05
+**Approved:** owner, 2026-09-05
 
 ## Context
 
@@ -199,5 +200,6 @@ Genres and release year only; a content retriever with its own source label; a c
 slice; a measured coverage number and a first relevance figure. No TMDB ingestion, no hybrid scoring,
 no serving integration until the offline number exists.
 
-Per CLAUDE.md the rung needs the owner's approval before implementation, and its row in
-`docs/modeling-roadmap.md` is the owner's to add.
+Approved by the owner on 2026-09-05 with the narrowed claim intact: this rung proves the mechanism
+on the only population the dataset offers, and does not demonstrate the production benefit that
+motivates it. Anyone reading its recall figure should read it that way.

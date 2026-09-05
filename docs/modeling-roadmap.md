@@ -237,6 +237,7 @@ The system pieces, mapped to the phases that own them:
 | 5 — Mixing and re-ranking | not proposed | — | — | |
 | 6 — Bandits and OPE | not proposed | — | — | Blocked on Phase 6 |
 | 7 — Generative / foundation | not proposed | — | — | May remain a reading list |
+| C — Content cold-item retrieval | **approved 2026-09-05** | 2026-09-05 | 0017 | Not a ladder rung but a second candidate source: 3,376 catalog movies have zero ratings and no interaction-derived index can reach them. Genres and release year first; the tag genome covers 0% of cold items. Proves the mechanism — the offline population is deep-catalog obscurity, while the production case is new releases, which MovieLens cannot measure |
 
 ## References
 

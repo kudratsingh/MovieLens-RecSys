@@ -148,9 +148,9 @@ The fix is to draw the subsample from a fixed seed independent of the training s
 population is held constant while the model's randomness varies. Until then the retrieval tolerances
 rest on the population term alone, and any verdict built on them is precise about sampling noise and
 silent about model instability.
-## C — Content-based cold-item retrieval (ADR 0017, proposed)
+## C — Content-based cold-item retrieval (ADR 0017, accepted 2026-09-05)
 
-Gated on the owner accepting ADR 0017 and adding its roadmap row. Sized for the first increment only:
+Approved 2026-09-05 with its roadmap row logged. Sized for the first increment only:
 genres and release year, no TMDB ingestion, no serving integration until an offline number exists.
 
 | ID | Size | Work item | Depends on | Acceptance evidence |
