@@ -34,13 +34,18 @@ causal sequence. Preserve this cohort for threshold/routing evidence, but do
 not treat h10 as SASRec quality evidence until a separately versioned,
 transition-aware sequential cohort is approved.
 
-**Artifact implementation note (2026-09-04):** M2-02 writes a deterministic,
-checksum-pinned model archive to a never-overwritten MLflow-run directory
-immediately after fitting, retains that local copy, and uploads a second copy
-to MLflow. Exact embedding and candidate equality, deterministic bytes, and
-fail-closed corruption checks define acceptance. The format and recovery
-boundary are documented in
-[`docs/modeling/sasrec-artifacts.md`](../modeling/sasrec-artifacts.md).
+**Artifact implementation and run note (2026-09-04):** M2-02 writes a
+deterministic, checksum-pinned model archive to a never-overwritten MLflow-run
+directory immediately after fitting, retains that local copy, and uploads a
+second copy to MLflow. Exact embedding and candidate equality, deterministic
+bytes, and fail-closed corruption checks define acceptance. The format and
+recovery boundary are documented in
+[`docs/modeling/sasrec-artifacts.md`](../modeling/sasrec-artifacts.md). Full-data
+run `a11af5ed0f0745f68572407237cfa4b9` completed under that contract and exactly
+reproduced the earlier seed-42 metrics. Its local and MLflow archives are
+byte-identical and reload successfully. This removes the artifact caveat from
+the historical first run, but does not remove the seed, rolling-window,
+tolerance, latency, or paired-ranker gates.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work

@@ -40,6 +40,8 @@ from project root. Requires Postgres and MLflow reachable per ``Settings``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import time
@@ -54,7 +56,13 @@ from sqlalchemy import create_engine
 from src.config import Settings
 from src.data.load import load_ratings
 from src.data.split import temporal_split
-from src.evaluation.protocol import COLD_START_THRESHOLD, K_CANDIDATES, evaluate
+from src.evaluation.protocol import (
+    COLD_START_THRESHOLD,
+    K_CANDIDATES,
+    PER_USER_RECALL_ARTIFACT,
+    evaluate,
+    per_user_recall_document,
+)
 from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
 from src.training import protocol_manifest
@@ -70,6 +78,15 @@ PHASE_2_EXPERIMENT = "phase-2-candidates"
 SAMPLE_FRACTION_ENV_VAR = "TWOTOWER_USER_SAMPLE_FRACTION"
 RUN_LABEL_ENV_VAR = "TWOTOWER_RUN_LABEL"
 INPUT_DIR_ENV_VAR = "TWOTOWER_INPUT_DIR"
+MODEL_TYPE = "two_tower"
+
+
+def _configuration_id(config: TwoTowerConfig) -> str:
+    """Identify model configuration independently of its training seed."""
+    parameters = config.as_params()
+    parameters.pop("seed")
+    canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode()
+    return f"two-tower-sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def subsample_users(
@@ -191,11 +208,11 @@ def run_once(
     holdout_user_ids = split.holdout["userId"].unique().tolist()
 
     mlflow.set_experiment(PHASE_2_EXPERIMENT)
-    with mlflow.start_run(run_name=run_name_for(policy, run_label)):
+    with mlflow.start_run(run_name=run_name_for(policy, run_label)) as run:
         mlflow.set_tags(
             {
                 "model_family": "candidate_generator",
-                "model_type": "two_tower",
+                "model_type": MODEL_TYPE,
                 "phase": "2",
                 "stage": "candidate",
                 "cold_start_routing_policy": policy,
@@ -383,6 +400,17 @@ def run_once(
                 "n_fallback_served_users": len(holdout_fallback),
                 **model.hard_negative_stats(),
             }
+        )
+        mlflow.log_dict(
+            per_user_recall_document(
+                result,
+                run_id=run.info.run_id,
+                model_type=MODEL_TYPE,
+                seed=config.seed,
+                configuration_id=_configuration_id(config),
+                protocol=protocol.to_dict(),
+            ),
+            PER_USER_RECALL_ARTIFACT,
         )
         if cohort is not None:
             synth_cold.log_summary(result, logger=logger, k=K_CANDIDATES)

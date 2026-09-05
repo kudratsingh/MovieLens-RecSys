@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import mlflow
@@ -8,7 +9,7 @@ import pytest
 
 from src.models.candidates.sasrec import SASRecConfig
 from src.models.candidates.sasrec_artifact import MANIFEST_FILENAME, load_sasrec
-from src.training.sasrec import retrieval_diagnostics, run_once
+from src.training.sasrec import _configuration_id, retrieval_diagnostics, run_once
 from src.training.twotower import PHASE_2_EXPERIMENT
 
 
@@ -39,6 +40,14 @@ def test_retrieval_diagnostics_handle_empty_policy_slice() -> None:
     }
 
 
+def test_configuration_identity_excludes_only_training_seed() -> None:
+    baseline = SASRecConfig(seed=7)
+    assert _configuration_id(baseline) == _configuration_id(SASRecConfig(seed=42))
+    assert _configuration_id(baseline) != _configuration_id(
+        SASRecConfig(seed=7, negative_count=baseline.negative_count + 1)
+    )
+
+
 def test_run_keeps_local_artifact_and_logs_mlflow_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -65,7 +74,13 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
         # directly inspectable path and never reaches an external service.
         monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
         mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
-        run_once(ratings, config, run_label="artifact-test", artifact_root=tmp_path / "durable")
+        run_once(
+            ratings,
+            config,
+            sample_fraction=0.99,
+            run_label="artifact-test",
+            artifact_root=tmp_path / "durable",
+        )
         client = mlflow.MlflowClient()
         experiment = client.get_experiment_by_name(PHASE_2_EXPERIMENT)
         assert experiment is not None
@@ -82,13 +97,28 @@ def test_run_keeps_local_artifact_and_logs_mlflow_copy(
             / "model"
             / MANIFEST_FILENAME
         )
+        recall_artifact = (
+            tmp_path
+            / "mlruns"
+            / experiment.experiment_id
+            / run.info.run_id
+            / "artifacts"
+            / "per_user_recall.json"
+        )
         assert durable_manifest.is_file()
         assert mlflow_manifest.is_file()
+        assert recall_artifact.is_file()
         assert durable_manifest.read_bytes() == mlflow_manifest.read_bytes()
         assert run.data.tags["sasrec_artifact_sha256"]
         assert run.data.tags["evaluation_protocol"]
         assert run.data.params["evaluation_protocol_hash"]
         assert run.data.params["train_seed"] == str(config.seed)
+        assert run.data.metrics["n_warm_users"] + run.data.metrics["n_cold_users"] == 4
+        recall_document = json.loads(recall_artifact.read_text())
+        assert recall_document["run_id"] == run.info.run_id
+        assert recall_document["configuration_id"] == _configuration_id(config)
+        assert recall_document["protocol"]["k"] == 500
+        assert len(recall_document["per_user_recall"]["overall"]) == 4
         load_sasrec(durable_manifest)
         load_sasrec(mlflow_manifest)
     finally:

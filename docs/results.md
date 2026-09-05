@@ -2337,7 +2337,8 @@ is still being built, the paired-ranker guardrail is unmeasured, and the run
 predates artifact export. Its MLflow run
 `6958fd082af6462da812ddd4708230c1` is `FINISHED` and retains all metrics,
 parameters, tags, and sequence diagnostics, but it contains no weights. M2-02
-therefore requires one exported rerun before serving or latency work.
+therefore required the exported rerun recorded below before serving or latency
+work.
 
 ### Why synthetic h10 is zero
 
@@ -2358,3 +2359,23 @@ if it were chronology, making h10 an out-of-distribution probe rather than a
 sequence-quality slice. Keep its routing assertion; version a separate cohort
 with strictly increasing timestamps and transition-aligned targets before
 claiming synthetic sequential quality.
+
+## SASRec artifact-backed full-data reproduction — 2026-09-04
+
+After model-level save/load/export landed, the frozen full-data cell was rerun
+as MLflow run `a11af5ed0f0745f68572407237cfa4b9`. It reproduced every final
+aggregate from metric-only run `6958fd082af6462da812ddd4708230c1`, including
+warm recall@500 **0.4651693328**, warm NDCG@500 0.1734004197, cold recall@500
+0.5262729520, and overall recall@500 0.4815962808.
+
+The run retained a 9,458,477-byte model archive locally and in MLflow. Both
+copies have SHA-256
+`43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6`;
+the artifact reloads successfully and rebuilds exact retrieval over 34,461
+items. Fit time was 24,293.3 seconds (6 h 44 min 53 s) with approximately
+8.8 GiB peak resident memory observed on the same 36 GiB Apple M3 Pro.
+
+This closes the lost-weights risk and demonstrates deterministic reproduction.
+It remains one seed and is not a promotion. The exact paths, lineage, resource
+record, interruption recovery, and remaining gates are in
+[`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
