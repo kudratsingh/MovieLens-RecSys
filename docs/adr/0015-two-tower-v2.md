@@ -3,7 +3,24 @@
 **Status:** Accepted — measured, not promoted
 **Date:** 2026-09-03
 
-**Outcome (2026-09-04):** The deterministic 6% Gate 1 pilot completed all
+**Corrected outcome (2026-09-05):** The stop decision below is superseded by a
+retrieval correctness defect, not by new tuning. FAISS row 0 represented dense
+item id 1, but the recommendation path dropped row 0 and interpreted every
+remaining zero-based row as a one-based dense id. The five-arm pilot therefore
+evaluated systematically mistranslated item ids. After the two-line mapping
+fix, an independent exact-index parity test passes and a tiny overfit canary
+reaches recall@10 `1.0`. One bounded 6% diagnostic with the current v2 defaults
+and exact FAISS reached warm recall@500 `0.3759484159` and NDCG@500
+`0.1483997512`, versus the old complete-v2 `0.0435`, popularity `0.1974`, and
+item-item `0.3619` reference lines. The run id is
+`8a22ed513b8f457eb0d5f93b826dc82a`; its protocol hash is
+`sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629`.
+Because this diagnostic also used 16,384 sampled negatives and exact retrieval
+where the old complete arm used 4,096 and IVF, it reopens the verdict but does
+not isolate the mapping effect or promote the model. No v3, sweep, or full-data
+run follows without a separate decision.
+
+**Superseded outcome (2026-09-04):** The deterministic 6% Gate 1 pilot completed all
 five planned arms with no failures. Complete v2 reached warm recall@500 of
 0.0435 (NDCG@500 0.0135), below temperature-only at 0.0445 and far below the
 same pilot's popularity reference of 0.1974. Hard-negative-only reached 0.0443
@@ -12,7 +29,9 @@ from 89.3 to 222.5 seconds. Complete v2 took 250.5 seconds. The differences
 inside the two-tower band are below the pilot slice's known noise, while the
 4.5x gap to popularity is not. The stop rule fired: Gate 2 is not justified,
 item-item remains champion, and this repair line is closed without promotion.
-The project proceeds to ADR 0016.
+The project proceeded to ADR 0016. These numbers remain below as an audit
+record, but no longer constitute evidence that two-tower retrieval loses to
+popularity.
 
 **Implementation note (2026-09-04):** Gate 0 uses bounded, current-model
 per-batch mining rather than materializing an epoch-wide neighbour artifact.
