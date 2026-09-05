@@ -65,6 +65,7 @@ from src.evaluation.protocol import (
 )
 from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
+from src.models.candidates.twotower_artifact import MANIFEST_FILENAME, export_twotower
 from src.training import protocol_manifest
 from synthetic.cold_start import harness as synth_cold
 
@@ -78,6 +79,8 @@ PHASE_2_EXPERIMENT = "phase-2-candidates"
 SAMPLE_FRACTION_ENV_VAR = "TWOTOWER_USER_SAMPLE_FRACTION"
 RUN_LABEL_ENV_VAR = "TWOTOWER_RUN_LABEL"
 INPUT_DIR_ENV_VAR = "TWOTOWER_INPUT_DIR"
+ARTIFACT_DIR_ENV_VAR = "TWOTOWER_ARTIFACT_DIR"
+DEFAULT_ARTIFACT_DIR = Path("artifacts/twotower")
 MODEL_TYPE = "two_tower"
 
 
@@ -122,6 +125,11 @@ def resolve_sample_fraction(env: Mapping[str, str] | None = None) -> float:
     return 1.0 if not raw else float(raw)
 
 
+def resolve_artifact_dir(env: Mapping[str, str] | None = None) -> Path:
+    raw = (env if env is not None else os.environ).get(ARTIFACT_DIR_ENV_VAR, "").strip()
+    return DEFAULT_ARTIFACT_DIR if not raw else Path(raw)
+
+
 def run_name_for(policy: str, label: str) -> str:
     """MLflow run name: the historical name, plus policy and sweep labels.
 
@@ -141,6 +149,7 @@ def run_once(
     sample_fraction: float = 1.0,
     run_label: str = "",
     routing_policy: str | None = None,
+    artifact_root: Path | None = None,
 ) -> None:
     """One MLflow run: split, fit, recommend, evaluate, log.
 
@@ -148,6 +157,7 @@ def run_once(
     25 M-row ``read_sql`` once and spend the rest of its budget training.
     """
     policy = routing.resolve_policy() if routing_policy is None else routing_policy
+    artifact_root = resolve_artifact_dir() if artifact_root is None else artifact_root
     logger.info("Cold-start routing policy: %s", policy)
 
     if sample_fraction != 1.0:
@@ -288,6 +298,22 @@ def run_once(
             epochs_run,
             config.epochs,
             epoch_eval_seconds,
+        )
+
+        artifact_dir = artifact_root / run.info.run_id
+        manifest = export_twotower(model, artifact_dir)
+        mlflow.log_artifacts(str(artifact_dir), artifact_path="model")
+        mlflow.log_param("twotower_artifact_schema_version", manifest.schema_version)
+        mlflow.set_tags(
+            {
+                "twotower_artifact_sha256": manifest.model_sha256,
+                "twotower_manifest": f"model/{MANIFEST_FILENAME}",
+            }
+        )
+        logger.info(
+            "Saved two-tower artifact %s (sha256=%s)",
+            artifact_dir,
+            manifest.model_sha256,
         )
 
         logger.info("Recommending top-%d for each holdout user ...", K_CANDIDATES)
@@ -477,6 +503,7 @@ __all__ = [
     "PHASE_2_EXPERIMENT",
     "load_inputs",
     "main",
+    "resolve_artifact_dir",
     "resolve_sample_fraction",
     "run_name_for",
     "run_once",
