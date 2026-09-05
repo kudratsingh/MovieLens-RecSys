@@ -51,6 +51,45 @@ would serve. This is the single most important finding behind this ADR, and it w
 any code was written precisely because the design would otherwise have been built on it and failed at
 the first cold item.
 
+## What the cold items actually are
+
+The ADR's own "how we would know we are wrong" asked for a sample to be inspected before
+implementation, on the grounds that the population might be data artefacts. It was, and the answer
+tempers the case rather than killing it. Eighteen drawn at seed 42:
+
+```
+Bullet Code (1940)                    Western
+Wings for the Eagle (1942)            Drama
+Up in Central Park (1948)             (no genres listed)
+Fort Dobbs (1958)                     Western
+Return of Shanghai Joe (1975)         Action|Western
+Honeymoon Academy (1990)              Comedy|Drama
+Caged Heat II: Stripped of Freedom    Action|Drama|Thriller
+The Wife He Met Online (2012)         Thriller
+Utopia in Four Movements (2010)       (no genres listed)
+```
+
+These are **real films, not artefacts** — the population is genuine. But they are overwhelmingly
+**deep-catalog obscurities, not new releases**: mostly pre-2000, with a long tail of B-movies,
+regional titles and documentaries that simply never accumulated a rating.
+
+That distinction matters more than it first appears, because it means **the offline population and
+the production need are not the same population**:
+
+- **Offline**, "cold item" means *long-tail obscurity*. Making `Bullet Code (1940)` reachable is a
+  coverage win and probably not a user-experience win, and this ADR should not pretend otherwise.
+- **In production**, "cold item" means *recently added* — a film released this week, which must be
+  recommendable on the day it enters the catalog. MovieLens 25M ends in 2019, so **this dataset
+  cannot measure that case at all.**
+
+The consequence for the claim: the offline work proves the *mechanism* — that a retriever can reach
+items with no interactions — on the only population available. It does not, and cannot, demonstrate
+the production benefit that motivates it. Anyone reading a cold-item recall figure from this rung
+should read it as evidence the machinery works, not as evidence users are better served.
+
+If that mechanism proof is not worth the increment on its own, the rung should be deferred rather
+than justified by a benefit this dataset cannot show.
+
 ## Decision
 
 Add a **content-based retriever** as a second candidate source, representing an item by its
