@@ -54,10 +54,22 @@ Three consequences follow directly, and they are the reason the denominator is w
   [`docs/results.md`](../../results.md) observed for CF/ALS, whose cold NDCG moved 0.04% across three
   seeds because 701 of 702 cold users were served by the deterministic popularity path.
 
-The warm slice is deliberately out of scope. Warm carries a *positive* claim (+3% relative), not a
-non-regression clause, and a positive claim is not established by a tolerance. The harness will
-report warm dispersion when the evidence contains it, labelled as diagnostic, and it never feeds a
-gate input.
+The warm slice is deliberately out of scope **for a tolerance**. Warm carries a *positive* claim
+(+3% relative), not a non-regression clause, and a positive claim is not established by a tolerance.
+This harness reports warm dispersion when the evidence contains it, labelled as diagnostic, and it
+never feeds a gate input.
+
+What the warm claim gets instead is an **uncertainty band**, computed by the gate itself from the
+same rule — see
+[`evaluation-protocol.md` § The positive claim carries an uncertainty band](evaluation-protocol.md#the-positive-claim-carries-an-uncertainty-band).
+The distinction is worth keeping sharp: a tolerance is a *published number* an operator types in,
+measured on runs the gate never reads, and it exists so a guardrail can tell a regression from
+noise. A band is *computed inside the verdict* from the runs being judged, and it exists so a
+positive claim can tell a gain from noise. They share the arithmetic — `H = sqrt(A² + B²)`, the same
+paired bootstrap, the same Student-t table, literally the same functions, which now live in
+`src/evaluation/retrieval_gate.py` and are imported here — and they do not share the
+anti-circularity problem, because a band derived from the candidate's own evaluation cannot be tuned
+to a result it is part of.
 
 ## Which variation must the tolerance cover
 
@@ -165,12 +177,16 @@ proxy for the other. Concretely:
   ranker episode in §1 above is the standing counterexample in this repository: 28.68% relative seed
   movement, an order of magnitude beyond anything a bootstrap over thousands of users would report.
   A one-run study in that situation would have proposed a ~0.5% tolerance and been wrong by 50×.
-- **The warm `+3%` clause was never protected by the tolerance and is now unprotected by anything
-  else either.** The tolerance feeds only the cold and overall non-regression clauses. Under three
+- **The warm `+3%` clause was never protected by the tolerance, and what now protects it covers only
+  half the gap.** The tolerance feeds only the cold and overall non-regression clauses. Under three
   seeds the warm clause at least read a mean, which shrinks seed variance by `√3`. Under one seed it
   reads a single draw from a distribution of unknown width, so a genuinely better model can fail on
-  an unlucky seed and a genuinely equal one can pass on a lucky one. Neither error is detectable from
-  the verdict.
+  an unlucky seed and a genuinely equal one can pass on a lucky one. The gate now puts a one-sided
+  95% band around that draw and decides the clause on its lower bound, which removes the *lucky
+  pass* — a gain the evidence cannot resolve no longer clears the bar. It does not remove the
+  *unlucky fail*, and it cannot: under one run the band is the population term alone, and the run
+  the seed produced is the only run there is. A one-seed `promote` is now a defensible claim about
+  the users evaluated; it is still not a claim about the seed.
 - **The guardrails get *tighter*, not looser, and that is not a consolation.** Dropping `A_s` shrinks
   `H_s`, so the cold and overall tolerances come out smaller — often at the 0.5% floor. That is the
   velocity-error direction this document prefers (§ Which direction of error is safe), so the
@@ -497,6 +513,11 @@ not measure".
   first multi-seed re-measurement of a model promoted under one seed lands outside what that verdict
   implied, the policy's premise — that seed confirmation was re-confirming a believed result — was
   wrong for this model family, and the one-run regime should be withdrawn rather than re-justified.
+- **Candidates keep getting refused on the band rather than on the point estimate.** Then `3% + H`
+  is the threshold in practice and `3%` is a fiction, and the honest response is to say so — either
+  by widening the evaluated population until `H` stops dominating, or by re-opening the threshold
+  itself as a decision. Quietly reading the point estimate instead would be picking the number that
+  passes, which is the failure this whole document exists to prevent.
 
 ## Residual gaps, recorded rather than papered over
 
@@ -512,9 +533,17 @@ not measure".
   scope note: it needs the gate's signature to take a provenance-carrying tolerance rather than two
   floats.
 - **The publication-order protection is procedural.** See derivation B above.
-- **Per-user recall vectors are not currently produced by `src/evaluation/protocol.py`.** `evaluate()`
-  returns slice means only; the study consumes vectors as evidence and does not compute them. Wiring
-  their export is a separate change to the trainers' evaluation call sites.
+- **The warm band removes the lucky pass and not the unlucky fail.** Deciding the positive claim on
+  a lower bound means the effective bar is `3% + H` rather than `3%`, so a real gain the evidence
+  cannot resolve is refused. That is the velocity error this document prefers, taken deliberately,
+  but it is a genuine cost and it lands hardest on exactly the slices where `H` is largest — small
+  populations and per-user metrics with wide spread. The recovery is the same as everywhere else
+  here: measure again on more users, not on a smaller bound.
+- **The band under one seed measures the wrong noise well.** It is the population term alone, so it
+  is precise about how the gain would move on a different sample of users and silent about how it
+  would move on a different training seed. Nothing in the verdict distinguishes a model whose seeds
+  agree from one whose seeds swing, and the band's tightness must not be read as evidence that they
+  agree. Closing this needs a second run, which is what the standing policy is spending.
 - **`m = 3` is a very thin basis for a standard deviation**, and the `t` multiplier makes that
   visible rather than fixing it. A study that can afford five seeds should run five; the harness
   accepts any `m ≥ 3` and the multiplier tightens automatically. `m = 1` is not a thinner version of

@@ -13,16 +13,40 @@ run per configuration until the ladder reaches the transformer rungs — is
 exercised by passing a single seed, and the decision then records
 ``seed_regime=single_seed`` and says in ``uncertainty_basis`` what a single run
 cannot tell anyone.  Nothing else about the gate changes with the seed count.
+
+**Uncertainty on the positive claim.**  The warm clause used to be a bare
+comparison of two numbers: candidate mean over incumbent, at least +3%.  That
+was defensible while the warm figure was a mean over three seeds and stopped
+being defensible when it became a single draw, so every verdict now carries a
+one-sided 95% band on the warm gain and the clause passes on the band's *lower*
+bound rather than on the point estimate.  The claim it makes is therefore "we
+are confident the gain is at least 3%" rather than "the number came out above
+3%", which is the only form of the claim a single run can support honestly.
+
+The band is built from the same arithmetic the guardrail tolerances are —
+`docs/model-planning/contracts/retrieval-tolerance-measurement.md`'s
+``H = sqrt(A² + B²)`` — with the paired user-level bootstrap supplying ``B`` and
+the across-seed dispersion supplying ``A`` whenever there is more than one seed
+to estimate it from.  It applies in both regimes: three seeds do not make a
+finite holdout infinite, and a band that switched itself off when the ladder
+returns to multi-seed runs would be the same silent weakening this module exists
+to refuse.  The band needs per-user warm recall vectors on both sides; without
+them the gate returns ``incomplete`` rather than falling back to the comparison
+it replaced.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+import statistics
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Final
+
+import numpy as np
+import numpy.typing as npt
 
 from .aggregate import MismatchedResultsError, mean_eval_result
 from .manifest import (
@@ -33,12 +57,18 @@ from .manifest import (
     ProtocolManifestError,
     validate_metric_value,
 )
-from .protocol import K_CANDIDATES, EvalResult, UserMetrics
+from .protocol import K_CANDIDATES, PER_USER_RECALL_ARTIFACT, EvalResult, UserMetrics
 
 REQUIRED_SEEDS: Final = (42, 7, 13)
 MIN_WARM_RELATIVE_GAIN: Final = 0.03
 GATE_STAGE: Final = "retrieval"
 GATE_METRIC: Final = "recall"
+
+# The one slice carrying a positive claim, and therefore the only one whose
+# per-user vectors the gate requires. The guardrails keep consuming the measured
+# tolerances; asking for their vectors too would raise the evidence bar without
+# changing a single verdict.
+WARM_SLICE: Final = "warm"
 
 MLFLOW_DETERMINISTIC_PARAM: Final = "model_deterministic"
 MLFLOW_SEED_PARAM: Final = "train_seed"
@@ -48,6 +78,113 @@ ITEMITEM_MODEL_TYPE: Final = "itemitem_cosine"
 _EXIT_PROMOTE: Final = 0
 _EXIT_REFUSE: Final = 1
 _EXIT_UNDECIDED: Final = 2
+
+
+# --- shared uncertainty kernel ----------------------------------------------
+#
+# The gate's warm band and `tolerance_study`'s guardrail tolerances are the same
+# measurement pointed at different clauses, so they are the same code. It lives
+# here rather than in the study because the dependency already runs that way —
+# the study imports the gate's vocabulary, not the other way round — and because
+# a gate that computed its own bootstrap would eventually drift from the one the
+# tolerances it consumes were measured with.
+
+ONE_SIDED_Z_95: Final = 1.6448536269514722
+
+# One-sided 95% Student-t critical values indexed by degrees of freedom. A seed
+# term is a mean over m runs, so df = m - 1; beyond df 30 the difference from the
+# normal quantile is smaller than anything else in these calculations.
+_T_95_ONE_SIDED: Final = (
+    math.nan,
+    6.314,
+    2.920,
+    2.353,
+    2.132,
+    2.015,
+    1.943,
+    1.895,
+    1.860,
+    1.833,
+    1.812,
+    1.796,
+    1.782,
+    1.771,
+    1.761,
+    1.753,
+    1.746,
+    1.740,
+    1.734,
+    1.729,
+    1.725,
+    1.721,
+    1.717,
+    1.714,
+    1.711,
+    1.708,
+    1.706,
+    1.703,
+    1.701,
+    1.699,
+    1.697,
+)
+
+# Enough replicates that the bootstrap's own Monte-Carlo error is far below the
+# quantity it estimates. Chunked when drawn (see `_bootstrap_replicate_means`).
+DEFAULT_BOOTSTRAP_REPLICATES: Final = 10_000
+MIN_BOOTSTRAP_REPLICATES: Final = 1_000
+
+# Fixed on the day the measurement protocol was written. It is a resampling seed
+# and has nothing to do with the training seeds a gate reads — naming it after
+# the date keeps the two from being confused.
+DEFAULT_BOOTSTRAP_SEED: Final = 20_260_904
+
+# Replicates are drawn in blocks so a 10,000 x n index matrix never has to exist
+# at once. The block size is a constant rather than a parameter because it
+# participates in the random stream: change it and the same seed produces
+# different (equally valid) replicates.
+_BOOTSTRAP_BLOCK: Final = 512
+
+# Slack allowed when checking that a per-user vector reproduces the slice mean
+# the run published. Wide enough for float accumulation over thousands of users,
+# far too narrow for a vector that belongs to a different run.
+_MEAN_RECONSTRUCTION_REL_TOL: Final = 1e-6
+_MEAN_RECONSTRUCTION_ABS_TOL: Final = 1e-9
+
+
+def _t_quantile(degrees_of_freedom: int) -> float:
+    if degrees_of_freedom < 1:
+        raise ValueError("a dispersion estimate needs at least two observations")
+    if degrees_of_freedom >= len(_T_95_ONE_SIDED):
+        return ONE_SIDED_Z_95
+    return _T_95_ONE_SIDED[degrees_of_freedom]
+
+
+def _paired_differences(
+    candidate: Mapping[int, float], incumbent: Mapping[int, float]
+) -> npt.NDArray[np.float64]:
+    users = sorted(candidate)
+    return np.array([candidate[user] - incumbent[user] for user in users], dtype=np.float64)
+
+
+def _bootstrap_replicate_means(
+    differences: npt.NDArray[np.float64], replicates: int, seed: int
+) -> npt.NDArray[np.float64]:
+    """Resample users with replacement; return the mean difference per replicate.
+
+    Drawn in blocks so the index matrix stays small. The block size is fixed
+    (`_BOOTSTRAP_BLOCK`) because it is part of the random stream: the same seed
+    reproduces the same replicates only for the same block size.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(differences.size)
+    means = np.empty(replicates, dtype=np.float64)
+    filled = 0
+    while filled < replicates:
+        block = min(_BOOTSTRAP_BLOCK, replicates - filled)
+        indices = rng.integers(0, n, size=(block, n))
+        means[filled : filled + block] = np.mean(differences[indices], axis=1)
+        filled += block
+    return means
 
 
 class RetrievalGateStatus(StrEnum):
@@ -77,12 +214,15 @@ _SINGLE_SEED_BASIS: Final = (
     "one training run: the supplied tolerances can only have covered evaluation-population "
     "sampling (a paired user-level bootstrap). Training stochasticity is unmeasured, so a "
     "model whose seeds genuinely disagree is not caught by this verdict, and the warm claim "
-    "is a single draw rather than a mean."
+    "is a single draw rather than a mean. Its uncertainty band is measured on that same "
+    "population term alone and inherits the same blind spot: it says how far the gain would "
+    "move on a different sample of users, not on a different training seed."
 )
 _MULTI_SEED_BASIS: Final = (
     "{count} training runs: the supplied tolerances cover across-seed training dispersion and "
     "evaluation-population sampling combined in quadrature, and every clause reads a mean "
-    "over the seed set."
+    "over the seed set. The warm claim's uncertainty band combines the same two terms the "
+    "same way."
 )
 
 
@@ -120,6 +260,62 @@ class RetrievalTolerance:
 
 
 @dataclass(frozen=True)
+class BandOptions:
+    """Resampling knobs for the warm band, fixed so a verdict is reproducible.
+
+    Both defaults are shared with `tolerance_study`, which matters more than it
+    looks: the guardrail tolerances a decision consumes and the band it computes
+    for itself are then drawn from the same replicate stream on the same users,
+    so the two half-widths in one JSON payload are comparable quantities rather
+    than two estimates of loosely related things.
+    """
+
+    bootstrap_replicates: int = DEFAULT_BOOTSTRAP_REPLICATES
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+    def __post_init__(self) -> None:
+        if type(self.bootstrap_replicates) is not int:
+            raise ValueError("bootstrap_replicates must be an integer")
+        if self.bootstrap_replicates < MIN_BOOTSTRAP_REPLICATES:
+            raise ValueError(
+                f"bootstrap_replicates must be at least {MIN_BOOTSTRAP_REPLICATES}, "
+                f"got {self.bootstrap_replicates}"
+            )
+        if type(self.bootstrap_seed) is not int:
+            raise ValueError("bootstrap_seed must be an integer")
+
+
+@dataclass(frozen=True)
+class UncertaintyBand:
+    """The one-sided 95% interval a positive clause is decided on.
+
+    Every field is relative to the incumbent's slice recall, in the same units
+    as `RecallClause.relative_change` and `MIN_WARM_RELATIVE_GAIN`, so the three
+    can be read against each other without conversion.
+
+    ``seed_half_width`` is ``None`` — never ``0.0`` — under a single seed. A zero
+    would claim the seed term was measured and found to be nothing, which is a
+    different and much stronger statement than "there was one run".
+    """
+
+    lower_bound: float
+    half_width: float
+    seed_half_width: float | None
+    population_half_width: float
+    n_users: int
+    bootstrap_replicates: int
+    bootstrap_seed: int
+    basis: str
+
+
+# Named rather than spelled inline because these two strings are what a reader
+# checks a `promote` against, and "the band saw one noise source" versus "the
+# band saw both" is the whole difference between the two regimes' verdicts.
+BAND_POPULATION_ONLY: Final = "population-only"
+BAND_SEED_AND_POPULATION: Final = "seed-and-population"
+
+
+@dataclass(frozen=True)
 class RetrievalRun:
     run_id: str
     model_type: str
@@ -127,6 +323,13 @@ class RetrievalRun:
     deterministic: bool
     protocol: ProtocolManifest
     result: EvalResult
+    # ``{slice_name: {user_id: recall}}``, as `evaluation.protocol.evaluate`
+    # publishes it. Only the warm slice is read, and only to build the band the
+    # positive clause is decided on. It defaults to empty so an existing caller
+    # still constructs, but a run that arrives without it makes the decision
+    # `incomplete` — the absence has to surface as missing evidence, not as a
+    # gate that quietly went back to comparing two bare numbers.
+    per_user_recall: Mapping[str, Mapping[int, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -145,6 +348,10 @@ class RecallClause:
     required_change: float
     passed: bool
     detail: str
+    # Present on a positive clause and absent on a non-regression one: the
+    # guardrails already consume a measured tolerance that *is* a noise
+    # allowance, and giving them a second one would double-count it.
+    band: UncertaintyBand | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +414,7 @@ def retrieval_promotion_decision(
     tolerance: RetrievalTolerance,
     min_warm_relative_gain: float = MIN_WARM_RELATIVE_GAIN,
     required_seeds: tuple[int, ...] = REQUIRED_SEEDS,
+    band_options: BandOptions | None = None,
 ) -> RetrievalGateDecision:
     """Apply the owner-approved retrieval gate without permissive fallbacks.
 
@@ -217,10 +425,18 @@ def retrieval_promotion_decision(
     should be something a caller asks for rather than something it inherits.
     The decision records which regime produced it either way.
 
-    Nothing else about the gate varies with the seed count.  The clauses, the
-    protocol and population checks, the deterministic-incumbent requirement and
-    ``serving_eligible=False`` are identical for one seed and for three.
+    The warm clause is decided on the lower bound of a one-sided 95% band, not
+    on the point estimate, so a `promote` claims the gain is *at least* the
+    threshold rather than that one measurement of it landed above.  Building
+    that band needs a warm per-user recall vector on every run; a run set that
+    does not carry them is `incomplete`.
+
+    Nothing else about the gate varies with the seed count.  The guardrail
+    clauses, the protocol and population checks, the deterministic-incumbent
+    requirement and ``serving_eligible=False`` are identical for one seed and
+    for three.
     """
+    resolved_band_options = band_options or BandOptions()
     if (
         not isinstance(min_warm_relative_gain, (int, float))
         or isinstance(min_warm_relative_gain, bool)
@@ -328,12 +544,26 @@ def retrieval_promotion_decision(
             required_seeds=required_seeds,
         )
 
+    band_terms, unpaired = _warm_band_terms(
+        candidate, incumbent, incumbent_mean.warm.recall, resolved_band_options
+    )
+    if unpaired:
+        return _decision(
+            RetrievalGateStatus.NOT_COMPARABLE,
+            candidate_ids,
+            incumbent_ids,
+            protocol_hash=protocol_hash,
+            reasons=unpaired,
+            required_seeds=required_seeds,
+        )
+
     clauses = (
         _positive_clause(
-            "warm",
+            WARM_SLICE,
             incumbent_mean.warm.recall,
             candidate_mean.warm.recall,
             min_warm_relative_gain,
+            band_terms,
         ),
         _non_regression_clause(
             "cold",
@@ -420,6 +650,17 @@ def _run_set_completeness(
             reasons.append(f"stochastic {side} run {run.run_id!r} is missing its seed")
         if run.seed is not None and type(run.seed) is not int:
             reasons.append(f"{side} run {run.run_id!r} seed must be an integer or null")
+        if not _warm_vector(run):
+            # Deliberately worded as a refusal rather than a note. The failure
+            # this sentence is guarding against is a future reader deciding the
+            # vectors are optional decoration and reinstating the bare
+            # comparison, which is the same class of mistake as a tolerance
+            # quietly defaulting to something permissive.
+            reasons.append(
+                f"{side} run {run.run_id!r} carries no warm per-user recall vector, so the "
+                "+3% claim cannot be given an uncertainty band; the gate does not fall back "
+                "to a bare comparison of two means"
+            )
     return reasons
 
 
@@ -470,6 +711,65 @@ def _validate_run(run: RetrievalRun) -> list[str]:
         reasons.append(f"run {run.run_id!r} has no warm users for the primary gate")
     if run.result.n_cold_users == 0:
         reasons.append(f"run {run.run_id!r} has no cold users for the required guardrail")
+    reasons.extend(_warm_vector_reasons(run))
+    return reasons
+
+
+def _warm_vector(run: RetrievalRun) -> Mapping[int, float] | None:
+    if not isinstance(run.per_user_recall, Mapping):
+        return None
+    vector = run.per_user_recall.get(WARM_SLICE)
+    return vector if vector else None
+
+
+def _warm_vector_reasons(run: RetrievalRun) -> list[str]:
+    """Check that the warm vector describes *this* run before resampling it.
+
+    Same three checks the tolerance study makes for the same reason: a vector of
+    the right shape from the wrong run would produce a band that is arithmetic
+    about nothing, and it would do so silently.
+    """
+    vector = _warm_vector(run)
+    if vector is None:
+        # Absence is `incomplete` evidence, reported by `_run_set_completeness`.
+        # Repeating it here would turn a missing artifact into a comparability
+        # failure, which reads as a claim about the runs rather than about what
+        # was supplied.
+        return []
+    reasons: list[str] = []
+    if len(vector) != run.result.n_warm_users:
+        reasons.append(
+            f"run {run.run_id!r} warm vector holds {len(vector)} users but the run reports "
+            f"{run.result.n_warm_users}"
+        )
+    for user_id, value in vector.items():
+        if type(user_id) is not int:
+            reasons.append(f"run {run.run_id!r} warm vector has a non-integer user id")
+            break
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or not 0.0 <= float(value) <= 1.0
+        ):
+            reasons.append(
+                f"run {run.run_id!r} warm vector has an invalid recall for user "
+                f"{user_id}: {value!r}"
+            )
+            break
+    if reasons:
+        return reasons
+    reconstructed = statistics.fmean(float(value) for value in vector.values())
+    if not math.isclose(
+        reconstructed,
+        run.result.warm.recall,
+        rel_tol=_MEAN_RECONSTRUCTION_REL_TOL,
+        abs_tol=_MEAN_RECONSTRUCTION_ABS_TOL,
+    ):
+        reasons.append(
+            f"run {run.run_id!r} warm vector averages {reconstructed:.6f} but the run published "
+            f"{run.result.warm.recall:.6f}; the vector does not belong to this run"
+        )
     return reasons
 
 
@@ -477,8 +777,121 @@ def _at_least(value: float, bound: float) -> bool:
     return value >= bound or math.isclose(value, bound, rel_tol=1e-9, abs_tol=1e-12)
 
 
+@dataclass(frozen=True)
+class _BandTerms:
+    """The measured half-widths, before a point estimate is subtracted from them.
+
+    Kept separate from `UncertaintyBand` so exactly one expression in this module
+    computes the relative change a clause reports. The band's lower bound is that
+    same number minus these half-widths, and a second copy of the subtraction
+    would be a second chance to disagree with the clause it belongs to.
+    """
+
+    seed_half_width: float | None
+    population_half_width: float
+    n_users: int
+    bootstrap_replicates: int
+    bootstrap_seed: int
+
+    @property
+    def half_width(self) -> float:
+        # Quadrature, per the composition argument in
+        # docs/model-planning/contracts/retrieval-tolerance-measurement.md: the
+        # holdout is pinned, so the across-seed spread is estimated at a fixed
+        # user set and the bootstrap at a fixed model. The two are independent
+        # and their variances add.
+        if self.seed_half_width is None:
+            return self.population_half_width
+        return math.hypot(self.seed_half_width, self.population_half_width)
+
+    @property
+    def basis(self) -> str:
+        return BAND_POPULATION_ONLY if self.seed_half_width is None else BAND_SEED_AND_POPULATION
+
+
+def _warm_band_terms(
+    candidate: RetrievalRunSet,
+    incumbent: RetrievalRunSet,
+    incumbent_warm_recall: float,
+    options: BandOptions,
+) -> tuple[_BandTerms | None, list[str]]:
+    """Measure how far the warm gain would move under resampling and re-seeding.
+
+    The population term is a *paired* bootstrap over per-user differences, which
+    is the only honest way to do it here: easy users are easy for both models, so
+    the two per-user vectors are strongly correlated and bootstrapping the two
+    means separately would inflate the term substantially — and an inflated band
+    is the permissive direction on a guardrail but the *restrictive* one on a
+    positive claim, so getting it wrong refuses good models.
+
+    Returns ``(terms, reasons)``; a non-empty ``reasons`` means the two sides
+    cannot be paired at all and the comparison is not available.
+    """
+    incumbent_vector = _warm_vector(incumbent.runs[0])
+    candidate_vectors = [_warm_vector(run) for run in candidate.runs]
+    if incumbent_vector is None or any(vector is None for vector in candidate_vectors):
+        # Unreachable from `retrieval_promotion_decision`, which returns
+        # `incomplete` first. Kept so a direct caller cannot get a band-free pass.
+        return None, []
+
+    users = set(incumbent_vector)
+    reasons = [
+        f"candidate run {run.run_id!r} and the incumbent scored different warm users; "
+        "the uncertainty band must be paired user by user"
+        for run, vector in zip(candidate.runs, candidate_vectors, strict=True)
+        if vector is not None and set(vector) != users
+    ]
+    if reasons:
+        return None, reasons
+    if incumbent_warm_recall <= 0:
+        # The clause refuses an undefined relative claim before it looks at a
+        # band, and every half-width here is denominated in this number.
+        return None, []
+
+    # One vector per user averaged across seeds, so the difference the bootstrap
+    # resamples has exactly the mean the clause reports: mean over users of the
+    # mean over seeds is the seed mean of the slice means.
+    seed_mean_recall = {
+        user: statistics.fmean(vector[user] for vector in candidate_vectors if vector is not None)
+        for user in users
+    }
+    differences = _paired_differences(seed_mean_recall, incumbent_vector)
+    replicates = _bootstrap_replicate_means(
+        differences, options.bootstrap_replicates, options.bootstrap_seed
+    )
+    population_half_width = (
+        ONE_SIDED_Z_95 * float(np.std(replicates, ddof=1)) / incumbent_warm_recall
+    )
+
+    # `None`, not `0.0`, under one seed: there is no dispersion estimate, which
+    # is a different finding from a dispersion estimate of zero.
+    seed_half_width: float | None = None
+    warm_recalls = [run.result.warm.recall for run in candidate.runs]
+    if len(warm_recalls) > 1:
+        seed_half_width = (
+            _t_quantile(len(warm_recalls) - 1)
+            * statistics.stdev(warm_recalls)
+            / math.sqrt(len(warm_recalls))
+        ) / incumbent_warm_recall
+
+    return (
+        _BandTerms(
+            seed_half_width=seed_half_width,
+            population_half_width=population_half_width,
+            n_users=len(users),
+            bootstrap_replicates=options.bootstrap_replicates,
+            bootstrap_seed=options.bootstrap_seed,
+        ),
+        [],
+    )
+
+
 def _positive_clause(
-    name: str, incumbent: float, candidate: float, required: float
+    name: str,
+    incumbent: float,
+    candidate: float,
+    required: float,
+    terms: _BandTerms | None,
 ) -> RecallClause:
     if incumbent <= 0:
         return RecallClause(
@@ -491,7 +904,34 @@ def _positive_clause(
             detail=f"{name} incumbent recall@500 is zero; relative improvement is undefined",
         )
     change = (candidate - incumbent) / incumbent
-    passed = _at_least(change, required)
+    if terms is None:
+        return RecallClause(
+            name=name,
+            incumbent=incumbent,
+            candidate=candidate,
+            relative_change=change,
+            required_change=required,
+            passed=False,
+            detail=(
+                f"{name} recall@500 changed {change:+.2%} ({incumbent:.6f} → {candidate:.6f}), "
+                "but no uncertainty band could be measured; a positive claim is not decided on "
+                "a point estimate alone"
+            ),
+        )
+    band = UncertaintyBand(
+        lower_bound=change - terms.half_width,
+        half_width=terms.half_width,
+        seed_half_width=terms.seed_half_width,
+        population_half_width=terms.population_half_width,
+        n_users=terms.n_users,
+        bootstrap_replicates=terms.bootstrap_replicates,
+        bootstrap_seed=terms.bootstrap_seed,
+        basis=terms.basis,
+    )
+    # The lower bound, not the point estimate. "The measurement came out above
+    # the bar" and "we are confident the truth is above the bar" are different
+    # claims, and only the second survives being read off a single run.
+    passed = _at_least(band.lower_bound, required)
     return RecallClause(
         name=name,
         incumbent=incumbent,
@@ -501,8 +941,11 @@ def _positive_clause(
         passed=passed,
         detail=(
             f"{name} recall@500 changed {change:+.2%} ({incumbent:.6f} → {candidate:.6f}); "
+            f"one-sided 95% lower bound {band.lower_bound:+.2%} "
+            f"(half-width {band.half_width:.2%}, {band.basis}, n={band.n_users}); "
             f"required at least +{required:.2%}"
         ),
+        band=band,
     )
 
 
@@ -559,12 +1002,75 @@ def _decision(
     )
 
 
-def retrieval_run_from_mlflow(run: Any) -> RetrievalRun:
+def per_user_recall_from_artifact(document: str) -> Mapping[str, Mapping[int, float]]:
+    """Parse one `per_user_recall.json` artifact into the gate's vector shape.
+
+    The artifact is what `evaluation.protocol.per_user_recall_document` writes,
+    and it is a whole run object rather than a bare vector map — the gate reads
+    only the vectors out of it and leaves the rest to the checks it already
+    makes against MLflow's own envelope.
+
+    JSON has no integer keys, so user ids arrive as strings and are parsed back
+    to the dataset's own ids here. They are never positions: pairing two runs by
+    position would silently compare different people.
+
+    Raises:
+        RetrievalRunNotUsableError: the document is not a per-user recall
+            artifact, or holds a vector this gate cannot resample.
+    """
+    try:
+        payload = json.loads(document)
+    except json.JSONDecodeError as exc:
+        raise RetrievalRunNotUsableError(
+            f"per-user recall artifact is not valid JSON: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RetrievalRunNotUsableError("per-user recall artifact must be one JSON object")
+    vectors_payload = payload.get("per_user_recall")
+    if not isinstance(vectors_payload, dict):
+        raise RetrievalRunNotUsableError(
+            "per-user recall artifact is missing its 'per_user_recall' object"
+        )
+    vectors: dict[str, Mapping[int, float]] = {}
+    for slice_name, vector in vectors_payload.items():
+        if not isinstance(vector, dict):
+            raise RetrievalRunNotUsableError(
+                f"per-user recall artifact slice {slice_name!r} must be an object of "
+                "user id to recall"
+            )
+        parsed: dict[int, float] = {}
+        for key, value in vector.items():
+            try:
+                user_id = int(key)
+            except (TypeError, ValueError) as exc:
+                raise RetrievalRunNotUsableError(
+                    f"per-user recall artifact slice {slice_name!r} has a non-integer user "
+                    f"id {key!r}"
+                ) from exc
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise RetrievalRunNotUsableError(
+                    f"per-user recall artifact slice {slice_name!r} has a non-numeric recall "
+                    f"for user {user_id}"
+                )
+            parsed[user_id] = float(value)
+        vectors[str(slice_name)] = parsed
+    return vectors
+
+
+def retrieval_run_from_mlflow(
+    run: Any, *, per_user_recall: Mapping[str, Mapping[int, float]] | None = None
+) -> RetrievalRun:
     """Read a strict retrieval envelope from one MLflow run.
 
     Legacy runs without the canonical protocol are intentionally unusable.
     They may be documented as historical evidence, but cannot silently enter
     an executable promotion decision.
+
+    ``per_user_recall`` is supplied by the caller rather than read here because
+    the vectors live in a run *artifact* and this function is deliberately given
+    only the run object — keeping it free of a tracking client is what makes it
+    testable without one. Omitting them produces a run the gate will report as
+    ``incomplete``, never one it waves through.
     """
     run_id = str(run.info.run_id)
     status = getattr(run.info, "status", "FINISHED")
@@ -676,6 +1182,7 @@ def retrieval_run_from_mlflow(run: Any) -> RetrievalRun:
         deterministic=deterministic,
         protocol=protocol,
         result=result,
+        per_user_recall=dict(per_user_recall or {}),
     )
 
 
@@ -685,8 +1192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.evaluation.retrieval_gate",
         description=(
-            "Strict retrieval gate: mean warm recall@500 over the stated seed set must improve "
-            "by 3%, with measured cold and overall non-regression tolerances."
+            "Strict retrieval gate: the one-sided 95% lower bound on the warm recall@500 gain "
+            "over the stated seed set must clear 3%, with measured cold and overall "
+            "non-regression tolerances."
         ),
     )
     parser.add_argument("--candidate", required=True, nargs="+", metavar="RUN_ID")
@@ -707,6 +1215,18 @@ def main(argv: list[str] | None = None) -> int:
             "without a seed term."
         ),
     )
+    parser.add_argument(
+        "--per-user-recall",
+        action="append",
+        default=[],
+        metavar="RUN_ID=PATH",
+        help=(
+            "read one run's per-user recall vectors from a local "
+            f"{PER_USER_RECALL_ARTIFACT} instead of its MLflow artifacts. Repeatable, and an "
+            "escape hatch rather than the normal path: the vectors are logged with the run, "
+            "and a gate reading them from somewhere else is a gate nobody can reproduce."
+        ),
+    )
     parser.add_argument("--tracking-uri", default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -719,12 +1239,28 @@ def main(argv: list[str] | None = None) -> int:
     mlflow.set_tracking_uri(args.tracking_uri or Settings().mlflow_tracking_uri)
     client = mlflow.tracking.MlflowClient()
 
+    def load_vectors(run_id: str) -> Mapping[str, Mapping[int, float]]:
+        from pathlib import Path
+
+        for override in args.per_user_recall:
+            named, separator, path = override.partition("=")
+            if not separator:
+                raise ValueError(f"--per-user-recall expects RUN_ID=PATH, got {override!r}")
+            if named == run_id:
+                return per_user_recall_from_artifact(Path(path).read_text(encoding="utf-8"))
+        local = mlflow.artifacts.download_artifacts(
+            run_id=run_id, artifact_path=PER_USER_RECALL_ARTIFACT
+        )
+        return per_user_recall_from_artifact(Path(local).read_text(encoding="utf-8"))
+
     try:
         candidate_runs = tuple(
-            retrieval_run_from_mlflow(client.get_run(run_id)) for run_id in args.candidate
+            retrieval_run_from_mlflow(client.get_run(run_id), per_user_recall=load_vectors(run_id))
+            for run_id in args.candidate
         )
         incumbent_runs = tuple(
-            retrieval_run_from_mlflow(client.get_run(run_id)) for run_id in args.incumbent
+            retrieval_run_from_mlflow(client.get_run(run_id), per_user_recall=load_vectors(run_id))
+            for run_id in args.incumbent
         )
         decision = retrieval_promotion_decision(
             RetrievalRunSet(
@@ -743,7 +1279,12 @@ def main(argv: list[str] | None = None) -> int:
             ),
             required_seeds=required_seeds,
         )
-    except (RetrievalRunNotUsableError, ValueError, mlflow.exceptions.MlflowException) as exc:
+    except (
+        RetrievalRunNotUsableError,
+        ValueError,
+        OSError,
+        mlflow.exceptions.MlflowException,
+    ) as exc:
         decision = _decision(
             RetrievalGateStatus.INCOMPLETE,
             args.candidate,
