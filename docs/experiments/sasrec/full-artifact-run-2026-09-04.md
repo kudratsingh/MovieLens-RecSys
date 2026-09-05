@@ -139,3 +139,35 @@ The run now has the population and paired-user evidence needed by the retrieval
 gate and tolerance instrument. It still produces an `incomplete` one-seed
 verdict by construction; the remaining seeds, rolling windows, tolerance
 derivation, latency, and paired-ranker checks are unchanged.
+
+## Comparable threshold-10 incumbent — 2026-09-05
+
+Recovering the population counts exposed that the previously quoted item-item
+reference was not gate-compatible. Its 1,939 warm / 702 cold partition is
+exactly the partition produced by the threshold of five that was in force when
+that run was made. At today's threshold of ten, eight holdout users with 5–9
+training interactions move from warm to cold: 1,931 warm / 710 cold.
+
+The current item-item trainer was therefore run on the same tracked CSV
+snapshot without starting or querying Docker. MLflow run
+`4b342e87dbf54834be5c719eae9a4e6c` is `FINISHED` and records the same protocol
+hash and exactly the same user ids in every SASRec evaluation slice. Its result
+is:
+
+| Metric | Item-item | SASRec | Relative change |
+|---|---:|---:|---:|
+| warm recall@500 | 0.3990569036 | 0.4651693328 | **+16.57%** |
+| cold recall@500 | 0.5262729520 | 0.5262729520 | 0.00% |
+| overall recall@500 | 0.4332573558 | 0.4815962808 | **+11.16%** |
+
+The item-item per-user artifact is 151,940 bytes with SHA-256
+`64d98e2f427e50d64051024073878c61836a740b33573e62078eb707b94af6af`.
+Its console record is retained at
+`artifacts/sasrec/logs/itemitem-threshold10-current-protocol-20260905.log`, and
+explicit tags record the CSV input seam and source commit because the temporary
+launcher lived outside Git and MLflow could not infer that metadata.
+
+Running the executable retrieval gate against these two run ids succeeds in
+loading both strict envelopes and returns `incomplete` for one reason only:
+SASRec seeds 7 and 13 are missing. No tolerance value or population mismatch is
+being hidden behind that result.

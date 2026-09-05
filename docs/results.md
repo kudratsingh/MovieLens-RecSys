@@ -2387,3 +2387,19 @@ and completes the run's population/per-user evidence. It remains one seed and
 is not a promotion. The exact paths, lineage, resource record, interruption
 recovery, and remaining gates are in
 [`experiments/sasrec/full-artifact-run-2026-09-04.md`](experiments/sasrec/full-artifact-run-2026-09-04.md).
+
+### Correction: the protocol-compatible item-item reference
+
+The earlier 0.400144 item-item reference partitioned 1,939 warm and 702 cold
+users because it was measured while the cold-start threshold was five. The
+current threshold of ten moves exactly eight users with 5–9 training events:
+the SASRec evidence recovery reports 1,931 warm and 710 cold. The old headline
+comparison is useful historical context but cannot enter the executable gate.
+
+Current-code item-item run `4b342e87dbf54834be5c719eae9a4e6c` was therefore
+measured on the same tracked CSV snapshot. Its protocol hash and all three
+per-user slice populations match the artifact-backed SASRec run exactly. Warm
+recall@500 is 0.3990569036, cold recall is 0.5262729520, and overall recall is
+0.4332573558. Against that admissible incumbent, SASRec is **+16.57% warm**,
+**0.00% cold**, and **+11.16% overall**. The executable gate loads both runs
+and returns `incomplete` solely because candidate seeds 7 and 13 are absent.

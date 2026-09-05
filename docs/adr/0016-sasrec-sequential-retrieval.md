@@ -50,6 +50,17 @@ missing warm/cold counts and per-user recall artifact. This completes the
 seed-42 evidence envelope, but does not remove the remaining seed,
 rolling-window, tolerance, latency, or paired-ranker gates.
 
+**Comparable-incumbent correction (2026-09-05):** The earlier 0.400144
+item-item reference used the five-interaction threshold in force when it was
+measured, producing 1,939 warm / 702 cold users. The current threshold of ten
+produces 1,931 / 710. Current-code item-item run
+`4b342e87dbf54834be5c719eae9a4e6c` has the same protocol hash and exact per-user
+slice populations as the artifact-backed SASRec run: warm recall@500
+0.3990569036, cold 0.5262729520, and overall 0.4332573558. SASRec's comparable
+changes are therefore **+16.57% warm, 0.00% cold, and +11.16% overall**. The
+advance band is unchanged, but the old cross-threshold comparison is not gate
+evidence.
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains
