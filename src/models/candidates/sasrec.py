@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -356,6 +356,49 @@ class SASRecModel:
             k,
             dense_exclusions=dense_exclusions,
         )
+
+    def retrieve_unfiltered(self, histories: Sequence[Sequence[int]], k: int) -> list[list[int]]:
+        """Batch top-k over ordered movie histories with nothing excluded.
+
+        The training-time counterpart of ``ItemItemModel.recommend(...,
+        filter_seen=False)``. ``recommend_from_history`` is the serving shape and
+        removes the history from its own results, which is right online and wrong
+        when assembling LambdaRank groups: the positive is drawn from the user's
+        train history, so a retriever that filters its own history would drop
+        every positive it was asked about. Exclusions belong to the caller here,
+        applied to the *negatives* pool after the positive has been kept
+        (`src/training/sasrec_ranker.py`, and #126 for the rule itself).
+
+        Batched because the ranker asks this ~154k times per run and a batch of
+        one spends most of its time in PyTorch dispatch rather than arithmetic.
+        Rows do not interact — causal attention plus the padding mask keeps each
+        sequence independent — so a row's result depends only on its own history
+        and on the batch size the caller chose, which callers pin and log.
+        """
+        if self._encoder is None or self._faiss_index is None:
+            raise RuntimeError("SASRec model and retrieval index are not loaded")
+        if not histories:
+            return []
+        if k <= 0:
+            return [[] for _ in histories]
+        if any(len(movie_ids) == 0 for movie_ids in histories):
+            raise ValueError("SASRec history must contain at least one movie")
+
+        max_length = self.config.max_sequence_length
+        batch = torch.zeros((len(histories), max_length), dtype=torch.long)
+        for row, movie_ids in enumerate(histories):
+            dense = [
+                self._item_to_index.get(int(movie_id), self._unknown_index)
+                for movie_id in movie_ids[-max_length:]
+            ]
+            batch[row, max_length - len(dense) :] = torch.tensor(dense, dtype=torch.long)
+        with torch.no_grad():
+            queries = self._encoder(batch).numpy()
+        search_k = min(len(self._index_to_item), k)
+        _scores, indices = self._faiss_index.search(queries, search_k)
+        return [
+            [self._index_to_item[int(index) + 1] for index in row if index >= 0] for row in indices
+        ]
 
     def _sequence_tensor(self, dense_history: list[int]) -> torch.Tensor:
         history = dense_history[-self.config.max_sequence_length :]

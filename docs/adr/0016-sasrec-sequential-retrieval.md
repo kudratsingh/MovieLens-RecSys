@@ -47,8 +47,10 @@ byte-identical and reload successfully. This removes the artifact caveat from
 the historical first run. A fail-closed post-hoc evaluation also reproduced
 the protocol hash and all six aggregate metrics exactly before adding the
 missing warm/cold counts and per-user recall artifact. This completes the
-seed-42 evidence envelope, but does not remove the remaining seed,
-rolling-window, tolerance, latency, or paired-ranker gates.
+seed-42 evidence envelope. The later single-run gate decision below closes the
+retrieval-quality question, and the fixed-ranker D-002 decision closes the
+joint-system non-regression question; the end-to-end bundle verdict stays open
+until a ranker trained on SASRec candidates is gated.
 
 **Comparable-incumbent correction (2026-09-05):** The earlier 0.400144
 item-item reference used the five-interaction threshold in force when it was
@@ -67,8 +69,102 @@ does not authorize seeds 7 or 13. Two or three confirmation runs become the
 default for later, more advanced Transformer models only when the owner asks
 for them. This supersedes ADR 0004's three-seed requirement for SASRec alone;
 it does not waive rolling-window, measured-tolerance, latency, or paired-ranker
-evidence. The executable retrieval gate still encodes the earlier three-seed
-policy and must be brought into line before it can issue this model's verdict.
+evidence. PR #139 subsequently made the seed set explicit, preserving the
+stronger multi-seed route while allowing the owner-approved seed-42 regime.
+
+**Retrieval-quality verdict (2026-09-05):** After PR #143 added a paired
+user-bootstrap band to the warm positive claim, the executable gate was run on
+the recovered SASRec and compatible item-item evidence with seed 42 and zero
+cold/overall tolerance. Zero is the strictest sensitivity boundary, not a
+claimed measured tolerance. The gate returned `promote`: warm changed +16.57%
+with a one-sided 95% lower bound of +12.88% against the +3% requirement, cold
+changed exactly 0.00%, and overall changed +11.16%. The last two therefore pass
+for every valid non-negative tolerance. This is retrieval-stage quality only.
+The paired fixed-ranker D-002 check below also passes, making retrieval
+promotion eligible; the end-to-end bundle remains blocked until a ranker
+trained on SASRec candidates clears ADR 0001.
+
+**Isolated latency verdict (2026-09-05):** The exact saved artifact passed a
+single-thread, request-shaped benchmark of 10,000 50-item encodes after 500
+warmups on the Apple M3 Pro. Encoder p50/p95/p99 were
+0.260/0.271/**0.285 ms**, with a 5.346 ms maximum, against the unchanged p99
+<15 ms budget. This closes the isolated encoder gate only; FAISS, feature
+lookup, ranking, networking, and durable audit work belong to the later
+authenticated service gate.
+
+**Fixed-ranker D-002 verdict (2026-09-05):** The deterministic seed-42
+LightGBM ranker of record was reconstructed from its full 154,003-positive
+window (87,794 groups, 1,843,674 rows), persisted with SHA-256 `b010ef…`, and
+first required to reproduce all six incumbent metrics at their retained
+six-decimal precision. Changing only the 500-candidate source from item-item to
+SASRec moved warm NDCG@10 from 0.069967 to 0.071138 (**+1.67%**), cold remained
+0.544948, and overall moved from 0.197659 to 0.198516 (**+0.43%**). The
+warm and cold non-regression clauses both pass. That is the rule D-002 assigns
+to a fixed current ranker, so SASRec is retrieval-promotion eligible. The same
+output's failed +3% overall clause is retained but is diagnostic rather than
+dispositive here: ADR 0001 reserves that positive-gain clause for a new ranker
+replacing the old one, not for a retriever swap under a fixed one. End-to-end
+promotion remains blocked on retraining LightGBM from SASRec candidates and
+gating that new bundle against the item-item plus LightGBM incumbent.
+
+**Status of SASRec v1 and the next step (2026-09-05):** Retrieval promotion
+eligible; end to end blocked on the ranker, which has not yet been retrained on
+SASRec candidates. Nothing about the model is terminal. The next step is to
+retrain LightGBM on SASRec candidates under PR #126's serving-equivalent
+exclusions, so the challenger bundle is exclusion-matched against an item-item
+plus LightGBM incumbent trained from the identical positives, and to gate that
+pair under ADR 0001. After that, Rung 3a adds the SASRec user embedding and its
+dot-product score against the candidate item as point-in-time LightGBM
+features — encoded strictly from history before the positive's timestamp, from
+artifact `a11af5ed…` alone — and reports which features carry the gain.
+
+**Paired-ranker outcome (2026-09-05):** The end-to-end guardrail was re-run with
+the ranker *retrained on SASRec's own candidates* rather than inherited from
+item-item's. Two boosters were fitted from the identical 154,003 positives under
+#126's exclusions, seed 42, with the same split, cohort and feature index, so the
+candidate stage is the only difference between them: item-item incumbent
+`bff5f86e6ae14e6b9c19d9c426e3b6ec`, SASRec challenger
+`50d9718802f949d98c5d8d4d6315bb1a`, both carrying protocol hash
+`sha256:0bc91de6a77dd088267b3eac995c8141e7dbbc8231647d042b49e45a1752b593` and the
+same 1,931 warm / 710 cold users.
+
+Retraining is worth roughly fifteen times what the fixed booster measured: warm
+NDCG@10 rises **+25.96%** (0.072792 → 0.091688) and warm recall@10 **+60.50%**,
+against the +1.67% the champion booster managed on the same candidates. **The
+ADR 0001 gate still refuses**, because overall NDCG@10 falls 32.15% and the cold
+slice falls 53.11% against a 5% tolerance. Nothing is promoted; item-item plus the
+champion LightGBM remain champion.
+
+The cold regression is not a retrieval effect and should not be read as one.
+Below the cold-start threshold both arms route to the popularity fallback and hold
+the *same fitted fallback object*, so a cold user's 500 candidates are
+byte-identical between the runs — asserted in `tests/unit/test_sasrec_ranker.py`,
+not inferred. The whole move belongs to the booster: the incumbent's total-gain
+importances are dominated by `item_popularity_30d` (260,507, 2.5× its next
+feature), which is exactly the rule that orders a popularity slate; the
+SASRec-trained booster, fitted where popularity discriminates poorly, comes out
+flat and has nothing to rank that slate with. One booster trained on one candidate
+distribution cannot serve two.
+
+Two follow-on arms measured the obvious repairs, both with their hypotheses
+recorded before they ran. A **per-route bundle** that trains nothing and keys the
+two saved boosters on the route serving already takes
+(`566f5309767a4076a4f5e8151be16645`) reproduces the incumbent's cold slice
+bit-identically and the challenger's warm slice bit-identically, and **passes the
+gate** at +6.88% overall / +25.96% warm / 0.00% cold. A **union booster** trained
+on the concatenation of both arms' training sets — 171,332 groups, 3,597,616 rows,
+zero duplicated groups (`cf475086bab941aeb6e4519ff021fc94`) — also **passes**, at
++6.30% overall / **+26.69% warm** / −1.05% cold, and its importances show
+`item_popularity_30d` restored to the top (284,345) while the warm gain survives:
+one model can carry both candidate distributions.
+
+**A passing gate is a measurement, not a promotion.** ADR 0001 changes a champion
+by decision. The two arms are close enough on overall that the trade is
+operational rather than metric — two boosters plus a routing rule against one
+model plus a retrain — and both still owe the rolling-window, tolerance and
+latency evidence SASRec itself owes; the k6 gate has seen neither. The numbers,
+the predeclared hypotheses and the gate JSONs are in `docs/results.md` and
+`docs/experiments/sasrec/`.
 
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
