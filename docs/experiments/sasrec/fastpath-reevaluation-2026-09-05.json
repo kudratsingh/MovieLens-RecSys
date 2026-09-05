@@ -1,0 +1,124 @@
+{
+  "artifact": {
+    "manifest": "artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/sasrec-manifest.json",
+    "model_sha256": "43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6",
+    "num_blocks": 2,
+    "retrieval": "exact-faiss",
+    "source_run_id": "a11af5ed0f0745f68572407237cfa4b9",
+    "training_repeated": false
+  },
+  "bundle": {
+    "after": {
+      "metrics": {
+        "cold_ndcg_at_10": 0.5490019989542251,
+        "cold_recall_at_10": 0.07763845424378057,
+        "overall_ndcg_at_10": 0.2217623025377634,
+        "overall_recall_at_10": 0.08277453446787489,
+        "warm_ndcg_at_10": 0.10144112985227004,
+        "warm_recall_at_10": 0.08466299482991889
+      },
+      "rank_seconds": 117.59387254202738,
+      "run_id": "c1d742c8485d4e54b66746a65f7705d0"
+    },
+    "before": {
+      "metrics": {
+        "cold_ndcg_at_10": 0.5490019989542251,
+        "cold_recall_at_10": 0.07763845424378057,
+        "overall_ndcg_at_10": 0.21463117342226065,
+        "overall_recall_at_10": 0.07748678642635348,
+        "warm_ndcg_at_10": 0.09168799054929602,
+        "warm_recall_at_10": 0.07743102042408873
+      },
+      "record": "docs/experiments/sasrec/ranker-per-route-bundle-2026-09-05.json",
+      "run_id": "566f5309767a4076a4f5e8151be16645",
+      "status": "superseded-by-fastpath-fixed-reevaluation"
+    },
+    "boosters": {
+      "cold_itemitem_ranker_run_id": "bff5f86e6ae14e6b9c19d9c426e3b6ec",
+      "cold_sha256": "05610e604cb2650a64ed3b01eccb3b8f637b32739a102543eabc0083773f7a65",
+      "warm_sasrec_ranker_run_id": "50d9718802f949d98c5d8d4d6315bb1a",
+      "warm_sha256": "7e2052c17a41389902b9473dd3aa46e3ec184ec1ec83f45e51eacd8b35e226a5"
+    },
+    "gates": {
+      "all_routes": {
+        "evidence": "artifacts/sasrec/fastpath-reevaluation/c1d742c8485d4e54b66746a65f7705d0/ranking-gate-all-routes.json",
+        "evidence_sha256": "613bffa56b138297a3ecf37f91460f6533b115e9b0ecd23208f2267afe3f888c",
+        "overall_ndcg_relative_change": 0.03322503903695822,
+        "status": "promote"
+      },
+      "learned_route": {
+        "cold_ndcg_relative_change": 0.0,
+        "evidence": "artifacts/sasrec/fastpath-reevaluation/c1d742c8485d4e54b66746a65f7705d0/ranking-gate-learned-route.json",
+        "evidence_sha256": "573f9083d7224f35d6378f0ed2d06044925027126de250fdc518bbbee3aa261c",
+        "status": "promote",
+        "warm_ndcg_relative_change": 0.10637313834171382
+      }
+    }
+  },
+  "date": "2026-09-05",
+  "fix": {
+    "full_length_max_abs_delta": 5.960464477539063e-08,
+    "implementation": "disable-pytorch-mha-fastpath-for-left-padding",
+    "regression_history_lengths": [
+      1,
+      3,
+      12,
+      49,
+      50
+    ],
+    "scored_retrieval": "SASRecModel.recommend_from_history_scored"
+  },
+  "population": {
+    "history_length_distribution": {
+      "10_19": 28,
+      "20_29": 26,
+      "30_39": 31,
+      "40_49": 46,
+      "50_plus": 1800
+    },
+    "n_cold_users": 710,
+    "n_warm_users": 1931,
+    "pre_fix_empty_warm_slates": 131,
+    "pre_fix_popularity_routed_warm_users": 0,
+    "post_fix_empty_warm_slates": 0
+  },
+  "protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+  "retrieval": {
+    "after": {
+      "metrics": {
+        "cold_ndcg_at_500": 0.4358465703567308,
+        "cold_recall_at_500": 0.5262729520330651,
+        "overall_ndcg_at_500": 0.2569348199388611,
+        "overall_recall_at_500": 0.5137688997280027,
+        "warm_ndcg_at_500": 0.1911516284335853,
+        "warm_recall_at_500": 0.5091713455402272
+      },
+      "recommend_seconds": 1.9036882079672068,
+      "run_id": "528b14513d9a49e098a0525417f23285"
+    },
+    "before": {
+      "metrics": {
+        "cold_ndcg_at_500": 0.4358465703567308,
+        "cold_recall_at_500": 0.5262729520330651,
+        "overall_ndcg_at_500": 0.24395580286730167,
+        "overall_recall_at_500": 0.4815962808075851,
+        "warm_ndcg_at_500": 0.17340041968889944,
+        "warm_recall_at_500": 0.4651693328168597
+      },
+      "run_id": "a11af5ed0f0745f68572407237cfa4b9",
+      "status": "superseded-by-fastpath-fixed-reevaluation"
+    },
+    "gate": {
+      "cold_recall_relative_change": 0.0,
+      "evidence": "artifacts/sasrec/fastpath-reevaluation/528b14513d9a49e098a0525417f23285/retrieval-gate.json",
+      "evidence_sha256": "1577e69b89eb56b07907ee78df9c2e4c4bd5dc5c9f34554a46ad67d82ff04a94",
+      "incumbent_run_id": "4b342e87dbf54834be5c719eae9a4e6c",
+      "overall_recall_relative_change": 0.18582845232237613,
+      "seed_regime": "single_seed",
+      "status": "promote",
+      "warm_recall_lower_bound_relative_change": 0.24380583086442004,
+      "warm_recall_relative_change": 0.275936692157317
+    }
+  },
+  "successful_run_log": "artifacts/sasrec/logs/w17-fastpath-recheck-20260905T1607PDT.log"
+}
