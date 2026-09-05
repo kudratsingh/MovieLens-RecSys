@@ -362,6 +362,45 @@ def test_runtime_history_gives_an_unseen_item_the_unknown_token() -> None:
     assert rebuilt[0][-1] == model._unknown_index
 
 
+def test_a_cold_user_gets_the_same_candidates_from_both_arms() -> None:
+    """Below the threshold the two arms are the same retriever.
+
+    This is what makes the cold slice interpretable in the step-1 comparison: a
+    user under `COLD_START_THRESHOLD` routes to the popularity fallback in both
+    arms, and both arms hold the *same* fitted fallback object, so their candidate
+    lists are identical and any difference in the cold numbers belongs entirely to
+    the booster. Asserted rather than reasoned about, because the whole reading of
+    that result rests on it.
+    """
+    train = _train_frame()
+    itemitem_model = ItemItemModel(cold_start_threshold=COLD_START_THRESHOLD).fit(train)
+    shared_popularity = itemitem_model._popularity
+    sasrec_model = SASRecModel(
+        config=_sasrec_config(), cold_start_threshold=COLD_START_THRESHOLD
+    ).fit(train)
+    sasrec_model._popularity = shared_popularity
+    itemitem = ItemItemSource(model=itemitem_model)
+    sasrec = SasrecSource(
+        model=sasrec_model,
+        popularity=shared_popularity,
+        manifest=None,  # type: ignore[arg-type]
+    )
+
+    # Every fixture user has 15 interactions, so thin one out below the threshold.
+    cold_user = 11
+    keep = ~((train["userId"] == cold_user) & (train.groupby("userId").cumcount() >= 5))
+    thinned = train[keep].reset_index(drop=True)
+    itemitem_model.fit(thinned)
+    thinned_popularity = itemitem_model._popularity
+    sasrec_model._popularity = thinned_popularity
+    sasrec_model._user_history, _ = sasrec_ranker.runtime_user_history(thinned, sasrec_model)
+    sasrec.popularity = thinned_popularity
+
+    assert not itemitem.served_by_learned_path(cold_user)
+    assert not sasrec.served_by_learned_path(cold_user)
+    assert itemitem.holdout_candidates(cold_user, 15) == sasrec.holdout_candidates(cold_user, 15)
+
+
 def test_batched_and_single_retrieval_agree() -> None:
     train = _train_frame()
     model = SASRecModel(config=_sasrec_config(), cold_start_threshold=1).fit(train)

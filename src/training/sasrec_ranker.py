@@ -897,6 +897,75 @@ def main() -> None:
             "two experiments wearing one verdict. Unset the variable and rerun."
         )
 
+    shared = prepare_shared()
+    incumbent = run_arm_from(shared, shared.itemitem)
+    challenger = run_arm_from(shared, shared.sasrec)
+
+    decision = promotion_decision(challenger.result, incumbent.result)
+    logger.info("ADR 0001 gate, %s vs %s:", challenger.name, incumbent.name)
+    for line in decision.summary().splitlines():
+        logger.info("  %s", line)
+
+    document = summary_document(incumbent, challenger, decision)
+    document["incumbent_run_ids"] = [incumbent.run_id]
+    document["candidate_run_ids"] = [challenger.run_id]
+    output = shared.booster_root / f"step1-{challenger.run_id}.json"
+    output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    logger.info("Wrote %s", output)
+
+
+@dataclass(frozen=True)
+class SharedInputs:
+    """Everything both arms must agree about, built once.
+
+    The point of the dataclass is the guarantee it carries: two arms handed the
+    same instance cannot disagree about the split, the positives, the features or
+    the fallback, because they are the same objects. It is also what lets the
+    follow-on bundle runner (`src/training/sasrec_ranker_bundles.py`) rebuild
+    byte-identical inputs without duplicating the prologue.
+    """
+
+    split: TemporalSplit
+    train_frame: pd.DataFrame
+    cohort: SyntheticColdCohort | None
+    positives: pd.DataFrame
+    feature_index: FeatureIndex
+    history_by_user: dict[int, tuple[np.ndarray, np.ndarray]]
+    movies_rows: int
+    seed: int
+    positive_limit: int
+    limit_binds: bool
+    window_rows: int
+    routing_policy: str
+    booster_root: Path
+    sample_fraction: float
+    itemitem: ItemItemSource
+    sasrec: SasrecSource
+
+
+def run_arm_from(shared: SharedInputs, source: CandidateSource) -> ArmOutcome:
+    """Run one arm against the shared inputs."""
+    return run_arm(
+        source,
+        split=shared.split,
+        train_frame=shared.train_frame,
+        cohort=shared.cohort,
+        positives=shared.positives,
+        feature_index=shared.feature_index,
+        history_by_user=shared.history_by_user,
+        movies_rows=shared.movies_rows,
+        seed=shared.seed,
+        positive_limit=shared.positive_limit,
+        limit_binds=shared.limit_binds,
+        window_rows=shared.window_rows,
+        routing_policy=shared.routing_policy,
+        booster_root=shared.booster_root,
+        sample_fraction=shared.sample_fraction,
+    )
+
+
+def prepare_shared() -> SharedInputs:
+    """Load, split, attach the cohort, and build everything both arms consume."""
     settings = Settings()
     seed = seeds.resolve_seed(RANKER_SEED)
     positive_limit = sampling.resolve_positive_limit(RANKER_POSITIVE_LIMIT)
@@ -976,39 +1045,24 @@ def main() -> None:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     logger.info("MLflow tracking at %s", settings.mlflow_tracking_uri)
 
-    def run(source: CandidateSource) -> ArmOutcome:
-        return run_arm(
-            source,
-            split=split,
-            train_frame=train_frame,
-            cohort=cohort,
-            positives=positives,
-            feature_index=feature_index,
-            history_by_user=history_by_user,
-            movies_rows=len(movies),
-            seed=seed,
-            positive_limit=positive_limit,
-            limit_binds=limit_binds,
-            window_rows=window_rows,
-            routing_policy=routing_policy,
-            booster_root=booster_root,
-            sample_fraction=sample_fraction,
-        )
-
-    incumbent = run(itemitem)
-    challenger = run(sasrec)
-
-    decision = promotion_decision(challenger.result, incumbent.result)
-    logger.info("ADR 0001 gate, %s vs %s:", challenger.name, incumbent.name)
-    for line in decision.summary().splitlines():
-        logger.info("  %s", line)
-
-    document = summary_document(incumbent, challenger, decision)
-    document["incumbent_run_ids"] = [incumbent.run_id]
-    document["candidate_run_ids"] = [challenger.run_id]
-    output = booster_root / f"step1-{challenger.run_id}.json"
-    output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    logger.info("Wrote %s", output)
+    return SharedInputs(
+        split=split,
+        train_frame=train_frame,
+        cohort=cohort,
+        positives=positives,
+        feature_index=feature_index,
+        history_by_user=history_by_user,
+        movies_rows=len(movies),
+        seed=seed,
+        positive_limit=positive_limit,
+        limit_binds=limit_binds,
+        window_rows=window_rows,
+        routing_policy=routing_policy,
+        booster_root=booster_root,
+        sample_fraction=sample_fraction,
+        itemitem=itemitem,
+        sasrec=sasrec,
+    )
 
 
 if __name__ == "__main__":
