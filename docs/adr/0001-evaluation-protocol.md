@@ -72,6 +72,32 @@ measurement behind the tolerance, and what it says about the runs already record
 - Any feature using data with timestamp >= T is illegal in training; point-in-time correctness is enforced at the evaluation boundary.
 - The Phase 4 Prefect promotion DAG reads `overall_ndcg_at_k`, `warm_ndcg_at_k` and `cold_ndcg_at_k` from MLflow and enforces the gate automatically — the aggregate's +3% and both slices' non-regression clause, failing on any of the three.
 
+## Amendment 2026-09-05 — the final evaluation reads 28 days, not 3.4 years
+
+This ADR defines the test partition as everything from `T + 28d` onward. Measured on the committed
+snapshot that is **4,870,337 ratings spanning 2016-07-23 to 2019-11-21 — 3.4 years**, against a
+holdout of 129,683 ratings over 28 days.
+
+Read as one block, that partition answers a different question than the one it was reserved for. A
+model trained on pre-2016 data and scored across three and a half years is being measured on how much
+the catalog and the audience moved as much as on how good it is, and the two cannot be separated
+afterwards. It is also a one-shot resource: a single read spends all of it, when a project of this
+length will want a final measurement after more than one candidate.
+
+**Decision, owner-approved 2026-09-05.** When the partition is unsealed, the final evaluation window
+is the **28 days immediately following `holdout_end`** — `[1469256597, 1471675797)`, roughly
+2016-07-23 to 2016-08-20. It matches the holdout's shape, so the number is directly comparable to
+every figure already recorded, and everything after it stays sealed, leaving roughly forty-four
+further windows for future final measurements.
+
+What this costs, recorded rather than discovered: a 28-day window is a smaller sample, so its number
+carries a wider interval than one computed over 3.4 years would. And it is the honest simulation only
+under a roughly monthly retraining cadence — a system retrained yearly is flattered by it, and should
+declare a longer window at unseal time rather than reuse this one by habit.
+
+The unseal trigger, the one-shot rule, and the contamination procedure are unchanged and live in
+[`../model-planning/memos/sealed-test-and-dataset-policy.md`](../model-planning/memos/sealed-test-and-dataset-policy.md).
+
 ## Amendment 2026-08-30 — the cold-start threshold is 10, online *and* offline
 
 **Decided by the owner.** Two things change together, and they are one decision:

@@ -92,6 +92,48 @@ says nothing about an uncommitted notebook, a psql session, or a glance at post-
 influenced a choice. Only the owner can close that, and the contamination procedure below is what
 happens if the answer is ever "yes".
 
+## Declared reads of the sealed partition
+
+The policy's value is that nothing touches this partition silently, which includes reads that are not
+model evaluations. This is the log.
+
+**2026-09-05 — catalog reachability by year. Owner-approved in advance.** Computed: the fraction of
+test-era interactions whose target movie appears in the training frame, overall and by calendar year.
+No model was run, no metric was scored, no model or configuration choice was informed by the result.
+It was requested to bound a question the holdout cannot answer — whether a model trained on pre-2016
+data can reach what people watched years later.
+
+| | |
+|---|---:|
+| Test rows | 4,870,337 over 30,335 users, 55,019 distinct movies |
+| Rows on movies present in train | 4,433,120 (91.02%) |
+| Rows on movies train never saw | 437,217 (8.98%) |
+| Distinct movies train never saw | **24,488** |
+
+| Year | Test rows | On movies present in train |
+|---|---:|---:|
+| 2016 | 669,007 | 98.28% |
+| 2017 | 1,689,935 | 93.76% |
+| 2018 | 1,310,761 | 88.65% |
+| 2019 | 1,200,634 | 85.72% |
+
+Two readings, and the second is the more useful one.
+
+**The structural ceiling decays slowly.** Reachability falls from 98.3% to 85.7% across three and a
+half years. That is a bound on recall, not a prediction of it — actual quality would degrade faster,
+because tastes and popularity move even among films the model knows. But catalog turnover alone does
+not collapse the model, which is a genuinely reassuring answer and was not obvious beforehand.
+
+**It also sizes the cold-item problem properly.** 24,488 distinct movies appear in the test era that
+training never contained — against the 3,376 zero-rating movies that ADR 0017's offline slice can
+see. So the production case that ADR motivates is roughly seven times larger than the offline
+population used to justify it, and it is genuinely about newly-added films rather than deep-catalog
+obscurity. The ADR's own caveat — that the offline population and the production need are different
+things — is confirmed rather than softened by this.
+
+This read consumed no evaluation window. The 28-day final window defined in ADR 0001's 2026-09-05
+amendment remains untouched and unspent.
+
 ## Sealed, operationally
 
 1. No run of record reads any interaction with `timestamp >= 1469256597` for fitting, scoring,
