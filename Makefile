@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -251,6 +251,13 @@ train-sasrec-ranker:
 # incumbent, neither promoted.
 train-sasrec-ranker-bundles:
 	python -m src.training.sasrec_ranker_bundles
+
+# ADR 0018 increment 1: one new learned-route booster reading the eight
+# aggregates plus the two point-in-time SASRec score columns, composed with the
+# untouched fallback booster and gated against PR #151's per-route bundle. Reads
+# the same pinned artifact and booster directory as the two targets above.
+train-sasrec-ranker-scores:
+	python -m src.training.sasrec_ranker_scores
 
 # The seed the two stochastic trainers use. CF/ALS initialises its factors at
 # random and the ranker samples its positives, its negatives and its splits;

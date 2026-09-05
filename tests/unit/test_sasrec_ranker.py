@@ -19,6 +19,7 @@ otherwise have to take on trust from a six-figure-positive training run:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -552,12 +553,19 @@ def test_booster_directory_is_create_only(tmp_path: Path) -> None:
 
 
 def test_routing_counts_are_reported_per_arm() -> None:
-    counts = RoutingCounts(learned=3, fallback=1, empty_prefix=2, learned_with_short_prefix=1)
+    counts = RoutingCounts(
+        learned=3,
+        fallback=1,
+        empty_prefix=2,
+        learned_with_short_prefix=1,
+        learned_below_encoder_window=2,
+    )
     assert counts.as_params("training_positives") == {
         "training_positives_learned": 3,
         "training_positives_fallback": 1,
         "training_positives_empty_prefix": 2,
         "training_positives_learned_short_prefix": 1,
+        "training_positives_learned_below_encoder_window": 2,
     }
 
 
@@ -583,6 +591,9 @@ class _RecordingSource:
 
     def identity(self) -> dict[str, str]:
         return self._inner.identity()
+
+    def ranking_features(self, row: int, movie_ids: Sequence[int]) -> pd.DataFrame | None:
+        return self._inner.ranking_features(row, movie_ids)
 
 
 def test_cold_start_threshold_is_the_one_the_system_uses() -> None:

@@ -42,7 +42,7 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,6 +147,7 @@ def rank_by_route(
     feature_index: FeatureIndex,
     user_ids: Sequence[int],
     as_of_timestamp: int,
+    warm_ranking_features: Callable[[int, list[int]], pd.DataFrame] | None = None,
 ) -> dict[int, list[int]]:
     """Retrieve and rank each user through the route serving would take them on.
 
@@ -154,6 +155,11 @@ def rank_by_route(
     slice — they coincide for holdout users, and using the model's predicate is
     what makes this a description of a servable system rather than of a scoring
     convenience.
+
+    ``warm_ranking_features``, when given, supplies the extra columns the learned
+    route's ranker reads (ADR 0018). It is called only for learned-route users,
+    because the fallback booster's contract is the eight aggregates and a user
+    below the threshold has no sequence to score against.
     """
     candidates_by_user: dict[int, list[int]] = {}
     features_by_user: dict[int, pd.DataFrame] = {}
@@ -167,7 +173,7 @@ def rank_by_route(
             candidates_by_user[user_id] = []
             continue
         candidates_by_user[user_id] = candidates
-        features_by_user[user_id] = feature_index.features_for(
+        features = feature_index.features_for(
             pd.DataFrame(
                 {
                     "userId": [user_id] * len(candidates),
@@ -176,6 +182,10 @@ def rank_by_route(
                 }
             )
         )
+        if learned and warm_ranking_features is not None:
+            extra = warm_ranking_features(user_id, candidates)
+            features = pd.concat([features, extra.set_index(features.index)], axis=1)
+        features_by_user[user_id] = features
 
     out: dict[int, list[int]] = {}
     for user_id, candidates in candidates_by_user.items():
