@@ -58,7 +58,6 @@ from src.serving import sequence_retrieval
 from src.serving.model_server import ModelRankingService
 from src.serving.policy import CANDIDATE_SOURCE_POPULARITY_FILL
 from src.serving.sequence_retrieval import (
-    AttentionFastpathGuardUnavailableError,
     EncoderProducesNonFiniteVectorsError,
     SequenceBundleIncompleteError,
     top_up_to_limit,
@@ -396,26 +395,56 @@ def _encode_at_depth(num_blocks: int, history_length: int) -> torch.Tensor:
 
 
 class TestTheFastpathGuardIsADependency:
-    def test_a_sasrec_bundle_refuses_to_load_while_the_shared_fix_is_absent(
+    def test_a_missing_symbol_is_not_a_refusal_because_the_fix_can_be_call_time(
         self, tmp_path: Path, unguarded_fastpath: None
     ) -> None:
-        """Today's behaviour, and the reason it is an exception rather than a workaround.
+        """W17 applies the toggle inside `encode_positions`, on every encode.
+
+        This test previously asserted the opposite — that no exported symbol and
+        no import side effect meant refusal. That premise was wrong: a symbol
+        lookup cannot see a fix that only exists once the code runs, so refusing
+        on its absence would reject a correctly-fixed bundle.
+
+        What replaces it is not weaker. The guard now *reports* how the fix
+        arrived, and `_assert_encoder_is_finite` decides whether the sidecar
+        starts by calling the real encoder at the lengths that were broken. The
+        safety property — a bundle whose encoder is genuinely unfixed must not
+        serve — is asserted directly below and by the no-op-hook test, both of
+        which exercise behaviour rather than the presence of a name.
+        """
+        assert (
+            sequence_retrieval._resolve_fastpath_guard()
+            == sequence_retrieval.GUARD_SOURCE_CALL_TIME
+        )
+
+    def test_an_encoder_that_is_still_broken_stops_the_deployment(
+        self, tmp_path: Path, unguarded_fastpath: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The property the removed test was really protecting.
 
         The sidecar could disable the fastpath itself in one line. It deliberately
         does not: a second copy of a global toggle is how serving and training end
         up disagreeing about which numerics a published metric was measured under.
-        So the dependency is named, and its absence stops the deployment.
+        So it depends on the shared fix — and proves the dependency held by
+        encoding a short history and looking at the vector, rather than by
+        trusting that a name exists.
         """
         path = _publish_sasrec_bundle(tmp_path / "bundle")
+        # Re-enable the defect after loading would otherwise have disabled it, so
+        # the encoder really is unfixed at probe time.
+        monkeypatch.setattr(
+            sequence_retrieval,
+            "_resolve_fastpath_guard",
+            lambda: sequence_retrieval.GUARD_SOURCE_CALL_TIME,
+        )
+        monkeypatch.setattr(torch.backends.mha, "set_fastpath_enabled", lambda _enabled: None)
+        torch.backends.mha.set_fastpath_enabled(True)
 
-        with pytest.raises(AttentionFastpathGuardUnavailableError) as error:
+        with pytest.raises(EncoderProducesNonFiniteVectorsError) as error:
             ServingArtifactBundle.load(path)
 
-        message = str(error.value)
-        # The message has to be actionable at 3am by someone who has never heard
-        # of this defect, so it names the module and the symbol that would fix it.
-        assert sequence_retrieval.SHARED_ENCODER_MODULE in message
-        assert sequence_retrieval.FASTPATH_GUARD_SYMBOL in message
+        # Actionable at 3am by someone who has never heard of this defect.
+        assert "fastpath" in str(error.value).lower()
 
     def test_the_guard_is_taken_from_the_shared_module_when_it_exports_a_hook(
         self, tmp_path: Path, fastpath_guard: None

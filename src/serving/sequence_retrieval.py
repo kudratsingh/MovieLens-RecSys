@@ -62,6 +62,10 @@ FASTPATH_GUARD_SYMBOL = "disable_attention_fastpath"
 # renamed we want the log to say which one stopped being true.
 GUARD_SOURCE_HOOK = "shared-encoder-hook"
 GUARD_SOURCE_IMPORT = "shared-encoder-import"
+# W17 landed the fix inside ``SASRecEncoder.encode_positions``, so it applies on
+# every encode rather than at import. Nothing is observable until the encoder is
+# called, which is why the finiteness probe — not this lookup — is authoritative.
+GUARD_SOURCE_CALL_TIME = "call-time-encoder"
 
 
 class AttentionFastpathGuardUnavailableError(RuntimeError):
@@ -449,16 +453,25 @@ def _resolve_fastpath_guard() -> str:
     global toggle is how the two paths end up disagreeing about which numbers
     the published metrics were measured under.
 
-    Two shapes of that fix are accepted, because the choice is not this lane's
-    to make:
+    Three shapes are recognised, because the choice was not this lane's to make
+    and the one that landed was not one of the two originally guessed:
 
     * a callable ``disable_attention_fastpath`` exported from the shared module,
-      which is called here; or
-    * the module disabling the fastpath as an import side effect, which is
-      detected by reading the flag back after importing it.
+      which is called here;
+    * the module disabling the fastpath as an import side effect, detected by
+      reading the flag back; or
+    * the shared encoder applying it **at call time**, which is what W17 does —
+      `encode_positions` sets the toggle on every encode, so nothing is
+      observable until the encoder actually runs.
 
-    Anything else is a named startup failure. Note that this resolves the
-    *dependency*; ``_assert_encoder_is_finite`` is what proves it worked.
+    That third shape is why this function no longer refuses. A symbol lookup
+    cannot see a fix that only exists once the code runs, and refusing on its
+    absence would have kept a correctly-fixed bundle from booting. So this
+    returns a *description of how the fix arrived*, for the audit, and
+    ``_assert_encoder_is_finite`` decides whether the sidecar starts — it calls
+    the real encoder at the lengths that were broken and refuses a hook that
+    exists but does nothing. Behaviour was always the load-bearing check; this
+    lookup was a cheap early signal that stopped mapping onto reality.
     """
     import torch
 
@@ -470,14 +483,11 @@ def _resolve_fastpath_guard() -> str:
         return GUARD_SOURCE_HOOK
     if not torch.backends.mha.get_fastpath_enabled():
         return GUARD_SOURCE_IMPORT
-    raise AttentionFastpathGuardUnavailableError(
-        f"{SHARED_ENCODER_MODULE} does not disable PyTorch's fused attention fastpath, so this "
-        "encoder would return NaN for every history shorter than its sequence window and "
-        "retrieve nothing. Land O-9/W17 first: the shared encoder module must either "
-        f"export a callable {FASTPATH_GUARD_SYMBOL}() or disable the fastpath on import "
-        "(torch.backends.mha.set_fastpath_enabled(False)). Refusing to serve a SASRec bundle "
-        "until it does."
-    )
+    # Not a failure. W17 applies the toggle inside `encode_positions`, so at
+    # import time the flag still reads enabled and no symbol is exported. The
+    # finiteness probe is what establishes whether the fix is really present;
+    # refusing here would reject a correctly-fixed bundle.
+    return GUARD_SOURCE_CALL_TIME
 
 
 def _assert_encoder_is_finite(model: Any, vocabulary: tuple[int, ...]) -> None:
