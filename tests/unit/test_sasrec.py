@@ -63,6 +63,65 @@ def test_training_vectors_are_not_retrieval_normalized() -> None:
     assert torch.allclose(torch.linalg.vector_norm(retrieval, dim=1), torch.ones(1))
 
 
+def _two_block_retrieval_model() -> SASRecModel:
+    config = _config(
+        max_sequence_length=50,
+        num_blocks=2,
+        dropout=0.0,
+        faiss_exact=True,
+    )
+    movie_ids = list(range(1_000, 1_600))
+    model = SASRecModel(config=config, cold_start_threshold=None)
+    model._item_to_index = {movie_id: index + 1 for index, movie_id in enumerate(movie_ids)}
+    model._index_to_item = {index: movie_id for movie_id, index in model._item_to_index.items()}
+    model._unknown_index = len(movie_ids) + 1
+    model._encoder = SASRecEncoder(len(movie_ids) + 2, config)
+    model.build_index()
+    return model
+
+
+def test_two_block_eval_retrieves_500_for_every_supported_history_length() -> None:
+    model = _two_block_retrieval_model()
+    movie_ids = sorted(model._item_to_index)
+
+    for length in (1, 3, 12, 49, 50):
+        history = movie_ids[:length]
+        encoded = model.encode_movie_history(history)
+        scored = model.recommend_from_history_scored(history, 500)
+
+        assert torch.isfinite(encoded).all(), f"non-finite query at history length {length}"
+        assert len(scored) == 500, f"short slate at history length {length}"
+        assert all(np.isfinite(score) for _movie_id, score in scored)
+        assert model.recommend_from_history(history, 500) == [movie_id for movie_id, _ in scored]
+
+
+def test_safe_attention_path_preserves_full_length_output() -> None:
+    torch.manual_seed(11)
+    config = _config(max_sequence_length=50, num_blocks=2, dropout=0.0)
+    encoder = SASRecEncoder(64, config).eval()
+    sequence = torch.arange(1, 51).unsqueeze(0)
+    positions = torch.arange(50).unsqueeze(0)
+    values = encoder.item_embedding(sequence) + encoder.position_embedding(positions)
+    causal_mask = torch.triu(torch.ones(50, 50, dtype=torch.bool), diagonal=1)
+
+    try:
+        torch.backends.mha.set_fastpath_enabled(True)
+        with torch.no_grad():
+            fast = encoder.output_norm(
+                encoder.transformer(
+                    values,
+                    mask=causal_mask,
+                    src_key_padding_mask=sequence.eq(0),
+                )
+            )
+    finally:
+        torch.backends.mha.set_fastpath_enabled(False)
+    with torch.no_grad():
+        safe = encoder.encode_positions(sequence)
+
+    assert torch.max(torch.abs(fast - safe)).item() <= 1e-6
+
+
 def test_sampled_negatives_exclude_prefix_target_and_duplicates() -> None:
     histories = torch.tensor([[0, 1, 2], [2, 3, 4]])
     positives = torch.tensor([3, 5])
