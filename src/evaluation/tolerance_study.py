@@ -15,6 +15,17 @@ population (a paired, user-level bootstrap).  Variances add, so the two
 one-sided half-widths combine in quadrature, and the result is rounded up,
 floored, and capped.
 
+**One-run studies.**  The 2026-09-05 standing policy — one run per
+configuration until the ladder reaches the transformer rungs — leaves no
+across-seed dispersion to estimate, so the bootstrap term carries the whole
+tolerance.  That is admitted, not silently accommodated: a one-run study must
+declare `single_run_justification`, the seed fields come back `None` rather
+than `0.0`, and the report says `seed_regime=single_seed`.  What is lost is
+real and worth repeating wherever this is read: a user-level bootstrap measures
+sampling noise over the evaluated population, not training stochasticity, so a
+model whose seeds genuinely disagree produces no wider tolerance than one whose
+seeds agree, and nothing downstream can tell the two apart.
+
 Fail-closed is the whole design.  Insufficient or incomparable evidence
 produces a status and a reason, never a number, and
 `ToleranceStudyReport.as_tolerance()` raises rather than handing an
@@ -43,6 +54,7 @@ from .retrieval_gate import (
     MIN_WARM_RELATIVE_GAIN,
     REQUIRED_SEEDS,
     RetrievalTolerance,
+    SeedRegime,
 )
 
 STUDY_SCHEMA_VERSION: Final = 1
@@ -54,10 +66,18 @@ GATING_SLICES: Final = ("cold", "overall")
 DIAGNOSTIC_SLICES: Final = ("warm",)
 _ALL_SLICES: Final = ("warm", "cold", "overall")
 
-# Three seeds is the floor rather than the target. A standard deviation over
-# three samples is a coarse estimate, which is exactly what the Student-t
-# multiplier below is for.
+# Three seeds is the floor rather than the target for a study that measures
+# dispersion at all. A standard deviation over three samples is a coarse
+# estimate, which is exactly what the Student-t multiplier below is for.
 MIN_STUDY_SEEDS: Final = 3
+
+# The one admissible study size below that floor, and only with a declared
+# justification. A one-run study is not a cheaper dispersion estimate — it is a
+# different measurement, covering the evaluation population and nothing else.
+# Two runs remain inadmissible: they are neither, and a standard deviation over
+# two samples carries a t multiplier of 6.314 that would buy a tolerance far
+# wider than the evidence supports.
+SINGLE_RUN_STUDY_SIZE: Final = 1
 
 # Enough replicates that the bootstrap's own Monte-Carlo error is far below the
 # quantity it estimates. Chunked when drawn (see `_bootstrap_replicate_means`).
@@ -191,7 +211,15 @@ class StudyRun:
 
 @dataclass(frozen=True)
 class ToleranceStudyInputs:
-    """Everything one study needs, with its provenance declared up front."""
+    """Everything one study needs, with its provenance declared up front.
+
+    ``single_run_justification`` is required exactly when ``study_runs`` holds
+    one run, and forbidden otherwise.  It is the recorded reason a tolerance is
+    allowed to rest on the population term alone — normally the standing
+    one-run-per-configuration policy — and it exists so the weaker regime is
+    something the evidence document states rather than something a reader has
+    to infer from an array length.
+    """
 
     model_type: str
     gate_configuration_id: str
@@ -199,6 +227,7 @@ class ToleranceStudyInputs:
     study_runs: tuple[StudyRun, ...]
     surrogate_delta: str | None = None
     zero_seed_variance_justification: str | None = None
+    single_run_justification: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,7 +266,13 @@ class StudyOptions:
 
 @dataclass(frozen=True)
 class SliceNoise:
-    """The measured noise floor of one slice, and what the rule makes of it."""
+    """The measured noise floor of one slice, and what the rule makes of it.
+
+    The three seed-dispersion fields are ``None`` — never ``0.0`` — when the
+    study carries a single run.  A zero would say "measured, and the seed
+    changes nothing", which is the `degenerate` finding and a materially
+    different claim from "not measured at all".
+    """
 
     slice_name: str
     gating: bool
@@ -245,9 +280,9 @@ class SliceNoise:
     incumbent_recall: float
     seed_recalls: tuple[float, ...]
     seed_mean: float
-    seed_sd: float
-    seed_relative_range: float
-    seed_half_width: float
+    seed_sd: float | None
+    seed_relative_range: float | None
+    seed_half_width: float | None
     bootstrap_run_ids: tuple[str, ...]
     bootstrap_standard_error: float
     bootstrap_standard_error_range: tuple[float, float]
@@ -264,6 +299,8 @@ class ToleranceStudyReport:
     status: ToleranceStudyStatus
     model_type: str
     derivation: str
+    seed_regime: SeedRegime
+    single_run_justification: str | None
     surrogate_delta: str | None
     protocol_hash: str | None
     incumbent_run_id: str
@@ -312,7 +349,10 @@ class ToleranceStudyReport:
         lines = [
             f"{headline} — recall@{K_CANDIDATES} tolerance study for {self.model_type}",
             f"  derivation: {self.derivation}",
+            f"  seed regime: {self.seed_regime.value} ({len(self.study_run_ids)} study run(s))",
         ]
+        if self.single_run_justification:
+            lines.append(f"  single-run justification: {self.single_run_justification}")
         if self.surrogate_delta:
             lines.append(f"  surrogate delta: {self.surrogate_delta}")
         for measured in self.slices:
@@ -322,12 +362,18 @@ class ToleranceStudyReport:
                 if measured.proposed_tolerance is None
                 else f"{measured.proposed_tolerance:.1%}"
             )
+            unmeasured_seed = measured.seed_half_width is None
+            seed_term = "not measured" if unmeasured_seed else f"{measured.seed_half_width:.2%}"
+            source = (
+                "[no seed term measured]"
+                if unmeasured_seed
+                else f"[{measured.dominant_component}-dominated]"
+            )
             lines.append(
                 f"  {measured.slice_name} ({scope}, n={measured.n_users}): {value} "
-                f"— seed {measured.seed_half_width:.2%}, "
+                f"— seed {seed_term}, "
                 f"population {measured.bootstrap_half_width:.2%}, "
-                f"combined {measured.combined_half_width:.2%} "
-                f"[{measured.dominant_component}-dominated]"
+                f"combined {measured.combined_half_width:.2%} {source}"
             )
             lines.extend(f"    note: {note}" for note in measured.notes)
         lines.extend(f"  reason: {reason}" for reason in self.reasons)
@@ -341,6 +387,7 @@ class ToleranceStudyReport:
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
         payload["status"] = self.status.value
+        payload["seed_regime"] = self.seed_regime.value
         payload["established"] = self.established
         return payload
 
@@ -350,7 +397,13 @@ def measure_retrieval_tolerance(
     *,
     options: StudyOptions | None = None,
 ) -> ToleranceStudyReport:
-    """Derive the gate's cold and overall tolerances from a noise study."""
+    """Derive the gate's cold and overall tolerances from a noise study.
+
+    Two admissible study sizes: `m >= MIN_STUDY_SEEDS`, which measures both
+    noise terms and combines them in quadrature, and exactly one run, which
+    measures the population term alone and must say why it is allowed to.  The
+    report names which of the two produced it.
+    """
     resolved = options or StudyOptions()
     run_ids = tuple(run.run_id for run in inputs.study_runs)
     seeds = tuple(run.seed for run in inputs.study_runs if type(run.seed) is int)
@@ -391,11 +444,17 @@ def measure_retrieval_tolerance(
             continue
         measured.append(_measure_slice(inputs, slice_name, resolved))
 
+    # `seed_sd is not None` matters: a one-run study did not measure a spread of
+    # zero, it measured no spread, and that is admitted through
+    # `single_run_justification` rather than through this clause.
     degenerate = [
         f"{m.slice_name} slice has zero seed spread and no justification; "
         "a stochastic model whose seed changes nothing is a seed that is not wired through"
         for m in measured
-        if m.gating and m.seed_sd == 0.0 and not inputs.zero_seed_variance_justification
+        if m.gating
+        and m.seed_sd is not None
+        and m.seed_sd == 0.0
+        and not inputs.zero_seed_variance_justification
     ]
     too_noisy = [
         f"{m.slice_name} combined half-width {m.combined_half_width:.2%} exceeds the "
@@ -434,6 +493,20 @@ def measure_retrieval_tolerance(
     )
 
 
+def _study_seed_regime(inputs: ToleranceStudyInputs) -> SeedRegime:
+    """Which regime this study measured, read off the run count.
+
+    Shares the gate's vocabulary on purpose: a `single_seed` study is the only
+    kind that can legitimately supply a `single_seed` verdict's tolerances, and
+    reusing the word is what makes that pairing checkable by a reader.
+    """
+    return (
+        SeedRegime.SINGLE_SEED
+        if len(inputs.study_runs) == SINGLE_RUN_STUDY_SIZE
+        else SeedRegime.MULTI_SEED
+    )
+
+
 def _study_configuration(inputs: ToleranceStudyInputs) -> str | None:
     """The one configuration the study runs share, or None when they disagree."""
     configurations = {
@@ -461,10 +534,23 @@ def _structural_reasons(inputs: ToleranceStudyInputs, derivation: str) -> tuple[
     if inputs.model_type == incumbent.model_type:
         reasons.append("study model and incumbent model identities must differ")
 
-    if len(inputs.study_runs) < MIN_STUDY_SEEDS:
+    run_count = len(inputs.study_runs)
+    if run_count == SINGLE_RUN_STUDY_SIZE:
+        if not _is_normalized(inputs.single_run_justification or ""):
+            reasons.append(
+                "a one-run study has no across-seed dispersion to estimate, so it must declare "
+                "single_run_justification — the recorded reason this tolerance may rest on the "
+                "population term alone"
+            )
+    elif run_count < MIN_STUDY_SEEDS:
         reasons.append(
             f"a dispersion estimate needs at least {MIN_STUDY_SEEDS} seeded runs, "
-            f"got {len(inputs.study_runs)}"
+            f"got {run_count}"
+        )
+    elif inputs.single_run_justification:
+        reasons.append(
+            f"single_run_justification was supplied but the study carries {run_count} runs; "
+            "one of the two declarations is wrong"
         )
     seeds = [run.seed for run in inputs.study_runs]
     if any(type(seed) is not int for seed in seeds):
@@ -655,10 +741,20 @@ def _measure_slice(
     incumbent_recall = _slice_recall(inputs.incumbent.result, slice_name)
     seed_recalls = tuple(_slice_recall(run.result, slice_name) for run in inputs.study_runs)
     seed_mean = statistics.fmean(seed_recalls)
-    seed_sd = statistics.stdev(seed_recalls)
-    seed_range = (max(seed_recalls) - min(seed_recalls)) / seed_mean if seed_mean > 0 else 0.0
-    seed_half_width = _t_quantile(len(seed_recalls) - 1) * seed_sd / math.sqrt(len(seed_recalls))
-    seed_half_width /= incumbent_recall
+
+    # A single run leaves these three genuinely unmeasured. `None` rather than
+    # zero, so that every consumer — the quadrature below, the degenerate check,
+    # the summary line — has to handle "we do not know" explicitly instead of
+    # inheriting the arithmetic of "we know it is nothing".
+    seed_sd: float | None = None
+    seed_range: float | None = None
+    seed_half_width: float | None = None
+    if len(seed_recalls) > 1:
+        seed_sd = statistics.stdev(seed_recalls)
+        seed_range = (max(seed_recalls) - min(seed_recalls)) / seed_mean if seed_mean > 0 else 0.0
+        seed_half_width = (
+            _t_quantile(len(seed_recalls) - 1) * seed_sd / math.sqrt(len(seed_recalls))
+        ) / incumbent_recall
 
     # Every run's bootstrap draws from the same seed on purpose. The resample
     # indices are then identical across runs, so a spread in the per-run
@@ -690,10 +786,19 @@ def _measure_slice(
         if percentile_half_widths
         else 0.0
     )
-    combined = math.hypot(seed_half_width, bootstrap_half_width)
+    combined = (
+        bootstrap_half_width
+        if seed_half_width is None
+        else math.hypot(seed_half_width, bootstrap_half_width)
+    )
 
     notes: list[str] = []
-    if seed_sd == 0.0:
+    if seed_half_width is None:
+        notes.append(
+            "seed term not measured: one study run. This tolerance covers evaluation-population "
+            "sampling only and cannot distinguish a real regression from training-seed variation"
+        )
+    elif seed_sd == 0.0:
         justification = inputs.zero_seed_variance_justification
         notes.append(
             f"zero seed spread across {len(seed_recalls)} runs"
@@ -741,7 +846,11 @@ def _measure_slice(
     )
 
 
-def _dominant(seed_half_width: float, bootstrap_half_width: float) -> str:
+def _dominant(seed_half_width: float | None, bootstrap_half_width: float) -> str:
+    if seed_half_width is None:
+        # Deliberately not "population": that word would claim a seed term was
+        # measured and lost the comparison, when none was measured at all.
+        return "population-only"
     if bootstrap_half_width == 0.0 and seed_half_width == 0.0:
         return "none"
     if seed_half_width >= _DOMINANCE_RATIO * bootstrap_half_width:
@@ -846,6 +955,8 @@ def _report(
         status=status,
         model_type=inputs.model_type,
         derivation=derivation,
+        seed_regime=_study_seed_regime(inputs),
+        single_run_justification=inputs.single_run_justification,
         surrogate_delta=inputs.surrogate_delta,
         protocol_hash=protocol_hash,
         incumbent_run_id=inputs.incumbent.run_id,
@@ -887,6 +998,7 @@ def study_inputs_from_json(document: str) -> ToleranceStudyInputs:
         ),
         surrogate_delta=_optional_str(payload, "surrogate_delta"),
         zero_seed_variance_justification=_optional_str(payload, "zero_seed_variance_justification"),
+        single_run_justification=_optional_str(payload, "single_run_justification"),
     )
 
 
@@ -994,7 +1106,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m src.evaluation.tolerance_study",
         description=(
             "Derive the retrieval gate's cold and overall non-regression tolerances from a "
-            "seed-and-bootstrap noise study. Refuses rather than guessing."
+            "seed-and-bootstrap noise study, or from the bootstrap alone when the evidence "
+            "declares a one-run study. Refuses rather than guessing."
         ),
     )
     parser.add_argument("--evidence", required=True, metavar="PATH")

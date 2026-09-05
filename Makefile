@@ -261,7 +261,7 @@ gate:
 	python -m src.evaluation.gate --candidate $(CANDIDATE) --incumbent $(INCUMBENT) $(GATE_ARGS)
 
 # ADR 0004's retrieval-only gate. Unlike `gate`, this reads recall@500 and
-# requires canonical protocol metadata plus the complete seed set. Retrieval
+# requires canonical protocol metadata plus the stated seed set. Retrieval
 # tolerances intentionally have no defaults: they must come from the measured
 # retrieval noise study, never from the ranker's NDCG tolerances.
 #
@@ -269,6 +269,15 @@ gate:
 #     CANDIDATE="<seed-42> <seed-7> <seed-13>" INCUMBENT=<item-item> \
 #     RETRIEVAL_COLD_TOLERANCE=<measured fraction> \
 #     RETRIEVAL_OVERALL_TOLERANCE=<measured fraction>
+#
+# RETRIEVAL_SEEDS states the seed policy and defaults to the three-seed set.
+# Under the one-run-per-configuration policy, pass the single seed the run used:
+#
+#   make gate-retrieval CANDIDATE=<seed-42 run> INCUMBENT=<item-item> \
+#     RETRIEVAL_SEEDS=42 RETRIEVAL_COLD_TOLERANCE=... RETRIEVAL_OVERALL_TOLERANCE=...
+#
+# The verdict then records seed_regime=single_seed, and the tolerances it is
+# handed must have come from a study with no seed term.
 gate-retrieval:
 	@test -n "$(CANDIDATE)" || { echo "CANDIDATE run id(s) required"; exit 2; }
 	@test -n "$(INCUMBENT)" || { echo "INCUMBENT run id(s) required"; exit 2; }
@@ -278,6 +287,7 @@ gate-retrieval:
 		--candidate $(CANDIDATE) --incumbent $(INCUMBENT) \
 		--cold-tolerance $(RETRIEVAL_COLD_TOLERANCE) \
 		--overall-tolerance $(RETRIEVAL_OVERALL_TOLERANCE) \
+		$(if $(RETRIEVAL_SEEDS),--seeds $(RETRIEVAL_SEEDS),) \
 		$(RETRIEVAL_GATE_ARGS)
 
 # Where the two tolerances `gate-retrieval` demands are supposed to come from.

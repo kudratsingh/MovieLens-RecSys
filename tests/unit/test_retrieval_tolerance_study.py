@@ -20,7 +20,7 @@ import pytest
 
 from src.evaluation.manifest import PROTOCOL_SCHEMA_VERSION, ProtocolManifest
 from src.evaluation.protocol import EvalResult, UserMetrics
-from src.evaluation.retrieval_gate import ITEMITEM_MODEL_TYPE, REQUIRED_SEEDS
+from src.evaluation.retrieval_gate import ITEMITEM_MODEL_TYPE, REQUIRED_SEEDS, SeedRegime
 from src.evaluation.tolerance_study import (
     DERIVATION_SAME_CONFIGURATION,
     DERIVATION_SURROGATE,
@@ -189,6 +189,19 @@ def _inputs(**changes: object) -> ToleranceStudyInputs:
     }
     defaults.update(changes)
     return ToleranceStudyInputs(**defaults)  # type: ignore[arg-type]
+
+
+SINGLE_RUN_REASON = "standing policy: one run per configuration until the transformer rungs"
+
+
+def _one_run_inputs(**changes: object) -> ToleranceStudyInputs:
+    """The study shape the one-run-per-configuration policy leaves affordable."""
+    defaults: dict[str, object] = {
+        "study_runs": _study_runs(seeds=(101,)),
+        "single_run_justification": SINGLE_RUN_REASON,
+    }
+    defaults.update(changes)
+    return _inputs(**defaults)
 
 
 def _measured(report: ToleranceStudyReport, slice_name: str):  # type: ignore[no-untyped-def]
@@ -411,6 +424,120 @@ def test_study_runs_must_agree_on_one_configuration():
 
     assert report.status is ToleranceStudyStatus.INSUFFICIENT_EVIDENCE
     assert any("exactly one configuration_id" in reason for reason in report.reasons)
+
+
+# --- one-run studies --------------------------------------------------------
+
+
+def test_a_declared_one_run_study_derives_the_tolerance_from_the_bootstrap_alone():
+    report = measure_retrieval_tolerance(_one_run_inputs(), options=FAST)
+    cold = _measured(report, "cold")
+
+    assert report.status is ToleranceStudyStatus.PROPOSED
+    assert report.seed_regime is SeedRegime.SINGLE_SEED
+    assert report.study_seeds == (101,)
+
+    # Unmeasured, not measured-and-zero. The distinction is the whole point.
+    assert cold.seed_sd is None
+    assert cold.seed_relative_range is None
+    assert cold.seed_half_width is None
+    assert cold.seed_recalls == (pytest.approx(COLD_MEANS[0]),)
+
+    assert cold.combined_half_width == pytest.approx(cold.bootstrap_half_width)
+    assert cold.bootstrap_half_width == pytest.approx(
+        ONE_SIDED_Z_95 * cold.bootstrap_standard_error / 0.50, rel=1e-9
+    )
+    assert cold.dominant_component == "population-only"
+    assert any("cannot distinguish a real regression" in note for note in cold.notes)
+
+    # This fixture's paired difference is small, so the whole tolerance is the
+    # published-resolution floor rather than anything the bootstrap resolved.
+    assert report.as_tolerance().cold == TOLERANCE_FLOOR
+
+
+def test_a_one_run_study_must_declare_why_it_is_one_run():
+    report = measure_retrieval_tolerance(
+        _one_run_inputs(single_run_justification=None), options=FAST
+    )
+
+    assert report.status is ToleranceStudyStatus.INSUFFICIENT_EVIDENCE
+    assert any("single_run_justification" in reason for reason in report.reasons)
+    assert report.slices == ()
+    with pytest.raises(ToleranceNotEstablishedError):
+        report.as_tolerance()
+
+
+def test_a_single_run_declaration_on_a_multi_seed_study_is_contradictory():
+    report = measure_retrieval_tolerance(
+        _inputs(single_run_justification=SINGLE_RUN_REASON), options=FAST
+    )
+
+    assert report.status is ToleranceStudyStatus.INSUFFICIENT_EVIDENCE
+    assert any("one of the two declarations is wrong" in reason for reason in report.reasons)
+
+
+@pytest.mark.parametrize("justification", [None, SINGLE_RUN_REASON])
+def test_two_runs_remain_inadmissible_under_either_declaration(justification: str | None):
+    report = measure_retrieval_tolerance(
+        _inputs(
+            study_runs=_study_runs(seeds=(101, 202)),
+            single_run_justification=justification,
+        ),
+        options=FAST,
+    )
+
+    assert report.status is ToleranceStudyStatus.INSUFFICIENT_EVIDENCE
+    assert any("at least 3 seeded runs" in reason for reason in report.reasons)
+
+
+def test_a_one_run_study_may_not_reuse_the_gates_own_seed_at_its_own_configuration():
+    """The anti-circularity rule survives the relaxation it is most exposed to."""
+    report = measure_retrieval_tolerance(
+        _one_run_inputs(study_runs=_study_runs(seeds=(42,))), options=FAST
+    )
+
+    assert report.status is ToleranceStudyStatus.INSUFFICIENT_EVIDENCE
+    assert any("seeds the gate does not read" in reason for reason in report.reasons)
+
+
+def test_a_one_run_surrogate_is_the_route_the_standing_policy_leaves_open():
+    report = measure_retrieval_tolerance(
+        _one_run_inputs(
+            study_runs=_study_runs(seeds=(42,), configuration_id="sasrec-6pct-pilot"),
+            surrogate_delta="6% of the training interactions; all else identical",
+        ),
+        options=FAST,
+    )
+
+    assert report.status is ToleranceStudyStatus.PROPOSED
+    assert report.derivation == DERIVATION_SURROGATE
+    assert report.seed_regime is SeedRegime.SINGLE_SEED
+
+
+def test_the_one_run_report_records_its_regime_in_json_and_in_prose():
+    report = measure_retrieval_tolerance(_one_run_inputs(), options=FAST)
+    payload = report.to_dict()
+
+    assert payload["seed_regime"] == "single_seed"
+    assert payload["single_run_justification"] == SINGLE_RUN_REASON
+    assert "seed regime: single_seed (1 study run(s))" in report.summary()
+    assert f"single-run justification: {SINGLE_RUN_REASON}" in report.summary()
+    assert "seed not measured" in report.summary()
+
+
+def test_the_multi_seed_regime_is_unchanged_by_the_one_run_path():
+    """Regression guard: three seeds still measure and combine both terms."""
+    report = measure_retrieval_tolerance(_inputs(), options=FAST)
+    cold = _measured(report, "cold")
+
+    assert report.seed_regime is SeedRegime.MULTI_SEED
+    assert report.single_run_justification is None
+    assert cold.seed_sd == pytest.approx(statistics.stdev(COLD_MEANS))
+    assert cold.seed_half_width is not None
+    assert cold.combined_half_width == pytest.approx(
+        math.hypot(cold.seed_half_width, cold.bootstrap_half_width)
+    )
+    assert cold.dominant_component == "seed"
 
 
 # --- not comparable ---------------------------------------------------------
@@ -656,6 +783,20 @@ def test_evidence_document_round_trips_into_the_same_report():
     assert (
         measure_retrieval_tolerance(loaded, options=FAST).to_dict()
         == measure_retrieval_tolerance(_inputs(), options=FAST).to_dict()
+    )
+
+
+def test_a_one_run_evidence_document_carries_its_declaration_through():
+    document = _document(
+        study_runs=[_run_payload(run) for run in _study_runs(seeds=(101,))],
+        single_run_justification=SINGLE_RUN_REASON,
+    )
+    loaded = study_inputs_from_json(json.dumps(document))
+
+    assert loaded.single_run_justification == SINGLE_RUN_REASON
+    assert (
+        measure_retrieval_tolerance(loaded, options=FAST).to_dict()
+        == measure_retrieval_tolerance(_one_run_inputs(), options=FAST).to_dict()
     )
 
 

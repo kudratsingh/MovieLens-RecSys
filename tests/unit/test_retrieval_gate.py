@@ -20,6 +20,7 @@ from src.evaluation.retrieval_gate import (
     RetrievalRunNotUsableError,
     RetrievalRunSet,
     RetrievalTolerance,
+    SeedRegime,
     retrieval_promotion_decision,
     retrieval_run_from_mlflow,
 )
@@ -133,6 +134,21 @@ def _incumbent(
                 model_type=ITEMITEM_MODEL_TYPE,
             ),
         ),
+    )
+
+
+def _one_run_candidate(
+    warm: float = 0.414,
+    cold: float = 0.525,
+    overall: float = 0.430,
+    *,
+    seed: int = 42,
+) -> RetrievalRunSet:
+    """The shape the one-run-per-configuration policy produces."""
+    return RetrievalRunSet(
+        model_id="sasrec",
+        deterministic=False,
+        runs=(_run(f"sasrec-{seed}", seed, _result(warm, cold, overall)),),
     )
 
 
@@ -300,6 +316,164 @@ def test_custom_seed_policy_is_reported_even_when_evidence_is_incomplete():
 
     assert decision.status is RetrievalGateStatus.INCOMPLETE
     assert decision.required_seeds == (1, 2, 3)
+
+
+# --- seed regime ------------------------------------------------------------
+
+
+def test_a_single_run_reaches_a_verdict_when_the_caller_states_the_policy():
+    decision = retrieval_promotion_decision(
+        _one_run_candidate(),
+        _incumbent(),
+        tolerance=TOLERANCE,
+        required_seeds=(42,),
+    )
+
+    assert decision.status is RetrievalGateStatus.PROMOTE
+    assert decision.required_seeds == (42,)
+    assert decision.candidate_run_ids == ("sasrec-42",)
+    # Everything the seed count does not touch is untouched.
+    assert decision.serving_eligible is False
+    assert decision.protocol_hash == _protocol().semantic_hash
+    assert {clause.name for clause in decision.clauses} == {"warm", "cold", "overall"}
+
+
+def test_a_single_seed_verdict_says_so_and_says_what_it_cannot_see():
+    payload = retrieval_promotion_decision(
+        _one_run_candidate(),
+        _incumbent(),
+        tolerance=TOLERANCE,
+        required_seeds=(42,),
+    ).to_dict()
+
+    assert payload["seed_regime"] == "single_seed"
+    assert payload["required_seeds"] == (42,)
+    basis = payload["uncertainty_basis"]
+    assert isinstance(basis, str)
+    assert "one training run" in basis
+    assert "Training stochasticity is unmeasured" in basis
+
+
+def test_the_single_seed_regime_is_visible_in_the_human_summary_too():
+    summary = retrieval_promotion_decision(
+        _one_run_candidate(),
+        _incumbent(),
+        tolerance=TOLERANCE,
+        required_seeds=(42,),
+    ).summary()
+
+    assert "seed regime: single_seed [42]" in summary
+    assert "uncertainty: one training run" in summary
+
+
+def test_one_run_is_incomplete_until_the_weaker_policy_is_asked_for():
+    """The whole no-silent-weakening property: the default is still three seeds."""
+    decision = retrieval_promotion_decision(_one_run_candidate(), _incumbent(), tolerance=TOLERANCE)
+
+    assert decision.status is RetrievalGateStatus.INCOMPLETE
+    assert decision.seed_regime is SeedRegime.MULTI_SEED
+    assert any("missing required seeds [7, 13]" in reason for reason in decision.reasons)
+
+
+def test_a_single_seed_policy_still_pins_which_seed_the_run_used():
+    decision = retrieval_promotion_decision(
+        _one_run_candidate(seed=7),
+        _incumbent(),
+        tolerance=TOLERANCE,
+        required_seeds=(42,),
+    )
+
+    assert decision.status is RetrievalGateStatus.INCOMPLETE
+    assert any("missing required seeds [42]" in reason for reason in decision.reasons)
+    assert any("unexpected seeds [7]" in reason for reason in decision.reasons)
+
+
+@pytest.mark.parametrize(
+    ("candidate", "failed_slice"),
+    [
+        (_one_run_candidate(warm=0.411), "warm"),
+        (_one_run_candidate(cold=0.500), "cold"),
+        (_one_run_candidate(overall=0.420), "overall"),
+    ],
+)
+def test_every_quality_clause_still_bites_under_the_single_seed_policy(
+    candidate: RetrievalRunSet, failed_slice: str
+):
+    decision = retrieval_promotion_decision(
+        candidate, _incumbent(), tolerance=TOLERANCE, required_seeds=(42,)
+    )
+
+    assert decision.status is RetrievalGateStatus.REFUSE
+    assert any(clause.name == failed_slice and not clause.passed for clause in decision.clauses)
+    assert decision.seed_regime is SeedRegime.SINGLE_SEED
+
+
+def test_the_other_checks_are_not_relaxed_along_with_the_seed_count():
+    one_run = _one_run_candidate()
+    mismatched = replace(
+        one_run,
+        runs=(replace(one_run.runs[0], protocol=_protocol(catalog_fingerprint="sha256:other")),),
+    )
+    deterministic = RetrievalRunSet(
+        model_id="sasrec",
+        deterministic=True,
+        runs=(_run("sasrec-once", None, _result(0.414, 0.525, 0.430), deterministic=True),),
+    )
+
+    not_comparable = retrieval_promotion_decision(
+        mismatched, _incumbent(), tolerance=TOLERANCE, required_seeds=(42,)
+    )
+    stochastic_required = retrieval_promotion_decision(
+        deterministic, _incumbent(), tolerance=TOLERANCE, required_seeds=(42,)
+    )
+
+    assert not_comparable.status is RetrievalGateStatus.NOT_COMPARABLE
+    assert stochastic_required.status is RetrievalGateStatus.INCOMPLETE
+    assert any("candidate must be stochastic" in reason for reason in stochastic_required.reasons)
+
+
+def test_three_seeds_behave_exactly_as_before_the_single_seed_policy():
+    """Regression guard for the regime the standing policy is a pause on."""
+    implicit = retrieval_promotion_decision(_candidate(), _incumbent(), tolerance=TOLERANCE)
+    explicit = retrieval_promotion_decision(
+        _candidate(), _incumbent(), tolerance=TOLERANCE, required_seeds=REQUIRED_SEEDS
+    )
+
+    assert implicit == explicit
+    assert implicit.status is RetrievalGateStatus.PROMOTE
+    assert implicit.required_seeds == (42, 7, 13)
+    assert implicit.seed_regime is SeedRegime.MULTI_SEED
+    assert "3 training runs" in implicit.uncertainty_basis
+    assert "quadrature" in implicit.uncertainty_basis
+    # The clause arithmetic is the part that must not have moved.
+    warm = next(clause for clause in implicit.clauses if clause.name == "warm")
+    assert warm.required_change == MIN_WARM_RELATIVE_GAIN
+    assert warm.candidate == pytest.approx(0.414)
+    assert warm.incumbent == pytest.approx(0.400)
+    cold = next(clause for clause in implicit.clauses if clause.name == "cold")
+    assert cold.required_change == pytest.approx(-0.02)
+
+
+def test_the_decision_payload_gained_exactly_the_two_regime_keys():
+    """A future field lands here deliberately, not by accident."""
+    payload = retrieval_promotion_decision(_candidate(), _incumbent(), tolerance=TOLERANCE)
+
+    assert set(payload.to_dict()) == {
+        "status",
+        "stage",
+        "metric",
+        "k",
+        "protocol_hash",
+        "required_seeds",
+        "candidate_run_ids",
+        "incumbent_run_ids",
+        "clauses",
+        "reasons",
+        "seed_regime",
+        "uncertainty_basis",
+        "serving_eligible",
+        "promote",
+    }
 
 
 @pytest.mark.parametrize(
