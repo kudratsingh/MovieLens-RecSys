@@ -555,6 +555,15 @@ db-migrate-status:
 # `--yes` is never passed from here, so a stray `make promote` in a shell that
 # happens to hold production credentials refuses rather than repointing
 # production; a deliberate production run says so on the command line.
+#
+# There is no TARGET or DATABASE variable here on purpose: the DSN comes from
+# POSTGRES_* the same way every other offline entrypoint's does. Which is why
+# the tool prints the host, port, database and tenant it resolved before it
+# touches anything -- an ephemeral stack publishes Postgres on a port it had to
+# choose, and `make promote TENANT=demo` in a shell that never set POSTGRES_PORT
+# is talking to whatever is on 5432, usually this machine's own database.
+#
+#   POSTGRES_PORT=55432 make promote TENANT=demo BUNDLE=models/serving
 PROMOTE_ARGS ?=
 
 promote:

@@ -14,11 +14,13 @@ from __future__ import annotations
 import pandas as pd
 from sqlalchemy import Engine, text
 
+from src.config import DEFAULT_TENANT_ID
+
 # The tenant whose ratings constitute the training frame. MovieLens users live
 # in `default`; synthetic tenants (`demo` and friends) share the same table,
 # which is the point of row-level security but also means an unfiltered read
 # quietly returns them too.
-TRAINING_TENANT_ID = "default"
+TRAINING_TENANT_ID = DEFAULT_TENANT_ID
 
 _RATINGS_QUERY = text(
     'SELECT "userId", "movieId", rating, timestamp FROM ratings ' "WHERE tenant_id = :tenant_id"
