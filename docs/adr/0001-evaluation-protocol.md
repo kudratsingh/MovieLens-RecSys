@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-18  
-**Amended:** 2026-08-30 — the cold-start threshold is 10, and it is the offline routing rule as well as the online one. See [the amendment](#amendment-2026-08-30--the-cold-start-threshold-is-10-online-and-offline) at the bottom; the "Cold-start slicing" bullets below are superseded by it.
+**Amended:** 2026-09-05 — learned-route changes use warm-primary promotion; changes touching both routes retain the overall-primary rule. See [the amendment](#amendment-2026-09-05--learned-route-changes-are-warm-primary) below.
 
 ## Context
 
@@ -47,8 +47,9 @@ K=10 reflects a realistic number of recommendations shown to a user. Metrics bey
 *Amended 2026-08-30 — see the note at the bottom of this file for the decision, the
 measurement behind the tolerance, and what it says about the runs already recorded.*
 
-- A challenger model is only promoted if it beats the incumbent by ≥ +3% relative NDCG@10 on the **overall** holdout (`overall_ndcg_at_k`), **and neither the warm nor the cold slice regresses by more than that slice's tolerance**.
-- Concretely: challenger must score at least `champion_score * 1.03` overall, and at least `champion_slice_score * (1 - T_slice)` on each of `warm_ndcg_at_k` and `cold_ndcg_at_k`.
+- A change touching both learned and fallback routes is promoted only if it beats the incumbent by ≥ +3% relative NDCG@10 on the **overall** holdout (`overall_ndcg_at_k`), **and neither the warm nor the cold slice regresses by more than that slice's tolerance**.
+- A change confined to the threshold-routed learned path is promoted if **warm NDCG@10 gains ≥ +3% relative** and cold NDCG@10 does not regress beyond its measured tolerance. Overall remains required output, but is not a promotion clause in this scope.
+- Scope is declared from the architecture before reading results. It is not a switch an operator may choose after seeing which interpretation passes.
 - 3% filters out retraining noise while remaining achievable for genuine architectural improvements (expected 5–15% gains between major changes).
 - `T_warm` and `T_cold` are the **measured** seed-to-seed noise floor, not a chosen band — the derivation is in the 2026-08-30 note.
 - Gate is automated via the evaluation module — never eyeballed. It is `promotion_decision` in [`src/evaluation/gate.py`](../../src/evaluation/gate.py).
@@ -70,7 +71,56 @@ measurement behind the tolerance, and what it says about the runs already record
 - All training and evaluation code must import from `src/evaluation/` — no ad-hoc metric computation in notebooks or training scripts.
 - The evaluation module must log cold-user and warm-user metrics separately to MLflow on every run.
 - Any feature using data with timestamp >= T is illegal in training; point-in-time correctness is enforced at the evaluation boundary.
-- The Phase 4 Prefect promotion DAG reads `overall_ndcg_at_k`, `warm_ndcg_at_k` and `cold_ndcg_at_k` from MLflow and enforces the gate automatically — the aggregate's +3% and both slices' non-regression clause, failing on any of the three.
+- The Phase 4 Prefect promotion DAG reads `overall_ndcg_at_k`, `warm_ndcg_at_k` and `cold_ndcg_at_k` from MLflow and enforces the declared scope automatically. Both modes continue to report the final verdict plus all three population views.
+
+## Amendment 2026-09-05 — learned-route changes are warm-primary
+
+**Decided by the owner.** The 2026-08-30 all-routes rule remains the default.
+When a challenger changes only the learned path used by users at or above
+`COLD_START_THRESHOLD`, the positive promotion claim moves from overall to the
+population the change can affect:
+
+1. warm NDCG@10 must gain at least 3% relative;
+2. cold NDCG@10 must not regress beyond `T_cold`; and
+3. overall NDCG@10 is still reported, but it does not gate promotion.
+
+A change to fallback candidates, fallback ranking, the routing boundary, or a
+shared ranker touches both routes and therefore keeps the original rule:
+overall +3% with warm and cold non-regression. The scope is an architectural
+fact declared before execution, not a second chance selected after the numbers
+arrive.
+
+### Why
+
+Cold users take identical popularity routing in the learned-retriever
+comparisons that prompted this amendment, yet they carry roughly 69–74% of
+overall NDCG mass. The aggregate is therefore dominated by a population whose
+output the proposed change cannot move. Against the accepted per-route SASRec
+bundle used by ADR 0018, warm contributes about 31.2% of the aggregate; holding
+cold fixed means an overall +3% clause silently requires about +9.6% warm. That
+is a different and much stronger claim than the stated +3% architectural gate.
+
+Cold remains a blocking non-regression clause. This matters operationally: the
+single booster trained only on SASRec candidates improved warm NDCG@10 by
+25.96% but damaged cold by 53.11%, and must still be refused. The per-route
+bundle improved warm by 25.96%, held cold exactly flat, and gained 6.88%
+overall, so it promotes under both scopes. These fixtures are pinned in the
+gate's unit tests.
+
+### Executable contract
+
+`promotion_decision(..., scope="learned-route")` implements the new rule.
+The default remains `scope="all-routes"`. The CLI exposes the same declaration:
+
+```bash
+make gate CANDIDATE=<run-id> INCUMBENT=<run-id> \
+  GATE_ARGS="--scope learned-route"
+```
+
+The structured and prose outputs retain the final verdict and the overall,
+warm, and cold readings. In learned-route mode the overall line is explicitly
+marked reported-not-gated, so evidence consumers cannot mistake it for the
+positive clause.
 
 ## Amendment 2026-09-05 — the final evaluation reads 28 days, not 3.4 years
 

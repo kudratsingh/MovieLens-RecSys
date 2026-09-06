@@ -284,6 +284,10 @@ train-sasrec-ranker-scores:
 #
 #   make gate CANDIDATE=<run id> INCUMBENT=<run id>
 #   make gate CANDIDATE="<id> <id> <id>" INCUMBENT="<id> <id> <id>"
+#   make gate CANDIDATE=<run id> INCUMBENT=<run id> GATE_ARGS="--scope learned-route"
+# The default is all-routes. Use learned-route only when the change is confined
+# to threshold-routed users; it gates warm +3% and cold non-regression while
+# reporting overall without gating on it (ADR 0001, 2026-09-05 amendment).
 gate:
 	@test -n "$(CANDIDATE)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
 	@test -n "$(INCUMBENT)" || { echo "usage: make gate CANDIDATE=<run id> INCUMBENT=<run id>"; exit 2; }
