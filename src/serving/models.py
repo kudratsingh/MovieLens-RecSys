@@ -9,12 +9,21 @@ from typing import Any
 import httpx
 
 from src.feature_contract import FEATURE_COLUMNS
-from src.serving.policy import FILTER_POLICY_NOT_RUN, REASON_CHAMPION_MISMATCH
+from src.serving.policy import (
+    ARTIFACT_SHA256_NOT_PINNED,
+    FILTER_POLICY_NOT_RUN,
+    RANKER_ROUTE_LEARNED,
+    RANKER_ROUTES,
+    REASON_CHAMPION_MISMATCH,
+)
 from src.serving.tenancy import TenantChampion
 
 # A sidecar that predates the split inputs still answers, but it cannot
 # attribute a candidate. Say so rather than inventing a source in the audit.
 CANDIDATE_SOURCE_UNKNOWN = "unknown"
+
+# SHA-256 as this project writes it everywhere: lowercase hex, no prefix.
+_SHA256_HEX_LENGTH = 64
 
 
 class ModelServerContractError(ValueError):
@@ -60,6 +69,23 @@ class ModelRankingResult:
     excluded_count: int = 0
     filter_policy: str = FILTER_POLICY_NOT_RUN
     feature_event_time: float | None = None
+    # Retrieval provenance. The defaults are what a sidecar that predates these
+    # fields means, not placeholders: it published one ranker and answered every
+    # request from it (``ModelRankingService._route_for`` with no declared
+    # threshold), it pins no checksum, and it runs no encoder.
+    ranker_route: str = RANKER_ROUTE_LEARNED
+    retriever_family: str = ""
+    retriever_sha256: str = ARTIFACT_SHA256_NOT_PINNED
+    encoder_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        # A sidecar that omits ``retriever_family`` still told us which family it
+        # is — it has been sending that string as ``candidate_policy`` since
+        # before the field existed. Resolving it on the dataclass rather than in
+        # the parser means every construction path agrees, so a result assembled
+        # by hand cannot put an empty family into an audit row.
+        if not self.retriever_family:
+            object.__setattr__(self, "retriever_family", self.candidate_policy)
 
 
 class ModelServerClient:
@@ -234,6 +260,10 @@ def _parse_result(
         excluded_count=_optional_count(value, "excluded_count"),
         filter_policy=_optional_filter_policy(value),
         feature_event_time=_optional_event_time(value),
+        ranker_route=_optional_ranker_route(value),
+        retriever_family=_optional_retriever_family(value),
+        retriever_sha256=_optional_sha256(value),
+        encoder_ms=_optional_encoder_ms(value),
     )
 
 
@@ -327,6 +357,62 @@ def _optional_filter_policy(value: dict[str, Any]) -> str:
     if not isinstance(raw, str) or not raw:
         raise ModelServerContractError("model-server returned an invalid 'filter_policy'")
     return raw
+
+
+def _optional_ranker_route(value: dict[str, Any]) -> str:
+    """Which booster scored the request, held to the two routes a bundle declares.
+
+    Validated rather than passed through, because this is the field an audit
+    query groups on to answer "which requests did not get the learned ranker".
+    A free-text route would make that query quietly incomplete, and an unreadable
+    one is a sidecar contract breach the coordinator should audit as an outage
+    rather than absorb.
+    """
+    raw = value.get("ranker_route")
+    if raw is None:
+        return RANKER_ROUTE_LEARNED
+    if raw not in RANKER_ROUTES:
+        raise ModelServerContractError(f"model-server returned an unknown ranker route {raw!r}")
+    return str(raw)
+
+
+def _optional_retriever_family(value: dict[str, Any]) -> str:
+    """The family name, or empty so the result falls back to ``candidate_policy``."""
+    raw = value.get("retriever_family")
+    if raw is None:
+        return ""
+    if not isinstance(raw, str) or not raw:
+        raise ModelServerContractError("model-server returned an invalid 'retriever_family'")
+    return raw
+
+
+def _optional_sha256(value: dict[str, Any]) -> str:
+    """The retriever artifact's checksum, or the honest empty string.
+
+    Shape-checked but not recomputed: the API image holds no artifacts, so the
+    only thing it can establish is that the sidecar sent something that could be
+    a digest. Anything else would put a value into a replay column that no
+    artifact ever hashed to.
+    """
+    raw = value.get("retriever_sha256")
+    if raw is None:
+        return ARTIFACT_SHA256_NOT_PINNED
+    if not isinstance(raw, str) or (raw and len(raw) != _SHA256_HEX_LENGTH):
+        raise ModelServerContractError("model-server returned an invalid 'retriever_sha256'")
+    return raw
+
+
+def _optional_encoder_ms(value: dict[str, Any]) -> float:
+    raw = value.get("encoder_ms")
+    if raw is None:
+        return 0.0
+    try:
+        resolved = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ModelServerContractError("model-server returned an invalid 'encoder_ms'") from exc
+    if not math.isfinite(resolved) or resolved < 0:
+        raise ModelServerContractError("model-server returned an invalid 'encoder_ms'")
+    return resolved
 
 
 def _optional_event_time(value: dict[str, Any]) -> float | None:
