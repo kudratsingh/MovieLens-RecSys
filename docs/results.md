@@ -3167,3 +3167,54 @@ taken, so a configuration whose seeds genuinely disagree would not be caught her
 The margin is large enough that this is unlikely to be decisive — the lower bound
 sits 22 points above the bar — but the blind spot is real and is stated rather than
 hidden.
+
+## 2026-09-06 — deterministic popularity tie-break reproduction
+
+PR #180 makes popularity ties deterministic with the key
+`(-interaction_count, movieId)`. The required full-data reproduction used the
+same 30-day holdout, 2,641 users (1,931 warm and 710 cold), seed 42, exact
+retrieval, and the local MLflow file store. No gate threshold changed.
+
+The popularity baseline reproduced every published metric at six decimals:
+
+| Metric | Published | Stable-tie rerun | Delta |
+|---|---:|---:|---:|
+| warm recall@500 | 0.016328 | 0.016328 | 0.000000 |
+| warm NDCG@500 | 0.030755 | 0.030755 | 0.000000 |
+| cold recall@500 | 0.063345 | 0.063345 | 0.000000 |
+| cold NDCG@500 | 0.483440 | 0.483440 | 0.000000 |
+| overall recall@500 | 0.028968 | 0.028968 | 0.000000 |
+| overall NDCG@500 | 0.152454 | 0.152454 | 0.000000 |
+
+Popularity run `d0b0da041f674e768c405159c69a62d1`, protocol
+`sha256:bd046cb608396d4e00494e1be789066799f2ece215f243187e59c999a210f73d`,
+completed in 53 seconds (2.7 seconds fit time). Its raw log is retained at
+`artifacts/popularity/logs/stable-ties-reproduction-20260906.log`.
+
+The SASRec fallback recheck found the intended tie-break effect in the cold
+route. Warm metrics and all recall metrics are bit-identical, while cold and
+therefore overall NDCG@500 move at published precision:
+
+| Metric | Fixed SASRec record | Stable-tie rerun | Exact delta |
+|---|---:|---:|---:|
+| warm recall@500 | 0.509171346 | 0.509171346 | 0 |
+| warm NDCG@500 | 0.191151628 | 0.191151628 | 0 |
+| cold recall@500 | 0.526272952 | 0.526272952 | 0 |
+| cold NDCG@500 | 0.435846570 | 0.435841367 | -0.000005203 |
+| overall recall@500 | 0.513768900 | 0.513768900 | 0 |
+| overall NDCG@500 | 0.256934820 | 0.256933421 | -0.000001399 |
+
+Retrieval run `0243864994024cb48ab746df628860a7`, protocol
+`sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28`,
+and bundle run `7b407714949045acb9fd9282a394bbba` completed together in 3 minutes
+45 seconds. The bundle's six recall@10 and NDCG@10 metrics are bit-identical to
+the recorded bundle, including cold NDCG@10 `0.5490019989542251` and overall
+NDCG@10 `0.2217623025377634`. Create-only evidence is retained under
+`artifacts/sasrec/popularity-tiebreak-reevaluation/`, with the raw log at
+`artifacts/sasrec/logs/popularity-tiebreak-recheck-20260906.log`.
+
+This is not a model regression: it is the deterministic resolution of equal
+popularity counts in the fallback slate. It does, however, move two published
+retrieval metrics. Per the predeclared stop rule, PR #180 remains draft and no
+record, promotion verdict, or downstream queue item changes until the owner
+decides whether the stable-tie rerun supersedes the old fallback record.
