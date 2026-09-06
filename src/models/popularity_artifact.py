@@ -15,16 +15,20 @@ defect #156 hit with the retrieval protocols). The reader has to work in an
 image that has neither implicit nor pandas, so nothing above stdlib is imported
 here and the derivation takes a plain mapping of counts rather than a frame.
 
-**Why the tiebreak is stated rather than inherited.** ``PopularityModel.fit``
-orders with ``sort_values(ascending=False)``, whose default kind is quicksort
-and therefore not stable: which of two equally-rated movies comes first is an
-implementation detail of pandas, and it can move between versions. That is fine
-for a model whose output is read as a ranking, and not fine for bytes a manifest
-pins by SHA-256 — a bundle whose recorded checksum stops matching its own file
+**Why the tiebreak is stated rather than inherited.** This module was written
+when ``PopularityModel.fit`` still ordered with ``sort_values(ascending=False)``
+— default kind quicksort, therefore not stable — so which of two equally-rated
+movies came first was a pandas implementation detail that could move between
+versions. Tolerable for a ranking; not tolerable for bytes a manifest pins by
+SHA-256, since a bundle whose recorded checksum stops matching its own file
 after a dependency bump is exactly the failure the v2 manifest exists to catch.
-So the order here is fully specified: interaction count descending, then
-``movieId`` ascending. It is the same key ``src/training/sasrec.py`` already
-uses to rank popularity for its retrieval diagnostics.
+O-17 has since given ``fit`` the same explicit key, so the two agree by
+construction rather than by luck: interaction count descending, then ``movieId``
+ascending — also the key ``src/training/sasrec.py`` uses for its popularity
+diagnostics. The order stays written out here anyway. A reader in the sidecar
+image cannot import ``PopularityModel`` to check (that package pulls in
+``implicit``), and an artifact contract that has to be looked up somewhere else
+is not a contract.
 """
 
 from __future__ import annotations
