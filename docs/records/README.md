@@ -15,6 +15,7 @@ record until it is current destroys the only thing it was good for.
 | [Working demo plan](demo-plan.md) | 2026-08-21 (`c25cb69`, PR #45) | [`demo-runbook.md`](../demo-runbook.md) |
 | [MVP release and deployment handoff](mvp-release-deployment-handoff.md) | 2026-08-27 (`4c74f0c`, PR #68) | [`deployment-runbook.md`](../deployment-runbook.md), [ADR 0013](../adr/0013-production-deployment-target.md) |
 | [Release serving fix handoff](release-serving-fix-handoff.md) | 2026-08-27 (closed by PR #69) | [ADR 0010](../adr/0010-synthetic-load-k6.md), 2026-08-26 notes |
+| [Progress log](progress-log-2026-05-31.md) | 2026-05-31 (last entry) | [`docs/status/`](../status/README.md) |
 
 Two documents that read like records live elsewhere on purpose:
 
