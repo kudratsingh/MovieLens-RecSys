@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "purpose": "Establish whether KMP_DUPLICATE_LIB_OK=TRUE perturbs two-tower results, before any number is measured under it. A reproduction check, not a measurement: it makes no new claim and adds no number to the record.",
+  "why_it_was_needed": {
+    "trigger": "A full-data two-tower run aborted 26m30s in, immediately after epoch 1/3 (loss 8.4730), at on_epoch's build_index() - the first faiss.IndexFlatIP construction in the process.",
+    "error": "OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized.",
+    "signal": "SIGABRT, exit 134",
+    "aborted_run": {
+      "mlflow_run_id": "796c1e96b003448782645c227b84ed13",
+      "status_left_as": "RUNNING",
+      "status_rationale": "A killed process never closes its run. docs/results.md sets this precedent explicitly, calling it the honest record of what happened.",
+      "evaluation_protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+      "note": "That hash is identical to the SASRec full-data run's, so the retrieval gate would have accepted the comparison had the run finished.",
+      "log": "artifacts/sasrec/logs/twotower-v2-fulldata-20260905T2220PDT.log"
+    },
+    "memory_excluded_by_measurement": {
+      "sampled": "once per minute for the whole 26 minutes",
+      "rss_steady_gb": 5.4,
+      "min_free_plus_inactive_gib": 6.53,
+      "at_abort_free_plus_inactive_gib": 8.51,
+      "at_abort_pressure_free_pct": 47
+    }
+  },
+  "environment": {
+    "machine": "Apple silicon macOS",
+    "torch": "2.12.0 (installed 2026-05-20)",
+    "faiss_cpu": "1.14.3 (installed 2026-07-03)",
+    "libomp_copies_present": ["torch/lib/", "faiss/.dylibs/", "sklearn/.dylibs/"],
+    "venv_unchanged_on_the_day": true
+  },
+  "minimal_reproduction": {
+    "script": "import faiss; import torch; <torch matmuls>; faiss.IndexFlatIP(...).add(...)",
+    "runtime_seconds": 10,
+    "conditions": [
+      {"condition": "OMP_NUM_THREADS unset", "exit": 139, "signal": "SIGSEGV", "where": "inside torch's parallel region, before faiss is reached"},
+      {"condition": "OMP_NUM_THREADS=1", "exit": 134, "signal": "SIGABRT", "where": "first faiss index build"},
+      {"condition": "OMP_NUM_THREADS=1 + KMP_DUPLICATE_LIB_OK=TRUE", "exit": 0, "signal": null, "where": "completes clean, no error emitted"}
+    ],
+    "finding": "OMP_NUM_THREADS=1 does not remove the collision, it relocates it from torch's threads to faiss's runtime init. docs/results.md and the Makefile both present the pin as the fix; it is not.",
+    "disposes_of": "The remedy results.md proposes - defer the faiss import until after the training loop. The import is not the trigger (it already sits at module top in candidates/twotower.py); the first index construction is, and it cannot be deferred past the per-epoch evaluation, nor past the final evaluation at all."
+  },
+  "validation_run": {
+    "mlflow_run_id": "ed694c47caa04e9b89bda5195c052693",
+    "tracking_store": "file:///private/tmp/mlflow-kmp-validation (throwaway, so the shared store is not polluted by a reproduction check)",
+    "status": "FINISHED",
+    "env": {"OMP_NUM_THREADS": "1", "KMP_DUPLICATE_LIB_OK": "TRUE"},
+    "config": "seed 42, faiss_exact=true, num_sampled=16384, epochs=3, v2 defaults; 6% user subsample; CSV input",
+    "wall_clock_seconds": 385.3,
+    "protocol_hash": "sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629",
+    "log": "artifacts/sasrec/logs/twotower-kmp-validation-6pct-20260905T2225PDT.log"
+  },
+  "comparison": {
+    "against": "8a22ed513b8f457eb0d5f93b826dc82a, the corrected 6% diagnostic recorded in ADR 0006's 2026-09-05 amendment",
+    "input_frame_identical": {
+      "users_kept": 9752,
+      "users_before_subsample": 162541,
+      "rows": 1517399,
+      "split_cutoff": 1471288304,
+      "training_pairs": 1198161,
+      "train_users": 8316,
+      "train_items": 19005
+    },
+    "metrics": {
+      "warm_recall_at_500": {"validation": 0.3759484158672824, "recorded": 0.3759484158672824, "exact": true},
+      "warm_ndcg_at_500": {"validation": 0.14839975118338375, "recorded": 0.14839975118338375, "exact": true},
+      "cold_recall_at_500": {"validation": 0.48295870268712504, "recorded": 0.48295870268712504, "exact": true},
+      "cold_ndcg_at_500": {"validation": 0.3844085561908767, "recorded": 0.3844085561908767, "exact": true},
+      "overall_recall_at_500": {"validation": 0.4083757755096589, "recorded": 0.4083757755096589, "exact": true},
+      "overall_ndcg_at_500": {"validation": 0.21991757088262404, "recorded": 0.21991757088262404, "exact": true}
+    },
+    "per_epoch_also_identical": {
+      "losses": [9.8231, 8.8138, 8.6116],
+      "warm_recall_at_500": [0.3339, 0.3589, 0.3759],
+      "item_cos_mean": [0.1918, 0.2825, 0.3283],
+      "item_cos_std": [0.1316, 0.13, 0.1287]
+    },
+    "bit_exact_reproduction": true
+  },
+  "conclusion": {
+    "flag_validated_for_this_workload": true,
+    "reasoning": "A flag that silently corrupted arithmetic would not land on the same sixteen significant figures across six metrics and three epochs.",
+    "corrected_6pct_result_stands": true,
+    "recorded_condition": "A two-tower run on this machine requires OMP_NUM_THREADS=1 AND KMP_DUPLICATE_LIB_OK=TRUE. The code path is deterministically fatal without the flag, so the original diagnostic cannot have been produced without it or an equivalent; the condition was simply unrecorded until now.",
+    "follow_up_not_taken_here": "With faiss_exact=true the index is IndexFlatIP - exact inner product, i.e. a matmul plus top-k. Computing it in torch would remove faiss from the training process entirely and retire the collision rather than suppress it, identical by construction. Own PR, own tests."
+  }
+}
