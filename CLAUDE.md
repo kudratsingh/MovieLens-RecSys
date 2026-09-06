@@ -245,7 +245,8 @@ movielens-recsys/
 │   │   │                      #   README.md indexes all 13 sets and says which describe the current build
 │   │   └── records/           # not maintained: product discovery, bundles 5–7 handoff, baseline
 │   │                          #   evidence, and the four dated finish-gate passes verbatim
-│   ├── records/               # not maintained: demo plan, MVP/deployment handoff, serving-fix handoff
+│   ├── records/               # not maintained: demo plan, MVP/deployment handoff, serving-fix handoff,
+│   │                          #   the pre-docs/status progress log
 │   ├── eda.md
 │   ├── results.md             # the measured offline numbers — baselines, candidate stage, ranker,
 │   │                          #   ADR 0011 cold-start coverage; each carries its run, date and machine
@@ -348,16 +349,17 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-09-03.** Phases 1 and 2 are complete; Phase 3 is in progress. This is the short form — the full ledger (every PR, what it landed and why, the remaining items per track, and the long-form current step) lives in [`docs/status/`](docs/status/README.md).
+**Updated 2026-09-05.** Phases 1 and 2 are complete; Phase 3 is in progress. This is the short form — the full ledger (every PR, what it landed and why, the remaining items per track, and the long-form current step) lives in [`docs/status/`](docs/status/README.md).
 
 - **On `main`:** the authenticated, RLS-isolated two-stage serving path — item-item retrieval and a LightGBM ranker in a private sidecar, Feast/Redis features, durable prediction *and* request audits, per-tenant champion/quota columns on the registry, a shared Redis rate limiter, the pinned k6 p99 gate; the movie-discovery product (Discover, Browse, movie detail, Library with Seen, Quick Picks) cut over at `/`; the ADR 0011 cold-start cohort; measured offline results in `docs/results.md`; the production deployment specified and rehearsed (ADR 0013) but **not provisioned — nothing is deployed**; dev and staging Compose beside it.
 - **Frontend finish gate:** every criterion a reviewer can settle passes; HOLD only on moderated sessions with real participants.
-- **Open decisions, mine:** the SASRec advance/stop rule (D-003) before the full-data seed-42 run lands — costed in [`docs/model-planning/memos/d003-full-run-stop-rule.md`](docs/model-planning/memos/d003-full-run-stop-rule.md); which rung of `docs/modeling-roadmap.md` is approved next, and two proposals awaiting that gate — the two-tower's `logit_temperature = 0.05` default (ADR 0006's 2026-08-30 note) and widening `RANKER_POSITIVE_WINDOW_DAYS` (ADR 0005's note). Settled on 2026-08-30: the threshold is 10 online and offline; the gate reads overall NDCG@10 with a per-slice no-regression clause (warm 6% / cold 5%); the ranker is proven better than CF/ALS under it (+15.5% overall); the two-tower as specified is measured, not promoted — its best swept configuration retrieves 6.8× below item-item.
+- **Modeling ladder:** Rung 2 (SASRec) is **measured and adjudicated** — the retrieval gate returned `promote` on the single full-data run at warm recall@500 **+16.57%** (lower bound +12.88%, n=1931), cold **+0.00%** and overall **+11.16%** against the matched incumbent, a margin that survives the measured 7.99% seed dispersion with **+8.58%** to spare against a 3% bar. Retrieval is promotion-eligible; the champion swap is mine to make and is sequenced behind the serving gates (audit provenance, an in-image encoder measurement, and the authenticated k6 gate with the SASRec bundle serving). **Rung 3 — a target-attention ranker — was approved on 2026-09-05 (ADR 0018)**, in two increments with the second gated on the first clearing +3% warm NDCG@10.
+- **Open decisions, mine:** two proposals awaiting the approval gate — the two-tower's `logit_temperature = 0.05` default (ADR 0006's 2026-08-30 note) and widening `RANKER_POSITIVE_WINDOW_DAYS` (ADR 0005's note). Rung 1 (two-tower v2) is closed without promotion, but no longer on the evidence that closed it: the FAISS row-mapping defect (#158) means the five-arm pilot evaluated mistranslated item ids, so ADR 0015's corrected outcome — not its below-popularity number — is the record. Settled on 2026-08-30: the threshold is 10 online and offline; the gate reads overall NDCG@10 with a per-slice no-regression clause (warm 6% / cold 5%); the ranker is proven better than CF/ALS under it (+15.5% overall); the two-tower as specified is measured, not promoted — its best swept configuration retrieves 6.8× below item-item.
 - **Remaining Phase 3 work** is itemised in [`docs/status/phase-3.md`](docs/status/phase-3.md): product track — moderated sessions then `/legacy` retirement, `/me` ownership, N6. Training-time candidate exclusions match the serving rule as of 2026-09-03; the feature-source boundary is D-009, costed in [`docs/model-planning/memos/feature-source-boundary.md`](docs/model-planning/memos/feature-source-boundary.md) and deferred on 2026-09-04 to prioritise modeling — it becomes blocking before any full-25M materialization.
 
 ### Current step
 
-Settle the SASRec advance/stop rule before the full-data seed-42 run finishes — a stop rule chosen after the number is visible is not a stop rule. Then create the Hetzner box and run the first deploy (`docs/deployment-runbook.md` §1–§7), and run the moderated sessions. Long form: [`docs/status/README.md`](docs/status/README.md#current-step).
+Close the three serving gates that stand between SASRec's `promote` verdict and a champion swap — retrieval provenance in the prediction audit, the encoder p99 re-measured inside the linux/amd64 sidecar image rather than on the host, and the unchanged authenticated k6 gate with the SASRec bundle serving — then make the swap. In parallel, Rung 3 increment 1 (SASRec score features in the learned-route ranker). Then create the Hetzner box and run the first deploy (`docs/deployment-runbook.md` §1–§7), and run the moderated sessions. Long form: [`docs/status/README.md`](docs/status/README.md#current-step).
 
 ## How to work with Claude Code on this
 
