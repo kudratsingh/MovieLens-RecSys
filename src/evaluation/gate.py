@@ -16,8 +16,7 @@ name. That is the mirror image of the failure the per-slice reporting rule
 exists to prevent — the cold slice cannot be hidden by the warm majority, and
 here the warm slice was being hidden by the cold minority.
 
-The owner's decision (2026-08-30) is the memo's option (c), and it is what this
-module implements:
+The owner's 2026-08-30 decision is the default this module implements:
 
     overall NDCG@k must gain at least `min_relative_gain` relative to the
     incumbent, AND neither slice may regress by more than its tolerance.
@@ -38,6 +37,11 @@ of claim:
 The tolerance is measured, not chosen. See `SliceTolerance` below and the
 2026-08-30 section of `docs/results.md` for the seed runs it comes from.
 
+The 2026-09-05 amendment adds an explicit learned-route scope. When a change is
+confined to threshold-routed users, warm NDCG@k carries the +3% positive claim,
+cold non-regression remains blocking, and overall is reported but not gated.
+The all-routes behavior and output stay the default.
+
 Nothing in this module reads MLflow, a database or a file: `promotion_decision`
 is a pure function over two `EvalResult`s, so Phase 4's Prefect promotion task
 and a unit test call exactly the same code. The MLflow read lives in the CLI at
@@ -49,7 +53,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from .aggregate import MismatchedResultsError, mean_eval_result
 from .protocol import EvalResult
@@ -63,6 +67,10 @@ MIN_RELATIVE_GAIN: Final = 0.03
 # end; `EvalResult.k` carries which K a given result was scored at, and the
 # gate refuses to compare two results scored at different ones.
 GATE_METRIC: Final = "ndcg"
+
+GateScope = Literal["all-routes", "learned-route"]
+ALL_ROUTES: Final[GateScope] = "all-routes"
+LEARNED_ROUTE: Final[GateScope] = "learned-route"
 
 
 class GateInputError(ValueError):
@@ -164,7 +172,7 @@ DEFAULT_SLICE_TOLERANCE: Final = MEASURED_SLICE_TOLERANCE
 
 @dataclass(frozen=True)
 class OverallVerdict:
-    """The aggregate clause: did the candidate clear the required gain?"""
+    """A positive-gain clause, used for overall or warm depending on scope."""
 
     metric: str
     incumbent: float
@@ -205,6 +213,8 @@ class GateDecision:
     metric: str
     overall: OverallVerdict
     slices: tuple[SliceVerdict, ...]
+    scope: GateScope = ALL_ROUTES
+    warm_gain: OverallVerdict | None = None
 
     @property
     def failures(self) -> tuple[str, ...]:
@@ -214,14 +224,32 @@ class GateDecision:
         answerable from the decision object alone, without re-deriving
         anything.
         """
-        reasons = [] if self.overall.passed else [self.overall.detail]
-        reasons.extend(s.detail for s in self.slices if not s.passed)
+        if self.scope == LEARNED_ROUTE:
+            assert self.warm_gain is not None
+            reasons = [] if self.warm_gain.passed else [self.warm_gain.detail]
+            reasons.extend(
+                slice_verdict.detail
+                for slice_verdict in self.slices
+                if slice_verdict.name == "cold" and not slice_verdict.passed
+            )
+        else:
+            reasons = [] if self.overall.passed else [self.overall.detail]
+            reasons.extend(
+                slice_verdict.detail for slice_verdict in self.slices if not slice_verdict.passed
+            )
         return tuple(reasons)
 
     def summary(self) -> str:
         """A few lines a human or a CI log can read without a JSON parser."""
         headline = "PROMOTE" if self.promote else "DO NOT PROMOTE"
-        lines = [f"{headline} — {self.metric}@{self.k}", f"  overall: {self.overall.detail}"]
+        lines = [f"{headline} — {self.metric}@{self.k}"]
+        if self.scope == LEARNED_ROUTE:
+            assert self.warm_gain is not None
+            lines[0] += " (learned-route)"
+            lines.append(f"  warm gain: {self.warm_gain.detail}")
+            lines.append(f"  overall (reported, not gated): {self.overall.detail}")
+        else:
+            lines.append(f"  overall: {self.overall.detail}")
         lines.extend(f"  {s.name}: {s.detail}" for s in self.slices)
         if self.failures:
             lines.append("  refused because:")
@@ -230,6 +258,11 @@ class GateDecision:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.scope == ALL_ROUTES:
+            # Keep the established default artifact byte-shape stable. Scope
+            # metadata is emitted only for the new explicit mode.
+            payload.pop("scope")
+            payload.pop("warm_gain")
         payload["failures"] = list(self.failures)
         return payload
 
@@ -240,6 +273,7 @@ def promotion_decision(
     *,
     min_relative_gain: float = MIN_RELATIVE_GAIN,
     slice_tolerance: SliceTolerance = DEFAULT_SLICE_TOLERANCE,
+    scope: GateScope = ALL_ROUTES,
 ) -> GateDecision:
     """Apply ADR 0001's gate to a candidate against the incumbent champion.
 
@@ -252,6 +286,10 @@ def promotion_decision(
         slice_tolerance: how far warm and cold may each regress before the gate
             refuses. Defaults to the measured floor, not to zero — see
             :data:`MEASURED_SLICE_TOLERANCE`.
+        scope: ``all-routes`` keeps the original overall-gain plus two-slice
+            non-regression rule. ``learned-route`` applies the positive-gain
+            clause to warm users, keeps cold non-regression, and reports but
+            does not gate on overall.
 
     Returns:
         A `GateDecision` naming every clause's margin, whether it promoted or
@@ -272,6 +310,8 @@ def promotion_decision(
             f"min_relative_gain must be a non-negative relative fraction, got "
             f"{min_relative_gain!r}"
         )
+    if scope not in (ALL_ROUTES, LEARNED_ROUTE):
+        raise GateInputError(f"unsupported gate scope {scope!r}")
 
     overall = _overall_verdict(candidate, incumbent, min_relative_gain)
     slices = (
@@ -294,12 +334,32 @@ def promotion_decision(
             k=candidate.k,
         ),
     )
+    warm_gain = (
+        _gain_verdict(
+            "warm",
+            incumbent.warm.ndcg,
+            candidate.warm.ndcg,
+            min_relative_gain,
+            candidate.k,
+        )
+        if scope == LEARNED_ROUTE
+        else None
+    )
+    promote = (
+        overall.passed and all(slice_verdict.passed for slice_verdict in slices)
+        if scope == ALL_ROUTES
+        else warm_gain is not None
+        and warm_gain.passed
+        and next(slice_verdict for slice_verdict in slices if slice_verdict.name == "cold").passed
+    )
     return GateDecision(
-        promote=overall.passed and all(s.passed for s in slices),
+        promote=promote,
         k=candidate.k,
         metric=GATE_METRIC,
         overall=overall,
         slices=slices,
+        scope=scope,
+        warm_gain=warm_gain,
     )
 
 
@@ -320,11 +380,25 @@ def _at_least(value: float, bound: float) -> bool:
 def _overall_verdict(
     candidate: EvalResult, incumbent: EvalResult, required_gain: float
 ) -> OverallVerdict:
-    inc = incumbent.overall.ndcg
-    cand = candidate.overall.ndcg
-    label = f"{GATE_METRIC}@{candidate.k}"
+    return _gain_verdict(
+        "overall",
+        incumbent.overall.ndcg,
+        candidate.overall.ndcg,
+        required_gain,
+        candidate.k,
+    )
+
+
+def _gain_verdict(
+    name: str,
+    inc: float,
+    cand: float,
+    required_gain: float,
+    k: int,
+) -> OverallVerdict:
+    label = f"{GATE_METRIC}@{k}"
     if inc <= 0.0:
-        # A relative gain against zero is undefined, and the aggregate clause
+        # A relative gain against zero is undefined, and the positive clause
         # is the one the candidate has to *establish*. Refusing is the honest
         # outcome: an incumbent scoring zero on the holdout is a broken or
         # absent champion, not a low bar to clear.
@@ -336,7 +410,7 @@ def _overall_verdict(
             required_gain=required_gain,
             passed=False,
             detail=(
-                f"overall {label} incumbent is {inc:.6f}, so a relative gain is undefined; "
+                f"{name} {label} incumbent is {inc:.6f}, so a relative gain is undefined; "
                 "the gate cannot confirm the required improvement"
             ),
         )
@@ -351,7 +425,7 @@ def _overall_verdict(
         required_gain=required_gain,
         passed=passed,
         detail=(
-            f"overall {label} {verb} {abs(relative):.2%} "
+            f"{name} {label} {verb} {abs(relative):.2%} "
             f"({inc:.6f} → {cand:.6f}) against a required +{required_gain:.2%}"
         ),
     )
@@ -518,11 +592,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.evaluation.gate",
         description=(
-            "ADR 0001's promotion gate over two MLflow runs: overall NDCG@k must gain at "
-            "least the required relative amount, and neither slice may regress beyond its "
-            "measured tolerance. Either side accepts several run ids, in which case the "
-            "gate reads their mean — the right comparison for a model whose metrics move "
-            "with the seed."
+            "ADR 0001's promotion gate over two MLflow runs. The default all-routes scope "
+            "requires overall gain and two-slice non-regression; learned-route requires "
+            "warm gain and cold non-regression while reporting overall. Either side accepts "
+            "several run ids, in which case the gate reads their mean."
         ),
         epilog=(
             f"Exit codes: {_EXIT_PROMOTE} promote, {_EXIT_REFUSE} do not promote, "
@@ -542,6 +615,15 @@ def main(argv: list[str] | None = None) -> int:
         nargs="+",
         metavar="RUN_ID",
         help="MLflow run id(s) of the champion; several are averaged",
+    )
+    parser.add_argument(
+        "--scope",
+        choices=(ALL_ROUTES, LEARNED_ROUTE),
+        default=ALL_ROUTES,
+        help=(
+            "change scope: all-routes gates overall gain (default); learned-route gates "
+            "warm gain and cold non-regression"
+        ),
     )
     parser.add_argument(
         "--min-relative-gain",
@@ -592,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
             incumbent,
             min_relative_gain=args.min_relative_gain,
             slice_tolerance=SliceTolerance(warm=args.warm_tolerance, cold=args.cold_tolerance),
+            scope=args.scope,
         )
     except (GateInputError, MismatchedResultsError, RunNotUsableError) as exc:
         print(f"could not decide: {exc}")
