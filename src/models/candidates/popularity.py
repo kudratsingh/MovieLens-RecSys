@@ -29,6 +29,13 @@ class PopularityModel:
     # Map from user id to the set of item ids that user rated in train.
     # Used purely to filter recommendations — never to compute popularity.
     user_history: dict[int, set[int]] = field(default_factory=dict)
+    # The raw interaction counts `ranking` was sorted from. Kept because the
+    # ranking alone cannot be re-ordered under a different tiebreak, and the
+    # published fill order (src/models/popularity_artifact.py) needs to: this
+    # model's tie order comes from a non-stable sort and is a pandas
+    # implementation detail, which is fine for a ranking and not fine for bytes
+    # a manifest pins by checksum.
+    counts: dict[int, int] = field(default_factory=dict)
 
     def fit(self, train: pd.DataFrame) -> PopularityModel:
         """Build the popularity ranking and per-user history from a train slice.
@@ -40,10 +47,12 @@ class PopularityModel:
         if train.empty:
             self.ranking = []
             self.user_history = {}
+            self.counts = {}
             return self
 
         counts = train.groupby("movieId").size().sort_values(ascending=False)
         self.ranking = counts.index.tolist()
+        self.counts = {int(movie_id): int(count) for movie_id, count in counts.items()}
         self.user_history = train.groupby("userId")["movieId"].apply(set).to_dict()
         return self
 
