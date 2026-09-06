@@ -328,6 +328,35 @@ def test_the_model_server_repeats_the_thread_pins_the_image_bakes() -> None:
     assert environment["MODEL_SERVER_WORKERS"] == command[command.index("--workers") + 1]
 
 
+def test_production_serves_the_full_data_bundle_and_not_the_demo_fixture() -> None:
+    """The features image bakes both bundles; this file is what picks one.
+
+    A literal rather than an interpolation with a default, and asserted here
+    because the two bundles have the same file layout: production serving the
+    compact demo fixture would look exactly like production serving the
+    champion, right up to the recommendations. That is the failure this line
+    stands between us and, so it must not be one forgotten variable away.
+
+    The materialize job never opens the bundle and still says the same thing --
+    a stack that disagrees with itself about which bundle it serves is how a
+    reader ends up trusting the wrong service's copy.
+    """
+    for service in ("model-server", "materialize"):
+        assert _environment(service)["MODEL_ARTIFACT_DIR"] == "/app/models/served-bundle", service
+
+
+def test_the_demo_stack_keeps_the_compact_fixture() -> None:
+    """The other half of the same claim, from the environment that must not move.
+
+    Demo and CI measure the fixture, which is the bundle their seeded tenant's
+    ratings reproduce. Pointing them at the served path would change what every
+    demo assertion and every k6 baseline is measured against.
+    """
+    demo = yaml.safe_load(DEMO_COMPOSE_PATH.read_text())["services"]
+    for service in ("model-server", "feature-setup"):
+        assert demo[service]["environment"]["MODEL_ARTIFACT_DIR"] == "/app/models/serving", service
+
+
 def test_neither_sidecar_takes_a_volume() -> None:
     """The bundle and the registry are baked, which is the whole point.
 
