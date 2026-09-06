@@ -21,14 +21,19 @@ from src.evaluation.protocol import (
     evaluate,
     per_user_recall_document,
 )
-from src.models.candidates.sasrec import SASRecConfig, SASRecModel, gbce_beta
+from src.models.candidates.sasrec import (
+    ALL_POSITION_TRAINING_OBJECTIVE,
+    SASRecConfig,
+    SASRecModel,
+    gbce_beta,
+)
 from src.models.candidates.sasrec_artifact import (
     ARTIFACT_SCHEMA_VERSION,
     MANIFEST_FILENAME,
     export_sasrec,
 )
 from src.training import protocol_manifest
-from src.training.twotower import (
+from src.training.candidate_data import (
     INPUT_DIR_ENV_VAR,
     PHASE_2_EXPERIMENT,
     load_inputs,
@@ -53,6 +58,8 @@ SUBSAMPLE_SEED = 42
 ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 MODEL_TYPE = "sasrec"
+TRAINING_OBJECTIVE = ALL_POSITION_TRAINING_OBJECTIVE
+EVALUATION_INDEX = "torch-exact-inner-product-v1"
 
 
 def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> str:
@@ -81,6 +88,7 @@ def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> 
     """
     parameters = config.as_params()
     parameters.pop("seed")
+    parameters["training_objective"] = TRAINING_OBJECTIVE
     parameters["sample_fraction"] = sample_fraction
     if sample_fraction != 1.0:
         parameters["subsample_seed"] = SUBSAMPLE_SEED
@@ -173,6 +181,8 @@ def run_once(
                 "n_train_rows": len(split.train),
                 "n_holdout_rows": len(split.holdout),
                 "k_candidates": K_CANDIDATES,
+                "training_objective": TRAINING_OBJECTIVE,
+                "evaluation_index": EVALUATION_INDEX,
             }
         )
         envelope = protocol_manifest.run_envelope(
@@ -185,7 +195,7 @@ def run_once(
 
         def on_epoch(epoch: int, loss: float) -> None:
             mlflow.log_metric("train_loss", loss, step=epoch)
-            model.build_index()
+            model.build_exact_tensor_index()
             recommendations = model.recommend_for_users(user_ids, K_CANDIDATES)
             result = evaluate(recommendations, holdout, train_counts, k=K_CANDIDATES)
             mlflow.log_metric("epoch_warm_recall_at_k_candidates", result.warm.recall, step=epoch)
@@ -198,7 +208,7 @@ def run_once(
             )
 
         started = time.perf_counter()
-        model.fit(train_frame, on_epoch=on_epoch)
+        model.fit(train_frame, on_epoch=on_epoch, retrieval_backend="torch")
         fit_seconds = time.perf_counter() - started
         active_run = mlflow.active_run()
         if active_run is None:
@@ -252,6 +262,9 @@ def run_once(
                 "gbce_beta": beta,
                 "sasrec_artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
                 "n_training_sequences": (
+                    model._training_stats.n_sequences if model._training_stats else 0
+                ),
+                "n_training_windows": (
                     model._training_stats.n_sequences if model._training_stats else 0
                 ),
                 "n_training_targets": (
