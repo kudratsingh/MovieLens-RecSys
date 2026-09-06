@@ -15,6 +15,12 @@ import numpy as np
 import torch
 
 from src.models.artifacts import file_sha256
+from src.models.popularity_artifact import (
+    POPULARITY_ARTIFACT_FILENAME,
+    popularity_order_from_counts,
+    read_popularity_order,
+    write_popularity_order,
+)
 
 from .sasrec import SASRecConfig, SASRecEncoder, SASRecModel
 
@@ -42,6 +48,15 @@ class SASRecArtifactManifest:
     sequence_order: str = "oldest-to-newest"
     padding: str = "left-zero"
     retrieval_normalization: str = "l2"
+    # The published fill order, when this artifact has one. Optional rather than
+    # required because artifacts exported before it existed — the pinned
+    # full-data encoder among them — must keep loading, and their manifests
+    # cannot be rewritten: a v2 serving bundle pins this very file's bytes under
+    # the `vocabulary` and `config` roles, so editing it in place would move
+    # checksums that are already recorded. For those, the fill order is attached
+    # by filename and pinned by the serving manifest instead.
+    popularity_filename: str | None = None
+    popularity_sha256: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> SASRecArtifactManifest:
@@ -64,6 +79,14 @@ class SASRecArtifactManifest:
                 sequence_order=str(raw["sequence_order"]),
                 padding=str(raw["padding"]),
                 retrieval_normalization=str(raw["retrieval_normalization"]),
+                popularity_filename=(
+                    None
+                    if raw.get("popularity_filename") is None
+                    else _safe_filename(str(raw["popularity_filename"]))
+                ),
+                popularity_sha256=(
+                    None if raw.get("popularity_sha256") is None else str(raw["popularity_sha256"])
+                ),
             )
         except KeyError as error:
             raise ValueError(f"SASRec manifest is missing {error.args[0]!r}") from error
@@ -87,6 +110,17 @@ class SASRecArtifactManifest:
             raise ValueError(
                 f"SASRec model checksum mismatch: expected {self.model_sha256}, got {actual}"
             )
+        if (self.popularity_filename is None) != (self.popularity_sha256 is None):
+            raise ValueError(
+                "SASRec manifest must declare a popularity filename and checksum together"
+            )
+        if self.popularity_filename is not None:
+            # Read rather than hashed-and-compared so a file that passes the
+            # checksum but is not a well-formed ordering fails here too, at load,
+            # rather than at the first request that needed a fill.
+            read_popularity_order(
+                directory / self.popularity_filename, expected_sha256=self.popularity_sha256
+            )
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -105,8 +139,22 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
     directory.mkdir(parents=True, exist_ok=True)
     model_path = directory / MODEL_FILENAME
     manifest_path = directory / MANIFEST_FILENAME
-    if model_path.exists() or manifest_path.exists():
+    popularity_path = directory / POPULARITY_ARTIFACT_FILENAME
+    if model_path.exists() or manifest_path.exists() or popularity_path.exists():
         raise FileExistsError(f"refusing to overwrite SASRec artifact in {directory}")
+
+    # The fill order ships with the encoder or the bundle cannot be published:
+    # the serving manifest requires the role, and a model fitted through
+    # ``SASRecModel.fit`` always has the counts to build one. An unfitted
+    # popularity means the caller assembled the model by hand, which is not
+    # something to paper over with an empty ordering.
+    if not model._popularity.counts:
+        raise ValueError(
+            "cannot export a SASRec model whose popularity fallback is unfitted; the bundle's "
+            "fill order is derived from it"
+        )
+    popularity_order = popularity_order_from_counts(model._popularity.counts)
+    popularity_sha256 = write_popularity_order(popularity_path, popularity_order)
 
     item_ids = [model._index_to_item[index] for index in range(1, len(model._index_to_item) + 1)]
     vocabulary_sha256 = _vocabulary_sha256(item_ids)
@@ -133,6 +181,8 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
         loss=model.config.loss,
         negative_count=model.config.negative_count,
         calibration_t=model.config.calibration_t,
+        popularity_filename=POPULARITY_ARTIFACT_FILENAME,
+        popularity_sha256=popularity_sha256,
     )
     manifest.write(manifest_path)
     return manifest
@@ -186,8 +236,39 @@ def load_sasrec(manifest_path: Path) -> SASRecModel:
             )
         state[name] = tensor
     model._encoder.load_state_dict(state, strict=True)
+    _attach_popularity_order(model, manifest, manifest_path.parent)
     model.build_index()
     return model
+
+
+def _attach_popularity_order(
+    model: SASRecModel, manifest: SASRecArtifactManifest, directory: Path
+) -> None:
+    """Restore the fill order a loaded model would otherwise not have.
+
+    Without this a bundle loaded from disk carries an unfitted ``PopularityModel``,
+    so a cold-routed user gets nothing from ``recommend`` and a short retrieval
+    has nothing to top up from. Two ways in, because the pinned artifacts predate
+    the manifest fields: the manifest names the file when it was exported with
+    one, otherwise the fixed filename is honoured if it is sitting in the
+    directory. The second path is unpinned at this layer on purpose — the serving
+    manifest pins it under the ``popularity`` role, and the alternative would be
+    to require rewriting artifact manifests whose bytes are already checksummed
+    by published bundles.
+
+    Only ``ranking`` is populated. ``user_history`` stays empty because a served
+    fill is filtered by the caller's own exclusion set, and rebuilding per-user
+    history from an artifact would be both impossible and the wrong answer.
+    """
+    if manifest.popularity_filename is not None:
+        path = directory / manifest.popularity_filename
+        expected = manifest.popularity_sha256
+    else:
+        path = directory / POPULARITY_ARTIFACT_FILENAME
+        expected = None
+        if not path.is_file():
+            return
+    model._popularity.ranking = list(read_popularity_order(path, expected_sha256=expected))
 
 
 def _write_model_archive(

@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec sasrec-popularity-order train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -233,6 +233,20 @@ train-twotower:
 
 train-sasrec:
 	python -m src.training.sasrec
+
+# The popularity fill order a served SASRec bundle tops a short slate up from.
+# `train-sasrec` writes it into every new artifact directory; this target is for
+# the encoders exported before the role existed, whose directories are immutable.
+# Pass the run's expected row count and cutoff — an ordering built from a
+# different frame than the run fitted on is wrong in a way nothing downstream
+# would notice:
+#
+#   make sasrec-popularity-order OUT=artifacts/sasrec/<run-id> \
+#       EXPECT_ROWS=25000095 EXPECT_CUTOFF=1466837397
+sasrec-popularity-order:
+	python -m src.training.export_popularity_order --output-dir "$(OUT)" \
+		$(if $(EXPECT_ROWS),--expect-rows $(EXPECT_ROWS),) \
+		$(if $(EXPECT_CUTOFF),--expect-cutoff $(EXPECT_CUTOFF),)
 
 train-ranker:
 	python -m src.training.ranker

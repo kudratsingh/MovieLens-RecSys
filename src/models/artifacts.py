@@ -69,13 +69,26 @@ SUPPORTED_MANIFEST_SCHEMA_VERSIONS: tuple[int, ...] = (
 RETRIEVER_FAMILY_ITEM_ITEM = CANDIDATE_SOURCE_SIMILARITY
 RETRIEVER_FAMILY_SASREC = "sasrec"
 
+# The fill order a retriever tops a short slate up from. Item-item carries one
+# inside its own index file, so the role is only named for families that publish
+# it separately; ``src/models/popularity_artifact.py`` writes and reads it.
+RETRIEVER_ARTIFACT_POPULARITY = "popularity"
+
 # The roles a family's artifacts play. SASRec ships the encoder, the item
 # vocabulary and the config needed to rebuild the encoder rather than a built
 # ANN index — see ``INDEX_TYPE_FLAT_IP_EXACT`` for why the index is rebuilt
 # rather than shipped.
+#
+# ``popularity`` is required rather than optional. A SASRec retrieval that
+# cannot reach its limit after exclusions has to top up from the ordering the
+# evaluation used, and a bundle that does not ship one leaves the sidecar with
+# two bad choices: return a visibly short slate, or invent an order out of the
+# item vocabulary — which is sorted by movie id, not popularity — and write a
+# false ``popularity-fill`` label into the prediction audit. Refusing the bundle
+# at publish time is the third option.
 _REQUIRED_RETRIEVER_ARTIFACTS: Mapping[str, tuple[str, ...]] = {
     RETRIEVER_FAMILY_ITEM_ITEM: ("index",),
-    RETRIEVER_FAMILY_SASREC: ("encoder", "vocabulary", "config"),
+    RETRIEVER_FAMILY_SASREC: ("encoder", "vocabulary", "config", RETRIEVER_ARTIFACT_POPULARITY),
 }
 
 # The one artifact whose version *is* the retriever's version. A bundle is
