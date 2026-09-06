@@ -3066,3 +3066,104 @@ boosters were written before their holdout evaluation. Raw verdict:
 [`experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json`](experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json).
 
 **Nothing is promoted.** Item-item plus LightGBM remains the champion.
+
+## Two-tower v2 on the full dataset, after the FAISS mapping fix — 2026-09-06
+
+The corrected v2 measured once at full scale. This closes the question ADR 0015's
+2026-09-05 amendment reopened: the below-popularity numbers on this page were an
+evaluator-path defect, and with the row-to-id mapping fixed the model is not where
+those numbers put it.
+
+**Read the cell before the number.** This is *not* the original complete-v2 arm.
+That arm used IVF retrieval and 4,096 sampled negatives; this run uses **exact
+inner-product search and 16,384**, which is the configuration the corrected 6%
+diagnostic used. It is therefore a different cell that happens to answer the same
+question, and no part of the difference between `0.0435` and what follows is
+attributable to the mapping fix alone.
+
+### Run and wall-clock
+
+MLflow experiment `phase-2-candidates`, run `2d7f1a49008d4e9d8791d4ca8598d613`,
+seed 42, `FINISHED`. Fit **6,879.3 s — 1 h 54 m 39 s** across three epochs
+(139,383 users x 34,461 items), per-epoch evaluation excluded. Apple silicon
+macOS, `OMP_NUM_THREADS=1`, `nice -n 19`, nothing else on the machine; peak RSS
+6.71 GB. Log
+`artifacts/sasrec/logs/twotower-v2-fulldata-filestore-20260905T2313PDT.log`.
+
+Configuration, resolved from `TwoTowerConfig.from_env()` rather than assumed:
+`embedding_dim 64, history_window 50, batch_size 4096, num_sampled 16384,
+epochs 3, learning_rate 1e-3, logit_temperature 0.05, correct_positive_logit
+True, use_item_features True, hard_negative_count 8, pool 256, warmup 1,
+early_stopping_patience 0, faiss_exact True, seed 42`. Full 25M source, no
+subsample: 25,000,095 ratings, `Train=20,000,075 Holdout=129,683` at cutoff
+**1466837397**, ADR 0011 cohort attached (fingerprint `ae4475f0e063`, 7,000
+history rows), 19,739,546 (history, positive) pairs. Those last figures are
+identical to the SASRec full-data run's, which is what makes the comparison
+below a like-for-like one on population rather than merely on metric name.
+
+**This run required `KMP_DUPLICATE_LIB_OK=TRUE` alongside `OMP_NUM_THREADS=1`.**
+An earlier attempt at the identical configuration aborted at 26 minutes with
+`OMP: Error #15` at the first FAISS index build. See ADR 0006's 2026-09-05
+environment note for the three-condition reproduction and for the bit-exact check
+that established the flag does not perturb results.
+
+### The numbers
+
+Against the item-item incumbent `4b342e87dbf54834be5c719eae9a4e6c` on the same
+protocol hash `sha256:b4ed5afa…`, same 1,931 warm and 710 cold users:
+
+| Metric @500 | two-tower v2 | item-item | change |
+|---|---:|---:|---:|
+| warm recall | **0.5113336991953615** | 0.3990569035829944 | **+28.14%** |
+| warm NDCG | 0.18556902971912184 | 0.1387531836673012 | +33.74% |
+| cold recall | 0.5262729520330651 | 0.5262729520330651 | +0.00% |
+| cold NDCG | 0.4358465703567308 | 0.4358465703567308 | +0.00% |
+| overall recall | 0.5153499314993257 | 0.43325735583575864 | +18.95% |
+| overall NDCG | 0.25285303344979293 | 0.21862304529149468 | +15.66% |
+
+Cold is **bit-identical**, not merely close. Both models route users below the
+threshold of 10 to the same popularity list, so the cold slice is zero-by-construction
+for any threshold-routed retriever and moves only when the routing policy changes.
+The ADR 0011 buckets confirm the routing: h0/h1/h3 were fallback-served 500/500 as
+expected, h10 fallback-served 0 of 500, also as expected.
+
+Per-epoch warm recall@500 rose **0.4902 → 0.5058 → 0.5113** on losses
+8.4730 → 8.2323 → 8.2057, and the third epoch's per-epoch figure equals the final
+warm recall exactly. The metric was still climbing when the budget ran out, so
+three epochs is a floor on this configuration rather than a converged reading —
+the same shape the 6% pilot showed.
+
+### Gate
+
+`make gate-retrieval` against the same incumbent, single-seed regime, both
+tolerances 0.0 — the values SASRec's retrieval verdict was judged under, so the two
+verdicts are comparable:
+
+```
+PROMOTE — recall@500 (retrieval)
+  seed regime: single_seed [42]
+  warm:    +28.14% (0.399057 -> 0.511334); one-sided 95% lower bound +25.28%
+           (half-width 2.86%, population-only, n=1931); required at least +3.00%
+  cold:    +0.00% (0.526273 -> 0.526273); minimum allowed -0.00%
+  overall: +18.95% (0.433257 -> 0.515350); minimum allowed -0.00%
+  serving: blocked pending the paired LightGBM NDCG@10 guardrail
+```
+
+Evidence: [`fulldata-retrieval-gate-2026-09-06.json`](experiments/twotower-sweep/fulldata-retrieval-gate-2026-09-06.json).
+
+**What the verdict does and does not say.** It says the retrieval stage clears the
+bar by a margin whose lower bound is +25.28% on the population term. It does not
+say the model should serve: `serving_eligible` is **false**, and the gate names why —
+the paired LightGBM NDCG@10 guardrail has not run. A retriever that wins on recall@500
+can still lose end to end once a ranker trained on a different candidate distribution
+scores its slate, which is exactly what happened to SASRec at step 1 (+25.96% warm
+NDCG@10, -53.11% cold, refused). Nothing here is a promotion, and item-item plus
+LightGBM remains the champion bundle.
+
+**Its uncertainty is one training run.** The band above is population-only: it says
+how far the gain would move on a different sample of users, not on a different
+training seed. Under the one-run-per-configuration policy no seed replicate was
+taken, so a configuration whose seeds genuinely disagree would not be caught here.
+The margin is large enough that this is unlikely to be decisive — the lower bound
+sits 22 points above the bar — but the blind spot is real and is stated rather than
+hidden.

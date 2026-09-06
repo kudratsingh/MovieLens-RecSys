@@ -253,3 +253,55 @@ multiply and a top-k. Computing it in torch would remove faiss from the training
 and retire the collision rather than suppress it, with results identical by construction rather than
 by measurement. That is a code change to a champion-adjacent model and wants its own PR and its own
 tests; it is recorded here as the follow-up, not adopted in this note.
+
+## 2026-09-06 — full-data result note: the corrected v2 clears the retrieval gate
+
+The architecture in this ADR's Decision has now been measured once at full scale
+with the FAISS row-mapping defect fixed, and the result reverses this file's
+2026-08-30 sweep note in the direction that note itself anticipated might be
+possible only if the below-popularity ordering turned out to be an artefact.
+
+Run `2d7f1a49008d4e9d8791d4ca8598d613`, seed 42, three epochs in 6,879.3 s, full
+25M, protocol `sha256:b4ed5afa…`. Warm recall@500 **0.5113336991953615** against
+the item-item incumbent's `0.3990569035829944` — **+28.14%**, one-sided 95% lower
+bound +25.28% on the population term, n=1931. Cold is bit-identical, overall
++18.95%. `make gate-retrieval` at both tolerances 0.0 returns **promote**, with
+`serving_eligible` false pending the paired LightGBM guardrail. The numbers, the
+configuration and the caveats are in [`results.md`](../results.md)'s 2026-09-06
+section; the gate document is
+[`fulldata-retrieval-gate-2026-09-06.json`](../experiments/twotower-sweep/fulldata-retrieval-gate-2026-09-06.json).
+
+### What this does to the sweep note above
+
+The 2026-08-30 note's finding #3 — "the model loses to its own fallback", warm
+recall@500 of 0.04–0.05 against popularity's 0.2310 and item-item's 0.4001 — was
+measured through the defective retrieval path and is not evidence about these
+embeddings. Its findings #1 (the learning rate is fine) and #2 (a temperature
+fixes the objective) were about *losses*, which the mapping defect never touched,
+and they stand. So does its finding that IVF was not what was losing the recall:
+that comparison was between two equally mistranslated arms, but this run is exact
+search and lands far above both, which is consistent with the index never having
+been the problem.
+
+**The `logit_temperature = 0.05` proposal in that note is now supported by a
+full-data measurement rather than by a pilot's best-scoring cell.** This run
+carries τ = 0.05 as a v2 default and is the strongest number this architecture has
+produced. That still does not change the default in code — the proposal remains
+the owner's under the roadmap's approval gate, and this note only removes the
+objection that the evidence for it was a 116-user slice.
+
+### What it does not establish
+
+Nothing about promotion: the gate's serving clause is unmet, item-item plus
+LightGBM remains champion, and a retriever that wins recall@500 can still lose end
+to end — SASRec's step 1 is the worked example. Nothing about the effect size of
+the mapping fix in isolation, because this cell also changed the negative count
+(16,384 against the old arm's 4,096) and the index (exact against IVF). And
+nothing about seed stability: one run, population-term uncertainty only, under the
+one-run-per-configuration policy.
+
+Per-epoch warm recall rose `0.4902 -> 0.5058 -> 0.5113` across the three epochs and
+had not flattened, which is worth recording against this ADR's budget question:
+the 2026-08-30 note found eight epochs *worse* than three under the defective path,
+whereas here the metric was still climbing when the budget ran out. Whether more
+epochs help is now an open question again rather than a settled negative.
