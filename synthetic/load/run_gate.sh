@@ -122,6 +122,45 @@ if [ "$LOAD_PROFILE" = "nightly" ]; then
 	$DEMO_COMPOSE --profile load up -d --wait --wait-timeout 120 prometheus
 fi
 
+# Host memory, before and after the window. Purely evidence: nothing here feeds
+# a threshold or the re-measure rule, both of which stay exactly as ADR 0010
+# defines them.
+#
+# The gate already records CPU steal, which is what catches a preempted runner.
+# Memory is the blind spot beside it. A host deep in swap or compressing hard
+# serves the same requests more slowly, and it does so without moving steal at
+# all -- so the run comes back looking clean and the tail looks like the
+# service. That is precisely the confusion this file exists to prevent, so the
+# numbers go in the evidence directory and a reader can decide whether the
+# machine was fit to be measured.
+#
+# macOS and Linux answer this differently and neither is guaranteed present, so
+# every branch is best-effort and the file always gets written.
+host_memory() {
+	target="$1"
+	{
+		echo "== host memory"
+		if [ -r /proc/meminfo ]; then
+			# Linux, which is what CI runs. MemAvailable is the honest one:
+			# MemFree omits reclaimable page cache and reads alarmingly low on
+			# a perfectly healthy machine.
+			grep -E '^(MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree|Dirty|Writeback):' \
+				/proc/meminfo 2>/dev/null || echo "meminfo unreadable"
+		elif command -v vm_stat >/dev/null 2>&1; then
+			# macOS, which is where local runs happen. `Pages occupied by
+			# compressor` is the one to read: on Apple silicon it grows long
+			# before swap does, so swap alone understates the pressure.
+			page_size=$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)
+			echo "page_size_bytes=$page_size"
+			vm_stat 2>/dev/null | grep -E 'Pages (free|active|inactive|wired down|occupied by compressor)' \
+				|| echo "vm_stat unavailable"
+			sysctl -n vm.swapusage 2>/dev/null || echo "swapusage unavailable"
+		else
+			echo "no supported memory source on this host"
+		fi
+	} > "$target" 2>&1 || true
+}
+
 capture() {
 	when="$1"
 	# shellcheck disable=SC2086
@@ -140,6 +179,7 @@ capture() {
 	else
 		echo "no load-profile containers running" > "$LOAD_RESULTS_DIR/docker-stats-$when.txt"
 	fi
+	host_memory "$LOAD_RESULTS_DIR/host-memory-$when.txt"
 	: > "$LOAD_RESULTS_DIR/cpu-stat-$when.txt"
 	for service in api-load model-server feature-server; do
 		# shellcheck disable=SC2086
