@@ -50,6 +50,31 @@ the coordinates it restores were verified when they were promoted, the sidecar
 re-verifies the SHA-256s it loads on every boot, and requiring the old bundle to
 still be mounted would block the one path that exists for an emergency.
 
+**Which database.** This tool has no ``--database`` flag: it connects to
+whatever ``Settings.database_url`` resolves to, and that URL is assembled from
+``POSTGRES_HOST``/``POSTGRES_PORT``/``POSTGRES_DB`` with defaults that point at
+``localhost:5432``. On a developer's machine that is the developer's own
+Postgres, while the ephemeral demo stack a ``demo`` promotion means lives on a
+published port such as 55432. Both databases carry a ``demo`` row — migration
+0016 seeds one — so "the tenant exists" proves nothing about which of them is
+in front of you, and a run against the wrong one *succeeds*, prints a normal
+summary, and silently repoints a registry nobody meant to touch. That is a real
+near-miss this tool had, caught only because the operator happened to run
+``--dry-run`` first and compare ``champion_before.updated_at`` against a row
+they had already read by hand.
+
+Two things answer it, in order of how much they are relied on. Every run now
+prints the resolved host, port, database and tenant to stderr *before it reads
+or writes anything*, so the target is visible without a rehearsal — that is the
+fix, and it holds for promote, revert and ``--dry-run`` alike. On top of it,
+``check_target_is_intended`` refuses the one combination that is almost always a
+mistake: a non-default tenant against a ``POSTGRES_PORT`` that was never
+configured. It keys on whether the port was *stated* rather than on the number
+it came out as, because the failure is an operator who never said which database
+they meant, not one who said 5432 and meant it. ``--yes`` overrides it, as it
+does the production guard: the threat is an accidental run, and anyone who wants
+to repoint a database deliberately has ``psql``.
+
 **Propagation.** ``TenantRouter`` caches the row for
 ``DEFAULT_CACHE_TTL_SECONDS`` (30 s) per API process, and a CLI cannot reach
 another process's cache. A promotion is therefore live within about half a
@@ -77,11 +102,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from sqlalchemy import Connection, Engine, create_engine, text
 
-from src.config import Settings
+from src.config import DEFAULT_TENANT_ID, Settings
 from src.release.bootstrap import TREE_ROOT, ReleaseError
 from src.serving.tenancy import TenantChampion
 
@@ -229,6 +254,129 @@ def _require_champion(champion: TenantChampion | None) -> TenantChampion:
     if champion is None:
         raise ValueError("expected a fully named champion")
     return champion
+
+
+# --------------------------------------------------------------------------
+# which database
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Target:
+    """The database this run would write to, and whether anybody said so.
+
+    ``port_configured`` is not "the port is not 5432" — it is whether
+    ``POSTGRES_PORT`` was supplied at all, by the environment or by ``.env``.
+    Pydantic records that in ``model_fields_set``, and it is the honest form of
+    the question: an operator who types ``POSTGRES_PORT=5432`` has named their
+    target and should not be second-guessed, while one who typed nothing has a
+    URL that was assembled for them.
+    """
+
+    host: str
+    port: int
+    database: str
+    port_configured: bool
+
+    @property
+    def dsn(self) -> str:
+        """Host, port and database — no credentials. This gets printed."""
+        return f"{self.host}:{self.port}/{self.database}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "port_configured": self.port_configured,
+        }
+
+
+def resolve_target(settings: Settings) -> Target:
+    """Read back the coordinates ``Settings.database_url`` was built from."""
+    return Target(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_db,
+        port_configured="postgres_port" in settings.model_fields_set,
+    )
+
+
+def announce_target(
+    target: Target,
+    *,
+    tenant_id: str,
+    operation: str,
+    stream: TextIO | None = None,
+) -> None:
+    """Say which database and which tenant, before anything else happens.
+
+    Printed rather than logged, and framed rather than folded into the summary
+    JSON, because the whole value of this line is that an operator cannot fail
+    to see it. It goes to stderr for the same reason the log lines do: stdout
+    carries the machine-readable summary and must stay parseable.
+    """
+    handle = stream if stream is not None else sys.stderr
+    rule = "=" * 72
+    print(rule, file=handle)
+    print(
+        f"[promote] TARGET  {target.dsn}  tenant={tenant_id}  operation={operation}",
+        file=handle,
+    )
+    if not target.port_configured:
+        # The near-miss in one sentence: the port nobody chose is the one that
+        # quietly pointed at the wrong database.
+        print(
+            f"[promote]         POSTGRES_PORT is unset, so {target.port} is the built-in default",
+            file=handle,
+        )
+    print(rule, file=handle)
+    handle.flush()
+
+
+def check_target_is_intended(
+    settings: Settings,
+    *,
+    tenant_id: str,
+    confirmed: bool,
+) -> str:
+    """Refuse the one target that is almost always somebody else's database.
+
+    A tenant other than ``DEFAULT_TENANT_ID`` lives in a stack that was stood up
+    for it — the demo compose project, a staging box — and those publish
+    Postgres on a port they had to choose, because the default one is already
+    taken by the developer's own database. So "a non-default tenant plus a port
+    nobody configured" describes an operator who meant one database and is
+    talking to another, and it describes almost nothing else.
+
+    Deliberately keyed on the *port having been stated*, not on its value and
+    not on the host: ``POSTGRES_PORT=5432`` is a target somebody chose, and a
+    guard that refused it would teach people to pass ``--yes`` by reflex. And
+    deliberately keyed on ``DEFAULT_TENANT_ID`` rather than on a list of "unsafe"
+    tenant names — a new tenant appears in a migration, and one that nobody
+    remembered to add to a list would arrive unguarded.
+
+    Like the production guard this is a refusal, not a lock. It is aimed at the
+    ``make promote`` typed one terminal away from the stack it meant; an
+    operator who wants to write this row already has ``psql``.
+    """
+    target = resolve_target(settings)
+    if tenant_id == DEFAULT_TENANT_ID:
+        return f"tenant={tenant_id!r} is the default tenant; {target.dsn} is where it lives"
+    if target.port_configured:
+        return f"POSTGRES_PORT was set explicitly, so {target.dsn} is the stated target"
+    if confirmed:
+        return f"{target.dsn} was not stated, and --yes accepted it for tenant {tenant_id!r}"
+    raise PromotionRefusedError(
+        f"this would promote tenant {tenant_id!r} against {target.dsn}, and POSTGRES_PORT was "
+        f"never set — so the target is whatever Postgres answers on the default port of this "
+        f"machine, which is usually the developer's own database and not the stack tenant "
+        f"{tenant_id!r} lives in. Tenants come from migrations, so every migrated database "
+        f"carries a {tenant_id!r} row and the run would have succeeded against the wrong one. "
+        f"Nothing in any database was read or written. "
+        f"Point it at the right stack (POSTGRES_PORT=<published port> make promote ...), or "
+        f"re-run with --yes if {target.dsn} really is the database you meant."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -683,7 +831,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Required to write when ENVIRONMENT=production. Ignored elsewhere.",
+        help=(
+            "Confirm a write the tool cannot tell was intended: required when "
+            "ENVIRONMENT=production, and to move a non-default tenant against an unset "
+            "POSTGRES_PORT. Ignored otherwise."
+        ),
     )
     return parser
 
@@ -722,6 +874,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _dispatch(args: argparse.Namespace, settings: Settings) -> dict[str, Any]:
     actor = current_actor()
+    target = resolve_target(settings)
+    operation = "revert" if args.revert else "promote"
+    if args.dry_run:
+        operation += " --dry-run"
+    # The first thing every run does, ahead of the bundle, the guards and the
+    # connection. A refusal below is the backstop; this line is the fix, and it
+    # has to be on screen even for the runs that go on to be refused — and
+    # especially for a --dry-run, which is the rehearsal an operator reads the
+    # database's own state out of.
+    announce_target(target, tenant_id=args.tenant, operation=operation)
+
     if args.revert:
         request = build_revert(tenant_id=args.tenant, snapshot_dir=args.snapshot_dir, actor=actor)
     else:
@@ -735,6 +898,11 @@ def _dispatch(args: argparse.Namespace, settings: Settings) -> dict[str, Any]:
     # After verification, before the connection: a bundle that does not verify
     # should say so whatever environment it was pointed at, and a refusal should
     # not depend on a database being reachable.
+    target_check = (
+        "--dry-run writes nothing, so the target is reported and not gated"
+        if args.dry_run
+        else check_target_is_intended(settings, tenant_id=args.tenant, confirmed=args.yes)
+    )
     authorization = (
         "--dry-run writes nothing, so no confirmation is required"
         if args.dry_run
@@ -747,6 +915,8 @@ def _dispatch(args: argparse.Namespace, settings: Settings) -> dict[str, Any]:
     finally:
         engine.dispose()
     summary["authorization"] = authorization
+    summary["target"] = target.to_dict()
+    summary["target_check"] = target_check
     return summary
 
 
