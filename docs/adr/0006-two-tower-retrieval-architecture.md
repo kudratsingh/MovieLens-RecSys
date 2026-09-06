@@ -3,6 +3,28 @@
 **Status:** Accepted
 **Date:** 2026-07-02
 
+**Correctness amendment (2026-09-05):** The negative retrieval conclusions in
+the 2026-08-30 sweep note below are superseded. The item table was added to
+FAISS as rows `0..N-1`, corresponding to dense item ids `1..N`, but
+`TwoTowerModel.recommend()` discarded row 0 as though it were padding and used
+every other row number directly as the dense id. Consequently, every retrieved
+item was either dropped or translated to the preceding item. A cross-path test
+against an independently built exact FAISS index exposed the mismatch, and a
+200-user/400-item overfit canary reached loss `0.000498` and recall@10 `1.0`
+after the row-to-id conversion was corrected.
+
+One bounded seed-42 6% diagnostic after the fix reached warm recall@500
+`0.3759484159` and NDCG@500 `0.1483997512` on 115 warm users (run
+`8a22ed513b8f457eb0d5f93b826dc82a`, protocol
+`sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629`).
+The previous complete-v2 result was `0.0435`. Its same-cohort reference lines
+were popularity `0.1974` and item-item `0.3619`. The corrected diagnostic used
+exact retrieval and 16,384 sampled negatives rather than the earlier complete
+arm's IVF retrieval and 4,096, so it does not isolate the effect size or make a
+promotion decision. It does establish that the old below-popularity result was
+an evaluator-path defect, not evidence about the embeddings. No full-data run
+or additional sweep was authorized.
+
 ## Context
 
 [ADR 0003](0003-two-stage-architecture.md) pinned the two-stage architecture. [ADR 0004](0004-item-item-before-two-tower.md) pinned item-item as the classical baseline the learned candidate generator has to beat. This ADR fills the remaining slot in the candidate-stage lineage: the shape of the two-tower model itself — the encoders, the loss, the retrieval index, and the cold-start path.
@@ -102,6 +124,10 @@ Ships with:
 - **The point-in-time canary test starts passing spuriously fast.** Would suggest history construction was silently reverted to include the positive or later timestamps. Mitigation: the canary is a strict-equality check against a hand-built expected history, not a "is it small enough" heuristic.
 
 ## 2026-08-30 — sweep note: what a learning-rate and budget sweep found about this configuration
+
+> **Superseded by the 2026-09-05 correctness amendment above.** These runs are
+> retained as an audit record, but all retrieval metrics passed through the
+> broken FAISS row-to-dense-id conversion and cannot support a model verdict.
 
 [`results.md`](../results.md)'s first 2026-08-30 session measured this ADR's configuration on the full dataset and got warm recall@500 of 0.0466 against item-item's 0.4001, on a loss curve that stopped moving after one epoch. It called that "a hyperparameter symptom before it is an architectural one" and named a training-budget and learning-rate sweep as the cheapest next experiment. That sweep has now been run — a 12-cell pilot on a seeded 6% of users, then two full-dataset runs — and this note records what it found about **the configuration in this ADR**. The decision itself is not changed here: no default moved in code, and this note proposes rather than adopts.
 
