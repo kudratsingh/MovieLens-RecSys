@@ -502,6 +502,41 @@ permanently delete the isolated demo Postgres and Keycloak data.
 
 - **A port is already allocated:** stop the normal development stack with
   `make infra-down`, then rerun `make demo-up`.
+
+  When that is not available — another session is using the dev stack, or you
+  are measuring and must not disturb what is running — move the host-side
+  publication instead, through the `DEMO_COMPOSE_EXTRA` hook. Keep the override
+  outside the repository; it is a property of your machine, not of the stack:
+
+  ```yaml
+  # ~/host-port-relief.yml
+  services:
+    postgres:
+      ports: !override
+        - "55432:5432"
+  ```
+
+  ```sh
+  export DEMO_COMPOSE_EXTRA="-f ~/host-port-relief.yml"
+  ```
+
+  **`!override` is required, and leaving it out fails silently.** Compose merges
+  a `ports` list by *appending*, so a plain entry keeps `published: "5432"` and
+  adds `55432` beside it — the conflict survives and `demo-up` still collides,
+  while the override file looks correct. Confirm which you got before rerunning:
+
+  ```sh
+  docker compose -p movielens-demo -f docker-compose.yml -f docker-compose.demo.yml \
+      -f ~/host-port-relief.yml config | grep -c 'published: "5432"'
+  ```
+
+  `0` is right. `1` means the tag was dropped and the base publication is still
+  there.
+
+  Nothing measured changes: `target` stays `5432`, and the load generator, the
+  API, pgBouncer and both sidecars all reach Postgres over the `movielens-demo`
+  network on the container port rather than through the published one. A gate
+  run taken this way is comparable to one taken without it.
 - **Schema setup failed:** run `make demo-logs` and inspect `demo-setup` and
   `postgres`. The API will not start after a failed setup job.
 - **FastAPI is unhealthy:** inspect `api` and `pgbouncer` logs. Startup checks
