@@ -211,8 +211,8 @@ These are the things I'll hold the project to. Every one of them maps to a real 
 movielens-recsys/
 ├── CLAUDE.md                  # this file
 ├── README.md                  # the public front door: status, quickstart, measured numbers, ADR index
-├── Makefile                   # train, serving-artifacts*, serve, test, lint, db-migrate, demo-*, prod-*,
-│                              #   api-contract*, web-api-types* targets
+├── Makefile                   # train, serving-artifacts*, serve, test, lint, db-migrate, promote*, demo-*,
+│                              #   prod-*, api-contract*, web-api-types* targets
 ├── scripts/                   # generate_openapi.py — committed OpenAPI contract + CI drift check
 ├── alembic.ini
 ├── alembic/                   # Phase 3 — tenant roles, tenants registry, tenant_id + forced RLS, personas, feature tables, audits
@@ -277,8 +277,10 @@ movielens-recsys/
 │   │   ├── request_id.py      # Phase 3 — X-Request-ID adoption and echo on every response
 │   │   ├── routing/           # Phase 6 — champion/challenger split, shadow routing
 │   │   └── ...                # recommendations, orchestration, online features, TMDB proxy, startup checks
-│   ├── release/               # Phase 3 — production bootstrap (preflight, schema, seed, materialize) and the
-│   │                          #   post-deploy verify matrix; the only place a migrator DSN is used
+│   ├── release/               # Phase 3 — production bootstrap (preflight, schema, seed, materialize), the
+│   │                          #   post-deploy verify matrix, and the manual champion promotion + revert
+│   │                          #   (`make promote`, NOT Phase 6's routing gate); the only place a migrator
+│   │                          #   DSN is used
 │   └── monitoring/            # Phase 5 — drift, dashboards
 ├── pipelines/                 # Phase 4 — Prefect flows
 ├── synthetic/                 # Phase 3+ — synthetic-user harnesses (scoped per job)

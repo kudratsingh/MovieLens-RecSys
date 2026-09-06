@@ -47,9 +47,15 @@ from src.models.artifacts import (
     CandidateRetrieval,
     RetrieverRef,
 )
+from src.serving.logging_setup import ensure_stdout_logging
 from src.serving.policy import CANDIDATE_SOURCE_POPULARITY_FILL
 
 logger = logging.getLogger(__name__)
+# This module is imported from inside the sidecar's ``lifespan``, under a uvicorn
+# that configures only its own loggers. Without a handler of its own the boot
+# line below — the one thing that says which retrieval family and index type this
+# worker realised — has nothing on its chain to write it, and is dropped.
+ensure_stdout_logging(logger)
 
 # The module the shared SASRec encoder lives in, and the symbol O-9/W17 is
 # expected to export from it once that work lands. Named as constants because
@@ -664,9 +670,13 @@ def load_sequence_retriever(retriever: RetrieverRef, artifact_dir: Path) -> SASR
     encoder_timer = EncoderForwardTimer()
     encoder_timer.attach(_encoder_module_of(model))
 
+    # ``family=`` is spelled out rather than left implicit in the event name, so
+    # one grep answers "which retrieval family is this sidecar on" across every
+    # family rather than only for the one that names itself.
     logger.info(
-        "sasrec_retriever_loaded encoder=%s items=%s window=%s cold_start_threshold=%s "
-        "index_type=%s fastpath_guard=%s",
+        "sasrec_retriever_loaded family=%s encoder=%s items=%s window=%s "
+        "cold_start_threshold=%s index_type=%s fastpath_guard=%s",
+        RETRIEVER_FAMILY_SASREC,
         encoder.version,
         len(vocabulary),
         artifact_manifest.max_sequence_length,
