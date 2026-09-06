@@ -11,7 +11,9 @@ from __future__ import annotations
 import pytest
 
 from src.evaluation.gate import (
+    ALL_ROUTES,
     DEFAULT_SLICE_TOLERANCE,
+    LEARNED_ROUTE,
     MEASURED_SLICE_TOLERANCE,
     MIN_RELATIVE_GAIN,
     GateInputError,
@@ -161,6 +163,63 @@ def test_an_aggregate_gain_below_the_threshold_refuses_even_with_no_regression()
     assert all(s.passed for s in decision.slices)
     assert decision.failures == (decision.overall.detail,)
     assert "required +3.00%" in decision.overall.detail
+
+
+def test_learned_route_gates_warm_gain_and_reports_overall_without_gating_it():
+    incumbent = _result(warm=0.050, cold=0.400, overall=0.150)
+    candidate = _result(warm=0.052, cold=0.400, overall=0.151)
+
+    default = promotion_decision(candidate, incumbent, slice_tolerance=TOLERANCE)
+    learned = promotion_decision(
+        candidate,
+        incumbent,
+        slice_tolerance=TOLERANCE,
+        scope=LEARNED_ROUTE,
+    )
+
+    assert default.scope == ALL_ROUTES
+    assert default.promote is False
+    assert learned.promote is True
+    assert learned.overall.passed is False
+    assert learned.warm_gain is not None
+    assert learned.warm_gain.passed is True
+    assert learned.warm_gain.relative_change == pytest.approx(0.04)
+    assert learned.failures == ()
+    assert "overall (reported, not gated)" in learned.summary()
+
+
+def test_step_1_single_booster_is_refused_on_cold_in_learned_route_mode():
+    incumbent = _result(warm=0.072792, cold=0.549002, overall=0.200815)
+    single_booster = _result(warm=0.091688, cold=0.257423, overall=0.136244)
+
+    decision = promotion_decision(single_booster, incumbent, scope=LEARNED_ROUTE)
+
+    assert decision.warm_gain is not None and decision.warm_gain.passed is True
+    assert decision.promote is False
+    assert len(decision.failures) == 1
+    assert "cold" in decision.failures[0]
+    assert "53.11%" in decision.failures[0]
+
+
+def test_step_1_per_route_bundle_promotes_under_both_scopes():
+    incumbent = _result(warm=0.072792, cold=0.549002, overall=0.200815)
+    per_route = _result(warm=0.091688, cold=0.549002, overall=0.214631)
+
+    all_routes = promotion_decision(per_route, incumbent)
+    learned_route = promotion_decision(per_route, incumbent, scope=LEARNED_ROUTE)
+
+    assert all_routes.promote is True
+    assert learned_route.promote is True
+    assert all_routes.overall.relative_change == pytest.approx(0.0688, abs=1e-4)
+    assert learned_route.warm_gain is not None
+    assert learned_route.warm_gain.relative_change == pytest.approx(0.2596, abs=1e-4)
+
+
+def test_unknown_gate_scope_is_refused():
+    result = _result(warm=0.05, cold=0.4, overall=0.15)
+
+    with pytest.raises(GateInputError, match="unsupported gate scope"):
+        promotion_decision(result, result, scope="warm-only")  # type: ignore[arg-type]
 
 
 def test_the_default_aggregate_threshold_is_adr_0001s_three_percent():
