@@ -315,8 +315,12 @@ movielens-recsys/
 └── infra/                     # images, platform config, and the operational scripts around them
     ├── README.md              # one line per directory + which compose file / Make target consumes it
     ├── api/                   # FastAPI image + entrypoint dispatching serve | bootstrap | verify
-    ├── features/              # Feast + LightGBM sidecar image; bakes the serving bundle and applies the registry
-    ├── model-bundle/          # committed candidate-index.json + ranker.txt + manifest.json (baked, SHA-256-pinned)
+    ├── features/              # Feast + LightGBM sidecar image; bakes *both* bundles below and applies the registry
+    ├── model-bundle/          # the demo *fixture*: schema 1, candidate-index.json + ranker.txt +
+    │                          #   manifest.json, retrained and hash-compared by `serving-artifacts-check`
+    ├── model-bundle-served/   # the *served* full-data bundle: schema 2 with lineage, assembled from
+    │                          #   pinned artifacts by `make serving-artifacts-publish`, checked by
+    │                          #   `serving-artifacts-verify`. Both are baked; MODEL_ARTIFACT_DIR picks
     ├── pgbouncer/             # dev config plus the production image: env-rendered, scram-sha-256, forced-user aliases
     ├── postgres/              # pgbouncer_auth SECURITY DEFINER lookup, run once during provisioning
     ├── postgres-init/         # dev-only mlflow database bootstrap
