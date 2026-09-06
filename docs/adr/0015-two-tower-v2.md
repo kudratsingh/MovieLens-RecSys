@@ -3,6 +3,38 @@
 **Status:** Accepted — measured, not promoted
 **Date:** 2026-09-03
 
+**Full-data outcome (2026-09-06):** The corrected v2 has now been measured once at
+full scale, and the retrieval gate passes. Run
+`2d7f1a49008d4e9d8791d4ca8598d613`, seed 42, three epochs in 6,879.3 s, protocol
+`sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28` —
+the same protocol as the item-item incumbent `4b342e87dbf54834be5c719eae9a4e6c`
+and the SASRec champion, over the same 1,931 warm and 710 cold users. Warm
+recall@500 **0.5113336991953615** against item-item's `0.3990569035829944`
+(**+28.14%**, one-sided 95% lower bound **+25.28%**, population-only, n=1931);
+cold **bit-identical** at `0.5262729520330651`, which is zero-by-construction for
+any threshold-routed retriever; overall recall@500 `0.5153499314993257`
+(+18.95%). `make gate-retrieval` at both tolerances 0.0 returns **promote**.
+Per-epoch warm recall rose `0.4902 -> 0.5058 -> 0.5113` and had not flattened,
+so three epochs is a floor rather than a converged reading.
+
+This settles what the 2026-09-05 amendment reopened. It does **not** promote the
+model: the gate's own `serving_eligible` is false pending the paired LightGBM
+NDCG@10 guardrail, and SASRec's step 1 is the reason that clause exists — a
+retriever can clear recall@500 handsomely and still lose end to end once a ranker
+trained on a different candidate distribution scores its slate. Item-item plus
+LightGBM remains champion; promotion is the owner's decision under ADR 0001.
+
+Two limits travel with the number. **The cell is not the original complete-v2
+arm** — that used IVF retrieval and 4,096 sampled negatives, this uses exact
+inner-product search and 16,384 — so it does not isolate the mapping fix's
+effect, and the gap from `0.0435` to `0.5113` should not be read as one. And
+**its uncertainty is one training run**: the band is the population term alone
+and says how far the gain would move on a different sample of users, not on a
+different seed. The margin is wide enough that this is unlikely to be decisive,
+but the blind spot is stated rather than hidden. No sweep, no v3, no paired-ranker
+step followed. The run also required `KMP_DUPLICATE_LIB_OK=TRUE`; see ADR 0006's
+2026-09-05 environment note.
+
 **Corrected outcome (2026-09-05):** The stop decision below is superseded by a
 retrieval correctness defect, not by new tuning. FAISS row 0 represented dense
 item id 1, but the recommendation path dropped row 0 and interpreted every
