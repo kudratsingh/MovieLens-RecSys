@@ -22,7 +22,62 @@ proposal can pre-commit. A passing increment 1 therefore does not start incremen
 momentum: it starts a conversation whose output is a number written down before any DIN code
 exists.
 
-## Result — 2026-09-05: increment 1 measured, stop rule 1 fired
+## Result — 2026-09-05 (final): re-measured after O-9, stop rule 1 fired
+
+Increment 1 was measured twice. The first run predated PR #162's fast-path
+repair, when a left-padded sequence encoded to NaN and **34,190 of 153,947
+learned-route positives retrieved nothing** — precisely the short-history users a
+sequence signal has the most to say about. It was re-run once on the fixed
+encoder, at the same seed and configuration, against bundle 1b re-measured on
+that same fixed encoder (`c1d742c8…`, PR #162). **The verdict did not change.**
+
+| | bundle 1b (fixed) | 8-column control | 10-column arm |
+|---|---:|---:|---:|
+| run / booster | `c1d742c8…` | `3e9c826e…` | `0bcc12ba…` (`bc89411b…`) |
+| warm NDCG@10 | 0.101441 | 0.102358 | **0.104257** |
+| cold NDCG@10 | 0.549002 | 0.549002 | 0.549002 (bit-identical) |
+| overall NDCG@10 | 0.221762 | 0.222432 | 0.223821 |
+| warm recall@10 | 0.084663 | 0.084520 | 0.084418 |
+
+**Both gate scopes refuse**, now from the gate's own implementation of each (PR
+#155): all-routes reads overall **+0.93%** against +3.00%; learned-route reads
+warm **+2.78%** against +3.00% with cold non-regression satisfied by
+construction.
+
+**The control is the number that matters, and it is new.** Because the
+incumbent's warm booster predates the repair, "arm beats bundle" would have
+confounded two columns with a retrain. Fitting an eight-column control from the
+*same* frame, groups and labels separates them: the two features are worth
+**+1.86% warm NDCG@10**, and the remaining +0.90% of the arm's +2.78% is the
+retrain alone. Without that control the arm reads as a near miss on the stop
+rule; with it, the feature effect is clearly under.
+
+**Stop rule 1 fired on both readings.** Under the amendment recorded with the
+owner's approval, **increment 2 (DIN) is not built** — its first precondition
+failed, so the owner is never asked for the warm target the second requires.
+
+**Risk 1 is what happened, and the repair sharpened it.** The two columns took
+**82.3%** of the arm's total gain (up from 77.5% pre-repair) while every
+aggregate fell — `item_popularity_30d` from 255,536 to 37,249. With more
+short-history users present the booster leans on the sequence score *more* and
+gets +1.86% for it. That is the ADR's own prediction, written before either run:
+*"a large feature gain and a small NDCG gain"*, because the candidate set is
+SASRec's top-500 and the score is therefore a monotone function of the rank
+within a group by construction. `sasrec_candidate_rank` was deliberately excluded
+so rank could not be the explanation; it was the explanation anyway, carried by
+the required features, so the rank-only control never needed running.
+
+**What this does not establish.** Not that sequence information is useless to a
+ranker — that the encoder's *scalar verdict* is useless to a ranker scoring the
+encoder's *own* candidates, which is narrower and nearly circular. Two readings
+survive for a future rung, neither of them increment 2 as specified: score these
+features against a slate the encoder did not choose, where they stop restating
+the ordering; or give the ranker the history itself rather than a summary of it.
+
+Full record: [`docs/results.md`](../results.md#the-same-question-asked-again-after-o-9--2026-09-05)
+and [`docs/experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json`](../experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json).
+
+## Result — 2026-09-05 (superseded): the pre-O-9 measurement
 
 Increment 1 ran the same day it was approved. Run
 `eee531bb16d943f5a2213dd9b7a8dc1a`, one new ten-column learned-route booster
@@ -74,16 +129,15 @@ ordering; or give the ranker the history itself rather than a summary of it.
 The second is what target attention was for, and this result cannot speak to it
 either way, which is why the rung stops rather than concluding.
 
-**Both arms were measured under O-9.** A left-padded sequence encodes to NaN in
-`eval()` mode — PyTorch's fused attention path returns NaN for a query position
-whose keys are all masked — so any history shorter than the 50-item window
-retrieves nothing. **34,190 of 153,947 learned-route positives (22.2%)** are
-affected. Increment 1 and its incumbent were measured under it on identical
-candidates and identical groups, so this comparison is internally valid, but the
-fix and the re-measurement of the SASRec line are a separate work item (W17).
-Every SASRec number on record understates the retriever, this one included.
+**Both arms were measured under O-9**, which is why this reading is superseded
+by the one above. A left-padded sequence encoded to NaN in `eval()` mode, so any
+history shorter than the 50-item window retrieved nothing and **34,190 of
+153,947 learned-route positives (22.2%)** were dropped. Arm and incumbent were
+measured under it on identical candidates and identical groups, so the
+comparison was internally valid — but it was taken on the wrong population, and
+the re-measurement above is what stands.
 
-Full record: [`docs/results.md`](../results.md#the-ranker-given-the-sasrec-score--2026-09-05-adr-0018-rung-3-increment-1)
+Superseded record: [`docs/results.md`](../results.md#the-ranker-given-the-sasrec-score--2026-09-05-adr-0018-rung-3-increment-1)
 and [`docs/experiments/sasrec/ranker-sasrec-score-features-2026-09-05.json`](../experiments/sasrec/ranker-sasrec-score-features-2026-09-05.json).
 
 The rest of this document is the proposal as written on 2026-09-05 and is not rewritten.

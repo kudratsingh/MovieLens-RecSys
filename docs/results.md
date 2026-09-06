@@ -2747,6 +2747,18 @@ and latency evidence SASRec itself owes, and the k6 gate has not seen either.
 
 ## The ranker given the SASRec score — 2026-09-05 (ADR 0018, Rung 3 increment 1)
 
+> **Superseded on 2026-09-05 by the re-measurement below.** Everything in this
+> section was measured before O-9's fast-path repair, when a left-padded
+> sequence encoded to NaN and **34,190 of 153,947 learned-route positives
+> retrieved nothing at all**. The comparison it makes is internally valid — arm
+> and incumbent were both measured under the defect, on identical candidates and
+> identical groups — but the population it measured is not the one the fixed
+> retriever serves, and the missing positives are exactly the short-history
+> users a sequence signal should help most. Kept as written because the reasoning
+> survived the repair; read
+> [the re-measurement](#the-same-question-asked-again-after-o-9--2026-09-05) for
+> the numbers that stand.
+
 The four arms above bought their entire warm gain with the *retriever*. The
 booster still read the same eight aggregate columns it always had, and on
 SASRec's candidate mix its importances went flat — which is what a model with
@@ -2906,3 +2918,129 @@ configuration, seed 42, per the replication-budget decision.
 **Nothing is promoted.** Item-item plus LightGBM remains the champion; the
 per-route bundle and the union booster remain measured-but-not-promoted; this arm
 is measured and refused.
+
+## The same question, asked again after O-9 — 2026-09-05
+
+O-9's repair changed the population the verdict above was taken on. A
+left-padded sequence encoded to NaN in `eval()` mode, so every positive whose
+strict prefix was shorter than the encoder's 50-item window retrieved an empty
+slate and was dropped. PR #162 fixed it. That is not a detail for this rung: the
+34,190 dropped positives are precisely the short-history users a sequence signal
+has the most to say about, so increment 1 deserved to be asked again with them
+present.
+
+It was, once, at the same seed and configuration. **The verdict does not
+change**, and the re-measurement is the better evidence for it.
+
+### What moved in the inputs
+
+The training set grew from step 1's pre-repair **83,538 groups / 1,754,298 rows**
+to **115,167 / 2,418,507** — `+31,629` groups, which is the 34,190 recovered
+positives less the handful that churn out of a top-500 tail when the fix moves
+full-length queries by ~6e-08. Dropped positives fell from 70,465 to 38,836. The
+run read **25,000,095 source ratings** at cutoff `1466837397`, the same frame
+every recorded number on this page was measured on.
+
+Still **0 of 2,418,507 rows carry the missing sentinel**, for the same structural
+reason as before: a positive whose route is the fallback never enters the learned
+booster's set. The `NaN` path the contract defines remains correct, tested, and
+unexercised on this data.
+
+### The arm, and its own control
+
+Two boosters from **one** training set. The frame, the groups and the labels are
+built once and selected from twice — eight columns for the control, ten for the
+arm — so the difference between them is the feature set and nothing else. That
+control is new, and it is what makes this measurement stronger than the first:
+the incumbent bundle's warm booster was fitted *before* the repair, so it is
+slightly stale against the slate it now ranks, and "arm beats bundle" alone would
+confound two columns with a retrain.
+
+| | bundle 1b, O-9-fixed | 8-column control | 10-column arm |
+|---|---:|---:|---:|
+| run / booster | `c1d742c8…` | `3e9c826e…` | `0bcc12ba…` |
+| new boosters | 0 | 1 | 1 |
+| warm NDCG@10 | 0.101441 | 0.102358 | **0.104257** |
+| cold NDCG@10 | 0.549002 | 0.549002 | 0.549002 |
+| overall NDCG@10 | 0.221762 | 0.222432 | 0.223821 |
+| warm recall@10 | 0.084663 | 0.084520 | 0.084418 |
+| cold recall@10 | 0.077638 | 0.077638 | 0.077638 |
+| overall recall@10 | 0.082775 | 0.082670 | 0.082596 |
+
+Cold came back `0.5490019989542251` and `0.07763845424378057` in both arms — the
+same floats, not the same six decimals. The fallback route never reads the
+encoder, so that had to hold across the repair, and the run refuses to write if
+it does not.
+
+### Both scopes refuse, and the ablation says why
+
+ADR 0001's gate now carries the learned-route scope itself (PR #155), so both
+readings come from one implementation rather than one of them being computed by
+hand as in the first run.
+
+| Reading | Claim | Result |
+|---|---|---|
+| all-routes | overall +3.00% | **+0.93%** — DO NOT PROMOTE |
+| learned-route | warm +3.00%, cold non-regression | **+2.78%**, cold +0.00% — DO NOT PROMOTE |
+
+**The ablation is the number that matters.** Against its own control — same
+frame, same groups, same labels, retrained under identical conditions — the two
+columns are worth **+1.86% warm NDCG@10**. The remaining +0.90% of the arm's
++2.78% over the bundle is the *retrain*, not the features: the control alone
+beats the bundle by +0.90% simply by being fitted on the post-repair candidate
+distribution. Without that control the arm would have read +2.78% and looked
+like a near miss on the stop rule; it is really a +1.86% feature effect and a
++0.90% retrain effect, and only the first is what Rung 3 asked about.
+
+### The mechanism is the same one, and stronger
+
+| Feature | 8-column control | 10-column arm |
+|---|---:|---:|
+| `sasrec_user_item_logit` | — | **1,122,103** |
+| `sasrec_user_item_score` | — | **506,423** |
+| `item_popularity_30d` | 255,536 | 37,249 |
+| `user_interaction_count` | 163,441 | 55,637 |
+| `user_days_active` | 114,501 | 34,533 |
+| `item_popularity_7d` | 74,708 | 30,046 |
+| `item_popularity_all_time` | 73,183 | 46,791 |
+| `user_genre_affinity` | 70,551 | 25,140 |
+| `item_age_days` | 68,397 | 50,786 |
+| `user_days_since_last_interaction` | 62,760 | 53,775 |
+
+The two columns take **82.3%** of the arm's total gain (1,628,526 of 1,978,046),
+up from 77.5% pre-repair, and every aggregate falls — `item_popularity_30d`
+hardest, from 255,536 to 37,249. With more short-history users in the set the
+booster leans on the sequence score *more*, and gets +1.86% for it. Warm
+recall@10 goes very slightly the wrong way again (−0.29% against the bundle,
+−0.12% against the control).
+
+That is ADR 0018's Risk 1 with a larger sample behind it: the candidates **are**
+SASRec's top-500, so within a group the score is a monotone function of the rank
+by construction, and a listwise GBDT spends its capacity re-deriving an ordering
+it was already handed. The repair did not change the shape of the finding; it
+made it clearer.
+
+### Stop, again
+
+ADR 0018's stop rule 1 asks for **+3% warm NDCG@10** over the per-route bundle.
+The arm reads +2.78% against the bundle and +1.86% against its own control.
+Either way it is under, and under the amendment recorded with the owner's
+approval **increment 2 (DIN) is not built** — its first precondition failed, so
+the owner is never asked for the warm target the second one needs.
+
+What stands is what stood before, now on the full population: the encoder's
+*scalar verdict* adds little to a ranker scoring the encoder's *own* candidates.
+The two readings a future rung might take are unchanged — score these features
+against a slate the encoder did not choose, or give the ranker the history itself
+rather than a summary of it.
+
+### Run and wall-clock
+
+`src/training/sasrec_ranker_scores.py`, 12-core Apple M3 Pro with 36 GiB unified
+memory, `OMP_NUM_THREADS=1`, **10 min 17 s** end to end — 212.7 s to build the
+shared training set, 36.0 s and 43.7 s to fit the two boosters, 111.8 s and
+112.7 s to rank the holdout twice. Seed 42, one run per configuration. Both
+boosters were written before their holdout evaluation. Raw verdict:
+[`experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json`](experiments/sasrec/ranker-sasrec-score-features-postO9-2026-09-05.json).
+
+**Nothing is promoted.** Item-item plus LightGBM remains the champion.
