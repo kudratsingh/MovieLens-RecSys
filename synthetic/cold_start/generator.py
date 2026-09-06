@@ -291,10 +291,11 @@ def build_provenance(
     buckets: Sequence[int],
     users_per_bucket: int,
     data_version: str,
+    generator_version: str = GENERATOR_VERSION,
 ) -> CohortProvenance:
     return CohortProvenance(
         seed=seed,
-        generator_version=GENERATOR_VERSION,
+        generator_version=generator_version,
         split_cutoff=cutoff,
         data_version=data_version,
         buckets=tuple(int(bucket) for bucket in buckets),

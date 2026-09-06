@@ -1034,8 +1034,14 @@ def run_arm_from(shared: SharedInputs, source: CandidateSource) -> ArmOutcome:
     )
 
 
-def prepare_shared() -> SharedInputs:
-    """Load, split, attach the cohort, and build everything both arms consume."""
+def prepare_shared(*, additional_cohort: SyntheticColdCohort | None = None) -> SharedInputs:
+    """Load, split, attach cohorts, and build everything both arms consume.
+
+    ``additional_cohort`` is an additive diagnostic seam. The default path is
+    byte-for-byte the historical runner; ADR 0011's sequence-valid v2 recheck
+    uses the seam to put its request histories into the same feature and
+    exclusion indexes without replacing the immutable v1 slice.
+    """
     settings = Settings()
     seed = seeds.resolve_seed(RANKER_SEED)
     positive_limit = sampling.resolve_positive_limit(RANKER_POSITIVE_LIMIT)
@@ -1075,6 +1081,21 @@ def prepare_shared() -> SharedInputs:
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
     )
+    if additional_cohort is not None:
+        if sample_fraction != 1.0:
+            raise ValueError("an additional cohort requires the full-data split")
+        if additional_cohort.provenance.split_cutoff != split.cutoff:
+            raise ValueError(
+                "additional cohort cutoff "
+                f"{additional_cohort.provenance.split_cutoff} != split cutoff {split.cutoff}"
+            )
+        train_frame = synth_cold.attach_history(train_frame, additional_cohort)
+        logger.info(
+            "Attached additional synthetic cohort: %d users, %d history rows, fingerprint=%s",
+            additional_cohort.n_users,
+            len(additional_cohort.history),
+            additional_cohort.provenance.fingerprint[:12],
+        )
 
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
