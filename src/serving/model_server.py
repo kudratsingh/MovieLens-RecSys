@@ -23,8 +23,19 @@ from starlette.concurrency import run_in_threadpool
 from src.config import Settings
 from src.feature_contract import FEATURE_COLUMNS
 from src.features.online import RANKER_FEATURES, create_feature_store
-from src.models.artifacts import ServingArtifactBundle, ServingManifest
+from src.models.artifacts import (
+    RANKER_ROUTE_FALLBACK,
+    RANKER_ROUTE_LEARNED,
+    ServingArtifactBundle,
+    ServingManifest,
+)
 from src.serving.policy import EXCLUSION_FILTER_POLICY, REASON_CHAMPION_MISMATCH
+from src.serving.sequence_retrieval import (
+    SidecarRetriever,
+    serves_from_learned_path,
+    sidecar_retriever_for,
+    top_up_to_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +155,11 @@ class RankingResult:
     excluded_count: int
     filter_policy: str
     feature_event_time: float | None
+    # Which of the manifest's two ranker routes actually scored this request.
+    # Reported rather than inferred from the history length, because the
+    # threshold that decides it is a property of the loaded bundle and a reader
+    # of an audit row has no way to know which bundle was loaded.
+    ranker_route: str
 
 
 class ModelRankingService:
@@ -157,6 +173,16 @@ class ModelRankingService:
         feature_cache_max_entries: int = 256,
     ) -> None:
         self._bundle = bundle
+        # Resolved once, at construction, so a rank call never has to ask which
+        # family it is serving. A bundle that reached here is fully realised —
+        # ``load`` refuses rather than returning a half-loaded one — so this
+        # cannot fail for any bundle that booted.
+        self._retriever: SidecarRetriever = sidecar_retriever_for(
+            retriever=bundle.retriever, candidates=bundle.candidates
+        )
+        # ``None`` for every bundle published before schema 2, which is what
+        # keeps those bundles on the single learned route they have always used.
+        self._cold_start_threshold = _declared_cold_start_threshold(bundle.manifest)
         self._feature_store = feature_store
         self._feature_cache_max_entries = feature_cache_max_entries
         self._feature_cache: OrderedDict[
@@ -193,15 +219,15 @@ class ModelRankingService:
         """
         started = time.perf_counter()
         manifest = self._bundle.manifest
-        seeds = self._warmup_seed_movie_ids()
+        seeds = self._retriever.warmup_seed_movie_ids(self._warmup_seed_count())
         if not seeds:
             raise DegenerateWarmupError(
-                "the candidate index carries no items to warm from; the serving bundle at "
+                "the retrieval stage carries no items to warm from; the serving bundle at "
                 "this manifest cannot rank anything"
             )
-        # Mirrors what ``rank`` asks the index for, so the feature read below is
-        # keyed on the exact candidate set the warm rank will look up.
-        retrieval = self._bundle.candidates.retrieve(
+        # Mirrors what ``rank`` asks the retriever for, so the feature read below
+        # is keyed on the exact candidate set the warm rank will look up.
+        retrieval = self._retriever.retrieve(
             seeds,
             limit=max(WARMUP_LIMIT, WARMUP_CANDIDATE_LIMIT),
             excluded_movie_ids=(),
@@ -237,20 +263,25 @@ class ModelRankingService:
             feature_event_time=feature_event_time,
         )
 
-    def _warmup_seed_movie_ids(self) -> list[int]:
-        """The lowest item ids this index can retrieve from, in sorted order.
+    def _warmup_seed_count(self) -> int:
+        """How long the warm-up's synthetic history has to be to warm the real path.
 
-        Sorted ids rather than, say, the most popular ones: the warm input has
-        to be a pure function of the bundle so every worker in a deployment —
-        and every deployment of the same image — warms on identical data.
-        Neighbour keys come first because a seed the index has no neighbours for
-        exercises only the popularity fill, and the fill is not the path a warm
-        user takes.
+        ``WARMUP_SEED_LIMIT`` was chosen when every bundle answered every request
+        from one route. A bundle that declares a cold-start threshold splits that
+        in two, and a warm-up shorter than the threshold would warm the *fallback*
+        route — paying none of the lazy cost on the path a real warm user takes,
+        which is the whole reason the warm-up exists. So it is at least the
+        threshold.
+
+        For a sequence bundle this also makes the warm-up the startup detector for
+        the fused-attention NaN defect end to end: a threshold-length history is
+        shorter than the encoder window, so it is left-padded, so a worker whose
+        encoder is unguarded retrieves nothing and dies on ``DegenerateWarmupError``
+        instead of serving popularity under a learned model version.
         """
-        index = self._bundle.candidates
-        if index.neighbors:
-            return sorted(index.neighbors)[:WARMUP_SEED_LIMIT]
-        return sorted(index.popularity)[:WARMUP_SEED_LIMIT]
+        if self._cold_start_threshold is None:
+            return WARMUP_SEED_LIMIT
+        return max(WARMUP_SEED_LIMIT, self._cold_start_threshold)
 
     def rank(
         self,
@@ -283,18 +314,54 @@ class ModelRankingService:
         if not positive_history_movie_ids:
             raise ColdStartError("learned retrieval requires at least one historical interaction")
 
+        # The route is decided from the history the request carries, before any
+        # retrieval, because it selects the booster and a booster swap mid-request
+        # would be worse than either choice.
+        route = self._route_for(len(set(positive_history_movie_ids)))
         excluded = set(excluded_movie_ids)
+        width = max(limit, candidate_limit)
         candidate_started = time.perf_counter()
-        retrieval = self._bundle.candidates.retrieve(
+        retrieval = self._retriever.retrieve(
             positive_history_movie_ids,
-            limit=max(limit, candidate_limit),
+            limit=width,
             excluded_movie_ids=excluded,
             dismissed_movie_ids=dismissed_movie_ids,
         )
+        # Topping a short retrieval up is the sidecar's job, not a retriever's —
+        # see ``top_up_to_limit`` for the argument. For the item-item family this
+        # is provably a no-op, because ``CandidateIndex.retrieve`` already filled
+        # from the same order before returning.
+        topped = top_up_to_limit(
+            retrieval,
+            limit=width,
+            fill_order=self._retriever.fill_order(),
+            blocked=excluded | set(dismissed_movie_ids) | set(positive_history_movie_ids),
+        )
+        retrieval = topped.retrieval
         candidate_ids = retrieval.movie_ids
         candidate_latency_ms = (time.perf_counter() - candidate_started) * 1000
         if not candidate_ids:
             raise ValueError("learned candidate index returned no unseen items")
+        if topped.shortfall:
+            # Info rather than warning, and deliberately so. A small tenant whose
+            # catalog runs out once exclusions are applied hits this on every
+            # request, and it is not a fault — nothing is available to return.
+            # The neighbouring ``excluded_candidate_blocked`` warning is a
+            # contract breach and this is not one. It is still logged, because
+            # the other way to arrive here is a retriever quietly under-delivering
+            # and a candidate set narrower than the caller asked for should never
+            # be invisible.
+            logger.info(
+                "candidate_shortfall tenant_id=%s user_id=%s route=%s family=%s requested=%s "
+                "retrieved=%s filled=%s",
+                tenant_id,
+                user_id,
+                route,
+                manifest.retriever.family,
+                width,
+                len(candidate_ids),
+                topped.filled,
+            )
         feature_started = time.perf_counter()
         features, feature_event_time = self._online_features(
             tenant_id=tenant_id,
@@ -303,7 +370,7 @@ class ModelRankingService:
         )
         feature_latency_ms = (time.perf_counter() - feature_started) * 1000
         ranker_started = time.perf_counter()
-        scores = self._bundle.ranker.predict(features)
+        scores = self._bundle.rankers[route].predict(features)
         order = np.argsort(-scores, kind="stable")
         items: list[RankedItem] = []
         for raw_index in order:
@@ -334,17 +401,23 @@ class ModelRankingService:
             )
         ranker_latency_ms = (time.perf_counter() - ranker_started) * 1000
         latency_ms = (time.perf_counter() - started) * 1000
+        # The version of the booster that actually ran, which is the learned
+        # route's only when the learned route ran. A schema 1 bundle points both
+        # routes at one artifact, so this is unchanged for every bundle published
+        # before the split.
+        ranker_version = manifest.route(route).artifact.version
         logger.debug(
             "learned_rank tenant_id=%s user_id=%s candidate_policy=%s "
-            "candidate_version=%s ranker_version=%s feature_version=%s "
+            "candidate_version=%s ranker_route=%s ranker_version=%s feature_version=%s "
             "candidate_count=%s result_count=%s positive_count=%s seed_count=%s "
             "excluded_count=%s candidate_latency_ms=%.3f feature_latency_ms=%.3f "
             "ranker_latency_ms=%.3f latency_ms=%.3f",
             tenant_id,
             user_id,
-            manifest.candidate.artifact_type,
-            manifest.candidate.version,
-            manifest.ranker.version,
+            manifest.retriever.family,
+            manifest.retriever.version,
+            route,
+            ranker_version,
             manifest.feature_version,
             len(candidate_ids),
             len(items),
@@ -360,9 +433,9 @@ class ModelRankingService:
         )
         return RankingResult(
             items=items,
-            candidate_policy=manifest.candidate.artifact_type,
-            candidate_version=manifest.candidate.version,
-            ranker_version=manifest.ranker.version,
+            candidate_policy=manifest.retriever.family,
+            candidate_version=manifest.retriever.version,
+            ranker_version=ranker_version,
             feature_version=manifest.feature_version,
             candidate_latency_ms=candidate_latency_ms,
             feature_latency_ms=feature_latency_ms,
@@ -373,7 +446,30 @@ class ModelRankingService:
             excluded_count=retrieval.excluded_count,
             filter_policy=EXCLUSION_FILTER_POLICY,
             feature_event_time=feature_event_time,
+            ranker_route=route,
         )
+
+    def _route_for(self, history_size: int) -> str:
+        """Pick the ranking route for a request, from the loaded bundle's threshold.
+
+        The learned route gets the bundle's learned booster and the fallback route
+        the incumbent one. Which is which is a property of the *bundle*, not of
+        this process: a manifest that declares no ``cold_start_threshold`` — every
+        schema 1 bundle, and any schema 2 bundle that chose not to — answers
+        everything on the learned route, exactly as this sidecar always has.
+
+        The coordinator applies its own threshold before it calls at all
+        (``src/serving/orchestration.py``), so in a matched deployment the
+        fallback route fires only for the warm-up and for a bundle whose
+        threshold is stricter than the coordinator's. It is checked here anyway
+        because the sidecar must not depend on a caller's routing to pick the
+        right booster.
+        """
+        if serves_from_learned_path(
+            history_size=history_size, cold_start_threshold=self._cold_start_threshold
+        ):
+            return RANKER_ROUTE_LEARNED
+        return RANKER_ROUTE_FALLBACK
 
     def _online_features(
         self,
@@ -431,9 +527,13 @@ class ChampionCoordinates(BaseModel):
     feature_version: str = Field(min_length=1)
 
     def matches(self, manifest: ServingManifest) -> bool:
+        # ``candidate_version`` is the registry's name for the retrieval stage
+        # and stays as it is on the wire; what it is compared against is now the
+        # retriever's version, which is the same string a schema 1 bundle put in
+        # its candidate ref.
         return (
-            self.candidate_version == manifest.candidate.version
-            and self.ranker_version == manifest.ranker.version
+            self.candidate_version == manifest.retriever.version
+            and self.ranker_version == manifest.ranker_version
             and self.feature_version == manifest.feature_version
         )
 
@@ -493,6 +593,9 @@ class RankResponse(BaseModel):
     excluded_count: int
     filter_policy: str
     feature_event_time: float | None
+    # Additive: the coordinator's client reads named keys, so a build that
+    # predates this field keeps parsing the response unchanged.
+    ranker_route: str
     items: list[RankItemResponse]
 
 
@@ -517,12 +620,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ranking_service = service
     app.state.warmup = report
     logger.info(
-        "Model server warm tenant=%s candidate=%s ranker=%s features=%s "
+        "Model server warm tenant=%s family=%s candidate=%s ranker=%s features=%s "
         "warmup_ms=%.1f seeds=%s candidates=%s ranked=%s seed_count=%s "
         "feature_event_time=%s workers=%s",
         bundle.manifest.tenant_id,
-        bundle.manifest.candidate.version,
-        bundle.manifest.ranker.version,
+        bundle.manifest.retriever.family,
+        bundle.manifest.retriever.version,
+        bundle.manifest.ranker_version,
         bundle.manifest.feature_version,
         report.warmup_ms,
         len(report.seed_movie_ids),
@@ -569,8 +673,8 @@ async def healthz(request: Request, response: Response) -> dict[str, Any]:
     }
     if service is not None:
         payload["tenant_id"] = service.manifest.tenant_id
-        payload["candidate_version"] = service.manifest.candidate.version
-        payload["ranker_version"] = service.manifest.ranker.version
+        payload["candidate_version"] = service.manifest.retriever.version
+        payload["ranker_version"] = service.manifest.ranker_version
         payload["feature_version"] = service.manifest.feature_version
     if report is None:
         response.status_code = 503
@@ -629,6 +733,7 @@ async def rank(
         excluded_count=result.excluded_count,
         filter_policy=result.filter_policy,
         feature_event_time=result.feature_event_time,
+        ranker_route=result.ranker_route,
         items=[
             RankItemResponse(
                 movie_id=item.movie_id,
@@ -696,7 +801,23 @@ def _assert_online_features_are_materialized(
 
 def _describe_manifest(manifest: ServingManifest) -> str:
     """The loaded bundle in the same shape a champion is written down in."""
-    return f"{manifest.candidate.version}/{manifest.ranker.version}/{manifest.feature_version}"
+    return f"{manifest.retriever.version}/{manifest.ranker_version}/{manifest.feature_version}"
+
+
+def _declared_cold_start_threshold(manifest: ServingManifest) -> int | None:
+    """The history size at or above which this bundle uses its learned route.
+
+    Read off the retriever's declared parameters rather than from
+    ``src.evaluation.protocol``, and family-neutrally rather than only for
+    sequence bundles. The threshold is a claim the *bundle* makes about which
+    users its learned booster was fit for, so a bundle and the sidecar serving it
+    can never disagree about it — and a bundle that declares none keeps the
+    single-route behaviour every bundle published before schema 2 has.
+    """
+    threshold = manifest.retriever.params.get("cold_start_threshold")
+    if threshold is None:
+        return None
+    return int(threshold)
 
 
 def _declared_workers() -> int | None:
