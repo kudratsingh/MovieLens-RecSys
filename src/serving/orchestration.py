@@ -41,10 +41,12 @@ from src.serving.models import (
     ModelServerContractError,
 )
 from src.serving.policy import (
+    ARTIFACT_SHA256_NOT_PINNED,
     CANDIDATE_SOURCE_POPULARITY_FALLBACK,
     CANDIDATE_SOURCE_POPULARITY_FILL,
     EXCLUSION_FILTER_POLICY,
     POLICY_POPULARITY,
+    RANKER_ROUTE_FALLBACK,
     REASON_CHAMPION_MISMATCH,
     REASON_NO_CHAMPION,
     SCORE_SCALE_INTERACTION_COUNT,
@@ -136,6 +138,15 @@ class RecommendationDecision:
     feature_event_time: datetime | None = None
     candidate_sources: dict[str, int] = field(default_factory=dict)
     reason: str = ""
+    # Which retriever answered, from which pinned artifact, scored by which
+    # ranker route, and how much of it was the sequence encoder. Defaulted to
+    # the popularity answer rather than the learned one: a decision built without
+    # stating these ran no model, and defaulting the other way would let a
+    # forgotten field claim a champion that never served the request.
+    retriever_family: str = CANDIDATE_SOURCE_POPULARITY_FALLBACK
+    retriever_sha256: str = ARTIFACT_SHA256_NOT_PINNED
+    ranker_route: str = RANKER_ROUTE_FALLBACK
+    encoder_ms: float = 0.0
 
 
 class RecommendationCoordinator:
@@ -337,6 +348,15 @@ class RecommendationCoordinator:
             feature_event_time=_event_time(learned.feature_event_time),
             candidate_sources=dict(learned.candidate_sources),
             reason=reason,
+            # Straight from the sidecar, which is the only process that knows
+            # which manifest it loaded. Reported even when ``seeded`` is false:
+            # an unseeded retrieval still ran a family against an artifact, and
+            # the whole point of the checksum is to be able to replay the request
+            # that produced nothing.
+            retriever_family=learned.retriever_family,
+            retriever_sha256=learned.retriever_sha256,
+            ranker_route=learned.ranker_route,
+            encoder_ms=learned.encoder_ms,
         )
 
     async def _popularity(
@@ -407,6 +427,16 @@ class RecommendationCoordinator:
             feature_event_time=None,
             candidate_sources={CANDIDATE_SOURCE_POPULARITY_FALLBACK: len(items)},
             reason=reason,
+            # Stated rather than left to the defaults, so this stays correct if
+            # the defaults ever move. Popularity retrieves from a SQL query, not
+            # a published artifact, so there is no checksum to pin and no encoder
+            # to charge for. ``fallback`` is the honest route: nothing about this
+            # answer came from the learned booster, and a reader asking
+            # "which requests missed the learned ranker" has to find these.
+            retriever_family=CANDIDATE_SOURCE_POPULARITY_FALLBACK,
+            retriever_sha256=ARTIFACT_SHA256_NOT_PINNED,
+            ranker_route=RANKER_ROUTE_FALLBACK,
+            encoder_ms=0.0,
         )
 
 

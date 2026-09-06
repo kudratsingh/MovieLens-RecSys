@@ -32,6 +32,8 @@ a healthy deployment.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,6 +94,64 @@ class EncoderProducesNonFiniteVectorsError(RuntimeError):
 
 class SequenceBundleIncompleteError(ValueError):
     """The published bundle is not the shape this loader can rebuild an encoder from."""
+
+
+class EncoderForwardTimer:
+    """Time spent inside the sequence encoder's forward pass, per calling thread.
+
+    The audit column means "time in the encoder", so it has to exclude the FAISS
+    search — and the two are fused inside one ``SASRecModel`` method that this
+    lane does not own. That left three options and only one of them is honest.
+    Timing the pair would file index time under the encoder in every row. Running
+    a second forward pass purely to measure it would double the cost of the thing
+    being measured *and* report a number belonging to a pass that produced no
+    candidates. A pair of torch hooks measures the real pass, once, and needs no
+    change to the model at all.
+
+    Hooks do not perturb the numerics here: ``SASRecEncoder.encode_positions``
+    disables the fused-attention fastpath on every encode, so the transformer's
+    own fastpath decision is already made before a hook could influence it. What
+    they do cost is ``nn.Module``'s hook-free call shortcut — two dict lookups
+    per forward.
+
+    Thread-local because the sidecar ranks inside ``run_in_threadpool``: several
+    requests can be inside one loaded model at the same moment, and a shared
+    accumulator would hand one request another request's time. Torch runs the
+    forward pass synchronously on the calling thread, so each thread's hooks only
+    ever see their own work.
+    """
+
+    def __init__(self) -> None:
+        self._state = threading.local()
+
+    def attach(self, module: Any) -> None:
+        """Start timing every forward pass of ``module`` on every thread."""
+        module.register_forward_pre_hook(self._entered)
+        module.register_forward_hook(self._left)
+
+    def reset(self) -> None:
+        """Begin a new measurement window on this thread."""
+        self._state.entered_at = None
+        self._state.elapsed = 0.0
+
+    def elapsed_ms(self) -> float:
+        """Encoder time on this thread since the last :meth:`reset`."""
+        return float(getattr(self._state, "elapsed", 0.0)) * 1000
+
+    def _entered(self, _module: Any, _inputs: Any) -> None:
+        self._state.entered_at = time.perf_counter()
+
+    def _left(self, _module: Any, _inputs: Any, _output: Any) -> None:
+        entered_at = getattr(self._state, "entered_at", None)
+        if entered_at is None:
+            # A forward pass that began before this thread's window opened —
+            # the load-time finiteness probe, or a caller that never reset.
+            # Attributing it to whatever window is open now would be worse than
+            # dropping it.
+            return
+        elapsed = getattr(self._state, "elapsed", 0.0)
+        self._state.elapsed = elapsed + (time.perf_counter() - entered_at)
+        self._state.entered_at = None
 
 
 class SidecarRetriever(Protocol):
@@ -199,6 +259,11 @@ class SASRecSidecarRetriever:
     max_sequence_length: int
     cold_start_threshold: int | None
     fastpath_guard_source: str
+    # Attached to the loaded encoder by ``load_sequence_retriever``. Defaulted so
+    # a test that builds this adapter around a stub model still constructs; an
+    # unattached timer reports 0.0, which is the truth for a stub that never
+    # reaches an encoder.
+    encoder_timer: EncoderForwardTimer = field(default_factory=EncoderForwardTimer)
 
     @property
     def family(self) -> str:
@@ -228,7 +293,12 @@ class SASRecSidecarRetriever:
             return CandidateRetrieval(contributions=(), seed_count=0, excluded_count=len(hidden))
 
         window = _encoder_window(seeds, self.max_sequence_length)
+        # Opened immediately before the model call and read immediately after,
+        # so the window contains exactly the forward pass that produced these
+        # candidates and none of the search that ordered them.
+        self.encoder_timer.reset()
         scored = _scored_retrieval(self.model, window, limit, hidden)
+        encoder_ms = self.encoder_timer.elapsed_ms()
         contributions = tuple(
             CandidateContribution(
                 movie_id=movie_id,
@@ -249,6 +319,7 @@ class SASRecSidecarRetriever:
             contributions=contributions,
             seed_count=len(window) if contributions else 0,
             excluded_count=len(hidden),
+            encoder_ms=encoder_ms,
         )
 
     def fill_order(self) -> Sequence[int]:
@@ -425,6 +496,10 @@ def top_up_to_limit(
             contributions=tuple(contributions),
             seed_count=retrieval.seed_count,
             excluded_count=retrieval.excluded_count,
+            # Padding costs no encoder time, but it does not refund any either.
+            # Dropping the measurement here would make every topped-up sequence
+            # request look like it never ran an encoder.
+            encoder_ms=retrieval.encoder_ms,
         ),
         filled=filled,
         shortfall=limit - len(contributions),
@@ -583,6 +658,11 @@ def load_sequence_retriever(retriever: RetrieverRef, artifact_dir: Path) -> SASR
     _assert_declared_params_match(retriever, model, artifact_manifest.max_sequence_length)
     vocabulary = _vocabulary_of(model)
     _assert_encoder_is_finite(model, vocabulary)
+    # After the probe, so the probe's own forward passes are not the first thing
+    # the timer sees. They would be discarded anyway — no window is open — but
+    # attaching last keeps that from being load-bearing.
+    encoder_timer = EncoderForwardTimer()
+    encoder_timer.attach(_encoder_module_of(model))
 
     logger.info(
         "sasrec_retriever_loaded encoder=%s items=%s window=%s cold_start_threshold=%s "
@@ -600,6 +680,7 @@ def load_sequence_retriever(retriever: RetrieverRef, artifact_dir: Path) -> SASR
         max_sequence_length=artifact_manifest.max_sequence_length,
         cold_start_threshold=model.cold_start_threshold,
         fastpath_guard_source=guard_source,
+        encoder_timer=encoder_timer,
     )
 
 
@@ -639,6 +720,23 @@ def _assert_declared_params_match(
             "encoder config has faiss_exact=False, so loading rebuilds an IVF index instead of "
             "the exact one the published retrieval numbers were measured under"
         )
+
+
+def _encoder_module_of(model: Any) -> Any:
+    """The torch module whose forward pass ``encoder_ms`` measures.
+
+    Reaches into ``_encoder`` for the same reason ``_vocabulary_of`` reaches into
+    ``_index_to_item``: ``SASRecModel`` exposes no public accessor, and the
+    alternative — inferring the cost from the outside — is the thing this
+    function exists to avoid. A bundle that got this far has a loaded encoder;
+    ``load_sasrec`` refuses otherwise.
+    """
+    encoder = model._encoder
+    if encoder is None:
+        raise SequenceBundleIncompleteError(
+            "the loaded SASRec model carries no encoder, so it can neither retrieve nor be timed"
+        )
+    return encoder
 
 
 def _vocabulary_of(model: Any) -> tuple[int, ...]:

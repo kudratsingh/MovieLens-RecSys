@@ -42,6 +42,13 @@ from src.serving.policy import (
     CANDIDATE_SOURCE_SIMILARITY,
 )
 
+# Deliberate re-exports, spelled the way mypy requires one: every caller that
+# reads a manifest already imports these from here, and a second spelling of a
+# route name is how a manifest and an audit row end up disagreeing.
+from src.serving.policy import RANKER_ROUTE_FALLBACK as RANKER_ROUTE_FALLBACK
+from src.serving.policy import RANKER_ROUTE_LEARNED as RANKER_ROUTE_LEARNED
+from src.serving.policy import RANKER_ROUTES as RANKER_ROUTES
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Imported for the annotation alone. ``src.serving.sequence_retrieval``
     # imports this module, so a runtime import here would be a cycle; ``load``
@@ -100,12 +107,14 @@ _REQUIRED_RETRIEVER_PARAMS: Mapping[str, tuple[str, ...]] = {
 # would mean serving a retriever nobody has measured.
 INDEX_TYPE_FLAT_IP_EXACT = "flat-ip-exact"
 
-# The two ranking routes. Both must be declared: a bundle with a ranker on one
-# route and nothing on the other is refused at startup rather than discovered at
-# request time, when the only thing left to do is fall through to the incumbent.
-RANKER_ROUTE_LEARNED = "learned"
-RANKER_ROUTE_FALLBACK = "fallback"
-RANKER_ROUTES: tuple[str, ...] = (RANKER_ROUTE_LEARNED, RANKER_ROUTE_FALLBACK)
+# The two ranking routes — imported above rather than declared here, and still
+# named in this module's namespace so every existing `from src.models.artifacts
+# import RANKER_ROUTE_*` keeps working. They moved to ``src.serving.policy``
+# because the audit column that records which route ran is written by the slim
+# API image, which installs none of this module's dependencies. Both routes must
+# be declared by a manifest: a bundle with a ranker on one route and nothing on
+# the other is refused at startup rather than discovered at request time, when
+# the only thing left to do is fall through to the incumbent.
 
 _LINEAGE_FIELDS: tuple[str, ...] = (
     "protocol_hash",
@@ -578,11 +587,18 @@ class CandidateRetrieval:
     has never scored, or one whose every neighbor is filtered out, contributed
     nothing to this result, and counting it would let a response claim a
     retrieval it never performed.
+
+    ``encoder_ms`` is the part of this retrieval spent inside a sequence
+    encoder's forward pass, and nothing else — not the ANN search, not the
+    exclusion filtering. Zero is the right answer for a family that runs no
+    encoder rather than a missing measurement, which is why it defaults to 0.0
+    instead of ``None``: item-item genuinely spends none.
     """
 
     contributions: tuple[CandidateContribution, ...]
     seed_count: int
     excluded_count: int
+    encoder_ms: float = 0.0
 
     @property
     def movie_ids(self) -> list[int]:

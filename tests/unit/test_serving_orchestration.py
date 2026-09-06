@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import httpx
 import pytest
 from sqlalchemy import Connection, bindparam, text
@@ -13,7 +15,11 @@ from src.serving.models import (
 )
 from src.serving.orchestration import RecommendationCoordinator
 from src.serving.policy import (
+    ARTIFACT_SHA256_NOT_PINNED,
+    CANDIDATE_SOURCE_POPULARITY_FALLBACK,
     EXCLUSION_FILTER_POLICY,
+    RANKER_ROUTE_FALLBACK,
+    RANKER_ROUTE_LEARNED,
     REASON_CHAMPION_MISMATCH,
     REASON_NO_CHAMPION,
     id_set_digest,
@@ -105,6 +111,32 @@ class _LearnedModels:
 class _UnavailableModels:
     async def rank(self, **kwargs) -> ModelRankingResult:  # type: ignore[no-untyped-def]
         raise httpx.ConnectError("offline")
+
+
+# A digest of the right shape, because the coordinator refuses anything else and
+# an audit row that cannot be replayed is the failure these fields exist to stop.
+_SASREC_ENCODER_SHA256 = "a" * 64
+
+
+class _SequenceModels(_LearnedModels):
+    """The same stub answering as a loaded SASRec bundle rather than item-item.
+
+    The point of the subclass is the provenance, not the ranking: with a champion
+    swap pending, the coordinator has to carry whatever the sidecar says about
+    which family answered and from which weights, unchanged. Anything it
+    substitutes of its own would make the audit describe a deployment that never
+    served the request.
+    """
+
+    async def rank(self, **kwargs) -> ModelRankingResult:  # type: ignore[no-untyped-def]
+        return replace(
+            await super().rank(**kwargs),
+            candidate_policy="sasrec",
+            retriever_family="sasrec",
+            retriever_sha256=_SASREC_ENCODER_SHA256,
+            ranker_route=RANKER_ROUTE_LEARNED,
+            encoder_ms=1.4,
+        )
 
 
 def _add_catalog_and_history(
@@ -225,6 +257,71 @@ async def test_cold_user_routes_to_popularity_without_calling_models() -> None:
     assert decision.feature_latency_ms == 0.0
     assert [item.movie_id for item in decision.items] == [1, 2]
     assert [prediction.features for prediction in decision.predictions] == [{}, {}]
+
+
+@pytest.mark.asyncio
+async def test_a_sequence_answer_carries_the_family_artifact_route_and_encoder_time() -> None:
+    """The audit has to be able to tell a SASRec answer from an item-item one.
+
+    Every field here is the sidecar's, verbatim. The checksum in particular:
+    ``candidate_version`` names a bundle and a version string can be republished
+    over different weights, so the digest is the only part of the row that pins
+    which weights actually produced these candidates.
+    """
+    connection = _connection()
+    try:
+        _make_existing_user_warm(connection)
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _SequenceModels()
+        ).recommend(connection, tenant_id="demo", user_id=10, limit=5, champion=DEMO_CHAMPION)
+    finally:
+        connection.close()
+
+    assert decision.retriever_family == "sasrec"
+    assert decision.retriever_sha256 == _SASREC_ENCODER_SHA256
+    assert decision.ranker_route == RANKER_ROUTE_LEARNED
+    assert decision.encoder_ms == 1.4
+
+
+@pytest.mark.asyncio
+async def test_an_item_item_answer_reports_no_encoder_time() -> None:
+    """0.0 is a measurement for a family with no encoder, not a missing value."""
+    connection = _connection()
+    try:
+        _make_existing_user_warm(connection)
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _LearnedModels()
+        ).recommend(connection, tenant_id="demo", user_id=10, limit=5, champion=DEMO_CHAMPION)
+    finally:
+        connection.close()
+
+    # The stub omits the field entirely, the way a sidecar mid-rolling-deploy
+    # would; the family it has always sent as ``candidate_policy`` stands in.
+    assert decision.retriever_family == "item-item-cosine"
+    assert decision.encoder_ms == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_cold_user_records_the_fallback_route_and_never_the_learned_values() -> None:
+    """The fallback path has to state its own provenance rather than inherit any.
+
+    ``fallback`` rather than a third route value: a reader asking which requests
+    missed the learned booster has to find these, and popularity ran neither
+    booster nor encoder nor any checksum-pinned artifact.
+    """
+    connection = _connection()
+    try:
+        decision = await RecommendationCoordinator(
+            RecommendationService(), _SequenceModels()
+        ).recommend(connection, tenant_id="demo", user_id=999, limit=2, champion=DEMO_CHAMPION)
+    finally:
+        connection.close()
+
+    assert decision.fallback_reason == "cold-start"
+    assert decision.retriever_family == CANDIDATE_SOURCE_POPULARITY_FALLBACK
+    assert decision.retriever_sha256 == ARTIFACT_SHA256_NOT_PINNED
+    assert decision.ranker_route == RANKER_ROUTE_FALLBACK
+    assert decision.encoder_ms == 0.0
 
 
 @pytest.mark.parametrize("history_count", [0, 1, 3, COLD_START_THRESHOLD - 1])

@@ -1,0 +1,47 @@
+{
+  "artifact_sha256": "43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6",
+  "artifact_source": "artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/, copied out of the working tree and bind-mounted read-only at /artifact",
+  "build_commit": "76a6faf88ff4cdd9f966a8b35e80556a1c140eb5",
+  "build_dockerfile": "infra/features/Dockerfile",
+  "container_cpus": 2.0,
+  "container_memory": "4g",
+  "emulated": true,
+  "emulation_bound": {
+    "emulator": "Rosetta 2 under the Apple Virtualization Framework (Docker Desktop 4.80.0, UseVirtualizationFrameworkRosetta=true), not QEMU TCG",
+    "native_arm64_container_image_id": "sha256:90a081245178fd09990de91cb7697443cac755bf9625452d81689b85e1754c5e",
+    "native_arm64_container_p99_ms": 0.59884191,
+    "note": "The same Dockerfile was also built for linux/arm64 and the identical benchmark run natively inside it under the same 2 CPU / 4 GiB caps. That control differs from this run in exactly two ways -- the instruction set (with its torch wheel) and the translation layer -- so 1.68x is an upper bound on the translation overhead alone, and untranslated amd64 hardware cannot be slower than this run. Against the macOS host reference the ratio is 3.53x, but 2.10x of that is already present in the native arm64 container, so most of the host-to-container gap is Python 3.11 vs 3.13, the Linux CPU wheel, and the resource caps -- not emulation.",
+    "ratio_amd64_over_native_arm64_container": 1.6777
+  },
+  "emulation_note": "An aarch64 Apple M3 Pro can only run a linux/amd64 image under binary translation, so this p99 carries a translation penalty that real amd64 serving hardware does not, which makes the number pessimistic rather than optimistic.",
+  "history_length": 50,
+  "host_reference": {
+    "file": "docs/experiments/sasrec/encoder-latency-2026-09-05.json",
+    "note": "The macOS arm64 host run of the same benchmark against the same artifact. It is retained, not replaced; this amd64 run is the serving-relevant one because the sidecar ships linux/amd64 with torch==2.12.0+cpu.",
+    "p99_ms": 0.28462542
+  },
+  "image_architecture": "amd64/linux",
+  "image_digest_note": "The image was built locally and never pushed, so it has no registry digest. image_id is the local content digest of the exact image measured.",
+  "image_id": "sha256:bca4009266588a7bcdf6763c4ea6a01b41890dbbfb1cfcc549a104f4384d3ce7",
+  "image_tag": "movielens-recsys/features:amd64-encoder-bench",
+  "iterations": 10000,
+  "machine": "x86_64",
+  "manifest_path": "/artifact/sasrec-manifest.json",
+  "measured": "2026-09-05",
+  "p99_budget_ms": 15.0,
+  "passed": true,
+  "platform": "Linux-6.12.76-linuxkit-x86_64-with-glibc2.41",
+  "python_version": "3.11.16",
+  "runner_note": "src/evaluation/sasrec_latency.py is unmodified and its main() was called directly, but it could not be imported in this image as shipped: infra/features/requirements.txt does not install `implicit`, and src/models/candidates/__init__.py imports it eagerly through .cf. A shim registered an inert placeholder implicit.als.AlternatingLeastSquares in sys.modules before the import. Nothing on the measured path -- load_sasrec, encode_movie_history -- constructs or reaches CF/ALS, so the placeholder cannot move the number. The missing dependency is reported as a separate serving defect: src/serving/sequence_retrieval.py performs the same import when it loads a SASRec bundle.",
+  "summary": {
+    "max_ms": 3.874625,
+    "mean_ms": 0.8715997124,
+    "p50_ms": 0.8635625,
+    "p95_ms": 0.91491605,
+    "p99_ms": 1.00467033
+  },
+  "torch_num_interop_threads": 1,
+  "torch_num_threads": 1,
+  "torch_version": "2.12.0+cpu",
+  "warmup_iterations": 500
+}

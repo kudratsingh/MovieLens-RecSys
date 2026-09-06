@@ -16,8 +16,21 @@ from src.serving.audit import (
     RecommendationAuditMiddleware,
     RecommendationAuditService,
 )
-from src.serving.policy import EXCLUSION_FILTER_POLICY, FILTER_POLICY_NOT_RUN
+from src.serving.policy import (
+    ARTIFACT_SHA256_NOT_PINNED,
+    CANDIDATE_SOURCE_POPULARITY_FALLBACK,
+    EXCLUSION_FILTER_POLICY,
+    FILTER_POLICY_NOT_RUN,
+    RANKER_ROUTE_FALLBACK,
+    RANKER_ROUTE_LEARNED,
+    RANKER_ROUTE_NOT_RUN,
+    RETRIEVER_FAMILY_NOT_RUN,
+)
 from src.serving.request_id import RequestIdMiddleware
+
+# A real 64-character digest, so the tests exercise the shape the column holds
+# rather than a token that happens to be a string.
+_ENCODER_SHA256 = "b" * 64
 
 
 class _Result:
@@ -83,6 +96,10 @@ def test_record_persists_versions_predictions_features_and_latency() -> None:
             feature_event_time=event_time,
             candidate_sources={"item-item-cosine": 40, "popularity-fill": 10},
             reason="learned-two-stage: item-item-cosine retrieval over 12 positive seeds",
+            retriever_family="sasrec",
+            retriever_sha256=_ENCODER_SHA256,
+            ranker_route=RANKER_ROUTE_LEARNED,
+            encoder_ms=1.75,
         ),
     )
 
@@ -111,6 +128,13 @@ def test_record_persists_versions_predictions_features_and_latency() -> None:
     assert values["feature_event_time"] == event_time
     assert values["candidate_sources"] == {"item-item-cosine": 40, "popularity-fill": 10}
     assert values["reason"].startswith("learned-two-stage")
+    # Retrieval provenance: which family answered, from which pinned artifact,
+    # which booster scored it, and what the encoder cost. The checksum is stored
+    # verbatim — an audit that is off by a digest cannot be replayed.
+    assert values["retriever_family"] == "sasrec"
+    assert values["retriever_sha256"] == _ENCODER_SHA256
+    assert values["ranker_route"] == RANKER_ROUTE_LEARNED
+    assert values["encoder_ms"] == 1.75
 
 
 def test_record_without_serving_context_is_explicitly_not_run() -> None:
@@ -138,6 +162,13 @@ def test_record_without_serving_context_is_explicitly_not_run() -> None:
     assert values["feature_event_time"] is None
     assert values["candidate_sources"] == {}
     assert values["reason"] == "not-run"
+    # A request that never reached a model says so, in the column's own
+    # vocabulary. Never null: null is reserved for rows written before the
+    # columns existed, and the two are different facts.
+    assert values["retriever_family"] == RETRIEVER_FAMILY_NOT_RUN
+    assert values["retriever_sha256"] == ARTIFACT_SHA256_NOT_PINNED
+    assert values["ranker_route"] == RANKER_ROUTE_NOT_RUN
+    assert values["encoder_ms"] == 0.0
 
 
 def test_list_for_user_maps_newest_tenant_scoped_rows() -> None:
@@ -176,6 +207,10 @@ def test_list_for_user_maps_newest_tenant_scoped_rows() -> None:
                 feature_event_time=None,
                 candidate_sources={"popularity-fallback": 1},
                 reason="cold-start: 3 positive watched signals below threshold 10",
+                retriever_family=CANDIDATE_SOURCE_POPULARITY_FALLBACK,
+                retriever_sha256=ARTIFACT_SHA256_NOT_PINNED,
+                ranker_route=RANKER_ROUTE_FALLBACK,
+                encoder_ms=0.0,
             )
         ]
     )
@@ -195,7 +230,69 @@ def test_list_for_user_maps_newest_tenant_scoped_rows() -> None:
     assert records[0].filter_policy == EXCLUSION_FILTER_POLICY
     assert records[0].candidate_sources == {"popularity-fallback": 1}
     assert records[0].reason.startswith("cold-start")
+    assert records[0].retriever_family == CANDIDATE_SOURCE_POPULARITY_FALLBACK
+    assert records[0].ranker_route == RANKER_ROUTE_FALLBACK
+    assert records[0].encoder_ms == 0.0
     assert connection.calls[0][1] == {"user_id": 900000101, "limit": 5}
+
+
+def test_a_row_written_before_the_provenance_columns_reads_back_as_unknown() -> None:
+    """A pre-0019 row must not be dressed up as one that measured nothing.
+
+    The columns are nullable precisely so "this request predates the question"
+    stays distinguishable from "this request ran no model", which is what the
+    writer's own ``not-run``/``0.0`` mean. Coercing null to those sentinels here
+    would quietly merge the two populations in every audit query.
+    """
+    connection = _Connection(
+        [
+            SimpleNamespace(
+                request_id=uuid4(),
+                correlation_id="bff-discover-4",
+                tenant_id="demo",
+                actor_user_id="keycloak-user",
+                user_id=900000101,
+                endpoint="/users/{user_id}/recommendations",
+                http_status=200,
+                outcome="success",
+                policy="item-item-cosine+lightgbm",
+                model_version="candidate-v1/ranker-v1",
+                candidate_version="candidate-v1",
+                ranker_version="ranker-v1",
+                feature_version="features-v1",
+                fallback_reason=None,
+                candidate_latency_ms=0.2,
+                feature_latency_ms=3.0,
+                ranker_latency_ms=0.5,
+                model_latency_ms=4.25,
+                latency_ms=12.5,
+                predictions=[],
+                created_at=datetime.now(UTC),
+                input_state_revision=9,
+                input_state_hash="positive-digest",
+                exclusion_hash="exclusion-digest",
+                positive_signal_count=12,
+                excluded_count=2,
+                filter_policy=EXCLUSION_FILTER_POLICY,
+                feature_event_time=None,
+                candidate_sources={"item-item-cosine": 10},
+                reason="learned-two-stage",
+                retriever_family=None,
+                retriever_sha256=None,
+                ranker_route=None,
+                encoder_ms=None,
+            )
+        ]
+    )
+
+    records = RecommendationAuditService().list_for_user(
+        cast(Connection, connection), user_id=900000101, limit=5
+    )
+
+    assert records[0].retriever_family is None
+    assert records[0].retriever_sha256 is None
+    assert records[0].ranker_route is None
+    assert records[0].encoder_ms is None
 
 
 class _AuditRecorder:
