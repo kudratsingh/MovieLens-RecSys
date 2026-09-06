@@ -3195,7 +3195,7 @@ The SASRec fallback recheck found the intended tie-break effect in the cold
 route. Warm metrics and all recall metrics are bit-identical, while cold and
 therefore overall NDCG@500 move at published precision:
 
-| Metric | Fixed SASRec record | Stable-tie rerun | Exact delta |
+| Metric | Superseded run `528b1451…` | Stable-tie rerun | Exact delta |
 |---|---:|---:|---:|
 | warm recall@500 | 0.509171346 | 0.509171346 | 0 |
 | warm NDCG@500 | 0.191151628 | 0.191151628 | 0 |
@@ -3215,6 +3215,9 @@ NDCG@10 `0.2217623025377634`. Create-only evidence is retained under
 
 This is not a model regression: it is the deterministic resolution of equal
 popularity counts in the fallback slate. It does, however, move two published
-retrieval metrics. Per the predeclared stop rule, PR #180 remains draft and no
-record, promotion verdict, or downstream queue item changes until the owner
-decides whether the stable-tie rerun supersedes the old fallback record.
+retrieval metrics. The owner approved O-21 on 2026-09-06: run
+`0243864994024cb48ab746df628860a7` is now the deterministic retrieval record,
+and prior run `528b14513d9a49e098a0525417f23285` is retained as superseded
+evidence. The exact deltas are `-0.0000052030145743` for cold NDCG@500 and
+`-0.0000013987657508` for overall NDCG@500. Gate thresholds and promotion
+verdicts are unchanged.
