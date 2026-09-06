@@ -57,7 +57,11 @@ AUDIT_SQL = """
         fallback_reason,
         user_id,
         outcome,
-        http_status
+        http_status,
+        retriever_family,
+        retriever_sha256,
+        ranker_route,
+        encoder_ms
     FROM recommendation_audits
     WHERE created_at >= :since
     ORDER BY created_at
@@ -203,6 +207,19 @@ def _shape_audit(row: Mapping[str, Any]) -> dict[str, Any]:
     shaped["user_id"] = _optional_int(row.get("user_id"))
     shaped["outcome"] = _optional_str(row.get("outcome"))
     shaped["http_status"] = _optional_int(row.get("http_status"))
+    # Retrieval provenance (migration 0019). Without these the evidence
+    # directory cannot answer "which retriever answered, from which artifact,
+    # scored by which route" — the question a champion swap is judged on — and
+    # you have to go to psql, which a reviewer reading an archived run cannot.
+    #
+    # `retriever_sha256` is an empty string, not null, on a route that ran no
+    # published artifact: the popularity fallback retrieves from a SQL query,
+    # so there is nothing to pin. Null here means the row predates 0019. The
+    # two are different facts and the export keeps them distinguishable.
+    shaped["retriever_family"] = _optional_str(row.get("retriever_family"))
+    shaped["retriever_sha256"] = _optional_str(row.get("retriever_sha256"))
+    shaped["ranker_route"] = _optional_str(row.get("ranker_route"))
+    shaped["encoder_ms"] = _optional_float(row.get("encoder_ms"))
     return shaped
 
 
