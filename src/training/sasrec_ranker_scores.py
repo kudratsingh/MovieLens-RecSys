@@ -55,7 +55,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.evaluation.gate import GateDecision, promotion_decision
+from src.evaluation.gate import ALL_ROUTES, LEARNED_ROUTE, GateDecision, promotion_decision
 from src.evaluation.protocol import EvalResult, K, UserMetrics
 from src.feature_contract import (
     FEATURE_COLUMNS,
@@ -174,26 +174,15 @@ def missing_row_count(features_df: pd.DataFrame) -> int:
     return int(features_df[SASREC_SCORE_COLUMNS[0]].isna().sum())
 
 
-def warm_primary_reading(candidate: EvalResult, incumbent: EvalResult) -> dict[str, object]:
-    """The O-1 reading ADR 0001's gate does not currently take.
+def learned_route_reading(candidate: EvalResult, incumbent: EvalResult) -> GateDecision:
+    """The gate read under its learned-route scope (ADR 0001, 2026-09-05).
 
-    Warm relative change with an explicit cold non-regression clause, reported
-    beside the gate rather than instead of it. This is a *record* of what the
-    other reading would say, not a second gate: the threshold and the tolerance
-    are ADR 0001's own, unchanged.
+    Increment 1's first run predated PR #155 and computed this by hand from the
+    six metrics. It is the gate's own function now, which is strictly better:
+    one implementation decides both readings, so the two cannot drift and
+    neither can quietly acquire a different threshold from the other.
     """
-    warm_change = (candidate.warm.ndcg - incumbent.warm.ndcg) / incumbent.warm.ndcg
-    cold_change = (candidate.cold.ndcg - incumbent.cold.ndcg) / incumbent.cold.ndcg
-    return {
-        "reading": "warm-primary (O-1, undecided)",
-        "warm_relative_change": warm_change,
-        "required_warm_gain": 0.03,
-        "warm_passed": warm_change >= 0.03,
-        "cold_relative_change": cold_change,
-        "cold_tolerance": 0.05,
-        "cold_passed": cold_change >= -0.05,
-        "would_promote": warm_change >= 0.03 and cold_change >= -0.05,
-    }
+    return promotion_decision(candidate, incumbent, scope=LEARNED_ROUTE)
 
 
 @dataclass(frozen=True)
@@ -505,7 +494,7 @@ def document(
         "n_cold_users": result.n_cold_users,
         "detail": detail,
         "gate": decision.to_dict(),
-        "warm_primary_reading": warm_primary_reading(result, per_route_bundle_result()),
+        "learned_route_gate": learned_route_reading(result, per_route_bundle_result()).to_dict(),
     }
 
 
@@ -515,19 +504,19 @@ def main() -> None:
     result, detail = run(shared)
 
     incumbent = per_route_bundle_result()
-    decision = promotion_decision(result, incumbent)
-    logger.info("ADR 0001 gate, %s vs the O-9-fixed per-route bundle %s:", ARM, INCUMBENT_RUN)
+    decision = promotion_decision(result, incumbent, scope=ALL_ROUTES)
+    logger.info(
+        "ADR 0001 gate, all-routes scope, %s vs the O-9-fixed per-route bundle %s:",
+        ARM,
+        INCUMBENT_RUN,
+    )
     for line in decision.summary().splitlines():
         logger.info("  %s", line)
 
-    warm_primary = warm_primary_reading(result, incumbent)
-    logger.info(
-        "Warm-primary reading (O-1 undecided): warm %+.2f%% against +3.00%%, "
-        "cold %+.2f%% against a 5.00%% tolerance -> %s",
-        100.0 * float(warm_primary["warm_relative_change"]),  # type: ignore[arg-type]
-        100.0 * float(warm_primary["cold_relative_change"]),  # type: ignore[arg-type]
-        "PROMOTE" if warm_primary["would_promote"] else "DO NOT PROMOTE",
-    )
+    learned = learned_route_reading(result, incumbent)
+    logger.info("ADR 0001 gate, learned-route scope, %s vs %s:", ARM, INCUMBENT_RUN)
+    for line in learned.summary().splitlines():
+        logger.info("  %s", line)
 
     control_metrics = detail["control"]["metrics"]  # type: ignore[index]
     control_warm = float(control_metrics["warm_ndcg_at_k"])
