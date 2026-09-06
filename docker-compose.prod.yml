@@ -618,7 +618,16 @@ services:
       # input, which is what makes "one volume per service, not shareable" a
       # non-issue rather than a workaround, and makes a model rollback an image
       # rollback.
-      MODEL_ARTIFACT_DIR: /app/models/serving
+      #
+      # The features image bakes two bundles -- the compact demo fixture at
+      # /app/models/serving and the full-data served bundle at
+      # /app/models/served-bundle -- and this line is what decides which one
+      # production serves. A literal rather than an override with a default,
+      # deliberately: production serves the champion, and it must not be one
+      # forgotten variable away from serving the compact fixture instead.
+      # `bundle-kind.json` in the chosen directory is the mechanical half of the
+      # same guarantee.
+      MODEL_ARTIFACT_DIR: /app/models/served-bundle
       MODEL_MANIFEST_NAME: manifest.json
       MODEL_FEATURE_CACHE_MAX_ENTRIES: "256"
       MODEL_TENANT_ID: ${SERVING_REALM:-demo}
@@ -818,7 +827,12 @@ services:
       <<: [*feast-store, *admin-db]
       ENVIRONMENT: production
       MODEL_TENANT_ID: ${SERVING_REALM:-demo}
-      MODEL_ARTIFACT_DIR: /app/models/serving
+      # This job materializes features and never opens the bundle, but it says
+      # the same thing the sidecar says: every container in the stack answering
+      # "which bundle does production serve" the same way is worth more than the
+      # duplicated line costs, and a stack that disagrees with itself here is
+      # how a reader ends up trusting the wrong one.
+      MODEL_ARTIFACT_DIR: /app/models/served-bundle
       MODEL_SERVER_AUTH_TOKEN: ${MODEL_SERVER_AUTH_TOKEN:?generate one with secrets.token_urlsafe(48)}
       # Same reason as the sidecar's copy: Settings() enforces both production
       # guards at construction, and this job connects to Postgres directly as

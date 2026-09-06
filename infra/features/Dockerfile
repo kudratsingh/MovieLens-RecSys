@@ -84,6 +84,28 @@ COPY alembic ./alembic
 # SHA-256s are re-verified by ServingArtifactBundle.load on every boot.
 COPY infra/model-bundle/ ./models/serving/
 
+# The second bundle, at its own path. The image carries both — the compact demo
+# fixture above at /app/models/serving, and the full-data served bundle here at
+# /app/models/served-bundle — and MODEL_ARTIFACT_DIR picks one. Which bundle an
+# image serves is therefore an environment decision readable off a compose file,
+# rather than a build-time one invisible from outside the image.
+# docker-compose.demo.yml keeps the fixture; docker-compose.prod.yml names the
+# served path as a literal, because production serving the compact fixture must
+# not be one forgotten variable away.
+#
+# Two paths a directory apart rather than a filename apart, for the same reason
+# infra/model-bundle-served/ is its own directory: the bundles have the same
+# file layout, so nothing but the path tells them apart until something opens
+# bundle-kind.json.
+#
+# infra/model-bundle-served/ ships a .gitkeep so this COPY works before the
+# payload lands — a COPY of a missing directory fails the build outright. Until
+# a bundle is published into it the directory holds no manifest, and a container
+# pointed at it refuses to boot rather than falling back to the fixture. That is
+# ADR 0013's rule and not an oversight: a deployment that cannot realise the
+# bundle it was handed must stop, never quietly serve something else.
+COPY infra/model-bundle-served/ ./models/served-bundle/
+
 RUN useradd --create-home --uid 10001 feastuser \
     && mkdir -p /app/models/serving \
     && chown -R feastuser:feastuser /app

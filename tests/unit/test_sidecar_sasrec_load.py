@@ -979,3 +979,97 @@ class TestRetrievalScoresReachTheAudit:
             0.99,
             0.98,
         ]
+
+
+# --- 8. retrieval provenance reaches the audit ------------------------------
+
+
+class TestRetrievalProvenanceReachesTheAudit:
+    """The four facts an audit row needs to name the deployment that answered.
+
+    With a champion swap pending, a stored row that says only ``policy`` and
+    ``candidate_version`` cannot distinguish an item-item answer from a SASRec
+    one — the policy string collapses to ``popularity`` on every fallback and to
+    ``popularity-fill+lightgbm`` when no seed reached retrieval, and a version
+    string can be republished over different weights. Family, artifact checksum,
+    ranker route and encoder time are what close that.
+    """
+
+    def test_a_sequence_request_names_its_family_route_and_encoder_time(
+        self, tmp_path: Path, fastpath_guard: None
+    ) -> None:
+        result = _rank(_publish_sasrec_bundle(tmp_path / "bundle"), _request_history(12))
+
+        assert result.retriever_family == RETRIEVER_FAMILY_SASREC
+        assert result.ranker_route == RANKER_ROUTE_LEARNED
+        assert result.encoder_ms > 0.0
+
+    def test_encoder_time_is_carved_out_of_retrieval_rather_than_being_all_of_it(
+        self, tmp_path: Path, fastpath_guard: None
+    ) -> None:
+        """The column means "time in the encoder", so the FAISS search is not in it.
+
+        Both bounds matter. Above, the encoder cannot cost more than the
+        retrieval stage it happens inside. Below — strictly — there has to be
+        time in that stage that is *not* the encoder: the exact search over the
+        index and the exclusion filtering after it. An implementation that timed
+        the whole model call would satisfy the first bound and fail this one,
+        which is the mistake worth catching, because a mislabelled latency looks
+        exactly like a slow encoder in every dashboard downstream.
+        """
+        result = _rank(_publish_sasrec_bundle(tmp_path / "bundle"), _request_history(12))
+
+        assert 0.0 < result.encoder_ms < result.candidate_latency_ms
+
+    def test_the_recorded_checksum_is_the_manifest_s_own_and_not_a_recomputed_one(
+        self, tmp_path: Path, fastpath_guard: None
+    ) -> None:
+        """The replay key. Anything but the manifest's digest is a different bundle."""
+        directory = tmp_path / "bundle"
+        manifest_path = _publish_sasrec_bundle(directory)
+        manifest = ServingManifest.load(manifest_path)
+
+        result = _rank(manifest_path, _request_history(12))
+
+        assert result.retriever_sha256 == manifest.retriever.primary.sha256
+        assert result.retriever_sha256 == file_sha256(directory / MODEL_FILENAME)
+        assert len(result.retriever_sha256) == 64
+
+    def test_an_item_item_request_spends_no_encoder_time_and_pins_its_index(
+        self, tmp_path: Path
+    ) -> None:
+        """0.0 for a family with no encoder is a measurement, not a missing value."""
+        directory = tmp_path / "v2"
+        manifest_path = _publish_itemitem_bundle(directory, schema_v2=True)
+        manifest = ServingManifest.load(manifest_path)
+        warm = list(range(1, COLD_START_THRESHOLD + 1))
+
+        result = _rank(manifest_path, warm)
+
+        assert result.retriever_family == RETRIEVER_FAMILY_ITEM_ITEM
+        assert result.encoder_ms == 0.0
+        assert result.retriever_sha256 == manifest.retriever.primary.sha256
+        assert result.retriever_sha256 == file_sha256(directory / "candidate-index.json")
+
+    def test_a_cold_request_still_names_the_retriever_that_answered_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A fallback-route request is not a request with no retriever.
+
+        The bundle's incumbent booster scored it, but the candidates still came
+        from the item-item index — so the family and the checksum are the same
+        ones a warm request records, and only the route differs. Blanking them
+        because the route was the fallback would lose the ability to replay
+        exactly the requests most likely to be investigated.
+        """
+        directory = tmp_path / "v2"
+        manifest_path = _publish_itemitem_bundle(directory, schema_v2=True)
+        cold = [1, 2, 3]
+        assert len(cold) < COLD_START_THRESHOLD
+
+        result = _rank(manifest_path, cold)
+
+        assert result.ranker_route == RANKER_ROUTE_FALLBACK
+        assert result.retriever_family == RETRIEVER_FAMILY_ITEM_ITEM
+        assert result.retriever_sha256 == file_sha256(directory / "candidate-index.json")
+        assert result.encoder_ms == 0.0

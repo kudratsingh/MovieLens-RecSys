@@ -25,6 +25,7 @@ script a service uses.
 | [`api/`](#api) | The slim FastAPI runtime image — `src/`, `alembic/` and `synthetic/`, but no Feast, pandas or LightGBM | demo `demo-setup`, `api`, `api-load`; prod `api`, `release`, `verify`, `canary`; CI builds it as `movielens-api-ci` |
 | [`features/`](#features) | The Feast feature-server and LightGBM model-sidecar image | demo `feature-setup`, `feature-server`, `model-server`; prod `model-server`, `feature-server`, `materialize`; `make serving-artifacts` |
 | [`model-bundle/`](#model-bundle) | The committed serving bundle: item-item index, LightGBM booster, SHA-256 manifest | Build input to `features/` only. Written by `make serving-artifacts`, checked by `serving-artifacts-check` |
+| [`model-bundle-served/`](#model-bundle-served) | The full-data **served** bundle — the one production serves. Empty but for a placeholder until its payload is published | Build input to `features/` only, at its own image path. Written by `make serving-artifacts-publish`, checked by `serving-artifacts-verify` |
 | [`pgbouncer/`](#pgbouncer) | Transaction-pool-mode pooler — bind-mounted dev config, env-rendered production image | Dev stack mounts `pgbouncer.ini`; prod builds the image |
 | `postgres/` | The `pgbouncer_auth.user_lookup` SECURITY DEFINER function that pgBouncer's `auth_query` mode calls, so the pooler never holds a superuser credential. Deliberately **not** in `postgres-init/`, where it would run on a fresh dev volume before its role exists | Prod `postgres-provision` only, during `make prod-stores` |
 | `postgres-init/` | Dev-only `CREATE DATABASE mlflow` — the image's `POSTGRES_DB` creates only `movielens`, and MLflow would crash on startup without it | Dev stack's `postgres`, once, on a fresh volume |
@@ -41,7 +42,7 @@ script a service uses.
 Which stack uses what, at a glance: **dev only** — `postgres-init/`, `mlflow/`,
 `prometheus.yml`. **Production only** — `postgres/`, `edge/`, `backup/`, `k6/`,
 `deploy/`, `host/`. **Shared** — `api/`, `features/`, `pgbouncer/`, `keycloak/`,
-`model-bundle/`, `ci/`.
+`model-bundle/`, `model-bundle-served/`, `ci/`.
 
 ## Notes worth having before you read the files
 
@@ -65,9 +66,17 @@ Two things are baked in at build time rather than resolved at runtime, and both
 are deliberate. The Feast registry is applied during the build
 (`feast apply` + a semantic registry check), with the store connection supplied
 as `ARG`s defaulting to `build` — so a runtime that forgets them refuses rather
-than silently connecting somewhere. And `infra/model-bundle/` is copied in,
-which is what makes **rolling back the model the same act as rolling back the
+than silently connecting somewhere. And both model bundles are copied in, which
+is what makes **rolling back the model the same act as rolling back the
 image**; the SHA-256s are re-verified on boot.
+
+Both, at two paths: `infra/model-bundle/` → `/app/models/serving` and
+`infra/model-bundle-served/` → `/app/models/served-bundle`. `MODEL_ARTIFACT_DIR`
+picks one, so which bundle an image serves is an environment decision readable
+off a compose file rather than a build-time one invisible from outside the
+image — and the production image and the demo image stay the same image.
+`docker-compose.prod.yml` names the served path as a literal; the demo stack
+keeps the fixture.
 
 It also bakes `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and
 `VECLIB_MAXIMUM_THREADS` to `1`. That is not tuning: four uvicorn workers each
@@ -82,6 +91,27 @@ booster in its text format), and `manifest.json` — which binds them by SHA-256
 a tenant, a feature version, and the ordered 8-column feature contract.
 `ARTIFACT_AS_OF` is a literal in the Makefile so the manifest stays byte-stable,
 which is what non-negotiable #5's reproducibility check compares against.
+
+### `model-bundle-served/`
+
+The other bundle, and the one production serves: a schema 2 manifest naming a
+retrieval family's artifacts and one LightGBM booster per ranking route, plus
+`bundle-kind.json`, which labels the directory and pins the manifest's own
+SHA-256 — the one file nothing else hashes, and therefore the one that would
+have to change for either bundle to impersonate the other.
+
+Assembled rather than trained: `make serving-artifacts-publish` bakes artifacts
+somebody else produced, named by a spec document
+(`src/models/bundle_publisher.py`). `make serving-artifacts-verify` is its
+check, and it is *not* `serving-artifacts-check`'s retrain-and-diff — a
+full-data bundle cannot be rebuilt from the demo tenant's ratings, so what is
+checked is every artifact re-hashed against the manifest, every manifest
+validator re-run, the kind marker matched, and lineage required.
+
+Until the payload is published this holds only a `.gitkeep`, which is what keeps
+`docker build` working — a `COPY` of a missing directory fails outright. A
+container pointed here meanwhile refuses to boot rather than falling back to the
+fixture.
 
 ### `pgbouncer/`
 

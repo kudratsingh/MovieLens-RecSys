@@ -79,6 +79,33 @@ class TestFeaturesImageBakesItsInputs:
         dockerfile = DOCKERFILE.read_text()
         assert "COPY infra/model-bundle/ ./models/serving/" in dockerfile
 
+    def test_the_image_also_bakes_the_served_bundle_at_a_path_of_its_own(self) -> None:
+        """Both bundles ship, and MODEL_ARTIFACT_DIR is what picks one.
+
+        A build argument selecting the source directory would have been one line
+        fewer and would have made "which bundle is in this image" unanswerable
+        from the image. Baking both makes it an environment decision instead,
+        readable off a compose file — and it is what lets the production image
+        and the demo image stay the same image.
+        """
+        dockerfile = DOCKERFILE.read_text()
+        assert "COPY infra/model-bundle-served/ ./models/served-bundle/" in dockerfile
+
+    def test_the_served_bundle_directory_exists_before_its_payload_does(self) -> None:
+        """A COPY of a missing directory fails the build outright.
+
+        The payload is not published yet, so a dot-prefixed placeholder keeps
+        the directory — dot-prefixed so the publisher's "every byte in a bundle
+        is pinned" check ignores it once a real bundle lands beside it. Until
+        then the directory carries no manifest and a container pointed at it
+        refuses to boot, which is ADR 0013's rule rather than a gap: a
+        deployment that cannot realise its bundle must stop, not quietly serve
+        the other one.
+        """
+        served = REPO_ROOT / "infra" / "model-bundle-served"
+        assert served.is_dir()
+        assert (served / ".gitkeep").is_file()
+
     def test_the_image_applies_and_then_checks_the_feast_registry(self) -> None:
         dockerfile = DOCKERFILE.read_text()
         assert "feast -c src/features/feast_repo apply" in dockerfile

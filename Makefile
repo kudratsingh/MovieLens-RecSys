@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -356,13 +356,60 @@ serving-artifacts: serving-artifacts-image
 			&& tar -c -C /tmp/bundle .' > artifacts/serving-bundle.tar
 	tar -x -C $(ARTIFACT_DIR) -f artifacts/serving-bundle.tar
 
-# Rebuilds into a scratch directory inside the container and fails if the
-# committed bundle differs. The mount is read-only: a check must never be able
-# to repair what it is checking.
+# THE DEMO FIXTURE'S CHECK, and only that one. Rebuilds into a scratch
+# directory inside the container and fails if the committed bundle differs. The
+# mount is read-only: a check must never be able to repair what it is checking.
+#
+# "Check a serving bundle" now means two different things, and they are two
+# targets because they are two different claims. This one is a retrain-and-diff
+# and it is non-negotiable #5's reproducibility gate — it only works because the
+# demo fixture is trained from the demo tenant's ratings, which are right there.
+# `serving-artifacts-verify` below is the other meaning. Neither replaces the
+# other and this one does not weaken.
 serving-artifacts-check: serving-artifacts-image
 	$(ARTIFACT_RUN) -v "$(CURDIR)/$(ARTIFACT_DIR):/app/committed:ro" $(ARTIFACT_IMAGE) \
 		python -m src.training.demo_artifacts --check \
 			--as-of $(ARTIFACT_AS_OF) --output-dir /app/committed
+
+# --- Schema 2 served bundle --------------------------------------------------
+# A served bundle is assembled — not trained — from artifacts fit on the full
+# dataset, which is why it needs a publisher of its own and why its check is not
+# the one above. Rebuilding it from the demo tenant's ratings is impossible and
+# would prove nothing, so `serving-artifacts-verify` checks what can be checked
+# without the training data: every artifact re-hashed against the manifest,
+# every manifest validator re-run (family roles and params, the per-route ranker
+# feature contract against the booster files, the cross-route permutation
+# guard), the kind marker matched, and lineage required.
+#
+# The two bundles live in separate directories rather than sharing one under a
+# filename convention. They have the same file layout, so a single wrong
+# MODEL_ARTIFACT_DIR is all it takes to serve the compact fixture in production,
+# and a directory is the only distinction visible before anything is opened.
+# `bundle-kind.json` is the mechanical half: it names the kind and pins the
+# manifest's own checksum — the one file nothing else hashes — so a bundle moved
+# into the other kind's directory fails the verify instead of loading quietly.
+#
+# Unlike `serving-artifacts` these run against the host interpreter. Nothing
+# here trains: the publisher copies bytes somebody else produced, so LightGBM's
+# cross-architecture text-model drift — the whole reason the fixture build is
+# pinned to a linux/amd64 container — cannot apply to a copy.
+SERVED_BUNDLE_DIR ?= infra/model-bundle-served
+SERVED_BUNDLE_SPEC ?= infra/served-bundle.spec.json
+# Pass --realise to also rebuild the models from the verified bundle, which for
+# a sequence bundle rebuilds the encoder and its exact index. Off by default:
+# it costs a torch import an item-item bundle has no use for.
+SERVED_BUNDLE_ARGS ?=
+
+# The spec names the artifacts to bake — which ones is an owner decision
+# recorded in that document, never a default in here.
+serving-artifacts-publish:
+	@test -f $(SERVED_BUNDLE_SPEC) || { echo "no bundle spec at $(SERVED_BUNDLE_SPEC); write one (see src/models/bundle_publisher.py) or pass SERVED_BUNDLE_SPEC=<path>"; exit 2; }
+	python -m src.models.bundle_publisher --kind served \
+		--spec $(SERVED_BUNDLE_SPEC) --output-dir $(SERVED_BUNDLE_DIR) $(SERVED_BUNDLE_ARGS)
+
+serving-artifacts-verify:
+	python -m src.models.bundle_publisher --check --kind served \
+		--output-dir $(SERVED_BUNDLE_DIR) $(SERVED_BUNDLE_ARGS)
 
 serve:
 	uvicorn src.serving.app:app --host 0.0.0.0 --port 8000 --reload

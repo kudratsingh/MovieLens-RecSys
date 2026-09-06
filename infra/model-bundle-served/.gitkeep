@@ -1,0 +1,11 @@
+The full-data served bundle lives here, published by `make serving-artifacts-publish`
+(src/models/bundle_publisher.py) from a spec that names the artifacts to bake.
+
+This file only keeps the directory in git, because infra/features/Dockerfile copies
+it to /app/models/served-bundle and a COPY of a missing directory fails the build.
+It is dot-prefixed so the publisher's "every byte in a bundle is pinned" check
+ignores it and it can stay once a real bundle is published beside it.
+
+The compact demo fixture is the other bundle, in infra/model-bundle/. The two are
+never interchangeable: bundle-kind.json in each says which is which, and
+`make serving-artifacts-verify` refuses one that turns up in the other's place.

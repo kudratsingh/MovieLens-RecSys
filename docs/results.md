@@ -2476,6 +2476,28 @@ boundary but not FAISS, features, ranking, networking, or audit persistence, so
 the authenticated service p99 gate remains open. The raw report is
 [`experiments/sasrec/encoder-latency-2026-09-05.json`](experiments/sasrec/encoder-latency-2026-09-05.json).
 
+That run measured the machine that trained the model, and the sidecar does not
+run there: it ships `linux/amd64` with `torch==2.12.0+cpu`, a different wheel and
+a different Python from this host's arm64 3.13.7. The same benchmark was
+therefore re-run against the same artifact inside the image
+`infra/features/Dockerfile` builds for that platform, capped at 2 CPUs and 4 GiB,
+at the same 10,000 encodes after 500 warmups on a 50-item history: p50
+**0.864 ms**, p95 **0.915 ms**, p99 **1.005 ms**, maximum 3.875 ms — 3.5× the
+host p99 and still 14.9× inside the unchanged 15 ms budget. **The amd64 number is
+the serving-relevant one.** It is also pessimistic: an aarch64 laptop can only run
+an amd64 image under Rosetta 2 translation. A native `linux/arm64` build of the
+same Dockerfile, benchmarked identically, measured p99 **0.599 ms**, which puts
+the translation-plus-instruction-set penalty at no more than **1.68×** and means
+untranslated amd64 hardware cannot be slower than 1.005 ms. Two things the run
+also established: most of the host-to-container gap is Python 3.11 vs 3.13, the
+Linux CPU wheel and the resource caps rather than emulation; and the image cannot
+import the SASRec modules at all as shipped, because
+`infra/features/requirements.txt` omits `implicit` while
+`src/models/candidates/__init__.py` imports it eagerly — the benchmark was run
+past that with an inert placeholder, but `src/serving/sequence_retrieval.py`
+performs the same import when it loads a bundle. The raw report is
+[`experiments/sasrec/encoder-latency-amd64-2026-09-05.json`](experiments/sasrec/encoder-latency-amd64-2026-09-05.json).
+
 ### Fixed-ranker D-002 guardrail
 
 The ranker run of record (`517fdc75136842e188018ae0a9210c20`) predated weight

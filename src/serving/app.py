@@ -1112,6 +1112,10 @@ async def recommendations(
         feature_event_time=decision.feature_event_time,
         candidate_sources=decision.candidate_sources,
         reason=decision.reason,
+        retriever_family=decision.retriever_family,
+        retriever_sha256=decision.retriever_sha256,
+        ranker_route=decision.ranker_route,
+        encoder_ms=decision.encoder_ms,
     )
     items = decision.items
     logger.debug(

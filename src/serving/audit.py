@@ -18,7 +18,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-from src.serving.policy import FILTER_POLICY_NOT_RUN
+from src.serving.policy import (
+    ARTIFACT_SHA256_NOT_PINNED,
+    FILTER_POLICY_NOT_RUN,
+    RANKER_ROUTE_NOT_RUN,
+    RETRIEVER_FAMILY_NOT_RUN,
+)
 from src.serving.request_id import REQUEST_ID_ADOPTED_STATE_KEY
 
 logger = logging.getLogger(__name__)
@@ -76,6 +81,17 @@ class RecommendationAuditContext:
     feature_event_time: datetime | None = None
     candidate_sources: dict[str, int] = field(default_factory=dict)
     reason: str = ""
+    # Retrieval provenance. ``policy`` says what the response was; these say what
+    # produced it — which family retrieved, from which checksum-pinned artifact,
+    # which of the bundle's two boosters scored it, and how much of the request
+    # was the sequence encoder. The composite ``policy`` string cannot answer any
+    # of those on its own: it reads ``popularity`` for every fallback and
+    # ``popularity-fill+lightgbm`` for an unseeded retrieval, both of which lose
+    # the family entirely.
+    retriever_family: str = RETRIEVER_FAMILY_NOT_RUN
+    retriever_sha256: str = ARTIFACT_SHA256_NOT_PINNED
+    ranker_route: str = RANKER_ROUTE_NOT_RUN
+    encoder_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -110,6 +126,14 @@ class RecommendationAuditRecord:
     feature_event_time: datetime | None
     candidate_sources: dict[str, int]
     reason: str
+    # ``None`` on any row written before migration 0019 — the column did not
+    # exist, so the request genuinely has no record of which retriever answered.
+    # Distinct from the writer's own ``not-run``/``0.0``, which are claims about
+    # a request that *was* measured.
+    retriever_family: str | None
+    retriever_sha256: str | None
+    ranker_route: str | None
+    encoder_ms: float | None
 
 
 _INSERT_AUDIT = text("""
@@ -142,7 +166,11 @@ _INSERT_AUDIT = text("""
         filter_policy,
         feature_event_time,
         candidate_sources,
-        reason
+        reason,
+        retriever_family,
+        retriever_sha256,
+        ranker_route,
+        encoder_ms
     ) VALUES (
         :request_id,
         :correlation_id,
@@ -172,7 +200,11 @@ _INSERT_AUDIT = text("""
         :filter_policy,
         :feature_event_time,
         :candidate_sources,
-        :reason
+        :reason,
+        :retriever_family,
+        :retriever_sha256,
+        :ranker_route,
+        :encoder_ms
     )
     """).bindparams(
     bindparam("predictions", type_=JSON),
@@ -244,6 +276,13 @@ class RecommendationAuditService:
                 "feature_event_time": resolved.feature_event_time,
                 "candidate_sources": dict(resolved.candidate_sources),
                 "reason": resolved.reason,
+                # Never null on a row this writer produces. The column is
+                # nullable only so that rows predating migration 0019 are
+                # distinguishable from rows that measured nothing.
+                "retriever_family": resolved.retriever_family,
+                "retriever_sha256": resolved.retriever_sha256,
+                "ranker_route": resolved.ranker_route,
+                "encoder_ms": resolved.encoder_ms,
             },
         )
 
@@ -286,7 +325,11 @@ class RecommendationAuditService:
                     filter_policy,
                     feature_event_time,
                     candidate_sources,
-                    reason
+                    reason,
+                    retriever_family,
+                    retriever_sha256,
+                    ranker_route,
+                    encoder_ms
                 FROM recommendation_audits
                 WHERE user_id = :user_id
                 ORDER BY created_at DESC, request_id DESC
@@ -328,6 +371,14 @@ class RecommendationAuditService:
                 feature_event_time=row.feature_event_time,
                 candidate_sources=dict(row.candidate_sources or {}),
                 reason=str(row.reason),
+                # Carried through as ``None`` rather than coerced to the writer's
+                # sentinels: a pre-0019 row not knowing which retriever answered
+                # is a different fact from a request that ran none, and the
+                # column exists precisely so the two stay distinguishable.
+                retriever_family=_optional_text(row.retriever_family),
+                retriever_sha256=_optional_text(row.retriever_sha256),
+                ranker_route=_optional_text(row.ranker_route),
+                encoder_ms=(float(row.encoder_ms) if row.encoder_ms is not None else None),
             )
             for row in rows
         ]
@@ -421,6 +472,10 @@ class RecommendationAuditMiddleware(BaseHTTPMiddleware):
             latency_ms=latency_ms,
             context=context,
         )
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def resolve_audit_identity(request: Request) -> tuple[UUID, str]:

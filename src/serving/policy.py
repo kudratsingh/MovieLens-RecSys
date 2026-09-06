@@ -18,14 +18,20 @@ import hashlib
 from collections.abc import Iterable
 
 __all__ = [
+    "ARTIFACT_SHA256_NOT_PINNED",
     "CANDIDATE_SOURCE_POPULARITY_FALLBACK",
     "CANDIDATE_SOURCE_POPULARITY_FILL",
     "CANDIDATE_SOURCE_SIMILARITY",
     "EXCLUSION_FILTER_POLICY",
     "FILTER_POLICY_NOT_RUN",
     "POLICY_POPULARITY",
+    "RANKER_ROUTES",
+    "RANKER_ROUTE_FALLBACK",
+    "RANKER_ROUTE_LEARNED",
+    "RANKER_ROUTE_NOT_RUN",
     "REASON_CHAMPION_MISMATCH",
     "REASON_NO_CHAMPION",
+    "RETRIEVER_FAMILY_NOT_RUN",
     "SCORE_SCALE_INTERACTION_COUNT",
     "SCORE_SCALE_NOT_RUN",
     "SCORE_SCALE_RANK",
@@ -63,6 +69,28 @@ SCORE_SCALE_NOT_RUN = "not-run"
 # answered before the call is made at all.
 REASON_NO_CHAMPION = "no-champion"
 REASON_CHAMPION_MISMATCH = "champion-mismatch"
+
+# The two ranking routes a manifest publishes a booster for. They live here
+# rather than beside the manifest that validates them because the audit column
+# that records *which one ran* is written by the slim API, which cannot import
+# ``src.models``; ``src.models.artifacts`` re-exports these names so a manifest
+# and an audit row can never disagree about how a route is spelled.
+RANKER_ROUTE_LEARNED = "learned"
+RANKER_ROUTE_FALLBACK = "fallback"
+RANKER_ROUTES: tuple[str, ...] = (RANKER_ROUTE_LEARNED, RANKER_ROUTE_FALLBACK)
+
+# What the audit records for a request that reached no ranker at all — a 4xx, or
+# a failure before the coordinator returned. Deliberately outside
+# ``RANKER_ROUTES``: those two name boosters a bundle actually publishes, and a
+# request that ran neither must not be counted as either.
+RANKER_ROUTE_NOT_RUN = "not-run"
+RETRIEVER_FAMILY_NOT_RUN = "not-run"
+
+# The audit's answer when no checksum-pinned artifact produced the candidates.
+# The popularity fallback runs off a SQL query rather than a published index, so
+# there is nothing to pin. Empty rather than a word: the column otherwise holds a
+# 64-character hex digest, and an empty string cannot be mistaken for one.
+ARTIFACT_SHA256_NOT_PINNED = ""
 
 
 def id_set_digest(movie_ids: Iterable[int]) -> str:
