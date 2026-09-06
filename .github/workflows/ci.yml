@@ -70,7 +70,27 @@ jobs:
         run: |
           docker build --tag movielens-model-ci --file infra/features/Dockerfile .
           docker run --rm -e ENVIRONMENT=dev movielens-model-ci python -c \
-            "import fastapi, feast, lightgbm, pandas, uvicorn; import src.serving.model_server"
+            "import fastapi, feast, lightgbm, pandas, uvicorn, torch, faiss; import src.serving.model_server"
+
+      # The Dockerfile already refuses a build whose torch pin lost its `+cpu`
+      # build, by failing on any `nvidia-*` package. This is the second half of
+      # that guard, and it catches what a package name cannot: a CUDA wheel is
+      # roughly an order of magnitude larger than the CPU one, so a size ceiling
+      # fails even if some future wheel ships the runtime under a different name.
+      # The budget is set from the measured image (1.78 GB on linux/amd64, of
+      # which torch is 754 MB and faiss 66 MB) with headroom for ordinary growth,
+      # and far below where a CUDA build would land. Raising it is a deliberate
+      # act, which is the point — this image goes to a 40 GB box.
+      - name: Model runtime image stays CPU-sized
+        run: |
+          bytes=$(docker image inspect movielens-model-ci --format '{{.Size}}')
+          budget=$((2200 * 1000 * 1000))
+          printf 'model runtime image: %s bytes (budget %s)\n' "$bytes" "$budget"
+          if [ "$bytes" -gt "$budget" ]; then
+            echo "model runtime image exceeds its CPU-sized budget; a CUDA torch wheel is the usual cause" >&2
+            docker run --rm movielens-model-ci pip list --format=freeze | grep -i '^nvidia-' >&2 || true
+            exit 1
+          fi
 
       # The production stack has never been booted by any job, so `config` is
       # the cheapest place to learn that its model is even valid. Every
