@@ -602,8 +602,9 @@ there and all four provenance columns are NULL on every one of them, including t
 back with the right shape and zero rows. Nothing in the database can reconstruct either. The
 provenance is gone for good — a rolled-back window is a hole in the audit trail that no re-ingest
 fills, which is the single strongest reason not to do this. The TMDB catalog is recoverable, because
-it is a re-fetchable public snapshot: `make tmdb-ingest && make tmdb-load`, at the cost of new
-`pulled_at` timestamps.
+it is a re-fetchable public snapshot: `make tmdb-load` if the on-disk snapshot survives (it needs no
+API token), otherwise `make tmdb-ingest` first, which is roughly 52 minutes at the default rate and
+gives every row a new `pulled_at`.
 
 **The failure mode to actually fear is the mismatched pair.** Downgrading the schema while the
 current image is still serving is not a degraded path, it is an outage. Every request commits a
@@ -624,8 +625,10 @@ already be the one running, and `/recommendations` must be checked before you wa
 3. The `app_user` / `admin_user` grants on `recommendation_audits`, and on the 12 `tmdb_*` tables if
    you re-upgraded.
 4. `make prod-verify`, then the isolation canary — grants and RLS are what it exercises.
-5. `SELECT count(*) FROM tmdb_movies;` — a zero here means the catalog needs re-ingesting, and the
-   product's detail pages are degraded until it is.
+5. `SELECT count(*) FROM tmdb_movies;` — a zero here means the snapshot needs reloading. Nothing on
+   the serving path reads these tables (the product's detail pages read `movie_catalog_metadata`,
+   which `0018` does not touch), so this is not a user-visible outage — it is the ADR 0017 increment
+   2 feature input going missing, and the next training run is what would find it.
 6. The window you rolled through in `recommendation_audits`: those rows now claim nothing about which
    retriever answered. Say so wherever a promotion decision cites them.
 
