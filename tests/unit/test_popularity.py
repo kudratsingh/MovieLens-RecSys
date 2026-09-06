@@ -24,6 +24,14 @@ def test_fit_ranks_by_descending_popularity() -> None:
     assert model.ranking == [10, 20, 30]
 
 
+def test_fit_breaks_equal_count_ties_by_ascending_movie_id() -> None:
+    first = _ratings([(1, 30), (1, 10), (2, 20), (2, 30), (3, 10), (3, 20)])
+    second = first.iloc[::-1].reset_index(drop=True)
+
+    assert PopularityModel().fit(first).ranking == [10, 20, 30]
+    assert PopularityModel().fit(second).ranking == [10, 20, 30]
+
+
 def test_recommend_excludes_seen_items() -> None:
     # User 1 has rated the top-1 item; their recommendation should skip it.
     train = _ratings(
