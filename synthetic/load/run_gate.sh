@@ -122,6 +122,38 @@ if [ "$LOAD_PROFILE" = "nightly" ]; then
 	$DEMO_COMPOSE --profile load up -d --wait --wait-timeout 120 prometheus
 fi
 
+# The policy a warm request must answer with, read off the manifest the sidecar
+# actually loaded rather than named here.
+#
+# The scripts used to hard-code `item-item-cosine+lightgbm` and assert it on
+# every warm response. That is the right strictness and the wrong constant: the
+# moment a tenant's champion is a different family the gate fails every warm
+# check and reports a latency verdict, when what actually happened is that the
+# assertion still describes the previous champion. Reading the family from the
+# bundle keeps the check exactly as strict while letting it follow what is being
+# measured.
+#
+# Deliberately probed from the running sidecar, not from a path on disk: the
+# demo stack mounts a volume over the baked bundle, so the file the container
+# opened is the only honest source. Schema 2 names the family outright; schema 1
+# predates the field and its candidate artifact type is the same string.
+# Any failure falls back to the incumbent literal — a gate that cannot read a
+# manifest should behave exactly as it did before this change, not refuse.
+learned_policy_from_sidecar() {
+	container=$($DEMO_COMPOSE --profile load ps -q model-server 2>/dev/null || true)
+	if [ -z "$container" ]; then
+		echo "item-item-cosine+lightgbm"
+		return
+	fi
+	docker exec "$container" cat /app/models/serving/manifest.json 2>/dev/null \
+		| python -m synthetic.load.expected_policy 2>/dev/null \
+		|| echo "item-item-cosine+lightgbm"
+}
+
+LOAD_LEARNED_POLICY=$(learned_policy_from_sidecar)
+export LOAD_LEARNED_POLICY
+echo "[gate] warm requests will be asserted as policy '$LOAD_LEARNED_POLICY'" >&2
+
 # Host memory, before and after the window. Purely evidence: nothing here feeds
 # a threshold or the re-measure rule, both of which stay exactly as ADR 0010
 # defines them.
