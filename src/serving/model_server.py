@@ -147,6 +147,10 @@ class RankingResult:
     candidate_latency_ms: float
     feature_latency_ms: float
     ranker_latency_ms: float
+    # Time inside the sequence encoder's forward pass, carved out of
+    # ``candidate_latency_ms`` rather than added to it. 0.0 for a family that
+    # runs no encoder, which is a measurement and not a gap.
+    encoder_ms: float
     latency_ms: float
     candidate_sources: dict[str, int]
     # Positive seeds that actually reached a candidate, not the number offered.
@@ -160,6 +164,15 @@ class RankingResult:
     # threshold that decides it is a property of the loaded bundle and a reader
     # of an audit row has no way to know which bundle was loaded.
     ranker_route: str
+    # The retrieval family that answered, and the checksum of the artifact it
+    # answered from. The family is the same string ``candidate_policy`` carries
+    # today, and it is reported under its own name because the two are only
+    # incidentally equal: ``candidate_policy`` is the coordinator's input to a
+    # composite policy label, while this is the audit's answer to "which family
+    # ran". The checksum is what makes a row replayable — a version string can be
+    # republished over different weights, a SHA-256 cannot.
+    retriever_family: str
+    retriever_sha256: str
 
 
 class ModelRankingService:
@@ -410,8 +423,8 @@ class ModelRankingService:
             "learned_rank tenant_id=%s user_id=%s candidate_policy=%s "
             "candidate_version=%s ranker_route=%s ranker_version=%s feature_version=%s "
             "candidate_count=%s result_count=%s positive_count=%s seed_count=%s "
-            "excluded_count=%s candidate_latency_ms=%.3f feature_latency_ms=%.3f "
-            "ranker_latency_ms=%.3f latency_ms=%.3f",
+            "excluded_count=%s candidate_latency_ms=%.3f encoder_ms=%.3f "
+            "feature_latency_ms=%.3f ranker_latency_ms=%.3f latency_ms=%.3f",
             tenant_id,
             user_id,
             manifest.retriever.family,
@@ -427,6 +440,7 @@ class ModelRankingService:
             retrieval.seed_count,
             retrieval.excluded_count,
             candidate_latency_ms,
+            retrieval.encoder_ms,
             feature_latency_ms,
             ranker_latency_ms,
             latency_ms,
@@ -440,6 +454,7 @@ class ModelRankingService:
             candidate_latency_ms=candidate_latency_ms,
             feature_latency_ms=feature_latency_ms,
             ranker_latency_ms=ranker_latency_ms,
+            encoder_ms=retrieval.encoder_ms,
             latency_ms=latency_ms,
             candidate_sources=retrieval.source_counts(),
             seed_count=retrieval.seed_count,
@@ -447,6 +462,8 @@ class ModelRankingService:
             filter_policy=EXCLUSION_FILTER_POLICY,
             feature_event_time=feature_event_time,
             ranker_route=route,
+            retriever_family=manifest.retriever.family,
+            retriever_sha256=manifest.retriever.primary.sha256,
         )
 
     def _route_for(self, history_size: int) -> str:
@@ -594,8 +611,14 @@ class RankResponse(BaseModel):
     filter_policy: str
     feature_event_time: float | None
     # Additive: the coordinator's client reads named keys, so a build that
-    # predates this field keeps parsing the response unchanged.
+    # predates these fields keeps parsing the response unchanged.
     ranker_route: str
+    # Retrieval provenance for the audit row. Without these, a stored audit
+    # cannot say whether item-item or SASRec answered, nor which weights did —
+    # which is the question a champion swap makes urgent.
+    retriever_family: str
+    retriever_sha256: str
+    encoder_ms: float
     items: list[RankItemResponse]
 
 
@@ -734,6 +757,9 @@ async def rank(
         filter_policy=result.filter_policy,
         feature_event_time=result.feature_event_time,
         ranker_route=result.ranker_route,
+        retriever_family=result.retriever_family,
+        retriever_sha256=result.retriever_sha256,
+        encoder_ms=result.encoder_ms,
         items=[
             RankItemResponse(
                 movie_id=item.movie_id,
