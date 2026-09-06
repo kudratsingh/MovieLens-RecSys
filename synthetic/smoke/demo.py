@@ -9,6 +9,15 @@ grant. Every default is the local demo stack's value, so an argument-free run --
 which is what CI and every ``make demo-*`` target does -- behaves exactly as it
 did before the flags existed.
 
+The warm persona's assertion is about the *shape* of the policy the coordinator
+composed, not about one champion's spelling of it. It used to require
+``item-item-cosine+lightgbm`` literally, which meant the runbook's smoke step
+could not pass for any other champion — a SASRec bundle answers
+``sasrec+lightgbm`` — so a promotion was blocked by its own verification.
+``assert_learned_retrieval`` below is the derivation, and ``--retriever-family``
+is there for a caller that knows which family should be answering and wants that
+checked exactly.
+
 The full run also compares the catalog metadata the API serves with the reviewed
 fixture the database is seeded from, because a snapshot that predates a fixture
 refresh is invisible to every other check and very visible to a viewer: it is
@@ -49,6 +58,11 @@ class SmokeSummary:
     action_recommendation_count: int
     cold_history_count: int
     cold_recommendation_count: int
+    # Which retrieval family actually answered the warm persona, read off the
+    # policy the coordinator composed rather than assumed. Reported because a
+    # champion swap between families is otherwise invisible from outside the
+    # sidecar: nothing else this smoke prints changes when the family does.
+    action_retriever_family: str = ""
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,63 @@ COVERAGE_PERSONA_USER_ID = 900000101
 
 
 SUPPORTED_GRANT_TYPES = ("client_credentials", "password")
+
+# What a learned policy name is made of. The coordinator composes it as
+# ``f"{retriever_family}+lightgbm"`` (src/serving/orchestration.py) from the
+# family the sidecar reports off the manifest it loaded
+# (src/serving/model_server.py), so the retrieval half is whichever bundle is
+# promoted -- ``item-item-cosine`` under the incumbent, ``sasrec`` under a
+# sequence champion. This check used to hardcode the first of those, which made
+# the runbook's smoke step unpassable for every other champion; it now derives
+# the expectation from the shape the coordinator actually produces.
+LEARNED_RANKER_STAGE = "lightgbm"
+POPULARITY_POLICY = "popularity"
+
+# Prefixes that are not retrieval, refused by name so the check stays strict.
+# ``popularity`` is the cold-start fallback's whole policy name and carries no
+# ranker at all; ``popularity-fill`` is what the coordinator reports when the
+# ranker ran but no seed reached the index (``POLICY_UNSEEDED``); and
+# ``popularity-fallback`` is the audit's name for the same degradation. A warm
+# persona answered by any of them has silently lost its retrieval stage, which
+# is the bug this assertion exists to catch.
+DEGRADED_RETRIEVAL_SOURCES = frozenset(
+    {POPULARITY_POLICY, "popularity-fill", "popularity-fallback"}
+)
+
+
+def assert_learned_retrieval(
+    policy: str,
+    *,
+    subject: str,
+    expected_family: str | None = None,
+) -> str:
+    """Return the retrieval family that served ``subject``, or refuse the policy.
+
+    Three ways to fail, in the order they are cheapest to explain: the name
+    carries no ranker stage at all (a bare ``popularity`` answer), it carries
+    one but over candidates nothing retrieved, or it names a family other than
+    the one this run was told to expect. ``expected_family`` is ``None`` by
+    default because the smoke is pointed at deployments whose champion it does
+    not know; a caller that *does* know -- a promotion rehearsal, say -- pins it
+    and gets an exact-match check instead of a structural one.
+    """
+    family, separator, ranker_stage = policy.rpartition("+")
+    if not separator or not family or ranker_stage != LEARNED_RANKER_STAGE:
+        raise DemoSmokeError(
+            f"{subject} did not use learned two-stage serving: policy {policy!r} names no "
+            f"'<retrieval family>+{LEARNED_RANKER_STAGE}' ranking stage"
+        )
+    if family in DEGRADED_RETRIEVAL_SOURCES:
+        raise DemoSmokeError(
+            f"{subject} was ranked over {family!r} candidates rather than retrieved ones "
+            f"(policy {policy!r}). The ranker ran, but retrieval degraded to its fill order."
+        )
+    if expected_family is not None and family != expected_family:
+        raise DemoSmokeError(
+            f"{subject} was served by retrieval family {family!r}, but this run expects "
+            f"{expected_family!r} (policy {policy!r})"
+        )
+    return family
 
 
 @dataclass(frozen=True)
@@ -174,6 +245,7 @@ def run_behavior_smoke(
     api_url: str | None = None,
     keycloak_url: str | None = None,
     auth: AuthConfig | None = None,
+    expected_retriever_family: str | None = None,
 ) -> SmokeSummary:
     """Check warm/cold behavior through the authenticated API.
 
@@ -181,6 +253,13 @@ def run_behavior_smoke(
     The real Compose smoke supplies ``api_url`` plus ``keycloak_url`` and uses
     a short-lived confidential service token; browser-session behavior is
     covered separately by Playwright.
+
+    ``expected_retriever_family`` pins which family must have answered the warm
+    persona. Left unset, the warm assertion is the structural one described on
+    ``assert_learned_retrieval`` -- strict about the ranker stage and about
+    retrieval having actually happened, agnostic about which champion is
+    promoted, because that is what makes this runnable against a deployment
+    whose champion this caller does not know.
     """
     if (api_url and keycloak_url) or (not api_url and not keycloak_url):
         pass
@@ -241,9 +320,12 @@ def run_behavior_smoke(
         raise DemoSmokeError("Cold Start has no popularity fallback recommendations")
     action_policy = _recommendation_policy(action)
     cold_policy = _recommendation_policy(cold)
-    if action_policy != "item-item-cosine+lightgbm":
-        raise DemoSmokeError(f"Action Fan did not use learned two-stage serving: {action_policy}")
-    if cold_policy != "popularity":
+    action_family = assert_learned_retrieval(
+        action_policy,
+        subject="Action Fan",
+        expected_family=expected_retriever_family,
+    )
+    if cold_policy != POPULARITY_POLICY:
         raise DemoSmokeError(f"Cold Start did not use popularity fallback: {cold_policy}")
 
     seen_ids = {int(item["movie_id"]) for item in action_history}
@@ -258,6 +340,7 @@ def run_behavior_smoke(
         action_recommendation_count=len(action_recommendations),
         cold_history_count=len(cold_history),
         cold_recommendation_count=len(cold_recommendations),
+        action_retriever_family=action_family,
     )
 
 
@@ -543,6 +626,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--username", default=DEFAULT_AUTH.username)
     parser.add_argument("--password", default=DEFAULT_AUTH.password)
+    parser.add_argument(
+        "--retriever-family",
+        default=None,
+        help=(
+            "require the warm persona to have been served by this retrieval family "
+            "(e.g. item-item-cosine, sasrec). Omitted, any real retrieval family passes and "
+            "only a degraded one fails."
+        ),
+    )
     args = parser.parse_args(argv)
 
     auth = AuthConfig(
@@ -580,6 +672,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             api_url=args.api_url,
             keycloak_url=args.keycloak_url,
             auth=auth,
+            expected_retriever_family=args.retriever_family,
         )
         report: dict[str, Any] = dict(summary.__dict__)
         if not args.skip_catalog_coverage:

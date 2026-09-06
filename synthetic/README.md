@@ -136,8 +136,16 @@ warmed it would delete its own control.
 flags, so the same assertions can be pointed at a production realm. It checks
 that FastAPI, Next.js and Keycloak are reachable, that the four personas are
 discoverable, that Action Fan has history and recommendations with no seen-item
-overlap and reports `item-item-cosine+lightgbm` with versioned artifacts, and
+overlap and was served by a real retrieval family with the ranker behind it, and
 that Cold Start has no history and reports `popularity`.
+
+The warm assertion is on the *shape* of the policy the coordinator composed —
+`<retrieval family>+lightgbm`, refusing `popularity`, `popularity-fill` and
+`popularity-fallback` by name — rather than on one champion's spelling of it. It
+used to require `item-item-cosine+lightgbm` literally, which meant a promotion to
+any other champion could not pass its own smoke step: a SASRec bundle answers
+`sasrec+lightgbm`. `--retriever-family` pins it exactly for a caller that knows
+which family should be answering.
 
 It also compares the API-served catalog metadata against the reviewed fixture,
 because a stale snapshot is invisible to every other check and very visible to a

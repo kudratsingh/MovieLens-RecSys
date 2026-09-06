@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec sasrec-popularity-order train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec sasrec-popularity-order train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status promote promote-revert catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -540,6 +540,34 @@ db-migrate-down:
 
 db-migrate-status:
 	alembic current
+
+# --- Champion promotion ------------------------------------------------------
+# Move one tenant's champion coordinates in public.tenants onto a serving
+# bundle, after re-verifying every checksum that bundle pins. Migration 0016
+# seeded the `demo` row and said that moving it "is a promotion"; this is that
+# step. It is deliberately NOT Phase 6's automatic routing gate -- it decides
+# nothing about whether a model is better, it registers the one an operator
+# points it at.
+#
+# Runs on the host interpreter against the migrator DSN, the same way
+# `db-migrate` does: a bundle directory and a migrator credential both have to
+# be in reach, and the slim API image ships no LightGBM to read a manifest with.
+# `--yes` is never passed from here, so a stray `make promote` in a shell that
+# happens to hold production credentials refuses rather than repointing
+# production; a deliberate production run says so on the command line.
+PROMOTE_ARGS ?=
+
+promote:
+	@test -n "$(TENANT)" || { echo "usage: make promote TENANT=<tenant id> BUNDLE=<bundle dir>"; exit 2; }
+	@test -n "$(BUNDLE)" || { echo "usage: make promote TENANT=<tenant id> BUNDLE=<bundle dir>"; exit 2; }
+	python -m src.release.promote --tenant $(TENANT) --bundle $(BUNDLE) $(PROMOTE_ARGS)
+
+# The undo, as its own target rather than PROMOTE_ARGS=--revert: whoever types
+# this has a bad champion in front of them and should not also be assembling
+# flags.
+promote-revert:
+	@test -n "$(TENANT)" || { echo "usage: make promote-revert TENANT=<tenant id>"; exit 2; }
+	python -m src.release.promote --tenant $(TENANT) --revert $(PROMOTE_ARGS)
 
 # --- Dev --------------------------------------------------------------------
 # The dev environment's entry point, and deliberately an alias rather than a
