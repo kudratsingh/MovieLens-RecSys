@@ -30,6 +30,7 @@ from src.models.artifacts import (
     INDEX_TYPE_FLAT_IP_EXACT,
     RANKER_ROUTE_FALLBACK,
     RANKER_ROUTE_LEARNED,
+    RETRIEVER_ARTIFACT_POPULARITY,
     RETRIEVER_FAMILY_ITEM_ITEM,
     RETRIEVER_FAMILY_SASREC,
     CandidateIndex,
@@ -51,6 +52,10 @@ from src.models.bundle_publisher import (
     parse_utc_timestamp,
     publish_bundle,
     verify_bundle,
+)
+from src.models.popularity_artifact import (
+    POPULARITY_ARTIFACT_FILENAME,
+    serialize_popularity_order,
 )
 
 TRAINED_AT = "2026-09-01T00:00:00+00:00"
@@ -131,7 +136,9 @@ def _sasrec_sources(directory: Path, *, model_filename: str = "sasrec-model.zip"
         json.dumps({"model_filename": model_filename, "n_items": 3}, sort_keys=True),
         encoding="utf-8",
     )
-    return {"encoder": encoder, "companion": companion}
+    popularity = directory / POPULARITY_ARTIFACT_FILENAME
+    popularity.write_bytes(serialize_popularity_order([3, 1, 2]))
+    return {"encoder": encoder, "companion": companion, "popularity": popularity}
 
 
 # --- specs ------------------------------------------------------------------
@@ -202,7 +209,7 @@ def _sasrec_lineage() -> Lineage:
 def _sasrec_spec(
     directory: Path,
     *,
-    roles: tuple[str, ...] = ("encoder", "vocabulary", "config"),
+    roles: tuple[str, ...] = ("encoder", "vocabulary", "config", RETRIEVER_ARTIFACT_POPULARITY),
     lineage: Lineage | None = None,
     model_filename: str = "sasrec-model.zip",
 ) -> BundleSpec:
@@ -220,6 +227,9 @@ def _sasrec_spec(
         ),
         "config": ArtifactSource(
             path=files["companion"], artifact_type="sasrec-config", version="sasrec-v1"
+        ),
+        RETRIEVER_ARTIFACT_POPULARITY: ArtifactSource(
+            path=files["popularity"], artifact_type="popularity-order", version="sasrec-v1"
         ),
     }
     return BundleSpec(
@@ -320,7 +330,12 @@ class TestSasrecBundle:
 
         manifest = ServingManifest.load(bundle_dir / "manifest.json")
         assert manifest.retriever.family == RETRIEVER_FAMILY_SASREC
-        assert sorted(manifest.retriever.artifacts) == ["config", "encoder", "vocabulary"]
+        assert sorted(manifest.retriever.artifacts) == [
+            "config",
+            "encoder",
+            "popularity",
+            "vocabulary",
+        ]
         assert manifest.retriever.version == "sasrec-v1"
         assert manifest.retriever.params["max_sequence_length"] == 50
         assert manifest.retriever.params["index_type"] == INDEX_TYPE_FLAT_IP_EXACT
@@ -365,11 +380,16 @@ class TestSasrecBundle:
             trained_at=parse_utc_timestamp(TRAINED_AT),
             retriever=RetrieverSpec(
                 family=RETRIEVER_FAMILY_SASREC,
-                # Three roles, all present — but the vocabulary and config are
+                # Every role present — but the vocabulary and config are
                 # standalone files, so nothing lands as sasrec-manifest.json.
                 artifacts={
                     "encoder": ArtifactSource(
                         path=files["encoder"], artifact_type="sasrec-encoder", version="sasrec-v1"
+                    ),
+                    RETRIEVER_ARTIFACT_POPULARITY: ArtifactSource(
+                        path=files["popularity"],
+                        artifact_type="popularity-order",
+                        version="sasrec-v1",
                     ),
                     "vocabulary": ArtifactSource(
                         path=_blob(sources, "sasrec-vocabulary.json"),
@@ -420,7 +440,9 @@ class TestRefusedAtPublishTime:
         """
         bundle_dir = tmp_path / "bundle"
 
-        with pytest.raises(BundlePublishError, match=r"needs artifact\(s\) \['vocabulary'\]"):
+        with pytest.raises(
+            BundlePublishError, match=r"needs artifact\(s\) \['vocabulary', 'popularity'\]"
+        ):
             publish_bundle(
                 _sasrec_spec(sources, roles=("encoder", "config")), output_dir=bundle_dir
             )
