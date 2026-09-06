@@ -513,14 +513,121 @@ out and deploy it forwards. The workflow also uploads the recorded
 previous/current SHAs as a `rollback-target` artifact on every deploy, which is where to look if the
 box is unreachable and you need to know what was running.
 
-**Additive migrations only.** Alembic downgrades are untested here and migration `0010`'s backfill
-and `0012`'s audit columns are not safely reversible against live data. The paired rule that makes a
-rollback safe: the release path runs on **every** deploy including a rollback, so its schema step
-compares the database's revision against the revisions its own image knows about and **exits 0 when
-the database is ahead**. Without that, rolling back to an older image raises "Can't locate revision"
-and turns one incident into two. `make prod-rollback-rehearsal` is the test of exactly that property.
-A release that must ship a destructive migration has a database restore as its rollback path, not a
-redeploy, and needs a rehearsed restore before it merges.
+**Additive migrations only, and the database stays where it is.** A rollback moves images, never the
+schema. The rule that makes that safe: the release path runs on **every** deploy including a
+rollback, so its schema step compares the database's revision against the revisions its own image
+knows about and **exits 0 when the database is ahead**. Without that, rolling back to an older image
+raises "Can't locate revision" and turns one incident into two. `make prod-rollback-rehearsal` is the
+test of exactly that property. A release that must ship a destructive migration has a database
+restore as its rollback path, not a redeploy, and needs a rehearsed restore before it merges.
+
+### 9.1 A rollback that leaves the database ahead
+
+This is the normal case and it needs no action. The old image writes the column set it knows about;
+every column a later migration added is nullable with no server default, so the insert succeeds and
+the new columns stay NULL — which reads as "this row is older than the question" rather than as a
+false measurement. Verified on staging at revision `0019_audit_retrieval_provenance` by inserting a
+`recommendation_audits` row with no `retriever_family` / `retriever_sha256` / `ranker_route` /
+`encoder_ms`: `INSERT 0 1`.
+
+Migrations `0010`'s backfill and `0012`'s audit columns are still not safely reversible against live
+data. Neither is `0018` or `0019` — see below for what each costs, measured rather than assumed.
+
+### 9.2 Rolling the schema back across `0019` and `0018`
+
+**Do not do this on the box.** Both downgrades execute cleanly and both destroy data, and neither is
+needed by a rollback: §9.1 is what ADR 0013 performs. This section exists because the reverse path
+had never been executed anywhere, and now it has.
+
+Measured 2026-09-05 against the staging stack (`movielens-staging`, Postgres 16.14, macOS 26.5.2 /
+arm64, Docker 29.6.1), starting from `0019_audit_retrieval_provenance` with three
+`recommendation_audits` rows across tenants `demo` and `default` and populated TMDB tables.
+
+Both steps in one command, from the `release` service so Alembic runs as `migrator` — the role that
+owns the tables and can therefore alter one under forced RLS. `--no-deps` keeps it to Postgres; the
+entrypoint execs an unrecognised mode as given, which is how `alembic` reaches the CLI at all.
+
+```bash
+docker compose -p movielens-staging \
+  -f docker-compose.prod.yml -f docker-compose.staging.yml --env-file .env.staging \
+  run --rm --no-deps -T release alembic downgrade 0017_request_audits
+```
+
+```
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0019_audit_retrieval_provenance -> 0018_tmdb_catalog, ...
+INFO  [alembic.runtime.migration] Running downgrade 0018_tmdb_catalog -> 0017_request_audits, ...
+```
+
+Exit 0. `alembic downgrade 0018_tmdb_catalog` then `alembic downgrade 0017_request_audits` produces
+the same result in two steps. Postgres runs the whole thing in one transaction, so a failure would
+have left the revision where it started; none occurred.
+
+On the box the same invocation is `docker compose -p movielens-prod -f docker-compose.prod.yml
+--env-file .env.prod run --rm --no-deps -T release alembic ...`. There is deliberately no Make target
+for it: a downgrade should cost a full command line and a look at which project name is in it.
+
+**What each step costs.**
+
+| Step | Structure | Data |
+|---|---|---|
+| `0019` → `0018` | Drops `ck_audit_encoder_ms`, then the four provenance columns | Every value in `retriever_family`, `retriever_sha256`, `ranker_route`, `encoder_ms` is destroyed. The audit **rows** survive — 3 before, 3 after |
+| `0018` → `0017` | Revokes the `app_user` / `admin_user` grants, drops 10 named indexes and all 12 `tmdb_*` tables | Every TMDB catalog row is destroyed. `movies` is untouched — the cascade runs from `movies` into `tmdb_movies`, not the other way |
+
+**What survives, checked explicitly.** `recommendation_audits` keeps `relrowsecurity = t`,
+`relforcerowsecurity = t`, owner `migrator`, the `recommendation_audits_tenant_isolation` policy with
+both its `USING` and `WITH CHECK` expressions, and its `app_user` (SELECT, INSERT) / `admin_user`
+(SELECT, INSERT, UPDATE, DELETE) grants — at every revision in the cycle. Read as `app_user` at
+`0017`, `SET LOCAL app.tenant_id = 'demo'` returned 2 rows, `'default'` returned 1, and no setting at
+all returned 0. **The rollback does not weaken tenant isolation.**
+
+**Re-upgrading restores the schema exactly.**
+
+```bash
+docker compose -p movielens-staging \
+  -f docker-compose.prod.yml -f docker-compose.staging.yml --env-file .env.staging \
+  run --rm --no-deps -T release alembic upgrade head
+```
+
+A column-by-column diff of `information_schema.columns`, `pg_constraint`, `pg_policy` and
+`role_table_grants` against the pre-downgrade capture is identical but for one thing:
+`ordinal_position` for the four columns moves 31–34 → 35–38, because Postgres leaves a tombstone in
+`pg_attribute` for a dropped column and never reuses the number. Column *order* as `SELECT *` returns
+it is unchanged, so nothing that names its columns notices. Each full cycle adds four tombstones
+against the hard 1600-column ceiling — irrelevant in practice, worth knowing before someone loops it.
+
+**What does not come back is the data.** After `upgrade head` the three audit rows are all still
+there and all four provenance columns are NULL on every one of them, including the two that carried
+`item-item` / `sasrec`, a real artifact checksum and a measured `encoder_ms`. The TMDB tables come
+back with the right shape and zero rows. Nothing in the database can reconstruct either. The
+provenance is gone for good — a rolled-back window is a hole in the audit trail that no re-ingest
+fills, which is the single strongest reason not to do this. The TMDB catalog is recoverable, because
+it is a re-fetchable public snapshot: `make tmdb-ingest && make tmdb-load`, at the cost of new
+`pulled_at` timestamps.
+
+**The failure mode to actually fear is the mismatched pair.** Downgrading the schema while the
+current image is still serving is not a degraded path, it is an outage. Every request commits a
+durable audit row *before* it answers, and the current writer names all four columns:
+
+```
+ERROR:  column "retriever_family" of relation "recommendation_audits" does not exist
+```
+
+Every recommendation request fails. If you have downgraded the schema, the matching image must
+already be the one running, and `/recommendations` must be checked before you walk away.
+
+**If you rolled back across these revisions anyway, check:**
+
+1. `alembic current` — the revision you intended, on the database you intended.
+2. `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname='recommendation_audits';`
+   → `t | t`, and the `recommendation_audits_tenant_isolation` policy present.
+3. The `app_user` / `admin_user` grants on `recommendation_audits`, and on the 12 `tmdb_*` tables if
+   you re-upgraded.
+4. `make prod-verify`, then the isolation canary — grants and RLS are what it exercises.
+5. `SELECT count(*) FROM tmdb_movies;` — a zero here means the catalog needs re-ingesting, and the
+   product's detail pages are degraded until it is.
+6. The window you rolled through in `recommendation_audits`: those rows now claim nothing about which
+   retriever answered. Say so wherever a promotion decision cites them.
 
 **Personas reset to seed state on every release.** The seeder is delete-then-insert over nine known
 user ids in tenant `demo`. That is what makes the smoke assertions deterministic, and it also wipes
