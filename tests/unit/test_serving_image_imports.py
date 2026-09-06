@@ -38,6 +38,12 @@ FORBIDDEN_IN_API_IMAGE = (
 # the same edge that would drag in the other two.
 DEFERRED_IN_SIDECAR_IMAGE = ("torch", "faiss", "implicit")
 
+# What the sidecar image genuinely does not install. Distinct from the tuple
+# above: torch and faiss ARE installed there and are merely deferred to the
+# SASRec loader, whereas implicit is absent outright. Loading a bundle is
+# allowed to import torch; it is not allowed to import implicit.
+NOT_INSTALLED_IN_SIDECAR_IMAGE = ("implicit",)
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 _IMPORT_PROBE = """
@@ -156,6 +162,46 @@ def test_the_sidecar_loads_sasrec_without_importing_torch_at_module_scope() -> N
             "inside the function that rebuilds an encoder.\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+
+
+def test_loading_a_sasrec_bundle_does_not_need_the_als_trainer() -> None:
+    """Importing the sidecar is not the same as loading a bundle in it.
+
+    The test above proves ``src.serving.sequence_retrieval`` *imports* with
+    implicit blocked, and it passes because that module reaches the shared
+    encoder from inside two functions rather than at module scope. Those
+    function-level imports are the ones that fire when a SASRec bundle is
+    actually loaded, and they are what this covers.
+
+    The edge that broke: ``src/models/candidates/__init__`` imported ``.cf``
+    eagerly, ``.cf`` imports ``implicit`` at module scope, and the sidecar image
+    does not install implicit. So the package import succeeded on any machine
+    with the training suite present and raised ``ModuleNotFoundError`` inside the
+    built image — where ``sequence_retrieval``'s contract is to fail the worker
+    rather than serve a half-loaded bundle. A SASRec bundle could not boot at
+    all, and no test said so.
+    """
+    for module in (
+        "src.models.candidates",
+        "src.models.candidates.sasrec",
+        "src.models.candidates.sasrec_artifact",
+    ):
+        result = _import_with_blocked(module, NOT_INSTALLED_IN_SIDECAR_IMAGE)
+        assert result.returncode == 0, (
+            f"{module} needs implicit, which the sidecar image does not install. "
+            "Loading a SASRec bundle imports this module, so this breaks the "
+            "container at startup rather than here.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+
+def test_the_als_model_is_still_reachable_where_implicit_exists() -> None:
+    # Deferring the import must not quietly remove the name: the training code
+    # imports CFModel from this package and has every right to.
+    from src.models.candidates import CFModel, PopularityModel
+
+    assert CFModel.__name__ == "CFModel"
+    assert PopularityModel.__name__ == "PopularityModel"
 
 
 def test_serving_contract_modules_stay_dependency_free() -> None:
