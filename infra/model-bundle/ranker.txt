@@ -5,7 +5,7 @@ num_tree_per_iteration=1
 label_index=0
 max_feature_idx=7
 objective=lambdarank
-feature_names=Column_0 Column_1 Column_2 Column_3 Column_4 Column_5 Column_6 Column_7
+feature_names=user_interaction_count user_days_active user_days_since_last_interaction item_popularity_all_time item_popularity_30d item_popularity_7d item_age_days user_genre_affinity
 feature_infos=[1:95] [0:0.0013657407407407407] [1.1574074074074073e-05:2.3148148148148147e-05] [0:5] [0:5] [0:5] [0:1.3888194444444444] [0:1]
 tree_sizes=1736 1738 1738 1735 1744 1736 1736 1738 1736 1737 1746 1743 1740 1742 1739 1746 1749 1737 1736 1736 1739 1746 1739 1752 1757 1741 1716 1758 1725 1734 1753 1725 1716 1754 1715 1752 1734 1730 1743 1725
 
@@ -772,12 +772,12 @@ shrinkage=0.05
 end of trees
 
 feature_importances:
-Column_6=346
-Column_7=106
-Column_3=52
-Column_0=45
-Column_2=6
-Column_1=5
+item_age_days=346
+user_genre_affinity=106
+item_popularity_all_time=52
+user_interaction_count=45
+user_days_since_last_interaction=6
+user_days_active=5
 
 parameters:
 [boosting: gbdt]

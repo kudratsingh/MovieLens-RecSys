@@ -1,0 +1,186 @@
+{
+  "ablation": {
+    "eight_column_control": {
+      "booster_sha256": "3e9c826e8d20de665d51abeecc2dbb897f414bda4395c3d85e421b12901c4ece",
+      "feature_importance_gain": {
+        "item_age_days": 68397.48660135269,
+        "item_popularity_30d": 255535.55849933624,
+        "item_popularity_7d": 74707.65269374847,
+        "item_popularity_all_time": 73182.7434682846,
+        "user_days_active": 114501.14207696915,
+        "user_days_since_last_interaction": 62759.94160652161,
+        "user_genre_affinity": 70551.36827278137,
+        "user_interaction_count": 163441.146402359
+      },
+      "metrics": {
+        "cold_ndcg_at_k": 0.5490019989542251,
+        "cold_recall_at_k": 0.07763845424378057,
+        "overall_ndcg_at_k": 0.222432463783906,
+        "overall_recall_at_k": 0.08267007661186757,
+        "warm_ndcg_at_k": 0.10235769942816983,
+        "warm_recall_at_k": 0.08452012937279027
+      }
+    },
+    "question": "what are the two SASRec columns worth, holding the retrain constant",
+    "shared_training_set": {
+      "dropped_positives": 38836,
+      "groups": 115167,
+      "missing_sentinel_rows": 0,
+      "rows": 2418507
+    },
+    "ten_column_arm": {
+      "booster_sha256": "0bcc12ba75a181da4c36df69bb3dc4cec35703420b24c844170ac959f57fc0e9",
+      "feature_importance_gain": {
+        "item_age_days": 50785.940512657166,
+        "item_popularity_30d": 37249.30914020538,
+        "item_popularity_7d": 30045.850530147552,
+        "item_popularity_all_time": 46790.92650222778,
+        "sasrec_user_item_logit": 1122103.263528347,
+        "sasrec_user_item_score": 506422.7715444565,
+        "user_days_active": 34533.00372314453,
+        "user_days_since_last_interaction": 53774.96574497223,
+        "user_genre_affinity": 25139.757990837097,
+        "user_interaction_count": 55637.2283411026
+      },
+      "metrics": {
+        "cold_ndcg_at_k": 0.5490019989542251,
+        "cold_recall_at_k": 0.07763845424378057,
+        "overall_ndcg_at_k": 0.2238211261470445,
+        "overall_recall_at_k": 0.08259572680532322,
+        "warm_ndcg_at_k": 0.10425695230287141,
+        "warm_recall_at_k": 0.0844184422474233
+      }
+    },
+    "warm_ndcg_relative_change_control_vs_bundle": 0.009035482720220145,
+    "warm_ndcg_relative_change_features_only": 0.018555056290947558
+  },
+  "adr": "0018",
+  "candidate_run_ids": [
+    "bc89411b751f47eab9b098ddd628f306"
+  ],
+  "cutoff_timestamp": 1466837397,
+  "date": "2026-09-05",
+  "encoder": {
+    "model_sha256": "43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6",
+    "o9_fastpath_repair": "applied (PR #162)"
+  },
+  "gates": {
+    "all_routes": {
+      "failures": [
+        "overall ndcg@10 gained 0.93% (0.221762 \u2192 0.223821) against a required +3.00%"
+      ],
+      "k": 10,
+      "metric": "ndcg",
+      "overall": {
+        "candidate": 0.2238211261470445,
+        "detail": "overall ndcg@10 gained 0.93% (0.221762 \u2192 0.223821) against a required +3.00%",
+        "incumbent": 0.2217623025377634,
+        "metric": "ndcg@10",
+        "passed": false,
+        "relative_change": 0.009283920602017074,
+        "required_gain": 0.03
+      },
+      "promote": false,
+      "slices": [
+        {
+          "candidate": 0.10425695230287141,
+          "candidate_users": 1931,
+          "comparable": true,
+          "detail": "warm ndcg@10 improved 2.78% (0.101441 \u2192 0.104257, n=1931)",
+          "incumbent": 0.10144112985227004,
+          "incumbent_users": 1931,
+          "name": "warm",
+          "passed": true,
+          "relative_change": 0.02775819290165723,
+          "tolerance": 0.06
+        },
+        {
+          "candidate": 0.5490019989542251,
+          "candidate_users": 710,
+          "comparable": true,
+          "detail": "cold ndcg@10 improved 0.00% (0.549002 \u2192 0.549002, n=710)",
+          "incumbent": 0.5490019989542251,
+          "incumbent_users": 710,
+          "name": "cold",
+          "passed": true,
+          "relative_change": 0.0,
+          "tolerance": 0.05
+        }
+      ]
+    },
+    "learned_route": {
+      "failures": [
+        "warm ndcg@10 gained 2.78% (0.101441 \u2192 0.104257) against a required +3.00%"
+      ],
+      "k": 10,
+      "metric": "ndcg",
+      "overall": {
+        "candidate": 0.2238211261470445,
+        "detail": "overall ndcg@10 gained 0.93% (0.221762 \u2192 0.223821) against a required +3.00%",
+        "incumbent": 0.2217623025377634,
+        "metric": "ndcg@10",
+        "passed": false,
+        "relative_change": 0.009283920602017074,
+        "required_gain": 0.03
+      },
+      "promote": false,
+      "scope": "learned-route",
+      "slices": [
+        {
+          "candidate": 0.10425695230287141,
+          "candidate_users": 1931,
+          "comparable": true,
+          "detail": "warm ndcg@10 improved 2.78% (0.101441 \u2192 0.104257, n=1931)",
+          "incumbent": 0.10144112985227004,
+          "incumbent_users": 1931,
+          "name": "warm",
+          "passed": true,
+          "relative_change": 0.02775819290165723,
+          "tolerance": 0.06
+        },
+        {
+          "candidate": 0.5490019989542251,
+          "candidate_users": 710,
+          "comparable": true,
+          "detail": "cold ndcg@10 improved 0.00% (0.549002 \u2192 0.549002, n=710)",
+          "incumbent": 0.5490019989542251,
+          "incumbent_users": 710,
+          "name": "cold",
+          "passed": true,
+          "relative_change": 0.0,
+          "tolerance": 0.05
+        }
+      ],
+      "warm_gain": {
+        "candidate": 0.10425695230287141,
+        "detail": "warm ndcg@10 gained 2.78% (0.101441 \u2192 0.104257) against a required +3.00%",
+        "incumbent": 0.10144112985227004,
+        "metric": "ndcg@10",
+        "passed": false,
+        "relative_change": 0.02775819290165723,
+        "required_gain": 0.03
+      }
+    }
+  },
+  "increment": 1,
+  "incumbent_run_ids": [
+    "c1d742c8485d4e54b66746a65f7705d0"
+  ],
+  "metrics": {
+    "cold_ndcg_at_k": 0.5490019989542251,
+    "cold_recall_at_k": 0.07763845424378057,
+    "overall_ndcg_at_k": 0.2238211261470445,
+    "overall_recall_at_k": 0.08259572680532322,
+    "warm_ndcg_at_k": 0.10425695230287141,
+    "warm_recall_at_k": 0.0844184422474233
+  },
+  "n_cold_users": 710,
+  "n_warm_users": 1931,
+  "source_ratings": 25000095,
+  "superseded": {
+    "incumbent_run_id": "566f5309767a4076a4f5e8151be16645",
+    "reason": "measured before O-9's fast-path repair, with 34,190 of 153,947 learned-route positives retrieving nothing",
+    "record": "docs/experiments/sasrec/ranker-sasrec-score-features-2026-09-05.json",
+    "run_id": "eee531bb16d943f5a2213dd9b7a8dc1a"
+  }
+}

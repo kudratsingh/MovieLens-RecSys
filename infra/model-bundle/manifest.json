@@ -19,7 +19,7 @@
   "ranker": {
     "artifact_type": "lightgbm-lambdarank",
     "filename": "ranker.txt",
-    "sha256": "7897a151ad364ff900ead5bf119b39fcb0e00a1d5a7bb7cf5ce8c150cd7d98e2",
+    "sha256": "e216bc443e6ceface7c95f8c2c36e74b3078ab9eda1b250bd416bb72cf9118a5",
     "version": "demo-lgbm-v1"
   },
   "schema_version": 1,
