@@ -1,6 +1,7 @@
 import pandas as pd
 
 from src.models.candidates.popularity import PopularityModel
+from src.models.popularity_artifact import popularity_order_from_counts
 
 
 def _ratings(rows: list[tuple[int, int]]) -> pd.DataFrame:
@@ -22,6 +23,32 @@ def test_fit_ranks_by_descending_popularity() -> None:
     )
     model = PopularityModel().fit(train)
     assert model.ranking == [10, 20, 30]
+
+
+def test_fit_breaks_equal_count_ties_by_ascending_movie_id() -> None:
+    # Every movie here has exactly two ratings, so nothing but the tiebreak
+    # decides the order. Feeding the same rows in reverse is what catches an
+    # unstable sort: quicksort is free to return a different permutation for a
+    # different input order, and did.
+    first = _ratings([(1, 30), (1, 10), (2, 20), (2, 30), (3, 10), (3, 20)])
+    second = first.iloc[::-1].reset_index(drop=True)
+
+    assert PopularityModel().fit(first).ranking == [10, 20, 30]
+    assert PopularityModel().fit(second).ranking == [10, 20, 30]
+
+
+def test_fit_tie_order_matches_the_published_fill_order() -> None:
+    # O-17: the model and the checksummed artifact have to agree at ties, or a
+    # bundle's fill order says one thing and the model that produced the
+    # evaluation says another. Asserted against the artifact's own derivation
+    # rather than against a literal, so the two cannot drift apart silently.
+    train = _ratings(
+        [(1, 30), (1, 10), (2, 20), (2, 30), (3, 10), (3, 20), (4, 40), (5, 40), (6, 40)]
+    )
+    model = PopularityModel().fit(train)
+
+    assert model.ranking == list(popularity_order_from_counts(model.counts))
+    assert model.ranking == [40, 10, 20, 30]
 
 
 def test_recommend_excludes_seen_items() -> None:
