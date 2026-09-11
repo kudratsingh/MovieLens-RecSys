@@ -1,7 +1,28 @@
 # ADR 0020 — SASRec v2: capacity, sequence length, and the sampling ceiling
 
-**Status:** Proposed
+**Status:** Proposed — control stop triggered; owner decision required
 **Date:** 2026-09-05
+
+**Cell 0 control outcome (2026-09-10/11):** Owner-approved W28 implemented
+P1+P2 before this proposal was decided and measured the frozen v1 cell once at
+6% and once at full scale. The loop is computationally successful: full fit
+time fell from 17,655 seconds to 1,797.4 seconds (9.8x), with 7.22 GB maximum
+RSS, and training no longer imports FAISS. It is not equivalent in quality.
+Warm recall@500 moved from 0.318641 to 0.182165 at 6% (-42.82%) and from the
+corrected v1 record 0.509171 to 0.485648 at full scale (-4.62%). Full-data cold
+recall and NDCG are bit-identical, and the protocol hash and 1,931 warm / 710
+cold users match. Runs: `f837955c832440069dd8c1316a2ad0c6` (6%) and
+`fd2ee9f6f6794449a31ea3f50e600a48` (full).
+
+Those results fire stop rules 1 and 2 below. Therefore **no 0b/A/B/C/D/E cell
+is authorized by this proposal as written**. The saved copied-prefix v1 model
+remains the quality reference and no gate or champion changes. Before this ADR
+can be accepted, the owner must choose whether to (a) retain P2 as the practical
+objective for future architecture experiments despite its measured control
+shift, (b) build and measure P1 alone so v1-quality training remains possible
+without the copied tensor, or (c) return to the copied-prefix objective and
+reopen the GPU-spend decision. The control result is recorded in PR #183 and
+does not move any threshold.
 
 ## Context
 
