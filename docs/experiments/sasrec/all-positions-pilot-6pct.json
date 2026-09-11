@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "W28 canonical all-position training check on the established 6% user sample.",
+    "Architecture and optimization match the frozen SASRec v1 BCE cell; only",
+    "the training objective changes from copied final-position prefixes to one",
+    "causal encoder pass per bounded sequence window with every eligible target."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "allpos-pilot6-bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42
+    }
+  ]
+}

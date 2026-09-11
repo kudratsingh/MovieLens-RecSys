@@ -49,7 +49,6 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import mlflow
-import numpy as np
 import pandas as pd
 
 from src.config import Settings
