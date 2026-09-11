@@ -191,6 +191,28 @@ pre-fix retrieval and bundle numbers remain above as historical evidence but are
 superseded for quality claims. The complete before/after record is
 [`fastpath-reevaluation-2026-09-05.json`](../experiments/sasrec/fastpath-reevaluation-2026-09-05.json).
 
+**Canonical training-loop measurement (2026-09-10/11):** W28 now implements
+the all-position objective this ADR intended: one causal encoder pass per
+bounded window, every eligible next-timestamp target supervised once, and
+equal-timestamp groups kept out of one another's context. It also evaluates
+with exhaustive torch top-k so training never loads FAISS's second OpenMP
+runtime. The objective is recorded as `all-positions-strict-timestamp-v1` in
+MLflow and the artifact; older archives remain explicitly
+`strict-prefix-final-position-v1`.
+
+The computational result is decisive: the full fit fell from 17,655 seconds to
+1,797.4 seconds (9.8x), with 19,739,546 targets represented by 464,470 windows
+and peak RSS 7.22 GB. The quality result cuts the other way. At 6%, warm
+recall@500 was 0.182165 versus v1's 0.318641. At full scale, run
+`fd2ee9f6f6794449a31ea3f50e600a48` reached 0.485648 versus the corrected,
+stable-tie v1 record's 0.509171 (-4.62%) on the same protocol hash and 1,931
+warm / 710 cold users. Cold recall and NDCG are bit-identical because routing
+and fallback are unchanged. The saved v1 artifact therefore remains the
+quality reference; W28 changes how future training experiments run, not which
+model serves. No threshold or promotion verdict moves. ADR 0020 cells must name
+their training objective so architecture and objective changes are not
+misattributed.
+
 **Decision note (2026-09-04):** Approved as the next model after ADR 0015's
 bounded pilot triggered its stop rule. The owner explicitly directed the work
 to move from the repaired two-tower to the next model. Implementation remains

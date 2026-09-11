@@ -209,6 +209,15 @@ def test_torch_exact_top_k_matches_exact_faiss() -> None:
     )
 
 
+def test_invalid_retrieval_backend_fails_before_training() -> None:
+    model = SASRecModel(config=_config(), cold_start_threshold=None)
+
+    with pytest.raises(ValueError, match="unsupported retrieval backend"):
+        model.fit(_train(), retrieval_backend="annoy")  # type: ignore[arg-type]
+
+    assert model._encoder is None
+
+
 def test_sasrec_training_module_does_not_import_faiss() -> None:
     script = """
 import sys

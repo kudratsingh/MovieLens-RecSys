@@ -291,6 +291,8 @@ class SASRecModel:
         retrieval_backend: Literal["faiss", "torch"] = "faiss",
     ) -> SASRecModel:
         self.config.validate()
+        if retrieval_backend not in {"faiss", "torch"}:
+            raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
         self._training_objective = ALL_POSITION_TRAINING_OBJECTIVE
         self._popularity = PopularityModel().fit(train)
         if train.empty:
@@ -365,10 +367,8 @@ class SASRecModel:
                 on_epoch(epoch + 1, epoch_loss / max(1, predictions_seen))
         if retrieval_backend == "faiss":
             self.build_index()
-        elif retrieval_backend == "torch":
-            self.build_exact_tensor_index()
         else:
-            raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
+            self.build_exact_tensor_index()
         return self
 
     def build_index(self) -> None:

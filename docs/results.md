@@ -3221,3 +3221,103 @@ and prior run `528b14513d9a49e098a0525417f23285` is retained as superseded
 evidence. The exact deltas are `-0.0000052030145743` for cold NDCG@500 and
 `-0.0000013987657508` for overall NDCG@500. Gate thresholds and promotion
 verdicts are unchanged.
+
+## SASRec canonical all-position training — 2026-09-10/11
+
+W28 replaced the copied-prefix training shape with the objective described by
+Kang and McAuley: each bounded sequence window is encoded once and every causal
+position with a strictly later timestamp predicts its next item. Timestamp
+groups remain atomic, so simultaneous interactions never enter one another's
+prefix. Long histories are sliced at the 50-item v1 limit, every eligible
+target is retained exactly once, and the stored tensors remain linear in the
+number of interactions rather than multiplying every target by the sequence
+length. This is a different objective from SASRec v1's
+`strict-prefix-final-position-v1`; an exact metric match is neither expected nor
+claimed.
+
+Training-time evaluation now uses exhaustive torch matrix multiplication and
+top-k. FAISS is imported only when an exported artifact is loaded or its serving
+index is built, removing the second OpenMP runtime from the training process.
+The model archive records `all-positions-strict-timestamp-v1`, while artifacts
+written before W28 continue to load as `strict-prefix-final-position-v1`.
+
+### Matched 6% measurement
+
+The established deterministic 6% users were measured once with SASRec v1's
+frozen BCE, 32-negative, two-epoch, seed-42 configuration. The all-position run
+is `f837955c832440069dd8c1316a2ad0c6`, protocol
+`sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629`.
+It trained 1,198,161 targets in 28,202 windows and finished in 80.9 seconds of
+fit time (87.28 seconds process wall), versus 1,644 seconds for the copied-prefix
+v1 pilot.
+
+| Metric @500 | copied-prefix v1 | all positions | relative change |
+|---|---:|---:|---:|
+| warm recall | 0.3186408902 | **0.1821646974** | **-42.82%** |
+| warm NDCG | 0.1089101048 | **0.0677431186** | **-37.80%** |
+| cold recall (popularity-routed) | 0.4829587027 | 0.4826105213 | -0.07% |
+| cold NDCG (popularity-routed) | 0.3844085562 | 0.3841621361 | -0.06% |
+| overall recall | 0.3684341667 | **0.2732088865** | **-25.85%** |
+| overall NDCG | 0.1923944840 | **0.1636276693** | **-14.95%** |
+
+The tiny cold movement is the later stable popularity tie-break, not the
+training objective: both models route those users to fallback. Warm is the
+unconfounded comparison, and it says the faster objective is materially weaker
+on this small population.
+
+### Matched full-data measurement
+
+The same single cell then ran over all 25,000,095 ratings with the established
+ADR 0011 cohort attached. Run `fd2ee9f6f6794449a31ea3f50e600a48` is
+`FINISHED`, protocol
+`sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28`,
+with the same 1,931 warm and 710 cold users as the stable SASRec v1 record
+`0243864994024cb48ab746df628860a7`.
+
+| Metric @500 | copied-prefix v1 | all positions | relative change |
+|---|---:|---:|---:|
+| warm recall | 0.5091713455 | **0.4856483771** | **-4.62%** |
+| warm NDCG | 0.1911516284 | **0.1727795404** | **-9.61%** |
+| cold recall (popularity-routed) | 0.5262729520 | 0.5262729520 | 0.00% |
+| cold NDCG (popularity-routed) | 0.4358413673 | 0.4358413673 | 0.00% |
+| overall recall | 0.5137688997 | **0.4965697888** | **-3.35%** |
+| overall NDCG | 0.2569334212 | **0.2435004405** | **-5.23%** |
+
+Loss fell from 0.0553 to 0.0437 while warm recall rose from 0.4652 after epoch
+one to 0.4856 after epoch two. The run trained all 19,739,546 targets in
+464,470 windows. Fit time was **1,797.4 seconds (29 min 57 s)**, 9.8 times
+faster than v1's 17,655 seconds. The shell observed 43,321 seconds of elapsed
+wall time because the laptop slept or was unscheduled for most of the run;
+1,795 seconds of user CPU and the fit timer identify the active compute cost.
+Maximum resident set was 7,220,051,968 bytes, below v1's observed 8.8 GiB.
+
+The immutable model ZIP has SHA-256
+`16631300ccf58ada7bfa9f73e3974ea85b576fc77f6b1fd59e8a31828cdf744c`;
+the vocabulary hash is
+`76f0cf89a8e2be1c3a294d535be3a9edc4ef76ebe3cd599376fc0bb9ae9de8cd`.
+Local and MLflow copies are byte-identical and both reload to identical scored
+candidates. The console/resource log is retained at
+`artifacts/sasrec/logs/allpositions-full-20260910-retry1.log`.
+
+All four synthetic buckets routed correctly. Their recall@500 values were
+h0 0.476, h1 0.460, h3 0.456, and h10 0.340; h0/h1/h3 used popularity for all
+500 users and h10 used SASRec for all 500, exactly as the threshold requires.
+
+**Verdict:** W28 makes canonical training practical and removes the FAISS/OpenMP
+collision, but it does not replace the saved v1 model on quality. The full
+all-position model trails v1 by 4.62% warm recall and 9.61% warm NDCG under an
+identical protocol. No gate threshold or serving champion changes. Future
+SASRec-v2 cells should name this objective explicitly rather than comparing a
+new architecture trained all-position against v1 as though the objective were
+held fixed.
+
+Two non-verdict attempts are retained rather than erased. Docker-backed 6% run
+`833812eea8a341e9953285b4145cf9b8` completed training and wrote its local model
+but could not upload to the server's container-local read-only `/mlartifacts`;
+its deterministic file-store retry is the record above. Full run
+`b3435b7317e94e209b3f1ab3ec2c34fe` was stopped before its first epoch when the
+temporary worktree lacked the ignored v1 synthetic payload; it is tagged with
+that cause and terminated `KILLED` in MLflow.
+
+Machine-readable evidence:
+[`experiments/sasrec/all-positions-training-2026-09-11.json`](experiments/sasrec/all-positions-training-2026-09-11.json).
