@@ -1,6 +1,8 @@
 # ADR 0019 — Multi-retriever mixing and diversity re-ranking (Rung 5)
 
-**Status:** Proposed
+**Status:** Accepted
+
+**Decision note (2026-09-15).** Approved by the owner. Increment 1 (the fixed-budget attributed union of SASRec, corrected two-tower and item-item candidates, scored by union recall@500 against the best single source) starts after the SASRec bundle's serving gate and champion decision (W10/W11) and after the copied-prefix data-path rewrite (O-22), one job on the full data at a time. Both learned retrievers now clear the retrieval gate (SASRec 0.5092, two-tower 0.5113 warm recall@500), which is the condition this rung was written for.
 **Date:** 2026-09-05
 
 ## Context
