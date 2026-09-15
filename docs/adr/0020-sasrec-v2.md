@@ -1,6 +1,8 @@
 # ADR 0020 — SASRec v2: capacity, sequence length, and the sampling ceiling
 
-**Status:** Proposed — control stop triggered; owner decision required
+**Status:** Accepted — with the O-22 amendment
+
+**Decision note (2026-09-15).** Approved by the owner. The all-positions control fired this ADR's stop rule (−4.62% warm recall@500 at full scale, 9.8× faster; PR #183), and the owner's answer to O-22 is that the copied-prefix objective stays the objective of record. Every predeclared cell therefore runs on the copied-prefix objective once its data path is rewritten to be memory-bounded (M4b: streamed or gathered examples, sequence length 200 feasible, equality-tested against the current builder). All-positions remains a named ablation, never the baseline. The GPU trigger in O-3 is unchanged: CPU until a predeclared cell costs more than one night on the fixed data path.
 **Date:** 2026-09-05
 
 **Cell 0 control outcome (2026-09-10/11):** Owner-approved W28 implemented
