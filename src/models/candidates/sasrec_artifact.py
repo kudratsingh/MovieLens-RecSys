@@ -22,7 +22,13 @@ from src.models.popularity_artifact import (
     write_popularity_order,
 )
 
-from .sasrec import SASRecConfig, SASRecEncoder, SASRecModel
+from .sasrec import (
+    ALL_POSITION_TRAINING_OBJECTIVE,
+    LEGACY_TRAINING_OBJECTIVE,
+    SASRecConfig,
+    SASRecEncoder,
+    SASRecModel,
+)
 
 ARTIFACT_SCHEMA_VERSION = 1
 ARTIFACT_TYPE = "sasrec-retriever"
@@ -48,6 +54,7 @@ class SASRecArtifactManifest:
     sequence_order: str = "oldest-to-newest"
     padding: str = "left-zero"
     retrieval_normalization: str = "l2"
+    training_objective: str = LEGACY_TRAINING_OBJECTIVE
     # The published fill order, when this artifact has one. Optional rather than
     # required because artifacts exported before it existed — the pinned
     # full-data encoder among them — must keep loading, and their manifests
@@ -79,6 +86,7 @@ class SASRecArtifactManifest:
                 sequence_order=str(raw["sequence_order"]),
                 padding=str(raw["padding"]),
                 retrieval_normalization=str(raw["retrieval_normalization"]),
+                training_objective=str(raw.get("training_objective", LEGACY_TRAINING_OBJECTIVE)),
                 popularity_filename=(
                     None
                     if raw.get("popularity_filename") is None
@@ -102,6 +110,11 @@ class SASRecArtifactManifest:
             raise ValueError("unsupported SASRec sequence contract")
         if self.retrieval_normalization != "l2":
             raise ValueError("unsupported SASRec retrieval normalization")
+        if self.training_objective not in {
+            LEGACY_TRAINING_OBJECTIVE,
+            ALL_POSITION_TRAINING_OBJECTIVE,
+        }:
+            raise ValueError(f"unsupported SASRec training objective {self.training_objective!r}")
         model_path = directory / self.model_filename
         if not model_path.is_file():
             raise ValueError(f"SASRec model artifact is missing: {self.model_filename}")
@@ -163,6 +176,7 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
         "artifact_type": ARTIFACT_TYPE,
         "config": model.config.as_params(),
         "cold_start_threshold": model.cold_start_threshold,
+        "training_objective": model._training_objective,
         "item_ids": item_ids,
         "unknown_index": model._unknown_index,
         "vocabulary_sha256": vocabulary_sha256,
@@ -181,6 +195,7 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
         loss=model.config.loss,
         negative_count=model.config.negative_count,
         calibration_t=model.config.calibration_t,
+        training_objective=model._training_objective,
         popularity_filename=POPULARITY_ARTIFACT_FILENAME,
         popularity_sha256=popularity_sha256,
     )
@@ -236,6 +251,7 @@ def load_sasrec(manifest_path: Path) -> SASRecModel:
             )
         state[name] = tensor
     model._encoder.load_state_dict(state, strict=True)
+    model._training_objective = str(metadata.get("training_objective", LEGACY_TRAINING_OBJECTIVE))
     _attach_popularity_order(model, manifest, manifest_path.parent)
     model.build_index()
     return model
@@ -351,6 +367,8 @@ def _validate_metadata(metadata: dict[str, Any], manifest: SASRecArtifactManifes
     }
     if any(config.get(key) != value for key, value in manifest_fields.items()):
         raise ValueError("SASRec artifact config does not match its manifest")
+    if metadata.get("training_objective", LEGACY_TRAINING_OBJECTIVE) != manifest.training_objective:
+        raise ValueError("SASRec artifact training objective does not match its manifest")
 
 
 def _integer_list(value: Any, *, name: str) -> list[int]:

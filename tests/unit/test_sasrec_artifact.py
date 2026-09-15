@@ -10,7 +10,11 @@ import pandas as pd
 import pytest
 import torch
 
-from src.models.candidates.sasrec import SASRecConfig, SASRecModel
+from src.models.candidates.sasrec import (
+    ALL_POSITION_TRAINING_OBJECTIVE,
+    SASRecConfig,
+    SASRecModel,
+)
 from src.models.candidates.sasrec_artifact import (
     MANIFEST_FILENAME,
     MODEL_FILENAME,
@@ -63,6 +67,8 @@ def test_export_load_preserves_embeddings_and_candidates(tmp_path: Path) -> None
     )
     assert not (set(expected_candidates) & (set(history) | excluded))
     assert manifest == SASRecArtifactManifest.load(tmp_path / "run" / MANIFEST_FILENAME)
+    assert manifest.training_objective == ALL_POSITION_TRAINING_OBJECTIVE
+    assert loaded._training_objective == ALL_POSITION_TRAINING_OBJECTIVE
 
 
 def test_export_is_byte_deterministic_and_never_overwrites(tmp_path: Path) -> None:

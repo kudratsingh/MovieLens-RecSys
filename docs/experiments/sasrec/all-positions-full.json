@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "W28 full-data measurement of canonical all-position SASRec training.",
+    "Architecture and optimization match the frozen SASRec v1 BCE cell; only",
+    "the training objective changes. Run exactly once after the 6% check and",
+    "retain its model archive, MLflow evidence, and console log regardless of result."
+  ],
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "allpos-full-bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42
+    }
+  ]
+}

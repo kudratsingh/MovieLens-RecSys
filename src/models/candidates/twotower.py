@@ -48,6 +48,7 @@ from .item_features import (
 )
 from .popularity import PopularityModel
 from .sequence_data import build_strict_prefix_examples
+from .sequence_data import build_user_history as build_user_history  # re-exported for the guardrail
 
 logger = logging.getLogger(__name__)
 
@@ -233,25 +234,6 @@ class ItemTower(nn.Module):
             item_vectors = gate * item_vectors + (1.0 - gate) * side_vectors
             item_vectors = item_vectors.masked_fill((item_ids == 0).unsqueeze(-1), 0.0)
         return F.normalize(item_vectors, p=2, dim=-1)
-
-
-def build_user_history(
-    train: pd.DataFrame,
-    item_to_index: dict[int, int],
-) -> dict[int, list[int]]:
-    """Per-user chronological list of dense item indices from train.
-
-    Sorted by ``(userId, timestamp)`` in-place at the DataFrame level, then
-    materialized per user as a list of dense indices. The list order *is*
-    the point-in-time invariant that ADR 0006's canary test enforces —
-    downstream training code must slice `history[max(0, i-N):i]` at
-    position `i` and never look at `history[i:]`.
-    """
-    ordered = train.sort_values(["userId", "timestamp"], kind="stable")
-    ordered_dense = ordered["movieId"].map(item_to_index).astype("int64")
-    # groupby preserves the sorted order of rows within each group.
-    grouped = ordered.assign(_dense=ordered_dense).groupby("userId")["_dense"].apply(list)
-    return dict(grouped)
 
 
 def _log_uniform_probabilities(n_items: int) -> np.ndarray:
