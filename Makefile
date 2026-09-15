@@ -555,6 +555,15 @@ db-migrate-status:
 # `--yes` is never passed from here, so a stray `make promote` in a shell that
 # happens to hold production credentials refuses rather than repointing
 # production; a deliberate production run says so on the command line.
+#
+# There is no TARGET or DATABASE variable here on purpose: the DSN comes from
+# POSTGRES_* the same way every other offline entrypoint's does. Which is why
+# the tool prints the host, port, database and tenant it resolved before it
+# touches anything -- an ephemeral stack publishes Postgres on a port it had to
+# choose, and `make promote TENANT=demo` in a shell that never set POSTGRES_PORT
+# is talking to whatever is on 5432, usually this machine's own database.
+#
+#   POSTGRES_PORT=55432 make promote TENANT=demo BUNDLE=models/serving
 PROMOTE_ARGS ?=
 
 promote:
@@ -576,8 +585,11 @@ promote-revert:
 # The multi-environment plan names docker-compose.{dev,staging,prod}.yml, but
 # the dev stack already exists and already *is* two files: docker-compose.yml is
 # the stores and a Keycloak with dev credentials, docker-compose.demo.yml is the
-# application layer at ENVIRONMENT=dev over the reviewed 120-title fixture --
-# which is the "smaller dataset snapshot in dev" the plan asks for. A
+# application layer at ENVIRONMENT=dev over the demo fixture -- 515 interactions
+# across nine users, which is the "smaller dataset snapshot in dev" the plan asks
+# for. (The *catalog* is the full MovieLens 62,423 titles, because a retriever
+# cannot be served ids the database has no rows for; it is the interactions that
+# are small.) A
 # docker-compose.dev.yml would have exactly one job left: turning DEV_AUTH_BYPASS
 # on, which docker-compose.demo.yml explicitly sets to "false" so the browser
 # journeys and the load gate run against real Keycloak tokens. Flipping it in an

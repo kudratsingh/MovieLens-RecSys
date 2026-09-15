@@ -175,3 +175,133 @@ Full tables, loss curves and wall-clocks are in [`results.md`](../results.md)'s 
 - **The pilot's 116-user warm slice misled the ordering.** Plausible for differences of 0.005 between two-tower cells; not for the 8× gap to item-item or the 4× gap to popularity, and the full-dataset runs reproduce the ordering. If a re-seeded pilot inverted the temperature finding, finding #2 would need re-running; findings #1 and #3 would not.
 - **The temperature helps at a budget nobody here could afford.** The loss at τ = 0.1 was still falling when every run stopped, so "it turns around after N more epochs" is not excluded by anything measured here. It is made unlikely by recall falling across the epochs of every temperature cell at the default learning rate, in the same direction, from the first epoch on — and by the full-dataset budget run, which carried this ADR's own configuration to eight epochs on all 19,867,692 training pairs. Epochs 4 through 8 cost an hour and three quarters of extra fit, bought **0.0011 nats** (10.2718 → 10.2707, with the eighth epoch worse than the seventh), and ended at warm recall@500 of **0.0451 — below the 0.0466 the third epoch reached.** A budget nearly three times v1's made the model very slightly worse. The per-epoch embedding-spread metric added in the same PR says why in one line: mean pairwise item cosine moves 0.130 → 0.138 and its standard deviation 0.737 → 0.731 across all eight epochs, so the geometry is settled inside the first epoch and seven more do not disturb it.
 - **Retrieval, not the towers, is losing the recall.** FAISS IVF-Flat at `nprobe = 10` scans about a tenth of the catalog, and this ADR asserts ">0.95 recall vs exact at nprobe=10" without ever having measured it on these embeddings. So the sweep measured it: a cell identical to `lr1e-3-t0.05` except for exact inner-product search finishes at warm recall@500 of **0.0432 against the IVF twin's 0.0406**, having been *lower* than IVF at the first two epochs. Removing the approximation entirely moves recall by less than 0.003 and leaves the model 4.6× below popularity, so this ADR's IVF choice is exonerated and every recall number in the sweep is a measurement of the embeddings rather than of the index. The two cells' per-epoch losses are bit-identical (10.4800 → 9.1271 → 8.8088), which is also a free determinism check on the trainer.
+
+## 2026-09-05 — environment note: `OMP_NUM_THREADS=1` alone does not make this ADR's runs reproducible
+
+This note is about the conditions two-tower runs are measured under, not about the architecture.
+Nothing in the Decision changes. It exists for two reasons: the standing mitigation for this model's
+OpenMP problem is documented in two places and is **not sufficient**, and the corrected 6% figure in
+the amendment at the top of this file turns out to have been taken under a condition nobody wrote
+down.
+
+### The standing mitigation is incomplete
+
+[`results.md`](../results.md) and the `Makefile` both say the two-tower needs `OMP_NUM_THREADS=1` on a
+macOS wheel set where torch and faiss each bring their own `libomp`, "otherwise it segfaults". That is
+true, and it is half the story: the pin does not remove the collision, it relocates it. Measured on
+the development machine (torch 2.12.0 installed 2026-05-20, faiss-cpu 1.14.3 installed 2026-07-03,
+three `libomp.dylib` copies present — `torch/lib/`, `faiss/.dylibs/`, `sklearn/.dylibs/`) with a
+ten-second script that does nothing but `import faiss`, `import torch`, a few torch matmuls, and one
+`IndexFlatIP` build:
+
+| condition | outcome |
+|---|---|
+| `OMP_NUM_THREADS` unset | **SIGSEGV (139)** inside torch's parallel region, before faiss is reached |
+| `OMP_NUM_THREADS=1` | **SIGABRT (134)**, `OMP: Error #15`, at the **first faiss index build** |
+| `OMP_NUM_THREADS=1` + `KMP_DUPLICATE_LIB_OK=TRUE` | exit 0, clean, no error emitted |
+
+The middle row killed a full-data run on 2026-09-05: epoch 1 of 3 completed cleanly (loss 8.4730,
+26m30s) and the process aborted immediately after, at `on_epoch`'s `build_index()` — the first
+`faiss.IndexFlatIP` construction in the process. Memory was not a factor and was not assumed to be
+one: RSS held ~5.4 GB and free+inactive never fell below 6.53 GiB, sampled once a minute throughout.
+
+This also disposes of the remedy `results.md` proposes — "defer the `faiss` import until after the
+training loop". The import is not the trigger: `import faiss` already sits at module top in
+`candidates/twotower.py` and does not collide. The **first index construction** is the trigger, and
+it cannot be deferred past the per-epoch evaluation without deleting the per-epoch recall curve, nor
+past the final evaluation at all.
+
+### The workaround is validated for this workload, by reproduction rather than by argument
+
+`KMP_DUPLICATE_LIB_OK=TRUE` is described by the OpenMP runtime itself as "unsafe, unsupported,
+undocumented", warning that it "may cause crashes or silently produce incorrect results". That warning
+is a reason to measure, not a reason to assume. The 6% pilot was re-run under the flag in the recorded
+conditions of the corrected diagnostic (seed 42, exact FAISS, 16,384 sampled negatives, CSV input,
+throwaway file-store MLflow) and compared at full double precision against run
+`8a22ed513b8f457eb0d5f93b826dc82a`:
+
+| metric | re-run under the flag | recorded in the amendment above | agreement |
+|---|---|---|---|
+| warm recall@500 | 0.3759484158672824 | 0.3759484158672824 | exact |
+| warm NDCG@500 | 0.14839975118338375 | 0.14839975118338375 | exact |
+| cold recall@500 | 0.48295870268712504 | 0.48295870268712504 | exact |
+| cold NDCG@500 | 0.3844085561908767 | 0.3844085561908767 | exact |
+| overall recall@500 | 0.4083757755096589 | 0.4083757755096589 | exact |
+| overall NDCG@500 | 0.21991757088262404 | 0.21991757088262404 | exact |
+
+Every epoch agrees too — losses 9.8231 / 8.8138 / 8.6116, per-epoch warm recall 0.3339 / 0.3589 /
+0.3759, and the embedding-spread pair at all three — on an identical input frame (9,752 of 162,541
+users, 1,517,399 rows, cutoff 1471288304, 1,198,161 pairs across 8,316 users and 19,005 items) and
+under the same protocol hash `sha256:090985d7…`. A flag that silently corrupted arithmetic would not
+land on the same sixteen significant figures six times over, three epochs deep.
+
+This is a reproduction check, not a second measurement: it makes no new claim, adds no number to the
+record, and therefore does not sit against the one-run-per-configuration policy.
+
+### The consequence for the record
+
+The corrected 6% result **stands**, and the amendment above is unaffected. But the code path is
+deterministically fatal on this machine without the flag, so that diagnostic cannot have been produced
+without it or something equivalent, and the condition went unrecorded. It is recorded now: **a
+two-tower run on this machine requires `OMP_NUM_THREADS=1` *and* `KMP_DUPLICATE_LIB_OK=TRUE`**, and
+any two-tower run reported without both stated should be treated as having an unrecorded environment.
+
+### The clean fix, deliberately not taken here
+
+With `faiss_exact = True` the index is `IndexFlatIP` — exact inner product — which is a matrix
+multiply and a top-k. Computing it in torch would remove faiss from the training process altogether
+and retire the collision rather than suppress it, with results identical by construction rather than
+by measurement. That is a code change to a champion-adjacent model and wants its own PR and its own
+tests; it is recorded here as the follow-up, not adopted in this note.
+
+## 2026-09-06 — full-data result note: the corrected v2 clears the retrieval gate
+
+The architecture in this ADR's Decision has now been measured once at full scale
+with the FAISS row-mapping defect fixed, and the result reverses this file's
+2026-08-30 sweep note in the direction that note itself anticipated might be
+possible only if the below-popularity ordering turned out to be an artefact.
+
+Run `2d7f1a49008d4e9d8791d4ca8598d613`, seed 42, three epochs in 6,879.3 s, full
+25M, protocol `sha256:b4ed5afa…`. Warm recall@500 **0.5113336991953615** against
+the item-item incumbent's `0.3990569035829944` — **+28.14%**, one-sided 95% lower
+bound +25.28% on the population term, n=1931. Cold is bit-identical, overall
++18.95%. `make gate-retrieval` at both tolerances 0.0 returns **promote**, with
+`serving_eligible` false pending the paired LightGBM guardrail. The numbers, the
+configuration and the caveats are in [`results.md`](../results.md)'s 2026-09-06
+section; the gate document is
+[`fulldata-retrieval-gate-2026-09-06.json`](../experiments/twotower-sweep/fulldata-retrieval-gate-2026-09-06.json).
+
+### What this does to the sweep note above
+
+The 2026-08-30 note's finding #3 — "the model loses to its own fallback", warm
+recall@500 of 0.04–0.05 against popularity's 0.2310 and item-item's 0.4001 — was
+measured through the defective retrieval path and is not evidence about these
+embeddings. Its findings #1 (the learning rate is fine) and #2 (a temperature
+fixes the objective) were about *losses*, which the mapping defect never touched,
+and they stand. So does its finding that IVF was not what was losing the recall:
+that comparison was between two equally mistranslated arms, but this run is exact
+search and lands far above both, which is consistent with the index never having
+been the problem.
+
+**The `logit_temperature = 0.05` proposal in that note is now supported by a
+full-data measurement rather than by a pilot's best-scoring cell.** This run
+carries τ = 0.05 as a v2 default and is the strongest number this architecture has
+produced. That still does not change the default in code — the proposal remains
+the owner's under the roadmap's approval gate, and this note only removes the
+objection that the evidence for it was a 116-user slice.
+
+### What it does not establish
+
+Nothing about promotion: the gate's serving clause is unmet, item-item plus
+LightGBM remains champion, and a retriever that wins recall@500 can still lose end
+to end — SASRec's step 1 is the worked example. Nothing about the effect size of
+the mapping fix in isolation, because this cell also changed the negative count
+(16,384 against the old arm's 4,096) and the index (exact against IVF). And
+nothing about seed stability: one run, population-term uncertainty only, under the
+one-run-per-configuration policy.
+
+Per-epoch warm recall rose `0.4902 -> 0.5058 -> 0.5113` across the three epochs and
+had not flattened, which is worth recording against this ADR's budget question:
+the 2026-08-30 note found eight epochs *worse* than three under the defective path,
+whereas here the metric was still climbing when the budget ran out. Whether more
+epochs help is now an open question again rather than a settled negative.

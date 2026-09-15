@@ -34,7 +34,7 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 
-from src.config import Settings
+from src.config import DEFAULT_TENANT_ID, Settings
 from src.feature_contract import FEATURE_COLUMNS
 from src.models.artifacts import ArtifactRef, CandidateIndex, ServingManifest, file_sha256
 from src.release import promote
@@ -44,6 +44,7 @@ from src.release.promote import (
     build_promotion,
     build_revert,
     check_run_is_authorized,
+    check_target_is_intended,
     run_promotion,
     snapshot_path_for,
 )
@@ -475,6 +476,215 @@ def test_dev_needs_no_confirmation() -> None:
     assert "no confirmation" in check_run_is_authorized(_settings("dev"), confirmed=False)
 
 
+# --- which database --------------------------------------------------------
+#
+# The near-miss these cover, in full, because it is the reason the guard exists.
+# `make promote TENANT=demo BUNDLE=...` was run in a shell that had never set
+# POSTGRES_PORT, so `Settings.database_url` resolved to localhost:5432 — this
+# machine's own development Postgres — while the ephemeral demo stack the
+# promotion was for was published on 55432. It would have *succeeded*: migration
+# 0016 seeds a `demo` row into every database that has been migrated, so the
+# tenant lookup finds one either way and the summary reads exactly like a good
+# run. It was caught only because the operator ran `--dry-run` first and compared
+# `champion_before.updated_at` against a row they had already read by hand,
+# which is a habit and not a mechanism.
+
+
+def _unstated_port(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """The near-miss's shell: nothing anywhere says which Postgres.
+
+    Both sources have to be closed off. ``_env_file=None`` rules out a
+    checkout's ``.env`` and ``delenv`` rules out the environment, because the
+    guard reads ``model_fields_set`` and either one would legitimately put
+    ``postgres_port`` in it.
+    """
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    return Settings(_env_file=None)
+
+
+def test_a_non_default_tenant_against_an_unstated_port_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(PromotionRefusedError, match="POSTGRES_PORT was never set"):
+        check_target_is_intended(_unstated_port(monkeypatch), tenant_id=TENANT, confirmed=False)
+
+
+def test_the_operator_who_means_it_is_not_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--yes is the whole override. A guard nobody can get past gets worked around."""
+    decision = check_target_is_intended(
+        _unstated_port(monkeypatch), tenant_id=TENANT, confirmed=True
+    )
+    assert "--yes" in decision
+
+
+def test_a_stated_port_is_taken_at_its_word(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same 5432, said out loud, is a target and not an accident.
+
+    This is the test that pins the guard to *whether the port was configured*
+    rather than to the number it came out as. Keying on the value would refuse
+    a deployment that legitimately runs Postgres on the default port, and would
+    teach whoever operates it to pass --yes by reflex.
+    """
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    decision = check_target_is_intended(Settings(_env_file=None), tenant_id=TENANT, confirmed=False)
+    assert "stated target" in decision
+
+
+def test_the_default_tenant_is_at_home_on_the_default_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MovieLens lives in the database the defaulted DSN points at; no friction."""
+    decision = check_target_is_intended(
+        _unstated_port(monkeypatch), tenant_id=DEFAULT_TENANT_ID, confirmed=False
+    )
+    assert "default tenant" in decision
+
+
+def test_the_cli_refuses_the_near_miss_without_opening_a_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The run that would have silently repointed the wrong database.
+
+    `create_engine` is replaced with something that fails the test if it is
+    called at all: a refusal has to happen before the connection, so the wrong
+    database is never even read.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.setattr(promote, "Settings", lambda: Settings(_env_file=None, environment="dev"))
+
+    def _no_connection(*args: Any, **kwargs: Any) -> Engine:
+        raise AssertionError("a refused promotion must not reach a database")
+
+    monkeypatch.setattr(promote, "create_engine", _no_connection)
+
+    exit_code = promote.main(
+        [
+            "--tenant",
+            TENANT,
+            "--bundle",
+            str(_bundle(tmp_path / "bundle")),
+            "--snapshot-dir",
+            str(tmp_path / "snapshots"),
+        ]
+    )
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "POSTGRES_PORT was never set" in err
+    # The target was on screen before the refusal explained itself, and the
+    # snapshot — which a promotion writes before it writes the row — was never
+    # created, so nothing on this machine records an attempt that did not happen.
+    assert err.index("TARGET") < err.index("POSTGRES_PORT was never set")
+    assert "localhost:5432/movielens" in err
+    assert not (tmp_path / "snapshots").exists()
+
+
+def test_the_cli_still_promotes_when_the_operator_confirms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _tenants_engine()
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.setattr(promote, "Settings", lambda: Settings(_env_file=None, environment="dev"))
+    monkeypatch.setattr(promote, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(engine, "dispose", lambda *args, **kwargs: None)
+
+    exit_code = promote.main(
+        [
+            "--tenant",
+            TENANT,
+            "--bundle",
+            str(_bundle(tmp_path / "bundle")),
+            "--snapshot-dir",
+            str(tmp_path / "snapshots"),
+            "--yes",
+        ]
+    )
+
+    assert exit_code == 0
+    assert _row(engine)["champion_ranker_version"] == "served-lgbm-v1"
+
+
+def test_the_target_is_printed_before_the_database_is_touched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ordering, asserted rather than assumed.
+
+    Reading the captured stream from inside `create_engine` dates the banner
+    against the first moment this tool could read or write anything at all —
+    the engine does not exist before this call, so neither does any statement.
+    """
+    engine = _tenants_engine()
+    at_connect: list[str] = []
+
+    def _capture_then_connect(*args: Any, **kwargs: Any) -> Engine:
+        at_connect.append(capsys.readouterr().err)
+        return engine
+
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("POSTGRES_PORT", "55432")
+    monkeypatch.setattr(promote, "create_engine", _capture_then_connect)
+    monkeypatch.setattr(engine, "dispose", lambda *args, **kwargs: None)
+
+    exit_code = promote.main(
+        [
+            "--tenant",
+            TENANT,
+            "--bundle",
+            str(_bundle(tmp_path / "bundle")),
+            "--snapshot-dir",
+            str(tmp_path / "snapshots"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert "TARGET  localhost:55432/movielens  tenant=demo  operation=promote" in at_connect[0]
+
+
+def test_revert_announces_the_target_and_is_guarded_the_same_way(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An undo writes the row too, so it gets both halves of the fix."""
+    engine = _tenants_engine()
+    snapshots = tmp_path / "snapshots"
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setattr(promote, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(engine, "dispose", lambda *args, **kwargs: None)
+
+    monkeypatch.setenv("POSTGRES_PORT", "55432")
+    promote.main(
+        [
+            "--tenant",
+            TENANT,
+            "--bundle",
+            str(_bundle(tmp_path / "bundle")),
+            "--snapshot-dir",
+            str(snapshots),
+        ]
+    )
+    capsys.readouterr()
+
+    exit_code = promote.main(["--tenant", TENANT, "--revert", "--snapshot-dir", str(snapshots)])
+    err = capsys.readouterr().err
+
+    assert exit_code == 0
+    assert "TARGET  localhost:55432/movielens  tenant=demo  operation=revert" in err
+    assert _row(engine)["champion_ranker_version"] == "demo-lgbm-v1"
+
+    # And the same undo, in a shell that never said which database: refused
+    # before the connection, with the row left where the revert above put it.
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.setattr(promote, "Settings", lambda: Settings(_env_file=None, environment="dev"))
+    settled = _row(engine)
+
+    exit_code = promote.main(["--tenant", TENANT, "--revert", "--snapshot-dir", str(snapshots)])
+
+    assert exit_code == 1
+    assert "POSTGRES_PORT was never set" in capsys.readouterr().err
+    assert _row(engine) == settled
+
+
 # --- the CLI ---------------------------------------------------------------
 
 
@@ -483,8 +693,12 @@ def test_the_cli_promotes_end_to_end(
 ) -> None:
     engine = _tenants_engine()
     monkeypatch.setenv("ENVIRONMENT", "dev")
-    # The DSN is never opened: the one engine this run gets is the SQLite fixture
-    # above. Promoting against a real database is not a unit test's business.
+    # A stated port, because this is the happy path and the target guard below
+    # refuses a `demo` promotion in a shell that never named a database. The DSN
+    # is never opened either way: the one engine this run gets is the SQLite
+    # fixture above. Promoting against a real database is not a unit test's
+    # business.
+    monkeypatch.setenv("POSTGRES_PORT", "55432")
     monkeypatch.setattr(promote, "create_engine", lambda *args, **kwargs: engine)
     # `main` disposes the engine it built, which for a StaticPool closes the one
     # connection the ATTACHed in-memory database lives in — so the assertions

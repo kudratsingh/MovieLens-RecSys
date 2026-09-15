@@ -263,13 +263,13 @@ population than the models do.
 
 | Population | Movies | TMDB-resolved | With overview | With keywords | With cast |
 |---|---:|---:|---:|---:|---:|
-| Whole catalog | 62,423 | *pending the pull* | | | |
-| Cold items (no train interaction) | 27,962 | *pending the pull* | | | |
-| No MovieLens genres | 3,413 | *pending the pull* | | | |
+| Whole catalog | 62,423 | 61,468 (98.5%) | 61,365 | 47,815 | 59,763 |
+| Cold items (no train interaction) | 27,962 | 27,483 (98.3%) | 27,407 | 19,852 | 26,443 |
+| No MovieLens genres (whole catalog; ADR 0017's 3,413 is the cold subset) | 5,062 | 4,893 (96.7%) | 4,862 | 2,602 | 4,464 |
 
-This table is filled from `tmdb-coverage.md` once the snapshot exists. It is left visibly
-empty rather than estimated: the entire argument for increment 2 rests on these numbers,
-and a plausible guess in their place would be worse than a blank.
+Filled from the 2026-09-05 pull (`tmdb-coverage.md`, snapshot DVC md5 `da35a30da8b56ff7de01c9f08bb94be1.dir`,
+62,081 requests at a self-throttled 7.1 req/s after 429s, 0 failures, 142 minutes). The argument for
+increment 2 now rests on measured numbers: 98% of cold items have an overview and 95% have cast.
 
 ## What this does not settle
 
