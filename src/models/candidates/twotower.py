@@ -47,7 +47,8 @@ from .item_features import (
     fit_item_feature_schema,
 )
 from .popularity import PopularityModel
-from .sequence_data import build_strict_prefix_examples, build_user_history
+from .sequence_data import build_strict_prefix_examples
+from .sequence_data import build_user_history as build_user_history  # re-exported for the guardrail
 
 logger = logging.getLogger(__name__)
 

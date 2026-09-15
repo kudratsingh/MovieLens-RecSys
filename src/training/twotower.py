@@ -64,7 +64,9 @@ from src.models.candidates import routing
 from src.models.candidates.twotower import TwoTowerConfig, TwoTowerModel
 from src.training import protocol_manifest
 from src.training.candidate_data import (
-    INPUT_DIR_ENV_VAR,
+    INPUT_DIR_ENV_VAR as INPUT_DIR_ENV_VAR,  # re-exported: sweeps and exporters import it from here
+)
+from src.training.candidate_data import (
     PHASE_2_EXPERIMENT,
     load_inputs,
     subsample_users,
