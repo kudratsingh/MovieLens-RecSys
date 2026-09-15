@@ -110,7 +110,9 @@ export function LibrarySpotlight({
     // moved past is worth nothing.
     const controller = new AbortController();
     let current = true;
+    let settled = false;
     void readDetail(movieId, controller.signal).then((state) => {
+      settled = true;
       if (!current) return;
       setDetails((held) => ({
         ...held,
@@ -122,6 +124,11 @@ export function LibrarySpotlight({
     return () => {
       current = false;
       controller.abort();
+      // An aborted read must not count as "already asked for": under React's
+      // development double-invocation the effect is cleaned up and re-run
+      // before the first read settles, and a guard that survived that would
+      // leave the card without its enrichment for good.
+      if (!settled) requested.current.delete(movieId);
     };
   }, [movieId, readDetail]);
 

@@ -43,6 +43,35 @@ def test_full_run_freezes_winning_pilot_cell() -> None:
     assert config.seed == 42
 
 
+@pytest.mark.parametrize(
+    ("path", "fraction", "label"),
+    [
+        (
+            "docs/experiments/sasrec/all-positions-pilot-6pct.json",
+            0.06,
+            "allpos-pilot6-bce-neg32",
+        ),
+        (
+            "docs/experiments/sasrec/all-positions-full.json",
+            1.0,
+            "allpos-full-bce-neg32",
+        ),
+    ],
+)
+def test_all_position_measurements_hold_the_v1_cell_fixed(
+    path: str, fraction: float, label: str
+) -> None:
+    v1_spec = json.loads(Path("docs/experiments/sasrec/full.json").read_text())
+    _v1_fraction, v1_cells = parse_grid(v1_spec)
+    spec = json.loads(Path(path).read_text())
+    measured_fraction, cells = parse_grid(spec)
+
+    assert measured_fraction == fraction
+    assert len(cells) == 1
+    assert cells[0][0] == label
+    assert cells[0][1] == v1_cells[0][1]
+
+
 def test_unknown_grid_field_fails_loudly() -> None:
     with pytest.raises(ValueError, match="unknown"):
         parse_grid({"cells": [{"label": "bad", "layers": 2}]})

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -13,6 +16,7 @@ from src.models.candidates.sasrec import (
     SASRecModel,
     gbce_beta,
     sample_negatives,
+    sample_position_negatives,
     sampled_gbce_loss,
 )
 
@@ -136,6 +140,116 @@ def test_sampled_negatives_exclude_prefix_target_and_duplicates() -> None:
         assert not (set(sampled.tolist()) & set(history.tolist()))
         assert positive.item() not in sampled.tolist()
         assert len(set(sampled.tolist())) == len(sampled)
+
+
+def test_position_negatives_exclude_only_the_targets_causal_prefix() -> None:
+    sequences = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 7]])
+    prediction_windows = torch.tensor([0, 0, 1])
+    prediction_positions = torch.tensor([1, 3, 2])
+    positives = torch.tensor([8, 9, 10])
+
+    negatives = sample_position_negatives(
+        sequences,
+        prediction_windows,
+        prediction_positions,
+        positives,
+        n_items=14,
+        count=3,
+        rng=np.random.default_rng(42),
+    )
+
+    prefixes = ({1}, {1, 2, 3}, {4, 5, 6})
+    for prefix, positive, sampled in zip(prefixes, positives, negatives):
+        assert not (set(sampled.tolist()) & prefix)
+        assert int(positive) not in sampled.tolist()
+        assert len(set(sampled.tolist())) == len(sampled)
+
+
+def test_fit_encodes_one_window_once_for_all_of_its_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = SASRecEncoder.encode_positions
+
+    def counted(self: SASRecEncoder, sequences: torch.Tensor) -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        return original(self, sequences)
+
+    monkeypatch.setattr(SASRecEncoder, "encode_positions", counted)
+    train = pd.DataFrame(
+        [(user, user * 100 + item, item) for user in (1, 2) for item in range(5)],
+        columns=["userId", "movieId", "timestamp"],
+    )
+    model = SASRecModel(config=_config(batch_size=8), cold_start_threshold=None).fit(
+        train, retrieval_backend="torch"
+    )
+
+    assert calls == 1
+    assert model._training_stats is not None
+    assert model._training_stats.n_sequences == 2
+    assert model._training_stats.n_targets == 8
+
+
+def test_torch_exact_top_k_matches_exact_faiss() -> None:
+    model = _two_block_retrieval_model()
+    history = sorted(model._item_to_index)[:12]
+    faiss_scored = model.recommend_from_history_scored(history, 50)
+
+    model.build_exact_tensor_index()
+    torch_scored = model.recommend_from_history_scored(history, 50)
+
+    assert [movie_id for movie_id, _score in torch_scored] == [
+        movie_id for movie_id, _score in faiss_scored
+    ]
+    assert np.allclose(
+        [score for _movie_id, score in torch_scored],
+        [score for _movie_id, score in faiss_scored],
+        atol=1e-6,
+    )
+
+
+def test_invalid_retrieval_backend_fails_before_training() -> None:
+    model = SASRecModel(config=_config(), cold_start_threshold=None)
+
+    with pytest.raises(ValueError, match="unsupported retrieval backend"):
+        model.fit(_train(), retrieval_backend="annoy")  # type: ignore[arg-type]
+
+    assert model._encoder is None
+
+
+def test_sasrec_training_module_does_not_import_faiss() -> None:
+    script = """
+import sys
+import pandas as pd
+from src.models.candidates.sasrec import SASRecConfig, SASRecModel
+import src.training.sasrec
+ratings = pd.DataFrame(
+    [(user, user * 100 + item, item) for user in (1, 2) for item in range(5)],
+    columns=['userId', 'movieId', 'timestamp'],
+)
+config = SASRecConfig(
+    max_sequence_length=5, hidden_dim=8, num_blocks=1, num_heads=2,
+    feedforward_dim=16, dropout=0.0, negative_count=2, batch_size=8,
+    epochs=1, faiss_exact=True,
+)
+model = SASRecModel(config=config, cold_start_threshold=None).fit(
+    ratings, retrieval_backend='torch'
+)
+assert model.recommend(1, 2)
+assert 'faiss' not in sys.modules
+"""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_gbce_endpoints_and_bce_equivalence() -> None:
