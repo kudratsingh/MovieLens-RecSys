@@ -185,3 +185,6 @@ merge on green, execute W11 (champion swap) after M5 passes. Worktrees live unde
 Status ledger + CLAUDE.md brought to the 5–11 Sept reading (PR #184). `.coordination/` is now TRACKED in git
 (committed on the same PR) so any clone can resume from it; keep it free of secrets (the TMDB token lives
 only in the gitignored `.env`). Dependabot: 11 alerts on main (4 critical) — queued as M2b for Megatron.
+
+## 2026-09-15 (orchestrator working alone; Megatron idle)
+Merged #184 (ledger + this directory now tracked). Approved and merging: #174 (ADR 0019), #179 (ADR 0020 with O-22 amendment). Fixed and merging: #183 (re-exports), #185 (web Dependabot). Queue after these: W10 latency gate → W11 champion swap (orchestrator or Megatron), M4b copied-prefix data path, M6 cold cohort, Rung 5 increment 1, ADR 0020 cells. The `starlette` image-build failure seen on #174 was a transient index error, not a pin problem.
