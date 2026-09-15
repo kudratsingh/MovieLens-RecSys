@@ -152,7 +152,7 @@ ARTIFACT_RUN = docker run --rm --platform $(ARTIFACT_PLATFORM) \
 # that finds it at this path.
 SYNTH_COLD_PARQUET ?= data/synthetic/cold_start/v1/users.parquet
 
-.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
+.PHONY: install lint format typecheck test train train-popularity train-cf train-itemitem train-last-item train-content train-twotower train-sasrec sasrec-popularity-order train-ranker train-sasrec-ranker train-sasrec-ranker-bundles train-sasrec-ranker-scores gate gate-retrieval retrieval-tolerance-study serving-artifacts serving-artifacts-image serving-artifacts-check serving-artifacts-publish serving-artifacts-verify serve infra-up infra-down data-download data-ingest data-ingest-reset eda tmdb-ingest tmdb-load tmdb-coverage synth-cold-cohort db-migrate db-migrate-down db-migrate-status promote promote-revert catalog-verify up-dev demo-up demo-down demo-reset demo-seed demo-materialize demo-smoke demo-audits demo-load-quiesce demo-load-smoke demo-load-nightly demo-load-pages demo-load-pages-nightly demo-reliability-check demo-logs prod-env-guard up-prod prod-stores prod-pull prod-keycloak-provision prod-release prod-serve prod-seed prod-deploy prod-rollback prod-verify prod-load prod-rollback-rehearsal prod-backup prod-edge-ca prod-logs prod-down prod-reset staging-env-guard up-staging staging-stores staging-pull staging-release staging-serve staging-verify staging-edge-ca staging-logs staging-down staging-reset keycloak-export-realms web-install web-dev web-lint web-typecheck web-test web-e2e web-build diagrams api-contract api-contract-check web-api-types web-api-types-check
 
 install:
 	pip install -e ".[dev]"
@@ -233,6 +233,20 @@ train-twotower:
 
 train-sasrec:
 	python -m src.training.sasrec
+
+# The popularity fill order a served SASRec bundle tops a short slate up from.
+# `train-sasrec` writes it into every new artifact directory; this target is for
+# the encoders exported before the role existed, whose directories are immutable.
+# Pass the run's expected row count and cutoff — an ordering built from a
+# different frame than the run fitted on is wrong in a way nothing downstream
+# would notice:
+#
+#   make sasrec-popularity-order OUT=artifacts/sasrec/<run-id> \
+#       EXPECT_ROWS=25000095 EXPECT_CUTOFF=1466837397
+sasrec-popularity-order:
+	python -m src.training.export_popularity_order --output-dir "$(OUT)" \
+		$(if $(EXPECT_ROWS),--expect-rows $(EXPECT_ROWS),) \
+		$(if $(EXPECT_CUTOFF),--expect-cutoff $(EXPECT_CUTOFF),)
 
 train-ranker:
 	python -m src.training.ranker
@@ -527,6 +541,43 @@ db-migrate-down:
 db-migrate-status:
 	alembic current
 
+# --- Champion promotion ------------------------------------------------------
+# Move one tenant's champion coordinates in public.tenants onto a serving
+# bundle, after re-verifying every checksum that bundle pins. Migration 0016
+# seeded the `demo` row and said that moving it "is a promotion"; this is that
+# step. It is deliberately NOT Phase 6's automatic routing gate -- it decides
+# nothing about whether a model is better, it registers the one an operator
+# points it at.
+#
+# Runs on the host interpreter against the migrator DSN, the same way
+# `db-migrate` does: a bundle directory and a migrator credential both have to
+# be in reach, and the slim API image ships no LightGBM to read a manifest with.
+# `--yes` is never passed from here, so a stray `make promote` in a shell that
+# happens to hold production credentials refuses rather than repointing
+# production; a deliberate production run says so on the command line.
+#
+# There is no TARGET or DATABASE variable here on purpose: the DSN comes from
+# POSTGRES_* the same way every other offline entrypoint's does. Which is why
+# the tool prints the host, port, database and tenant it resolved before it
+# touches anything -- an ephemeral stack publishes Postgres on a port it had to
+# choose, and `make promote TENANT=demo` in a shell that never set POSTGRES_PORT
+# is talking to whatever is on 5432, usually this machine's own database.
+#
+#   POSTGRES_PORT=55432 make promote TENANT=demo BUNDLE=models/serving
+PROMOTE_ARGS ?=
+
+promote:
+	@test -n "$(TENANT)" || { echo "usage: make promote TENANT=<tenant id> BUNDLE=<bundle dir>"; exit 2; }
+	@test -n "$(BUNDLE)" || { echo "usage: make promote TENANT=<tenant id> BUNDLE=<bundle dir>"; exit 2; }
+	python -m src.release.promote --tenant $(TENANT) --bundle $(BUNDLE) $(PROMOTE_ARGS)
+
+# The undo, as its own target rather than PROMOTE_ARGS=--revert: whoever types
+# this has a bad champion in front of them and should not also be assembling
+# flags.
+promote-revert:
+	@test -n "$(TENANT)" || { echo "usage: make promote-revert TENANT=<tenant id>"; exit 2; }
+	python -m src.release.promote --tenant $(TENANT) --revert $(PROMOTE_ARGS)
+
 # --- Dev --------------------------------------------------------------------
 # The dev environment's entry point, and deliberately an alias rather than a
 # third Compose file.
@@ -534,8 +585,11 @@ db-migrate-status:
 # The multi-environment plan names docker-compose.{dev,staging,prod}.yml, but
 # the dev stack already exists and already *is* two files: docker-compose.yml is
 # the stores and a Keycloak with dev credentials, docker-compose.demo.yml is the
-# application layer at ENVIRONMENT=dev over the reviewed 120-title fixture --
-# which is the "smaller dataset snapshot in dev" the plan asks for. A
+# application layer at ENVIRONMENT=dev over the demo fixture -- 515 interactions
+# across nine users, which is the "smaller dataset snapshot in dev" the plan asks
+# for. (The *catalog* is the full MovieLens 62,423 titles, because a retriever
+# cannot be served ids the database has no rows for; it is the interactions that
+# are small.) A
 # docker-compose.dev.yml would have exactly one job left: turning DEV_AUTH_BYPASS
 # on, which docker-compose.demo.yml explicitly sets to "false" so the browser
 # journeys and the load gate run against real Keycloak tokens. Flipping it in an

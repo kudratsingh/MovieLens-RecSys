@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "purpose": "Provenance for the full-data popularity fill order published beside the pinned SASRec encoder (W21). The bytes themselves carry none of this on purpose - anything inside them would make the artifact unreproducible from its documented inputs - so this is where it lives until a served bundle's manifest Lineage carries it.",
+  "artifact": {
+    "filename": "popularity-order.json",
+    "artifact_type": "popularity-order",
+    "retriever_role": "popularity",
+    "payload_schema_version": 1,
+    "sha256": "9bc82187c910adf9633315b76294842d70e8cf7f2c49a8d4e0e0196849e933f0",
+    "n_movies": 34461,
+    "bytes": 212812,
+    "local_path": "artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/popularity-order.json"
+  },
+  "encoder": {
+    "mlflow_run_id": "a11af5ed0f0745f68572407237cfa4b9",
+    "protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+    "n_train_items": 34461,
+    "note": "sasrec-manifest.json is deliberately NOT rewritten: a published bundle pins its bytes under the vocabulary and config roles, so the fill order is attached by fixed filename here and pinned by the serving manifest."
+  },
+  "inputs": {
+    "source": "postgres ratings, tenant_id='default' (load_ratings default since #166)",
+    "n_source_ratings": 25000095,
+    "split_cutoff": 1466837397,
+    "holdout_end": 1469256597,
+    "cold_start_cohort_fingerprint": "ae4475f0e063dd4b430092100491838737ee03c8554e68b78cc551efa2e6cfe2",
+    "cold_start_cohort_history_rows": 7000,
+    "n_training_rows": 20007075,
+    "training_frame": "temporal_split(ratings).train with the ADR 0011 cohort history attached, i.e. the frame SASRecModel.fit fitted its PopularityModel on"
+  },
+  "ordering": {
+    "rule": "interaction count descending, then movieId ascending",
+    "why_stated": "PopularityModel.fit sorts with pandas' default quicksort, which is not stable, so its order among equal-count movies is an implementation detail that can move between versions. Fine for a ranking, not fine for bytes a manifest pins by SHA-256.",
+    "cold_start_threshold": 10,
+    "head": [356, 296, 318, 593, 480, 260, 2571, 110]
+  },
+  "reproduction": {
+    "command": "make sasrec-popularity-order OUT=artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9 EXPECT_ROWS=25000095 EXPECT_CUTOFF=1466837397",
+    "builds": 2,
+    "byte_identical": true,
+    "wall_clock_seconds": 41,
+    "omp_num_threads": 1,
+    "machine": "Apple silicon macOS, no other job on the box at the time",
+    "log": "artifacts/sasrec/logs/popularity-order-a11af5ed-20260905T2142PDT.log"
+  },
+  "verification": {
+    "load_sasrec_restores_it": true,
+    "ranking_length_equals_encoder_vocabulary": true,
+    "every_id_in_encoder_vocabulary": true,
+    "cold_routed_user_now_answered": "recommend(unknown_user, 5) -> [356, 296, 318, 593, 480]; before this change a bundle loaded from disk returned nothing"
+  }
+}

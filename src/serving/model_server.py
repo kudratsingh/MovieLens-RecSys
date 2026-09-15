@@ -29,6 +29,7 @@ from src.models.artifacts import (
     ServingArtifactBundle,
     ServingManifest,
 )
+from src.serving.logging_setup import ensure_stdout_logging
 from src.serving.policy import EXCLUSION_FILTER_POLICY, REASON_CHAMPION_MISMATCH
 from src.serving.sequence_retrieval import (
     SidecarRetriever,
@@ -38,6 +39,11 @@ from src.serving.sequence_retrieval import (
 )
 
 logger = logging.getLogger(__name__)
+# Unlike ``src/serving/app.py`` this module never called ``basicConfig``, and
+# uvicorn configures only its own loggers — so the warm line below, which names
+# the family and the three artifact versions this worker loaded, was written to
+# nobody. It is the sidecar's only unsolicited statement of what it is serving.
+ensure_stdout_logging(logger)
 
 # Feast names its event-timestamp columns by appending this suffix when
 # ``to_dict(include_event_timestamps=True)`` is used.

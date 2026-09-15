@@ -56,7 +56,11 @@ const KEYCLOAK_URL = __ENV.KEYCLOAK_URL || "http://keycloak:8080";
 const RESULTS_DIR = __ENV.RESULTS_DIR || "/results";
 const API_WORKERS = Number(__ENV.API_WORKERS || 4);
 
-const LEARNED_POLICY = "item-item-cosine+lightgbm";
+// Supplied by run_gate.sh from the served manifest's retriever family, so a
+// SASRec bundle is asserted as `sasrec+lightgbm` rather than failing every warm
+// check against the incumbent's name. The assertion itself is unchanged and just
+// as strict: a warm request that degrades to popularity still fails.
+const LEARNED_POLICY = __ENV.LEARNED_POLICY || "item-item-cosine+lightgbm";
 const POPULARITY_POLICY = "popularity";
 const FILTER_POLICY = "watched-and-dismissed-excluded-v1";
 // ADR 0001 as amended 2026-08-30, mirroring src/evaluation/protocol.py. k6
@@ -1368,11 +1372,17 @@ function revisionOf(response) {
 }
 
 /**
- * Page the whole demo catalog for one persona.
+ * Page the state-bearing head of the demo catalog for one persona.
  *
- * The catalog is the only endpoint that reports every movie's state in one
- * pass, which is what makes it the right place to take a restore baseline: the
- * library tabs cannot see dismissals, and the state endpoint is per movie.
+ * The catalog is the only endpoint that reports every state shape in one pass:
+ * the library tabs cannot see dismissals, and the state endpoint is per movie.
+ * The demo now exposes all 62,423 MovieLens titles, while its persona and
+ * background interactions are deliberately confined to the 120 reviewed
+ * titles.  Popular order therefore puts every state-bearing fixture ahead of
+ * the untouched catalog tail.  Title order does not: a bounded walk through
+ * that tail can miss every rated persona title and leave the mutation pool
+ * empty.  Keep this walk bounded so setup remains a warm-up, not a second load
+ * test; the seeded popularity invariant makes the bound complete for state.
  */
 function readWholeCatalog(auth, userId) {
   const states = {};
@@ -1380,7 +1390,7 @@ function readWholeCatalog(auth, userId) {
   let cursor = null;
   for (let page = 0; page < 16; page++) {
     const url =
-      `${BASE_URL}/users/${userId}/catalog?limit=${CATALOG_MAX_PAGE_SIZE}&sort=title` +
+      `${BASE_URL}/users/${userId}/catalog?limit=${CATALOG_MAX_PAGE_SIZE}&sort=popular` +
       (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
     const response = http.get(url, {
       headers: authorizationHeaders(auth),

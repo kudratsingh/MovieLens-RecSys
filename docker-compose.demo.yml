@@ -150,6 +150,12 @@ services:
       KEYCLOAK_URL: http://keycloak:8080
       LOAD_PROFILE: ${LOAD_PROFILE:-smoke}
       API_WORKERS: ${API_LOAD_WORKERS:-4}
+      # The policy string a warm request must answer with. `run_gate.sh` reads
+      # it off the manifest the sidecar actually loaded, so the assertion
+      # follows the bundle under test instead of naming one family. The default
+      # is the incumbent, so an invocation that does not set it behaves exactly
+      # as before.
+      LEARNED_POLICY: ${LOAD_LEARNED_POLICY:-item-item-cosine+lightgbm}
       # Where handleSummary drops the machine-readable summary, and where the
       # raw sample stream lands. The wrapper points both at a per-window
       # subdirectory so a re-measured run keeps both windows side by side.

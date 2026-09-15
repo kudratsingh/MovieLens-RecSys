@@ -71,7 +71,12 @@ from src.config import Settings
 from src.release import VERIFY_SENTINEL, VERIFY_SUBSET_SENTINEL
 from src.release.bootstrap import PreflightError, check_issuer_equality
 from src.serving.orchestration import REASON_LEARNED
-from synthetic.smoke.demo import AuthConfig, DemoSmokeError, run_behavior_smoke
+from synthetic.smoke.demo import (
+    AuthConfig,
+    DemoSmokeError,
+    assert_learned_retrieval,
+    run_behavior_smoke,
+)
 from synthetic.tenant_isolation.remote_canary import Actor, CanaryError
 from synthetic.tenant_isolation.remote_canary import run as run_isolation_canary
 
@@ -87,7 +92,6 @@ WRITE_PERSONA_USER_ID = 900000103
 COLD_START_USER_ID = 900000104
 NEVER_WRITE_USER_IDS = frozenset({COLD_START_USER_ID})
 
-LEARNED_POLICY = "item-item-cosine+lightgbm"
 AUDIENCE_MAPPER = "oidc-audience-mapper"
 AUDIENCE_MAPPER_CONFIG_KEY = "included.client.audience"
 BROWSER_FACING_CLIENTS = ("movielens-api", "movielens-web")
@@ -398,12 +402,20 @@ def check_learned_serving(run: VerifyRun) -> CheckResult:
             f"learned={policy.get('learned')!r}: {policy.get('reason')!r}. A 200 that "
             "quietly degraded to popularity is exactly what this row refuses."
         )
-    if policy.get("name") != LEARNED_POLICY:
-        raise CheckFailedError(
-            f"learned serving reported policy {policy.get('name')!r}, expected "
-            f"{LEARNED_POLICY!r}"
+    # The retrieval family is whichever bundle is promoted, so the row asserts
+    # the shape the coordinator only produces on the learned path rather than one
+    # champion's spelling of it. A literal here would have made this row fail
+    # every non-item-item champion — the verification refusing the deployment it
+    # exists to verify.
+    try:
+        family = assert_learned_retrieval(
+            str(policy.get("name") or ""),
+            subject=f"user {run.config.warm_user_id}",
         )
-    return CheckResult("V-5", "learned serving", True, f"served by {LEARNED_POLICY}", evidence)
+    except DemoSmokeError as exc:
+        raise CheckFailedError(str(exc)) from exc
+    evidence["retriever_family"] = family
+    return CheckResult("V-5", "learned serving", True, f"served by {policy.get('name')}", evidence)
 
 
 def check_tenant_isolation(run: VerifyRun) -> CheckResult:

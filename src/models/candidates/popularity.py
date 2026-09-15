@@ -29,6 +29,10 @@ class PopularityModel:
     # Map from user id to the set of item ids that user rated in train.
     # Used purely to filter recommendations — never to compute popularity.
     user_history: dict[int, set[int]] = field(default_factory=dict)
+    # The raw interaction counts `ranking` was sorted from. The published fill
+    # order uses the same counts and explicit tie-break; retaining them avoids a
+    # second groupby and keeps both representations derived from one source.
+    counts: dict[int, int] = field(default_factory=dict)
 
     def fit(self, train: pd.DataFrame) -> PopularityModel:
         """Build the popularity ranking and per-user history from a train slice.
@@ -40,10 +44,14 @@ class PopularityModel:
         if train.empty:
             self.ranking = []
             self.user_history = {}
+            self.counts = {}
             return self
 
-        counts = train.groupby("movieId").size().sort_values(ascending=False)
-        self.ranking = counts.index.tolist()
+        counts = train.groupby("movieId").size()
+        ordered = counts.rename("size").reset_index()
+        ordered = ordered.sort_values(["size", "movieId"], ascending=[False, True], kind="stable")
+        self.ranking = ordered["movieId"].tolist()
+        self.counts = {int(movie_id): int(count) for movie_id, count in counts.items()}
         self.user_history = train.groupby("userId")["movieId"].apply(set).to_dict()
         return self
 

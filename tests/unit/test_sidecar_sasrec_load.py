@@ -42,6 +42,7 @@ from src.models.artifacts import (
     INDEX_TYPE_FLAT_IP_EXACT,
     RANKER_ROUTE_FALLBACK,
     RANKER_ROUTE_LEARNED,
+    RETRIEVER_ARTIFACT_POPULARITY,
     RETRIEVER_FAMILY_ITEM_ITEM,
     RETRIEVER_FAMILY_SASREC,
     ArtifactRef,
@@ -55,6 +56,7 @@ from src.models.artifacts import (
 )
 from src.models.candidates.sasrec import SASRecConfig, SASRecEncoder, SASRecModel
 from src.models.candidates.sasrec_artifact import MANIFEST_FILENAME, MODEL_FILENAME, export_sasrec
+from src.models.popularity_artifact import POPULARITY_ARTIFACT_FILENAME
 from src.serving import sequence_retrieval
 from src.serving.model_server import ModelRankingService
 from src.serving.policy import CANDIDATE_SOURCE_POPULARITY_FILL
@@ -295,11 +297,25 @@ def _publish_sasrec_bundle(
             directory / "incumbent.txt", version="incumbent-v1", labels=INCUMBENT_LABELS
         )
     )
+    # W21: the exporter writes the fill order beside the encoder, and the family
+    # now requires the role, so a bundle that omits it does not publish at all.
+    popularity_path = directory / POPULARITY_ARTIFACT_FILENAME
+    popularity = ArtifactRef(
+        artifact_type="popularity-order",
+        version="sasrec-v1",
+        filename=popularity_path.name,
+        sha256=file_sha256(popularity_path),
+    )
     manifest = ServingManifest(
         tenant_id="demo",
         retriever=RetrieverRef(
             family=RETRIEVER_FAMILY_SASREC,
-            artifacts={"encoder": encoder, "vocabulary": vocabulary, "config": config},
+            artifacts={
+                "encoder": encoder,
+                "vocabulary": vocabulary,
+                "config": config,
+                RETRIEVER_ARTIFACT_POPULARITY: popularity,
+            },
             params=declared,
         ),
         rankers={RANKER_ROUTE_LEARNED: learned, RANKER_ROUTE_FALLBACK: fallback},
@@ -904,14 +920,17 @@ class TestTopUpToLimit:
     def test_a_sasrec_bundle_publishes_no_fill_order(
         self, tmp_path: Path, fastpath_guard: None
     ) -> None:
-        """Stated as a test because it is a decision, not an omission.
+        """Still empty, but for one turn longer and for a different reason.
 
-        The archive carries no popularity model — ``export_sasrec`` deliberately
-        omits it, and the offline ranker run injects item-item's by hand — so the
-        only fill order available to the sidecar would be the item vocabulary in
-        sorted movie-id order. Labelling that ``popularity-fill`` in a prediction
-        audit would be false. Shipping a popularity artifact beside the encoder
-        is the fix, and it belongs to the training lane.
+        The training half of the fix has landed (W21): the bundle above now
+        carries ``popularity-order.json``, the family requires the role, and the
+        manifest pins its checksum. What is still missing is the serving half —
+        ``SASRecSidecarRetriever.fill_order()`` reading it — which lives in
+        ``src/serving/`` and belongs to the lane that owns that file. Until then
+        the honest answer is unchanged: return nothing and let a short retrieval
+        be visibly short, rather than invent an order out of the sorted item
+        vocabulary and write a false ``popularity-fill`` label into the audit.
+        This assertion is the handoff marker; it flips when that wiring lands.
         """
         bundle = ServingArtifactBundle.load(_publish_sasrec_bundle(tmp_path / "bundle"))
         assert bundle.retriever is not None

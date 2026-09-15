@@ -36,6 +36,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEV_MODEL_SERVER_AUTH_TOKEN = "dev-model-server-token"
 DEV_PGBOUNCER_ADMIN_PASSWORD = "pgbouncer_admin"
 
+# The tenant MovieLens itself lives in: seeded by migration 0002, backfilled
+# onto every pre-tenancy row by 0003, and the one `src.data.load` reads a
+# training frame from. Every other tenant (`demo`, `synth_load`, `synth_cold`)
+# is an addition alongside it. Named here rather than spelled out at each use
+# so a guard that asks "is this the default tenant?" and the field below that
+# answers to it cannot drift apart.
+DEFAULT_TENANT_ID = "default"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -125,7 +133,7 @@ class Settings(BaseSettings):
     # and treats every request as coming from `dev_bypass_tenant`. The
     # constructor asserts this is only set when environment == "dev".
     dev_auth_bypass: bool = False
-    dev_bypass_tenant: str = "default"
+    dev_bypass_tenant: str = DEFAULT_TENANT_ID
     dev_bypass_user: str = "dev-user"
 
     # --- Request rate limiting (ADR 0014) -----------------------------------

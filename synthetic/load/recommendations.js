@@ -13,7 +13,11 @@ const KEYCLOAK_URL = __ENV.KEYCLOAK_URL || "http://keycloak:8080";
 const WARM_USERS = [900000101, 900000102, 900000103];
 const COLD_USER = 900000104;
 const MIXED_USERS = [...WARM_USERS, COLD_USER];
-const LEARNED_POLICY = "item-item-cosine+lightgbm";
+// Supplied by run_gate.sh from the served manifest's retriever family, so a
+// SASRec bundle is asserted as `sasrec+lightgbm` rather than failing every warm
+// check against the incumbent's name. The assertion itself is unchanged and just
+// as strict: a warm request that degrades to popularity still fails.
+const LEARNED_POLICY = __ENV.LEARNED_POLICY || "item-item-cosine+lightgbm";
 const POPULARITY_POLICY = "popularity";
 // ADR 0001 as amended 2026-08-30, mirroring src/evaluation/protocol.py. k6
 // cannot import the Python constant, so the gate asserts the response reports

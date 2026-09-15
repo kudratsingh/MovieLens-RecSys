@@ -23,6 +23,7 @@ from src.models.artifacts import (
     INDEX_TYPE_FLAT_IP_EXACT,
     RANKER_ROUTE_FALLBACK,
     RANKER_ROUTE_LEARNED,
+    RETRIEVER_ARTIFACT_POPULARITY,
     RETRIEVER_FAMILY_ITEM_ITEM,
     RETRIEVER_FAMILY_SASREC,
     ArtifactRef,
@@ -33,6 +34,10 @@ from src.models.artifacts import (
     ServingArtifactBundle,
     ServingManifest,
     file_sha256,
+)
+from src.models.popularity_artifact import (
+    POPULARITY_ARTIFACT_FILENAME,
+    serialize_popularity_order,
 )
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
 
@@ -162,6 +167,12 @@ def _sasrec_retriever(directory: Path, **params: Any) -> RetrieverRef:
                 artifact_type="sasrec-config",
                 version="sasrec-v1",
                 content="{}",
+            ),
+            RETRIEVER_ARTIFACT_POPULARITY: _blob(
+                directory / POPULARITY_ARTIFACT_FILENAME,
+                artifact_type="popularity-order",
+                version="sasrec-v1",
+                content=serialize_popularity_order([3, 1, 2]).decode(),
             ),
         },
         params=settings,
@@ -341,7 +352,12 @@ class TestSchemaTwo:
         manifest = ServingManifest.load(path)
 
         assert manifest.retriever.family == RETRIEVER_FAMILY_SASREC
-        assert sorted(manifest.retriever.artifacts) == ["config", "encoder", "vocabulary"]
+        assert sorted(manifest.retriever.artifacts) == [
+            "config",
+            "encoder",
+            "popularity",
+            "vocabulary",
+        ]
         assert manifest.retriever.version == "sasrec-v1"
         assert manifest.retriever.params["max_sequence_length"] == 200
         assert manifest.retriever.params["cold_start_threshold"] == 5
