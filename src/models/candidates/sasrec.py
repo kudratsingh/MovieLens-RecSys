@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-import faiss
 import numpy as np
 import pandas as pd
 import torch
@@ -17,8 +16,15 @@ from torch import nn
 
 from . import routing
 from .popularity import PopularityModel
-from .sequence_data import SequenceExampleStats, build_strict_prefix_examples_with_stats
-from .twotower import build_user_history
+from .sequence_data import (
+    AllPositionTrainingData,
+    SequenceExampleStats,
+    build_all_position_training_data,
+    build_user_history,
+)
+
+LEGACY_TRAINING_OBJECTIVE = "strict-prefix-final-position-v1"
+ALL_POSITION_TRAINING_OBJECTIVE = "all-positions-strict-timestamp-v1"
 
 
 @dataclass(frozen=True)
@@ -198,6 +204,70 @@ def sample_negatives(
     return torch.from_numpy(output)
 
 
+def sample_position_negatives(
+    sequences: torch.Tensor,
+    prediction_windows: torch.Tensor,
+    prediction_positions: torch.Tensor,
+    positives: torch.Tensor,
+    *,
+    n_items: int,
+    count: int,
+    rng: np.random.Generator,
+) -> torch.Tensor:
+    """Sample target negatives without materializing copied prefix rows."""
+    output = np.empty((len(positives), count), dtype=np.int64)
+    sequence_values = sequences.numpy()
+    for row, (window_value, position_value, positive_value) in enumerate(
+        zip(prediction_windows.numpy(), prediction_positions.numpy(), positives.numpy())
+    ):
+        window = int(window_value)
+        position = int(position_value)
+        history = sequence_values[window, : position + 1]
+        forbidden = set(int(item) for item in history if item)
+        forbidden.add(int(positive_value))
+        if n_items - len(forbidden) < count:
+            raise ValueError("not enough eligible unique negatives for requested count")
+        selected: list[int] = []
+        selected_set: set[int] = set()
+        while len(selected) < count:
+            draws = rng.integers(1, n_items + 1, size=max(8, 2 * (count - len(selected))))
+            for candidate_value in draws:
+                candidate = int(candidate_value)
+                if candidate not in forbidden and candidate not in selected_set:
+                    selected.append(candidate)
+                    selected_set.add(candidate)
+                    if len(selected) == count:
+                        break
+        output[row] = selected
+    return torch.from_numpy(output)
+
+
+def _window_batches(
+    data: AllPositionTrainingData,
+    permutation: torch.Tensor,
+    *,
+    max_predictions: int,
+) -> Iterator[torch.Tensor]:
+    """Pack shuffled windows while bounding sampled-logit memory by targets."""
+    current: list[int] = []
+    current_predictions = 0
+    for window_value in permutation.tolist():
+        window = int(window_value)
+        predictions = int(data.prediction_offsets[window + 1] - data.prediction_offsets[window])
+        if current and current_predictions + predictions > max_predictions:
+            yield torch.tensor(current, dtype=torch.long)
+            current = []
+            current_predictions = 0
+        current.append(window)
+        current_predictions += predictions
+        if current_predictions >= max_predictions:
+            yield torch.tensor(current, dtype=torch.long)
+            current = []
+            current_predictions = 0
+    if current:
+        yield torch.tensor(current, dtype=torch.long)
+
+
 @dataclass
 class SASRecModel:
     config: SASRecConfig = field(default_factory=SASRecConfig)
@@ -208,15 +278,22 @@ class SASRecModel:
     _user_history: dict[int, list[int]] = field(default_factory=dict)
     _unknown_index: int = 0
     _training_stats: SequenceExampleStats | None = None
+    _training_objective: str = LEGACY_TRAINING_OBJECTIVE
     _faiss_index: Any = None
+    _exact_item_matrix: torch.Tensor | None = None
     _popularity: PopularityModel = field(default_factory=PopularityModel)
 
     def fit(
         self,
         train: pd.DataFrame,
         on_epoch: Callable[[int, float], None] | None = None,
+        *,
+        retrieval_backend: Literal["faiss", "torch"] = "faiss",
     ) -> SASRecModel:
         self.config.validate()
+        if retrieval_backend not in {"faiss", "torch"}:
+            raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
+        self._training_objective = ALL_POSITION_TRAINING_OBJECTIVE
         self._popularity = PopularityModel().fit(train)
         if train.empty:
             return self
@@ -227,11 +304,12 @@ class SASRecModel:
         self._index_to_item = {index: item for item, index in self._item_to_index.items()}
         self._unknown_index = len(items) + 1
         self._user_history = build_user_history(train, self._item_to_index)
-        histories, positives, self._training_stats = build_strict_prefix_examples_with_stats(
+        training_data = build_all_position_training_data(
             train,
             item_to_index=self._item_to_index,
             max_length=self.config.max_sequence_length,
         )
+        self._training_stats = training_data.stats
         self._encoder = SASRecEncoder(len(items) + 2, self.config)
         optimizer = torch.optim.Adam(self._encoder.parameters(), lr=self.config.learning_rate)
         rng = np.random.default_rng(self.config.seed)
@@ -246,21 +324,28 @@ class SASRecModel:
         )
         for epoch in range(self.config.epochs):
             self._encoder.train()
-            permutation = torch.randperm(len(positives))
+            permutation = torch.randperm(len(training_data.sequences))
             epoch_loss = 0.0
-            batches = 0
-            for start in range(0, len(positives), self.config.batch_size):
-                rows = permutation[start : start + self.config.batch_size]
-                history_batch = histories[rows].long()
-                positive_batch = positives[rows].long()
-                negative_batch = sample_negatives(
-                    history_batch,
+            predictions_seen = 0
+            for rows in _window_batches(
+                training_data,
+                permutation,
+                max_predictions=self.config.batch_size,
+            ):
+                sequences, prediction_windows, prediction_positions, positive_batch = (
+                    training_data.batch(rows)
+                )
+                negative_batch = sample_position_negatives(
+                    sequences,
+                    prediction_windows,
+                    prediction_positions,
                     positive_batch,
                     n_items=len(items),
                     count=self.config.negative_count,
                     rng=rng,
                 )
-                user_vectors = self._encoder.training_user_vectors(history_batch)
+                encoded_positions = self._encoder.encode_positions(sequences.long())
+                user_vectors = encoded_positions[prediction_windows, prediction_positions]
                 positive_logits = (
                     user_vectors * self._encoder.item_vectors(positive_batch, normalize=False)
                 ).sum(dim=1)
@@ -275,16 +360,25 @@ class SASRecModel:
                 optimizer.step()
                 with torch.no_grad():
                     self._encoder.item_embedding.weight[0].zero_()
-                epoch_loss += float(loss.item())
-                batches += 1
+                batch_predictions = len(positive_batch)
+                epoch_loss += float(loss.item()) * batch_predictions
+                predictions_seen += batch_predictions
             if on_epoch is not None:
-                on_epoch(epoch + 1, epoch_loss / max(1, batches))
-        self.build_index()
+                on_epoch(epoch + 1, epoch_loss / max(1, predictions_seen))
+        if retrieval_backend == "faiss":
+            self.build_index()
+        else:
+            self.build_exact_tensor_index()
         return self
 
     def build_index(self) -> None:
         if self._encoder is None:
             return
+        # Keep FAISS out of the training process. Artifact loading and serving
+        # cross this lazy boundary; the trainer evaluates with torch exact
+        # top-k and therefore never loads FAISS's second OpenMP runtime.
+        import faiss
+
         # Retrieval must be deterministic: disable dropout before building the
         # item index and leave the fitted model in inference mode. ``fit``
         # explicitly restores training mode at the start of every epoch.
@@ -304,17 +398,46 @@ class SASRecModel:
             index.nprobe = self.config.faiss_nprobe
         index.add(vectors)
         self._faiss_index = index
+        self._exact_item_matrix = None
+
+    def build_exact_tensor_index(self) -> None:
+        """Build the exhaustive torch index used by training-time evaluation."""
+        if self._encoder is None:
+            return
+        self._encoder.eval()
+        n_items = len(self._index_to_item)
+        with torch.no_grad():
+            self._exact_item_matrix = self._encoder.item_vectors(
+                torch.arange(1, n_items + 1)
+            ).detach()
+        self._faiss_index = None
+
+    def _has_retrieval_index(self) -> bool:
+        return self._faiss_index is not None or self._exact_item_matrix is not None
+
+    def _search_index(
+        self, queries: np.ndarray[Any, Any], k: int
+    ) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
+        if self._faiss_index is not None:
+            scores, indices = self._faiss_index.search(queries, k)
+            return scores, indices
+        if self._exact_item_matrix is None:
+            raise RuntimeError("SASRec retrieval index is not loaded")
+        with torch.no_grad():
+            similarities = torch.from_numpy(queries) @ self._exact_item_matrix.T
+            scores, indices = torch.topk(similarities, k=k, dim=1, largest=True, sorted=True)
+        return scores.numpy(), indices.numpy()
 
     def was_served_by_sasrec(self, user_id: int) -> bool:
         history = self._user_history.get(user_id, [])
-        if self._encoder is None or self._faiss_index is None or not history:
+        if self._encoder is None or not self._has_retrieval_index() or not history:
             return False
         return self.cold_start_threshold is None or len(history) >= self.cold_start_threshold
 
     def recommend(self, user_id: int, k: int) -> list[int]:
         if not self.was_served_by_sasrec(user_id):
             return self._popularity.recommend(user_id, k)
-        assert self._encoder is not None and self._faiss_index is not None
+        assert self._encoder is not None and self._has_retrieval_index()
         full_history = self._user_history[user_id]
         return self._recommend_from_dense_history(full_history, k)
 
@@ -346,7 +469,7 @@ class SASRecModel:
         """Retrieve from an ordered runtime history using an exported model."""
         if k <= 0:
             return []
-        if self._encoder is None or self._faiss_index is None:
+        if self._encoder is None or not self._has_retrieval_index():
             raise RuntimeError("SASRec model and retrieval index are not loaded")
         if not movie_ids:
             raise ValueError("SASRec history must contain at least one movie")
@@ -380,7 +503,7 @@ class SASRecModel:
         """
         if k <= 0:
             return []
-        if self._encoder is None or self._faiss_index is None:
+        if self._encoder is None or not self._has_retrieval_index():
             raise RuntimeError("SASRec model and retrieval index are not loaded")
         if not movie_ids:
             raise ValueError("SASRec history must contain at least one movie")
@@ -489,7 +612,7 @@ class SASRecModel:
         sequence independent — so a row's result depends only on its own history
         and on the batch size the caller chose, which callers pin and log.
         """
-        if self._encoder is None or self._faiss_index is None:
+        if self._encoder is None or not self._has_retrieval_index():
             raise RuntimeError("SASRec model and retrieval index are not loaded")
         if not histories:
             return []
@@ -510,12 +633,12 @@ class SASRecModel:
         both jobs. Anything else would make the feature a re-derivation of the
         score rather than the score itself.
         """
-        if self._faiss_index is None:
+        if not self._has_retrieval_index():
             raise RuntimeError("SASRec retrieval index is not loaded")
         if k <= 0 or len(queries) == 0:
             return [[] for _ in range(len(queries))]
         search_k = min(len(self._index_to_item), k)
-        _scores, indices = self._faiss_index.search(queries, search_k)
+        _scores, indices = self._search_index(queries, search_k)
         return [
             [self._index_to_item[int(index) + 1] for index in row if index >= 0] for row in indices
         ]
@@ -550,7 +673,7 @@ class SASRecModel:
         *,
         dense_exclusions: set[int] | None = None,
     ) -> list[tuple[int, float]]:
-        assert self._encoder is not None and self._faiss_index is not None
+        assert self._encoder is not None and self._has_retrieval_index()
         history = full_history[-self.config.max_sequence_length :]
         sequence = self._sequence_tensor(history)
         with torch.no_grad():
@@ -558,7 +681,7 @@ class SASRecModel:
         # Exclusions cover the full known history, not only the encoder window.
         seen = set(full_history) | (dense_exclusions or set())
         search_k = min(len(self._index_to_item), k + len(seen))
-        scores, indices = self._faiss_index.search(query, search_k)
+        scores, indices = self._search_index(query, search_k)
         return [
             (self._index_to_item[int(index) + 1], float(score))
             for score, index in zip(scores[0], indices[0])

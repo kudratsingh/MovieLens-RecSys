@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-11",
+  "objective": "all-positions-strict-timestamp-v1",
+  "comparison_objective": "strict-prefix-final-position-v1",
+  "configuration": {
+    "max_sequence_length": 50,
+    "hidden_dim": 64,
+    "num_blocks": 2,
+    "num_heads": 2,
+    "feedforward_dim": 256,
+    "dropout": 0.2,
+    "loss": "bce",
+    "negative_count": 32,
+    "batch_size_targets": 512,
+    "epochs": 2,
+    "learning_rate": 0.001,
+    "evaluation_index": "torch-exact-inner-product-v1",
+    "seed": 42
+  },
+  "pilot_6pct": {
+    "run_id": "f837955c832440069dd8c1316a2ad0c6",
+    "status": "FINISHED",
+    "protocol_hash": "sha256:090985d7075bd3df802ecb5da9402bc7fa7f3d10769dd9d384585113187cb629",
+    "n_warm_users": 115,
+    "n_cold_users": 50,
+    "n_training_windows": 28202,
+    "n_training_targets": 1198161,
+    "fit_seconds": 80.9,
+    "process_wall_seconds": 87.28,
+    "max_rss_bytes_from_diagnostic_attempt": 4261019648,
+    "metrics_at_500": {
+      "warm_recall": 0.18216469741552496,
+      "warm_ndcg": 0.06774311858891624,
+      "cold_recall": 0.48261052128491033,
+      "cold_ndcg": 0.38416213605306504,
+      "overall_recall": 0.2732088864668538,
+      "overall_ndcg": 0.163627669335628
+    },
+    "model_sha256": "6dfe8d4eefda277add4178c60ba7e73a7b3069a9382f68eaad1c184e4f0b0328"
+  },
+  "full": {
+    "run_id": "fd2ee9f6f6794449a31ea3f50e600a48",
+    "status": "FINISHED",
+    "protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+    "n_warm_users": 1931,
+    "n_cold_users": 710,
+    "n_training_windows": 464470,
+    "n_training_targets": 19739546,
+    "fit_seconds": 1797.4,
+    "process_user_seconds": 1795.14,
+    "elapsed_wall_seconds_including_host_sleep": 43321.41,
+    "max_rss_bytes": 7220051968,
+    "metrics_at_500": {
+      "warm_recall": 0.48564837711462056,
+      "warm_ndcg": 0.172779540407266,
+      "cold_recall": 0.5262729520330651,
+      "cold_ndcg": 0.4358413673421565,
+      "overall_recall": 0.4965697887738768,
+      "overall_ndcg": 0.24350044049199612
+    },
+    "synthetic_cold_recall_at_500": {
+      "h0": 0.476,
+      "h1": 0.46,
+      "h3": 0.456,
+      "h10": 0.34
+    },
+    "synthetic_cold_routing_ok": true,
+    "model_sha256": "16631300ccf58ada7bfa9f73e3974ea85b576fc77f6b1fd59e8a31828cdf744c",
+    "vocabulary_sha256": "76f0cf89a8e2be1c3a294d535be3a9edc4ef76ebe3cd599376fc0bb9ae9de8cd",
+    "manifest_sha256": "12dad65a02807242f6cc3e69699400b54e668da8f2a9110bee0acfabe95810dc",
+    "popularity_order_sha256": "9bc82187c910adf9633315b76294842d70e8cf7f2c49a8d4e0e0196849e933f0",
+    "local_and_mlflow_copies_equal": true,
+    "reload_scored_candidates_equal": true
+  },
+  "retained_non_verdict_attempts": [
+    {
+      "run_id": "833812eea8a341e9953285b4145cf9b8",
+      "scope": "pilot_6pct",
+      "reason": "HTTP MLflow advertised container-local /mlartifacts to the host client; immutable local model retained"
+    },
+    {
+      "run_id": "b3435b7317e94e209b3f1ab3ec2c34fe",
+      "scope": "full",
+      "status": "KILLED",
+      "reason": "preflight stopped before epoch one because the temporary worktree lacked the ignored v1 synthetic cohort payload"
+    }
+  ],
+  "verdict": "canonical all-position training is 9.8x faster at full scale but trails the corrected v1 warm recall by 4.62%; no threshold, promotion verdict, or serving champion changes"
+}

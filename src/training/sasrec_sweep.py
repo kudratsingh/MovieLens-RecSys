@@ -14,8 +14,8 @@ import mlflow
 
 from src.config import Settings
 from src.models.candidates.sasrec import SASRecConfig
+from src.training.candidate_data import INPUT_DIR_ENV_VAR, load_inputs
 from src.training.sasrec import run_once
-from src.training.twotower import INPUT_DIR_ENV_VAR, load_inputs
 
 logger = logging.getLogger(__name__)
 
