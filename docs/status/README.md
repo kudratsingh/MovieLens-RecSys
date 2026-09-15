@@ -6,9 +6,48 @@ The dated header paragraph as it stood when the ledger moved, then the current s
 
 ## Where the project stands
 
-**Updated 2026-09-05.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs (0007–0012), the auth/tenancy foundation, the Feast-backed learned online recommendation path, durable demo personas, prediction audits, the measured k6 latency gate, and the whole movie-discovery frontend — Discover, Browse, movie detail, Library, and Quick Picks behind one shell, with `/` cut over to the product — are all on `main` (PRs #27–#82, the last stretch being a product round on the cutover build). The frontend finish gate has now been run twice, and every criterion a reviewer can settle passes; the remaining HOLD is moderated research with real participants, which is mine to run and not a reviewer's to substitute for. On top of that, the production deployment now exists as an artifact rather than an intention — ADR 0013 pins one Hetzner CX22 running the same `docker-compose.prod.yml` the rehearsal runs, ADR 0014 closes the rate-limiting question with a measured finding, `docs/deployment-runbook.md` is the operational document, and the production-mode rehearsal has been run end to end and its defects fixed — but nothing is deployed, because the machine does not exist yet. The current concrete step (the one to take next) is at the bottom of this section.
+**Updated 2026-09-15.** Phase 1 and Phase 2 are complete. Phase 3 is underway: its architecture ADRs (0007–0012), the auth/tenancy foundation, the Feast-backed learned online recommendation path, durable demo personas, prediction audits, the measured k6 latency gate, and the whole movie-discovery frontend — Discover, Browse, movie detail, Library, and Quick Picks behind one shell, with `/` cut over to the product — are all on `main` (PRs #27–#82, the last stretch being a product round on the cutover build). The frontend finish gate has now been run twice, and every criterion a reviewer can settle passes; the remaining HOLD is moderated research with real participants, which is mine to run and not a reviewer's to substitute for. On top of that, the production deployment now exists as an artifact rather than an intention — ADR 0013 pins one Hetzner CX22 running the same `docker-compose.prod.yml` the rehearsal runs, ADR 0014 closes the rate-limiting question with a measured finding, `docs/deployment-runbook.md` is the operational document, and the production-mode rehearsal has been run end to end and its defects fixed — but nothing is deployed, because the machine does not exist yet. The current concrete step (the one to take next) is at the bottom of this section.
 
 ## Current step
+
+**2026-09-15 — the ledger for the 5–11 September wave, and the step that follows it.** Thirty-nine PRs
+landed between #149 and #183. The modeling numbers of record are now: item-item warm recall@500 0.3991;
+SASRec **0.5092** after the eval-mode fast-path defect was fixed (#162 — left-padded histories under 50
+items encoded to NaN and got empty slates; 131 warm users were affected) and re-recorded deterministic
+at #180; the corrected two-tower v2 **0.5113** (#158 fixed an off-by-one between FAISS rows and item ids
+that had made every earlier two-tower number a measurement of a bug; #182 records the full run and its
+`promote`). Both learned retrievers clear ADR 0004's retrieval gate under the single-seed regime. The
+per-route bundle — SASRec candidates, a LightGBM retrained on them for the learned route, the incumbent
+LightGBM kept for the popularity fallback route (owner decision O-7) — clears ADR 0001's end-to-end gate at
+overall NDCG@10 **0.2218 vs 0.2008** (+10.4%, warm +39%; #151, re-measured in #162). Rung 3 increment 1
+(SASRec score features in the learned-route ranker, ADR 0018) was measured and **refused** at +2.78%
+warm against the +3% bar (#159): the encoder's score on its own candidates tells the ranker little beyond
+rank; DIN is not built. The canonical all-positions SASRec objective was measured (#183, in review): 9.8×
+faster and 4.62% worse at full scale, so it stays an opt-in ablation and the copied-prefix objective remains
+the one of record (O-22). Proposed and awaiting the owner: ADR 0019 (Rung 5, multi-retriever mixing, #174)
+and ADR 0020 (SASRec v2 capacity cells, #179).
+
+The serving path caught up with the models in the same wave: manifest v2 with one ranker per route and
+lineage, a generic retriever interface, the private sidecar loading a SASRec bundle fail-closed (with the
+fast-path fix applied at load and the history order pinned by test after #163 caught it reversed), CPU-only
+torch pins with a no-CUDA check (#160), retrieval provenance columns on every audit row (#168, +0.46 ms at
+p99, measured), a bundle publisher that bakes the demo fixture and the served full-data bundle at distinct
+paths with the production compose selecting the latter (#169), the popularity fallback shipped inside the
+SASRec bundle (#173), `make promote` / `promote-revert` with a target guard (#175, #177 — the first manual
+champion promotion the project has had), the k6 gate deriving its policy from the bundle under test (#176)
+and recording host memory (#170), an executed migration rollback rehearsal (#172 — the hazard is a database
+*behind* the image, not ahead), the demo database seeded with the full 62,423-movie catalog (#178), and
+the TMDB metadata snapshot for 98.5% of the catalog, DVC-tracked and loaded (#181). The evaluation gate
+gained a learned-route scope (#155, O-1: warm NDCG@10 +3% with cold non-regression for changes confined
+to the learned route) and the training frame is scoped to the MovieLens tenant (#166).
+
+**What is still open, in order.** (1) The SASRec bundle's authenticated k6 measurement on the
+full-catalog demo — its incumbent control is p99 11.06 ms — and then the champion swap by `make promote`,
+which the owner has authorised once that gate passes. (2) The copied-prefix data-path rewrite (memory-bounded,
+sequence length 200) that O-22 chose over the all-positions objective. (3) The sequence-valid synthetic
+cold cohort (ADR 0011's h10 slice is timestamp-tied and cannot measure a sequence model). (4) The owner's
+three decisions: ADR 0019, ADR 0020, and a DVC remote for the 436 MB TMDB snapshot, which today exists only
+on one machine. The Hetzner deployment and the moderated frontend sessions below remain owed and unchanged.
 
 **2026-09-04 — the modeling track is executing, and it moved ahead of the deployment.** A full-data
 SASRec run at seed 42 was launched on the local machine; everything below about approving a roadmap
