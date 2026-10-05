@@ -1,18 +1,15 @@
 {
   "_comment": [
-    "WO-2 done-criterion 5 (2026-10-05 build brief). PREPARED, NOT RUN: held until",
-    "WO-1 has merged and this branch is rebased onto it, and until the owner",
-    "approves runs. The cell is pilot6-bce-neg32 from pilot-6pct.json, copied",
-    "unchanged except for the label, an explicit seed, and an explicit",
-    "training_objective. The objective field only exists after WO-1",
-    "(SASRecConfig.training_objective); on a tree without it, parse_grid refuses",
-    "the cell rather than silently training the fast all-positions objective.",
-    "The one variable is the encoder: hand-written (WO-2) instead of the packaged",
-    "PyTorch encoder. Initialization is bit-identical to v1 at the same seed;",
-    "training rounds differently, so the result is compared with the RANGE of",
-    "WO-1's four reference pilots (seeds 42, 7, 13, 21), not with any one of them.",
-    "Run: caffeinate -i python -m src.training.sasrec_sweep docs/experiments/sasrec/wo2-handwritten-pilot-6pct.json",
-    "Record the result in docs/results.md beside the WO-1 references, pass or fail."
+    "WO-2 done-criterion 5 (2026-10-05 build brief). Approved 2026-10-05 after WO-1",
+    "(PR #194) and O-25; this branch is rebased onto WO-1. The cell is pilot6-bce-neg32",
+    "from pilot-6pct.json, identical to WO-1's reference cells except the label: same",
+    "seed, objective, loss, negatives, epochs and exact search. The one variable is the",
+    "encoder: hand-written (WO-2) instead of the packaged PyTorch encoder. Initialization",
+    "is bit-identical to v1 at the same seed; training rounds differently, so the result",
+    "is compared with the RANGE of WO-1's four reference pilots under O-25's partition:",
+    "s42 0.3625487076, s7 0.3611061547, s13 0.3714076606, s21 0.3936318283,",
+    "i.e. inside [0.3611, 0.3936] passes. The run must carry the expected protocol hash",
+    "below before its number is read. Record the result in docs/results.md, pass or fail."
   ],
   "sample_fraction": 0.06,
   "cells": [
@@ -25,5 +22,88 @@
       "seed": 42,
       "training_objective": "strict-prefix-final-position-v1"
     }
-  ]
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "reference_pilots": {
+    "7baeb7d0 (s42)": 0.3625487076,
+    "d71f0fa6 (s7)": 0.3611061547,
+    "2d9f3cc1 (s13)": 0.3714076606,
+    "8668ca0c (s21)": 0.3936318283
+  },
+  "result": {
+    "status": "outside-range",
+    "criterion_met": false,
+    "date_run": "2026-10-05",
+    "run_id": "38442d1a08dd42f3868c1f6147a56fd8",
+    "tracking_store": "local file store <wo2 worktree>/mlruns (MLFLOW_ALLOW_FILE_STORE=true)",
+    "protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+    "protocol_hash_matches_expected": true,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "warm_recall_at_500": 0.3427768662530133,
+    "warm_ndcg_at_500": 0.13417544409906496,
+    "cold_recall_at_500": 0.5427033422192526,
+    "cold_ndcg_at_500": 0.4341170760032304,
+    "overall_recall_at_500": 0.3958185843665054,
+    "overall_ndcg_at_500": 0.21375179542057826,
+    "reference_range": [
+      0.3611061547,
+      0.3936318283
+    ],
+    "reference_mean": 0.372174,
+    "reference_sd": 0.015013,
+    "below_range_floor_by": 0.0183292884,
+    "difference_vs_wo1_s42": -0.0197718414,
+    "relative_difference_vs_wo1_s42": -0.0545,
+    "z_vs_reference_mean": -1.96,
+    "cold_identical_to_references": true,
+    "train_loss_by_epoch": [
+      0.09627555151047919,
+      0.06960934610357054
+    ],
+    "wo1_s42_train_loss_by_epoch": [
+      0.09626241,
+      0.06954593
+    ],
+    "epoch_warm_recall": [
+      0.331259,
+      0.3427768662530133
+    ],
+    "wo1_s42_epoch_warm_recall": [
+      0.32254,
+      0.3625487076
+    ],
+    "per_user_warm_vs_wo1_s42": {
+      "identical": 72,
+      "higher": 11,
+      "lower": 25,
+      "mean_difference": -0.019771841310911333
+    },
+    "fit_seconds": 1315.3,
+    "wo1_fit_seconds": {
+      "s42": 1080.8,
+      "s7": 1080.4,
+      "s13": 1088.9,
+      "s21": 1099.0
+    },
+    "fit_slowdown_vs_wo1_s42": 0.217,
+    "wall_time": "22 min 03 s (2026-10-05T12:11:04Z to 12:33:07Z)",
+    "peak_rss_bytes": 3082076160,
+    "wo1_peak_rss": "3.04 GB (s42), 2.92 GB (seed sweep)",
+    "load_average_at_start": "1.99 / 2.35 / 2.71",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "artifact": {
+      "directory": "artifacts/wo2-pilot/models/38442d1a08dd42f3868c1f6147a56fd8/ (main checkout, not committed)",
+      "model_sha256": "093e33ac0820ad2bb9cb656b2646d0416395cc8d7f16aa9c7b0b789c916118b4",
+      "weights_sha256": "sha256:609c397237c30b6e23aede121798b83fa69f107a29c31837df46b40b4904a95c",
+      "encoder_impl": "hand-written-transformer-v1"
+    },
+    "log": "artifacts/wo2-pilot/logs/wo2-pilot-s42.log (main checkout)",
+    "command": "caffeinate -i env OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE MLFLOW_ALLOW_FILE_STORE=true MLFLOW_TRACKING_URI=file://<wo2 worktree>/mlruns TWOTOWER_INPUT_DIR=<main>/data/raw/ml-25m SASREC_ARTIFACT_DIR=<main>/artifacts/wo2-pilot/models /usr/bin/time -l python -m src.training.sasrec_sweep docs/experiments/sasrec/wo2-handwritten-pilot-6pct.json",
+    "next": "none taken; not retuned and not re-run. Owner decision."
+  }
 }

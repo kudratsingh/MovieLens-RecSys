@@ -3459,7 +3459,59 @@ its md5 `9e0c978e…` equals the DVC pointer.
 
 Retraining v1 on the hand-written encoder will give an equivalent model, not a
 bit-identical one. Initialization is bit-identical; training rounds differently.
-The seed-42 pilot that measures this (done-criterion 5) is held.
+The seed-42 pilot that measures this (done-criterion 5) is recorded below.
 
 Machine-readable record:
 [`experiments/sasrec/wo2-converter-recheck.json`](experiments/sasrec/wo2-converter-recheck.json).
+
+### The seed-42 pilot with the hand-written encoder (WO-2 done-criterion 5)
+
+This is one run of WO-1's reference cell, `pilot6-bce-neg32` at seed 42, after rebasing onto WO-1
+(PR #194). The objective, data path, partition and protocol are all WO-1's: O-25's 6% sample,
+protocol `sha256:faf2828d…`, 108 warm / 39 cold users. The protocol hash was confirmed before the
+number was read. The one change is the encoder. Initialization is bit-identical to WO-1's seed-42
+run; training rounds differently.
+
+| Run | Encoder | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Fit s | Peak RSS |
+|---|---|---:|---:|---:|---:|---:|
+| `7baeb7d0…` (WO-1 s42) | packaged | 0.3625487076 | 0.1354006643 | 0.5427033422 | 1,080.8 | 3.04 GB |
+| `d71f0fa6…` (WO-1 s7) | packaged | 0.3611061547 | 0.1307310996 | 0.5427033422 | 1,080.4 | 2.92 GB |
+| `2d9f3cc1…` (WO-1 s13) | packaged | 0.3714076606 | 0.1253087969 | 0.5427033422 | 1,088.9 | 2.92 GB |
+| `8668ca0c…` (WO-1 s21) | packaged | 0.3936318283 | 0.1483434889 | 0.5427033422 | 1,099.0 | 2.92 GB |
+| **`38442d1a08dd42f3868c1f6147a56fd8`** | **hand-written** | **0.3427768663** | 0.1341754441 | 0.5427033422 | **1,315.3** | 3.08 GB |
+
+**Verdict: outside the range. Done-criterion 5 is not met.** The reference range is
+0.3611–0.3936. This run is 0.0183 below its floor and 0.0198 below WO-1's own seed-42 run (−5.45%).
+It sits 1.96 sample standard deviations below the reference mean of 0.3722. Nothing was retuned or
+re-run; the result goes to the owner.
+
+What the run shows beside the number:
+- **Cold recall is identical** to all four references, as it must be: cold users go to the
+  popularity fallback.
+- **Training followed v1 closely, then diverged by rounding.**
+  - Epoch losses: 0.0962756 and 0.0696093, against WO-1 s42's 0.0962624 and 0.0695459
+    (+0.01% and +0.09%).
+  - The per-epoch warm recall crossed over. After epoch 1 the hand-written run led, 0.3313 against
+    0.3225. After epoch 2 it trailed, 0.3428 against 0.3625.
+- **Per user, against WO-1 s42:** 72 of 108 warm users have identical recall, 11 are higher and
+  25 lower. One warm user is 0.93% of the slice.
+- **Same-seed movement:** on this population, a same-seed rerun that differs only in float
+  rounding moved warm recall by 0.02, about one reference standard deviation.
+
+Whether that is noise or a real defect cannot be told from one run. The converted v1 model
+reproduces its full-data record exactly, and the equivalence tests hold outputs within 2.4e-6. The
+owner decides what comes next.
+
+**Speed at pilot scale:**
+- **Fit time:** 1,315.3 s against WO-1's 1,080.4–1,099.0 s, which is 21.7% slower than its seed-42
+  run.
+- **Wall time:** 22 min 03 s against 18 min 21 s.
+- **Where the extra cost comes from:** the slowdown is larger than the 12% measured with 4 threads
+  in a micro-benchmark. This run, like WO-1's, used `OMP_NUM_THREADS=1`.
+- **Peak RSS:** 3.08 GB (2.87 GiB), against WO-1's 3.04 GB.
+- **Start load:** load averages at the start were 1.99 / 2.35 / 2.71.
+
+The MLflow run is in a local file store in the WO-2 worktree (`mlruns/`). The exported model is at
+`artifacts/wo2-pilot/models/38442d1a…/` in the main checkout, with archive SHA-256 `093e33ac…` and
+weights digest `sha256:609c3972…`. Run record:
+[`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
