@@ -3416,3 +3416,50 @@ direction, not quality. No full-data run was made, and no threshold, verdict or 
 The MLflow runs are in a local file store, because the shared server could not accept host
 artifact uploads; the run record explains this. Run record:
 [`model-planning/experiments/wo1-restore-trainer-of-record.md`](model-planning/experiments/wo1-restore-trainer-of-record.md).
+
+## SASRec v1 through the hand-written encoder — 2026-10-05 (WO-2 inference check)
+
+WO-2 replaced PyTorch's packaged Transformer encoder with a hand-written one
+(`src/models/candidates/transformer.py`, rule D7) and added a converter that loads
+pre-WO-2 archives in memory. Done-criterion 3 required the saved v1 model
+`a11af5ed…` (SHA-256 `43320b87e3cb…`) to load through that converter and, scored
+inference-only on the same protocol, to match recorded run `528b1451…`: warm
+recall@500 to four decimals and cold recall exactly. Nothing was trained.
+
+| Slice | Recorded (`528b1451…`) | Hand-written encoder (`a2c3f5ac…`) | Difference |
+|---|---:|---:|---:|
+| warm recall@500 (1,931 users) | 0.5091713455402272 | 0.5091713455402274 | +1.1e-16 |
+| cold recall@500 (710 users) | 0.5262729520330651 | 0.5262729520330651 | 0 |
+| overall recall@500 | 0.5137688997 | 0.5137688997280029 | — |
+
+**Verdict: passed.** Every user's recall equals the September per-user export:
+all 1,931 warm and 710 cold users. The aggregate's last-digit difference comes
+from summation order. Protocol hash `sha256:b4ed5afa…` reproduced. No
+short-history warm user got an empty slate.
+
+Against the packaged encoder running the same weights on the same users,
+**36 of 1,931 warm users' top-500 lists changed, all in order only and none in
+membership**. No cold list changed, because cold users go to the popularity
+fallback and never reach the encoder. The packaged encoder scores the same warm
+recall to the last digit. On the v1 weights the two encoders' per-position
+outputs differ by at most 2.1e-6 and the normalized query vectors by at most
+1.8e-7. The only movement is near-tie reordering, which shows up as a warm
+NDCG@500 change of −5.1e-10. Cold NDCG@500 reads 0.4358414 here against
+0.4358466 recorded. That −5.2e-6 is O-21's stable popularity tie-break from
+2026-09-06, not WO-2.
+
+The shared MLflow server (`localhost:5001`) accepted the run's metrics as run
+`7c1d3377…`, identical to the above. It then failed on artifact upload, because
+its artifact root `/mlartifacts` is container-local, the same fault that hit
+`833812ee…` in September. That run is tagged with the cause. The record with
+every artifact (per-user recall, top-500 lists, verdict) is the local SQLite
+store retry `a2c3f5ac09064114b24d70897d68526c` under `artifacts/wo2-converter/`.
+Before the run, the ADR 0011 cohort was regenerated from the CSV snapshot, and
+its md5 `9e0c978e…` equals the DVC pointer.
+
+Retraining v1 on the hand-written encoder will give an equivalent model, not a
+bit-identical one. Initialization is bit-identical; training rounds differently.
+The seed-42 pilot that measures this (done-criterion 5) is held.
+
+Machine-readable record:
+[`experiments/sasrec/wo2-converter-recheck.json`](experiments/sasrec/wo2-converter-recheck.json).
