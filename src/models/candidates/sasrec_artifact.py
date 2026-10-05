@@ -25,8 +25,8 @@ from src.models.popularity_artifact import (
 )
 
 from .sasrec import (
-    ALL_POSITION_TRAINING_OBJECTIVE,
     LEGACY_TRAINING_OBJECTIVE,
+    TRAINING_OBJECTIVES,
     SASRecConfig,
     SASRecEncoder,
     SASRecModel,
@@ -156,10 +156,7 @@ class SASRecArtifactManifest:
             raise ValueError("unsupported SASRec sequence contract")
         if self.retrieval_normalization != "l2":
             raise ValueError("unsupported SASRec retrieval normalization")
-        if self.training_objective not in {
-            LEGACY_TRAINING_OBJECTIVE,
-            ALL_POSITION_TRAINING_OBJECTIVE,
-        }:
+        if self.training_objective not in TRAINING_OBJECTIVES:
             raise ValueError(f"unsupported SASRec training objective {self.training_objective!r}")
         if self.encoder_impl not in ENCODER_IMPLS:
             raise ValueError(f"unsupported SASRec encoder layout {self.encoder_impl!r}")

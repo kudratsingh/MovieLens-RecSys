@@ -48,6 +48,7 @@ from .sequence_data import (
     SequenceExampleStats,
     StrictPrefixExamples,
     build_all_position_training_data,
+    build_overlapping_all_position_training_data,
     build_strict_prefix_example_store,
     build_user_history,
 )
@@ -59,17 +60,34 @@ from .transformer import LayerNormalization, TransformerStack
 # keeps it the baseline. All-positions is a named ablation (PR #183).
 LEGACY_TRAINING_OBJECTIVE = "strict-prefix-final-position-v1"
 ALL_POSITION_TRAINING_OBJECTIVE = "all-positions-strict-timestamp-v1"
-TRAINING_OBJECTIVES = (LEGACY_TRAINING_OBJECTIVE, ALL_POSITION_TRAINING_OBJECTIVE)
+# WO-3 (ADR 0020 amendment 2026-10-05, D4): the repairs of the all-positions
+# trainer. Each is its own objective, named for what it changes, because an
+# archive's manifest records the objective's name and not the settings behind
+# it: a model trained with overlapping windows must never be labelled as the
+# ablation PR #183 measured. The name and the settings are checked against each
+# other in ``SASRecConfig.validate``. Which of these becomes *the* repaired
+# objective is decided by the WO-3 pilots and is pending until they report.
+OVERLAP_TRAINING_OBJECTIVE = "all-positions-overlap-v2"
+WIDE_BATCH_TRAINING_OBJECTIVE = "all-positions-wide-v2"
+OVERLAP_WIDE_BATCH_TRAINING_OBJECTIVE = "all-positions-overlap-wide-v2"
+ALL_POSITION_TRAINING_OBJECTIVES = (
+    ALL_POSITION_TRAINING_OBJECTIVE,
+    OVERLAP_TRAINING_OBJECTIVE,
+    WIDE_BATCH_TRAINING_OBJECTIVE,
+    OVERLAP_WIDE_BATCH_TRAINING_OBJECTIVE,
+)
+TRAINING_OBJECTIVES = (LEGACY_TRAINING_OBJECTIVE, *ALL_POSITION_TRAINING_OBJECTIVES)
 
 # ``cpu`` is the default and the only bit-reproducible device. ``mps`` (the Mac's
 # GPU) and ``cuda`` come after it under ADR 0020's D6 hardware order; a model
 # trained on either is moved back to the CPU before it scores anything.
 DEVICES = ("cpu", "mps", "cuda")
 
-# Fields added after configuration ids were first minted: WO-1's objective and
-# WO-4's trainer settings. Each default reproduces the trainer as it was before the
-# field existed, and ``src.training.sasrec._configuration_id`` leaves a field out of
-# the id while it holds that default, so no run recorded earlier changes identity.
+# Fields added after configuration ids were first minted: WO-1's objective,
+# WO-4's trainer settings and WO-3's all-positions settings. Each default
+# reproduces the trainer as it was before the field existed, and
+# ``src.training.sasrec._configuration_id`` leaves a field out of the id while it
+# holds that default, so no run recorded earlier changes identity.
 POST_RECORD_FIELDS = (
     "training_objective",
     "microbatch_size",
@@ -79,7 +97,19 @@ POST_RECORD_FIELDS = (
     "early_stopping_min_relative_improvement",
     "early_stopping_probe_fraction",
     "early_stopping_probe_seed",
+    "window_stride",
+    "windows_per_step",
 )
+
+
+def all_position_objective_for(*, window_stride: int, windows_per_step: int) -> str:
+    """The name an all-positions configuration with these WO-3 settings must carry."""
+    return {
+        (False, False): ALL_POSITION_TRAINING_OBJECTIVE,
+        (True, False): OVERLAP_TRAINING_OBJECTIVE,
+        (False, True): WIDE_BATCH_TRAINING_OBJECTIVE,
+        (True, True): OVERLAP_WIDE_BATCH_TRAINING_OBJECTIVE,
+    }[(window_stride > 0, windows_per_step > 0)]
 
 # Probe users are encoded and scored this many at a time. Fixed, because float
 # results depend on the batch shape and the stopping decision should not.
@@ -119,6 +149,15 @@ class SASRecConfig:
     early_stopping_min_relative_improvement: float = DEFAULT_MIN_RELATIVE_IMPROVEMENT
     early_stopping_probe_fraction: float = DEFAULT_PROBE_FRACTION
     early_stopping_probe_seed: int = DEFAULT_PROBE_SEED
+    # WO-3, all-positions objectives only; 0 is the behaviour PR #183 measured.
+    # ``window_stride``: windows end every ``window_stride`` movies and overlap,
+    # and a window scores only the targets of its last ``window_stride`` movies,
+    # so every scored position has at least ``max_sequence_length -
+    # window_stride`` movies behind it (or all the user has). 0: windows are cut
+    # back to back. ``windows_per_step``: each step's ``batch_size`` targets are
+    # drawn from about this many windows. 0: whole windows are packed into a step.
+    window_stride: int = 0
+    windows_per_step: int = 0
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SASRecConfig:
@@ -169,6 +208,8 @@ class SASRecConfig:
             early_stopping_probe_seed=value(
                 "EARLY_STOPPING_PROBE_SEED", int, defaults.early_stopping_probe_seed
             ),
+            window_stride=value("WINDOW_STRIDE", int, defaults.window_stride),
+            windows_per_step=value("WINDOWS_PER_STEP", int, defaults.windows_per_step),
         )
 
     def as_params(self) -> dict[str, Any]:
@@ -183,6 +224,15 @@ class SASRecConfig:
     def gradient_accumulation_steps(self) -> int:
         """Forward/backward passes accumulated into one optimizer step, at most."""
         return math.ceil(self.batch_size / self.microbatch_examples)
+
+    @property
+    def min_window_context(self) -> int:
+        """Movies a scored all-positions target has behind it in its window, at least.
+
+        Fewer only when the user has fewer. Back-to-back windows guarantee none:
+        the first prediction of every window after a user's first sees one movie.
+        """
+        return self.max_sequence_length - self.window_stride if self.window_stride else 0
 
     def validate(self) -> None:
         if self.max_sequence_length <= 0 or self.hidden_dim <= 0:
@@ -215,6 +265,29 @@ class SASRecConfig:
                 raise ValueError("early_stopping_probe_fraction must be in (0, 1)")
             if self.early_stopping_min_relative_improvement < 0.0:
                 raise ValueError("early_stopping_min_relative_improvement must be non-negative")
+        if self.window_stride < 0 or self.windows_per_step < 0:
+            raise ValueError("window_stride and windows_per_step must be 0 (off) or positive")
+        if self.window_stride >= self.max_sequence_length:
+            raise ValueError(
+                "window_stride must be below max_sequence_length; 0 cuts windows back to back"
+            )
+        if self.windows_per_step > self.batch_size:
+            raise ValueError("windows_per_step cannot exceed batch_size")
+        if self.training_objective == LEGACY_TRAINING_OBJECTIVE:
+            if self.window_stride or self.windows_per_step:
+                raise ValueError(
+                    "window_stride and windows_per_step apply to all-positions objectives only"
+                )
+            return
+        expected = all_position_objective_for(
+            window_stride=self.window_stride, windows_per_step=self.windows_per_step
+        )
+        if self.training_objective != expected:
+            raise ValueError(
+                f"training_objective {self.training_objective!r} does not match "
+                f"window_stride={self.window_stride}, windows_per_step="
+                f"{self.windows_per_step}; that configuration is {expected!r}"
+            )
 
 
 def resolve_device(name: str) -> torch.device:
@@ -444,6 +517,72 @@ def _window_batches(
         yield torch.tensor(current, dtype=torch.long)
 
 
+def _wide_batches(
+    data: AllPositionTrainingData,
+    *,
+    batch_size: int,
+    windows_per_step: int,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Draw each step's targets from about ``windows_per_step`` windows (WO-3).
+
+    ``_window_batches`` packs whole windows, so at v1's shape a step of 512
+    targets reads about a dozen windows. Here every window's targets are split
+    at random into *visits* of at most ``ceil(batch_size / windows_per_step)``
+    targets, the visits are shuffled across the epoch, and they are packed into
+    steps of at most ``batch_size`` targets. Every target is still scored exactly
+    once per epoch; what changes is how many windows one step reads from, and
+    that a window is now encoded once per visit rather than once per epoch.
+
+    Yields ``(window_indices, target_indices, local_windows)`` for
+    ``AllPositionTrainingData.batch_visits``; ``local_windows`` is non-decreasing,
+    so targets are listed visit by visit as ``_window_groups`` requires. Both
+    shuffles draw from torch's global generator, which ``fit`` seeds, at the
+    start of the epoch.
+    """
+    counts = data.prediction_offsets[1:] - data.prediction_offsets[:-1]
+    n_windows = len(counts)
+    n_targets = int(data.prediction_offsets[-1]) if n_windows else 0
+    if n_targets == 0:
+        return
+    per_visit = math.ceil(batch_size / windows_per_step)
+    # The flat target arrays are already grouped window by window, so
+    # ``window_of`` is both each target's window and, after the stable sort
+    # below, each slot's window.
+    window_of = torch.repeat_interleave(torch.arange(n_windows), counts)
+    shuffled = torch.randperm(n_targets)
+    order = shuffled[torch.sort(window_of[shuffled], stable=True).indices]
+    rank = torch.arange(n_targets) - data.prediction_offsets[:-1][window_of]
+    visits_per_window = (counts + per_visit - 1) // per_visit
+    first_visit = torch.cumsum(visits_per_window, 0) - visits_per_window
+    slot_visit = first_visit[window_of] + torch.div(rank, per_visit, rounding_mode="floor")
+    n_visits = int(visits_per_window.sum())
+    visit_sizes = torch.bincount(slot_visit, minlength=n_visits)
+    visit_starts = torch.cumsum(visit_sizes, 0) - visit_sizes
+    visit_window = torch.repeat_interleave(torch.arange(n_windows), visits_per_window)
+    del window_of, shuffled, rank, slot_visit
+    visit_order = torch.randperm(n_visits)
+
+    def step(visits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        sizes = visit_sizes[visits]
+        local = torch.repeat_interleave(torch.arange(len(visits)), sizes)
+        within = torch.arange(int(sizes.sum())) - (torch.cumsum(sizes, 0) - sizes)[local]
+        return visit_window[visits], order[visit_starts[visits][local] + within], local
+
+    start = 0
+    targets_in_step = 0
+    for index, size in enumerate(visit_sizes[visit_order].tolist()):
+        if targets_in_step and targets_in_step + size > batch_size:
+            yield step(visit_order[start:index])
+            start = index
+            targets_in_step = 0
+        targets_in_step += size
+    yield step(visit_order[start:])
+
+
+# One all-positions step's inputs: (sequences, local windows, positions, positives).
+_AllPositionBatch = tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+
+
 @dataclass(frozen=True)
 class _TrainingLoop:
     """Everything a training step needs besides the batch, fixed for one ``fit``."""
@@ -544,6 +683,9 @@ class SASRecModel:
     _training_example_bytes: int = 0
     _training_objective: str = LEGACY_TRAINING_OBJECTIVE
     _training_report: SASRecTrainingReport | None = None
+    # All-positions batch shape over the whole fit (WO-3): optimizer steps,
+    # windows encoded and targets scored per step, as the run record reports them.
+    _all_position_batch_stats: dict[str, float] | None = None
     _faiss_index: Any = None
     _exact_item_matrix: torch.Tensor | None = None
     _popularity: PopularityModel = field(default_factory=PopularityModel)
@@ -610,12 +752,20 @@ class SASRecModel:
             )
             self._training_stats = examples.stats
             self._training_example_bytes = examples.nbytes
+        elif self.config.window_stride:
+            training_data = build_overlapping_all_position_training_data(
+                example_frame,
+                item_to_index=self._item_to_index,
+                max_length=self.config.max_sequence_length,
+                window_stride=self.config.window_stride,
+            )
         else:
             training_data = build_all_position_training_data(
                 example_frame,
                 item_to_index=self._item_to_index,
                 max_length=self.config.max_sequence_length,
             )
+        if training_data is not None:
             self._training_stats = training_data.stats
             self._training_example_bytes = sum(
                 tensor.numel() * tensor.element_size()
@@ -812,40 +962,70 @@ class SASRecModel:
     def _train_all_positions(
         self, training_data: AllPositionTrainingData, loop: _TrainingLoop
     ) -> None:
-        """One causal pass per bounded window, every eligible target supervised (PR #183)."""
+        """One causal pass per bounded window, every eligible target supervised (PR #183).
+
+        With both WO-3 settings at 0 this is the loop PR #183 measured, plus
+        WO-4's additions. ``window_stride`` changes only which windows exist (the
+        builder ``fit`` chose); ``windows_per_step`` changes only how a step's
+        targets are drawn from them (``_all_position_batches``).
+        """
         assert self._encoder is not None
+        steps = encoded_windows = scored_targets = epochs_run = 0
         for epoch in range(self.config.epochs):
             self._encoder.train()
             started = time.perf_counter()
-            permutation = torch.randperm(len(training_data.sequences))
             epoch_loss = 0.0
             predictions_seen = 0
-            for rows in _window_batches(
-                training_data,
-                permutation,
-                max_predictions=self.config.batch_size,
-            ):
-                step_loss, batch_predictions = self._all_positions_step(
-                    training_data, rows, loop, epoch + 1
-                )
+            for batch in self._all_position_batches(training_data):
+                step_loss, batch_predictions = self._all_positions_step(batch, loop, epoch + 1)
                 epoch_loss += step_loss * batch_predictions
                 predictions_seen += batch_predictions
+                steps += 1
+                encoded_windows += len(batch[0])
+                scored_targets += batch_predictions
+            epochs_run += 1
             mean_loss = epoch_loss / max(1, predictions_seen)
             if self._end_epoch(epoch + 1, mean_loss, time.perf_counter() - started, loop):
                 break
+        self._all_position_batch_stats = {
+            "steps_per_epoch": steps / max(1, epochs_run),
+            "encoded_windows_per_step": encoded_windows / max(1, steps),
+            "targets_per_step": scored_targets / max(1, steps),
+        }
+
+    def _all_position_batches(
+        self, training_data: AllPositionTrainingData
+    ) -> Iterator[_AllPositionBatch]:
+        """One epoch's steps as ``(sequences, local windows, positions, positives)``.
+
+        The epoch's shuffle is drawn when the first step is requested, before any
+        forward pass, which is where the recorded loop drew its permutation.
+        """
+        if self.config.windows_per_step:
+            for windows, targets, local in _wide_batches(
+                training_data,
+                batch_size=self.config.batch_size,
+                windows_per_step=self.config.windows_per_step,
+            ):
+                yield training_data.batch_visits(windows, targets, local)
+            return
+        permutation = torch.randperm(len(training_data.sequences))
+        for rows in _window_batches(
+            training_data,
+            permutation,
+            max_predictions=self.config.batch_size,
+        ):
+            yield training_data.batch(rows)
 
     def _all_positions_step(
         self,
-        training_data: AllPositionTrainingData,
-        rows: torch.Tensor,
+        batch: _AllPositionBatch,
         loop: _TrainingLoop,
         epoch: int,
     ) -> tuple[float, int]:
         """One optimizer step over a batch of windows; returns (mean loss, targets)."""
         assert self._encoder is not None
-        sequences, prediction_windows, prediction_positions, positive_batch = training_data.batch(
-            rows
-        )
+        sequences, prediction_windows, prediction_positions, positive_batch = batch
         negatives: torch.Tensor | None = None
         if self.config.loss in BCE_LOSSES:
             negatives = sample_position_negatives(
@@ -867,7 +1047,7 @@ class SASRecModel:
                     rng=loop.rng,
                 )
             )
-        groups = _window_groups(prediction_windows, len(rows), self.config.microbatch_size)
+        groups = _window_groups(prediction_windows, len(sequences), self.config.microbatch_size)
         total = len(positive_batch)
         loop.optimizer.zero_grad()
         step_loss = 0.0

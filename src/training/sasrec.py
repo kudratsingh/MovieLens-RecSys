@@ -119,10 +119,11 @@ def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> 
     id as run 528b1451 (it is the same experiment), while an all-positions run
     keeps the id PR #183 gave it.
 
-    WO-4's fields follow the same rule (``POST_RECORD_FIELDS``): each is left out
-    while it holds the default that reproduces the earlier trainer, and is part of
-    the id as soon as it does not. That includes ``device``, so a run trained on
-    ``mps`` can never be aggregated with CPU runs under one id by accident.
+    WO-4's fields and WO-3's follow the same rule (``POST_RECORD_FIELDS``): each is
+    left out while it holds the default that reproduces the earlier trainer, and
+    is part of the id as soon as it does not. That includes ``device``, so a run
+    trained on ``mps`` can never be aggregated with CPU runs under one id by
+    accident.
     """
     parameters = config.as_params()
     parameters.pop("seed")
@@ -419,6 +420,13 @@ def run_once(
                 ),
             }
         )
+        if model._all_position_batch_stats is not None:
+            # WO-3's diagnosis reads these: how many windows one step really
+            # reads from, and the context every scored target is guaranteed.
+            mlflow.log_param("min_window_context", config.min_window_context)
+            mlflow.log_metrics(
+                {f"train_{name}": value for name, value in model._all_position_batch_stats.items()}
+            )
         mlflow.log_metrics(
             {
                 "warm_recall_at_k_candidates": result.warm.recall,
