@@ -18,7 +18,12 @@ import numpy as np
 import pandas as pd
 
 from src.config import Settings
-from src.data.split import TemporalSplit, sealed_test_boundary, temporal_split
+from src.data.split import (
+    TemporalSplit,
+    sealed_test_boundary,
+    temporal_cutoff,
+    temporal_split,
+)
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -163,10 +168,12 @@ def sealed_partition_params(
     """Refuse a run that would touch the sealed partition; return what it did touch.
 
     The boundary is derived from the full frame, before any user subsample, so a
-    pilot is held to the same sealed window as a full run: a subsample computes
-    its own 80th-percentile cutoff, and its 28-day holdout could otherwise reach
-    past the full split's ``holdout_end``. The returned timestamps fill the
-    experiment record's partition declaration.
+    pilot is held to the same sealed window as a full run. Before O-25 a
+    subsample computed its own 80th-percentile cutoff, and the 6% pilot's landed
+    past the full split's ``holdout_end``. ``run_once`` now cuts a subsample at
+    the full frame's boundaries; this check stays as the backstop, on the rows
+    themselves. The returned timestamps fill the experiment record's partition
+    declaration.
     """
     boundary = sealed_test_boundary(full_ratings)
     latest_fit = int(fitted_frame["timestamp"].max()) if not fitted_frame.empty else 0
@@ -224,7 +231,12 @@ def run_once(
     full_ratings = ratings
     if sample_fraction != 1.0:
         ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
-    split = temporal_split(ratings)
+        # O-25: a subsample inherits the full frame's boundaries rather than
+        # computing its own quantile, which put the 6% pilot's whole holdout
+        # inside the sealed window. The guard below still checks the rows.
+        split = temporal_split(ratings, cutoff=temporal_cutoff(full_ratings))
+    else:
+        split = temporal_split(ratings)
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
     )

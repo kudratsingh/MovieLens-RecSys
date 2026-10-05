@@ -18,7 +18,7 @@ import pytest
 import torch
 
 import src.models.candidates.sequence_data as sequence_data
-from src.data.split import temporal_split
+from src.data.split import temporal_cutoff, temporal_split
 from src.models.candidates.sasrec import (
     ALL_POSITION_TRAINING_OBJECTIVE,
     LEGACY_TRAINING_OBJECTIVE,
@@ -283,3 +283,65 @@ def test_peak_rss_is_reported_in_bytes() -> None:
     # Any live Python process with torch loaded is far above 10 MB and below 1 TB;
     # a KiB/byte mix-up lands outside that range on either platform.
     assert 10 * 2**20 < peak_rss_bytes() < 2**40
+
+
+def test_a_subsampled_run_inherits_the_full_splits_boundaries() -> None:
+    """O-25: the sample is cut at the full frame's cutoff, never at its own quantile."""
+    ratings = _ratings_over_days()
+    full = temporal_split(ratings)
+    # A sample dominated by late activity: its own quantile would move the
+    # cutoff (and the 28-day holdout) past the full split's sealed boundary.
+    late_heavy = pd.concat(
+        [ratings[ratings["userId"] <= 4], ratings[ratings["timestamp"] >= full.cutoff]]
+    ).drop_duplicates()
+    assert temporal_split(late_heavy).holdout_end > full.holdout_end
+
+    cut = temporal_split(late_heavy, cutoff=temporal_cutoff(ratings))
+    params = sealed_partition_params(ratings, cut, cut.train)
+
+    assert (cut.cutoff, cut.holdout_end) == (full.cutoff, full.holdout_end)
+    assert params["sealed_boundary_timestamp"] == full.holdout_end
+    assert cut.train["timestamp"].max() < full.cutoff
+    assert cut.holdout["timestamp"].max() < full.holdout_end
+    assert not cut.holdout.empty
+
+
+def test_run_once_cuts_a_subsample_at_the_full_frames_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mlflow
+
+    import src.training.sasrec as sasrec_training
+
+    ratings = _ratings_over_days().assign(rating=4.0)
+    full = temporal_split(ratings)
+    seen: list[tuple[int, int]] = []
+    original = sasrec_training.temporal_split
+
+    def recording_split(frame: pd.DataFrame, **kwargs: object) -> object:
+        result = original(frame, **kwargs)  # type: ignore[arg-type]
+        seen.append((result.cutoff, result.holdout_end))
+        return result
+
+    monkeypatch.setattr(sasrec_training, "temporal_split", recording_split)
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    previous_uri = mlflow.get_tracking_uri()
+    try:
+        mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
+        sasrec_training.run_once(
+            ratings,
+            _config(epochs=1, max_sequence_length=4, batch_size=64),
+            sample_fraction=0.5,
+            run_label="o25",
+            artifact_root=tmp_path / "durable",
+        )
+        run = mlflow.MlflowClient().search_runs(
+            [mlflow.get_experiment_by_name(sasrec_training.PHASE_2_EXPERIMENT).experiment_id]
+        )[0]
+    finally:
+        mlflow.set_tracking_uri(previous_uri)
+
+    assert seen == [(full.cutoff, full.holdout_end)]
+    assert run.data.params["cutoff_timestamp"] == str(full.cutoff)
+    assert run.data.params["sealed_boundary_timestamp"] == str(full.holdout_end)
+    assert int(run.data.params["latest_scored_timestamp"]) < full.holdout_end

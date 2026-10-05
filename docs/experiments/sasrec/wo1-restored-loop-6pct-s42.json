@@ -6,8 +6,10 @@
     "the now-explicit objective.",
     "This seed-42 cell is the equivalence run: its weights digest and metrics must equal",
     "the old-loop control's (wo1-old-loop-control-6pct.json). If they differ, report",
-    "and stop; wo1-restored-loop-6pct-seeds.json does not run."
+    "and stop; wo1-restored-loop-6pct-seeds.json does not run.",
+    "O-25 (2026-10-05): the 6% sample is cut at the full split's boundaries (cutoff 1466837397, holdout_end 1469256597). Expected protocol hash, from the preflight:"
   ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
   "sample_fraction": 0.06,
   "cells": [
     {
