@@ -3735,3 +3735,37 @@ verdict or champion changes, and the v1 cell stays BCE.
 wall. Peak RSS 2,650,095,616 bytes (2.47 GiB), the same after fit and at the end of the run. Weights
 digest `sha256:6436271c…`, artifact SHA-256 `5820fa7a…`. Like WO-1's runs, it was logged to a local
 file store and can be imported into the shared server with its id.
+
+## The all-positions trainer's gap, first three causes — 2026-10-05 (WO-3, stopped after 3 pilots)
+
+WO-3 tests why the all-positions trainer (#183, 9.8× faster) scores below the trainer of record,
+one cause at a time. Each cause is a setting that defaults off (PR #201). Every pilot is the #183
+cell at seed 42 on O-25's 6% partition: protocol `sha256:faf2828d…` confirmed on each run before
+reading, 108 warm / 39 cold users, cold recall@500 0.5427033422 on every run.
+
+| Pilot | What changed | Run | Warm recall@500 | vs pilot 1 | Fit s |
+|---|---|---|---:|---:|---:|
+| 1 | nothing: the clean baseline | `5911fe7fbcbc477c85261d2ec6531987` | **0.3211451711** | — | 90.2 |
+| 2 | overlapping windows, stride 25: every scored target sees ≥ 25 movies (or all the user has); mean context 34.3 against 24.2 | `95003b498d7f41459f5f2b4ec6f4dfbc` | **0.2992780178** | −0.0219 | 120.3 |
+| 3 | each step's 512 targets from 512 window visits, the trainer of record's batch composition (against 11.5 windows) | `4929b4942d7645c38495c27f943b5d18` | **0.2837269604** | −0.0374 | 1,477.6 |
+
+**The clean gap is smaller than the recorded one.** Against WO-1's four-seed mean 0.3721736 the
+baseline is −13.71% (about 3.4 seed sd). It is not −42.82%: that figure (`f837955c…`) came from the
+contaminated split.
+
+**Neither cause, removed alone, closed any of it at this seed; both made recall worse.** Each fall is
+past the 0.015 the run record set before the runs as contradicting its expectation, so the thread
+stopped for the owner with 5 of 8 pilots, the seed repeats and the full run unspent.
+- Pilot 2 led the baseline after pass 1 (0.2586 against 0.2438) and trailed after pass 2. Its fall
+  rests mostly on four single-target users (three went from 1.0 to 0, one from 0 to 1), about 1.5
+  seed sd.
+- Pilot 3's fall is broader (15 users higher, 34 lower) and about 2.5 seed sd. It costs as much as
+  the trainer of record.
+
+**No share of the gap is attributed yet, and no repaired objective is named.** The passes pilot was
+not run. One untested difference: the trainer of record always predicts from position 49 with the
+history right-aligned, as evaluation does; every all-positions variant trains at many positions.
+
+Run record:
+[`model-planning/experiments/wo3-repair-fast-trainer.md`](model-planning/experiments/wo3-repair-fast-trainer.md);
+cells and results: `experiments/sasrec/wo3-*.json`.

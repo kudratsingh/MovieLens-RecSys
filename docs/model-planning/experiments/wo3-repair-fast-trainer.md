@@ -1,7 +1,8 @@
 # Experiment: SASRec v1 / repairing the all-positions trainer / wo3-v1
 
-**Status:** proposed. Code, tests and cells are committed; runs are held until the owner's
-coordinator releases them (2026-10-05, a database migration needs the machine quiet first).
+**Status:** stopped for the owner after 3 of 8 pilots. Pilots 2 and 3 each contradicted their
+predeclared expectation: each removed one cause and scored *below* the baseline. No further pilot,
+seed repeat or full run has been made.
 
 **Governing ADR:** [ADR 0020](../../adr/0020-sasrec-v2.md), amendment 2026-10-05, D4 ("try to
 repair the fast trainer before paying for the slow one"), with stop rules 1 and 2 unchanged.
@@ -11,7 +12,10 @@ Also [ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
 - Next-Phase Build Brief 2026-10-05, WO-3: up to 8 pilots, 3 seed repeats and 1 full run, with the
   brief's pass checks and stop rule. Approved in full once WO-2 was accepted.
 - WO-2 accepted and merged 2026-10-05 (`c07b4e0`, PR #196). This branch starts there.
-- Runs: **held**. To be filled in when the coordinator sends "runs approved".
+- Runs: the 6% pilots were released by the coordinator on 2026-10-05 after the database
+  migration. The first launch, during the migration, was refused by the harness's permission
+  check; the second, at 08:46 with the machine quiet, was allowed. The full run stays held for a
+  separate approval.
 
 **Specification version:** wo3-v1 (2026-10-05). The cells, written before any run:
 
@@ -125,10 +129,11 @@ from them, never which targets are trained or how often.
 | Owner unseal approval | not applicable | — |
 | Sealed boundary this run used | `holdout_end` = 1469256597 (2016-07-23 06:49:57 UTC), from the full 25M frame | logged `sealed_boundary_timestamp` and `holdout_end_timestamp` |
 | Feature source and its as-of | none; raw ratings, strict timestamp prefix | — |
-| Latest event timestamp that entered fitting | to be copied from each run (expected 1466819964 on the pilots, as WO-1 and WO-2) | `latest_fit_timestamp` < 1469256597; `run_once` refuses otherwise |
-| Latest event timestamp that entered scoring | to be copied from each run (expected 1469247943 on the pilots) | `latest_scored_timestamp` < 1469256597 |
+| Latest event timestamp that entered fitting | 1466819964 (2016-06-25) on all three pilots | `latest_fit_timestamp` < 1469256597; `run_once` refuses otherwise |
+| Latest event timestamp that entered scoring | 1469247943 (2016-07-23 04:25:43 UTC) on all three pilots | `latest_scored_timestamp` < 1469256597 |
 
-**Affirmation:** to be made after the runs, from their logged timestamps.
+**Affirmation.** Claude (WO-3 implementer), 2026-10-05: pilots 1–3 read no interaction at or after
+1469256597, as their logged latest-fit and latest-scored timestamps show.
 
 ## Metrics
 
@@ -272,17 +277,53 @@ cd $WT && SASREC_WO3_UNCHANGED_CHECK=1 TWOTOWER_INPUT_DIR=$MAIN/data/raw/ml-25m 
 
 ## Verdict
 
-Complete only after the runs.
+**Validity:** valid. All three pilots ran on protocol `faf2828d…`, confirmed on each run before any
+number was read, with 108 warm / 39 cold users and cold recall@500 0.5427033422 on every run (the
+guardrail).
 
-**Validity:**
+**Partition affirmation:** intact. Latest fit 1466819964 and latest scored 1469247943 on every
+pilot, both below 1469256597.
 
-**Partition affirmation:**
+**Decision:** stopped for the owner, under the predeclared expectation rule. Not a verdict on the
+repair: WO-3's done-criteria are neither met nor failed, and the stop rule (8 pilots) has not fired.
 
-**Decision:**
+**Rule application (seed 42, warm recall@500):**
 
-**Rule application:**
+| Pilot | Run | Warm recall@500 | vs pilot 1 | vs WO-1 mean 0.3721736 | Warm NDCG@500 | Fit s | Peak RSS |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1 baseline (#183 cell) | `5911fe7fbcbc477c85261d2ec6531987` | **0.3211451711** | — | −13.71% | 0.1066530 | 90.2 | 2.93 GB |
+| 2 overlap, stride 25 | `95003b498d7f41459f5f2b4ec6f4dfbc` | **0.2992780178** | −0.0219 | −19.59% | 0.1085791 | 120.3 | 2.89 GB |
+| 3 wide, 512 visits per step | `4929b4942d7645c38495c27f943b5d18` | **0.2837269604** | −0.0374 | −23.76% | 0.0967268 | 1,477.6 | 2.56 GB |
 
-**Runs:**
+- **Pilot 1** behaved as expected: below WO-1's range (floor 0.3610084), a gap of 0.0510, about
+  3.4 of WO-1's seed sd. The recorded −42.82% (`f837955c…`) was the contaminated split's.
+- **Pilot 2** restored context (every scored target sees at least 25 movies, or all the user has;
+  mean 34.3 against 24.2) and fell 0.0219, past the predeclared 0.015. It led pilot 1 after pass 1
+  (0.2586 against 0.2438) and trailed after pass 2. Per user against pilot 1: 25 higher, 34 lower,
+  49 unchanged; three single-target users went from 1.0 to 0, one from 0 to 1. Warm NDCG and
+  catalog coverage (14.1% against 10.4%) rose.
+- **Pilot 3** restored the trainer of record's batch composition (each step reads 511.8 windows,
+  one target each) and fell 0.0374. Per user: 15 higher, 34 lower, 59 unchanged. It costs as much
+  as the trainer of record (1,477.6 s fit, beside another pilot).
+- **Pilot 3 started before pilot 2's result** and was allowed to finish after the stop, as an
+  approved single-cause pilot whose result informs the owner's decision.
 
-**What is not authorized next:** no gate threshold, champion or serving change in any case. If the
-full run passes, WO-4 onward may train on the repaired objective; the ADR 0020 note names it.
+**What the three runs say, and do not say.** At one seed on 108 warm users, neither cause, removed
+alone, moved warm recall toward the trainer of record; both moved it down. Pilot 2's fall is 1.5
+seed sd and rests mostly on four users; pilot 3's is 2.5 sd and broader. The diagnosis has not yet
+attributed any share of the gap to a cause. One difference the brief did not list (a hypothesis,
+untested): the trainer of record always predicts from position 49 with the history right-aligned,
+which is exactly how evaluation queries the model, while every all-positions variant trains
+predictions at many positions.
+
+**Runs:** `5911fe7fbcbc477c85261d2ec6531987` (pilot 1), `95003b498d7f41459f5f2b4ec6f4dfbc` (pilot 2),
+`4929b4942d7645c38495c27f943b5d18` (pilot 3). Five of eight pilots, the seed repeats and the full
+run remain in the budget.
+
+**What is not authorized next:** no further pilot until the owner decides. The options are:
+- continue the plan (pilot 4, passes);
+- repeat pilots 2 and 3 at a second seed;
+- stop WO-3 on the D6 path, so that WO-5 trains on the original objective.
+
+No gate threshold, champion or serving change in any case. No repaired objective is named, and the
+ADR 0020 note waits for the outcome.

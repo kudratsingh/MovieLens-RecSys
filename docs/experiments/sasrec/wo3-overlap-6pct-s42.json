@@ -49,5 +49,52 @@
       "training_objective": "all-positions-overlap-v2",
       "window_stride": 25
     }
-  ]
+  ],
+  "result": {
+    "status": "contradicts the predeclared expectation (at or above pilot 1; a fall of more than 0.015 contradicts it): -0.0219 against pilot 1; the thread stopped for the owner",
+    "date_run": "2026-10-05",
+    "run_id": "95003b498d7f41459f5f2b4ec6f4dfbc",
+    "tracking_store": "local file store <wo3 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.29927801781670205,
+    "warm_ndcg_at_500": 0.10857906746407844,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.3638602467398278,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "vs_pilot_1": -0.0218671533,
+    "vs_wo1_mean_relative": -0.195864,
+    "train_loss_by_epoch": [
+      0.1043423495007814,
+      0.0810583669995553
+    ],
+    "epoch_warm_recall": [
+      0.258566890041648,
+      0.29927801781670205
+    ],
+    "n_training_windows": 52093,
+    "n_training_targets": 1186847,
+    "min_window_context": 25,
+    "train_steps_per_epoch": 2372.5,
+    "train_encoded_windows_per_step": 21.95700737618546,
+    "train_targets_per_step": 500.2516332982086,
+    "catalog_coverage": 0.140909575034615,
+    "fit_seconds": 120.3,
+    "wall": "2 min 9 s",
+    "peak_rss_bytes": 2886909952,
+    "concurrency_note": "ran beside pilot 3; load 2.48 / 2.32 / 2.53 at start",
+    "started": "2026-10-05T15:48:42Z",
+    "ended": "2026-10-05T15:50:51Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:9b81b130536e9fc4717caf0babcffe5e6aab4606b2b710a1c6dc922ae8f27b7c",
+    "artifact": {
+      "directory": "artifacts/wo3/models/95003b498d7f41459f5f2b4ec6f4dfbc/ (main checkout, not committed)",
+      "model_sha256": "61980a4d114039bf2d926585ca6eaccff15701c2d908d8de397fd38b2ffdb711"
+    },
+    "log": "artifacts/wo3/logs/wo3-p2-overlap.log (main checkout)"
+  }
 }
