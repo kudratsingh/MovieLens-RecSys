@@ -350,3 +350,65 @@ artifact export equivalence, latency, reliability and audit checks, and the prop
 them. A model read on the sealed window under this wording has not been shown to serve. The number is
 still an honest offline estimate on data no decision has used, which is what the read is for; it is
 not evidence that the model is ready to serve.
+
+## Contamination record — 2026-10-05 (O-25)
+
+**Declared under step 1 of the procedure above, before anything is decided about it.** The owner's
+answer is [O-25](../owner-decisions.md), and the run record is
+[`../experiments/wo1-restore-trainer-of-record.md`](../experiments/wo1-restore-trainer-of-record.md).
+
+**What happened.** WO-1's preflight found the leak in the pilot path's split. A pilot keeps every
+interaction of 6% of users (`subsample_users`, seed 42: 9,752 users, 1,517,399 ratings), and the
+trainer then ran `temporal_split` on that *subsample*. The subsample's own 80th-percentile cutoff
+is **1471288304** and its `holdout_end` is **1473707504**. The cutoff falls 23.5 days *after* the
+full split's sealed boundary, 1469256597. There is no `split.test` anywhere on this path. The
+boundary moved with the population, which none of the three known vectors in the section above
+describes.
+
+**Which rows.** The 6% split's train and holdout against the boundary and against the one-time final
+window `[1469256597, 1471675797)` that ADR 0001's 2026-09-05 amendment reserves for WO-8:
+
+| Slice | Rows | At or after 1469256597 | Inside the WO-8 window | Later sealed rows |
+|---|---:|---:|---:|---:|
+| train (fitted) | 1,213,918 | 4,870 | 4,870 | 0 |
+| holdout (scored) | 7,528 | **7,528 (all)** | 1,126 | 6,402 |
+
+**Which runs.** Every run on the seed-42 6% subsample before O-25. They are identified by their
+recorded split, train 1,213,918 / holdout 7,528 rows, or by the 9,752-user sample:
+
+- SASRec pilots, 2026-09-04/05: the BCE-vs-gBCE pilot (`docs/experiments/sasrec/pilot-6pct.json`)
+  and the reference values 0.3186 / 0.3103 / 0.3258 / 0.2957.
+- The 6% item-item incumbent in the M0-14 seed-dispersion study (warm recall@500 0.3587;
+  `experiments/tolerance/surrogate-seed-noise-6pct.json`).
+- SASRec all-positions pilot `f837955c832440069dd8c1316a2ad0c6` and the retained attempt
+  `833812eea8a341e9953285b4145cf9b8` (2026-09-11).
+- Two-tower v1 12-cell pilot sweep (`docs/experiments/twotower-sweep/pilot.json`; run ids in
+  `docs/results.md`).
+- Two-tower v2 bounded pilot, 2026-09-04 (`v2-pilot.json`).
+
+The 0.5% pilot sample's split (cutoff 1466662482, `holdout_end` 1469081682) stays inside the
+boundary and is not affected. Full-data runs compute the full split and are not affected.
+
+**Decisions that rested on these runs.** Under step 5 these are listed here and not re-decided here:
+
+- ADR 0016's choice of BCE over gBCE for the frozen v1 cell. It was made on the 6% pilot.
+- The two-tower pilot findings and ADR 0015's Gate 1 arm reading.
+- ADR 0020's 6% leg of the cell-0 control. Its full-data leg fired stop rule 2 independently.
+
+**The WO-8 window.** 4,870 fitted rows and 1,126 scored rows of `[1469256597, 1471675797)` entered
+pilot runs. No full-data model and no gate verdict was fitted or scored on them. Whether the window
+is still fit for the one-time read in WO-8 (step 3, retire the window) is the owner's decision. This
+note records the fact and does not make that call.
+
+**Closing the path (step 6).**
+
+- **Closed for SASRec.** On `feat/wo1-restore-trainer-of-record` (PR #194), `run_once` splits a
+  subsample at the full frame's cutoff (`temporal_split(..., cutoff=temporal_cutoff(full))`). It
+  also refuses any run whose fitted or scored rows reach the full frame's boundary
+  (`SealedPartitionError`). Both are under test. The new 6% pilot protocol hash is
+  `sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc`.
+- **Still open.** The two-tower, item-item and last-item trainers subsample and then compute their
+  own quantile in the same way. WO-1 does not change them. Any pilot they run before they are fixed
+  repeats this read.
+- **Tagging (step 4).** The affected MLflow runs live on the shared tracking server and have not
+  been tagged yet.

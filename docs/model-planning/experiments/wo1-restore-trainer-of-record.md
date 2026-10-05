@@ -1,268 +1,330 @@
 # Experiment: SASRec v1 / restored trainer of record on the memory-bounded data path / wo1-v1
 
-**Status:** proposed. The code is on `feat/wo1-restore-trainer-of-record`. All five runs are held
-until the owner approves them.
+**Status:** measured.
 
 **Governing ADR:** [ADR 0020](../../adr/0020-sasrec-v2.md). Its 2026-09-15 decision note makes the
 copied-prefix objective the objective of record, to run "once its data path is rewritten to be
-memory-bounded … equality-tested against the current builder". This run also falls under the
-ADR 0020 amendment 2026-10-05 (separate docs PR) and [ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
+memory-bounded … equality-tested against the current builder". Also governing: the ADR 0020
+amendment 2026-10-05 (separate docs PR) and
+[ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
 
-**Owner approval:** Next-Phase Build Brief, 2026-10-05, WO-1. Runs: pending ("runs approved").
+**Owner approval:**
+- Next-Phase Build Brief 2026-10-05, WO-1.
+- Runs approved 2026-10-05.
+- Pilot protocol: O-25 (2026-10-05, `docs/model-planning/owner-decisions.md`, PR #195). The 6%
+  sample is cut at the full split's boundaries.
 
-**Specification version:** wo1-v1 (2026-10-05). The cells are
+**Specification version:** wo1-v1 (2026-10-05), amended for O-25 before any run. The cells are
 [`wo1-old-loop-control-6pct.json`](../../experiments/sasrec/wo1-old-loop-control-6pct.json),
 [`wo1-restored-loop-6pct-s42.json`](../../experiments/sasrec/wo1-restored-loop-6pct-s42.json) and
 [`wo1-restored-loop-6pct-seeds.json`](../../experiments/sasrec/wo1-restored-loop-6pct-seeds.json).
 
 ## Decision this experiment informs
 
-This run decides whether the restored loop on the P1 data path becomes SASRec v1's trainer of
-record. If it does, its four pilot values replace the 2026-09-04/05 reference pilots, and WO-2 and
-WO-3 are judged against them.
+Whether the restored loop on the P1 data path is SASRec v1's trainer of record. If it is, its four
+pilot values become the reference set against which WO-2 and WO-3 are judged.
 
 ## Hypothesis and falsifier
 
 **Hypothesis:** ADR 0020 step P1 changes no modelling. Storing each user's sequence once and
-cutting the 50-movie window at batch time gives the same examples in the same order, so at seed 42
-on CPU the restored loop produces bit-identical weights and identical metrics to the loop at
-`89520be^`.
+cutting the 50-movie window at batch time gives the same examples in the same order. At seed 42 on
+CPU the restored loop should therefore produce bit-identical weights and identical metrics to the
+loop at `89520be^`.
 
-**Falsified when:** the seed-42 run's encoder-weights digest differs from the control's, or any of
-the six @500 metrics differs. Either one stops WO-1 for an owner decision. Seeds 7, 13 and 21 do
-not run.
+**Falsified when:** the seed-42 weights digest or any of the six @500 metrics differs from the
+control's. That stops WO-1, and seeds 7, 13 and 21 do not run.
 
 ## Baselines and controls
 
 | Model/control | Why it is required | Run/spec reference |
 |---|---|---|
-| Old loop from git (`89520be^`), seed 42 | Ground truth for equivalence | `wo1-old-loop-control-6pct.json` |
-| Previous reference pilots 0.3186 / 0.3103 / 0.3258 / 0.2957 | Superseded values. They predate PR #162's short-history fix, so they are context, not the comparison | `docs/results.md` |
+| Old loop from git (`89520be^` plus the recorded O-25 partition patch), seed 42 | Ground truth for equivalence | `wo1-old-loop-control-6pct.json`, run `3e031fa2046b42b4a1f50fc6e91fcc71` |
+| Previous reference pilots 0.3186 / 0.3103 / 0.3258 / 0.2957 | Superseded: their split read the sealed window, and they predate PR #162. They are compromised and are not compared | `docs/results.md`; sealed-test memo, 2026-10-05 |
 | Full-data v1 `528b1451…` / model `a11af5ed…` | The quality reference this objective produced. No full run in WO-1 | `full.json` |
 
 ## Changed and fixed axes
 
-**Changed:** two things change. The example storage moves from the copied `(n_examples × 50)`
-table to stored sequences windowed per batch; this applies to the control-vs-s42 pair. The training
-seed takes the values 42, 7, 13 and 21; this applies to the reference set.
+**Changed:**
+- The example storage: the copied `(n_examples × 50)` table is replaced by stored sequences
+  windowed per batch. This is the only difference between the control and the s42 run.
+- The training seed: 42, 7, 13 and 21, for the reference set.
 
-**Fixed:** everything else is held:
-
-- **Cell:** pilot-6pct.json's `pilot6-bce-neg32`: hidden 64, 2 blocks, 2 heads, feed-forward 256,
-  dropout 0.2, L = 50, BCE, 32 uniform negatives from the per-example sampler, batch 512, Adam
-  1e-3, 2 epochs.
-- **Data:** the 6% user subsample (`SUBSAMPLE_SEED` 42, independent of the training seed),
-  threshold 10, exclusions, and K = 500.
-- **Process:** CPU, `OMP_NUM_THREADS=1`, identical environment variables across all five runs.
+**Fixed:**
+- **Cell.** `pilot6-bce-neg32` from pilot-6pct.json:
+  - hidden 64, 2 blocks, 2 heads, feed-forward 256, dropout 0.2, L = 50;
+  - BCE, with 32 uniform negatives from the per-example sampler;
+  - batch 512, Adam 1e-3, 2 epochs.
+- **Data.** The 6% user subsample (`SUBSAMPLE_SEED` 42, independent of the training seed), cut at the
+  full split's boundaries (O-25). Threshold 10, exclusions, K = 500.
+- **Process.** CPU, `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=TRUE` on all five runs.
 
 ## Protocol identity
 
 | Field | Value |
 |---|---|
-| DVC/raw revision | `data/raw/ml-25m.dvc`, md5 `c3ce6309f6f0ec347a9e0a662c640021.dir` (1,156,670,716 bytes, 7 files) |
-| Derived snapshot hash | 6% user subsample of the above, `SUBSAMPLE_SEED` 42 |
-| Train cutoff / holdout window | the subsample's own ADR 0001 split. Logged as `cutoff_timestamp` / `holdout_end_timestamp`; copy them in after the run |
+| DVC/raw revision | `data/raw/ml-25m.dvc`, md5 `c3ce6309f6f0ec347a9e0a662c640021.dir`; fresh GroupLens download, `dvc status` clean |
+| Derived snapshot | 6% user subsample (9,752 users, 1,517,399 ratings, `SUBSAMPLE_SEED` 42), cut at the full split's cutoff; train frame sha256 `93ee9a20a5883df784176772732cf25ff27e453d0aa5998deb395d6afe81c5a6` (pandas row hash) |
+| Train cutoff / holdout window | 1466837397 / [1466837397, 1469256597), the full split's (O-25); train 1,202,444 rows, holdout 6,604 rows |
 | Rolling window(s) | none (w0 only) |
 | Partition(s) read | see the partition declaration below |
 | Label contract | every holdout rating in the 28-day window, set per user |
-| Catalog fingerprint | items in the subsample's train split, from the `sasrec_vocabulary_sha256` tag |
-| Cold threshold / routing | 10 / popularity below 10, SASRec at 10 or above |
+| Catalog fingerprint | items in the subsample's train split; `sasrec_vocabulary_sha256` tag on each run |
+| Cold threshold / routing | 10 / popularity below 10, SASRec at 10 or above; 108 warm / 39 cold users |
 | Exclusion policy | the user's full training history |
 | Stage / K | retrieval / 500 |
-| Feature or sequence contract | oldest-to-newest, left-zero padding, L = 50, strict prefix (equal-timestamp items never in each other's prefix) |
-| Protocol hash | generated by the run. Expected to equal the earlier 6% pilots' `sha256:090985d7…` (same subsample, same split); a mismatch is a finding |
+| Sequence contract | oldest-to-newest, left-zero padding, L = 50, strict prefix (equal-timestamp items never in each other's prefix); 1,186,847 examples |
+| Protocol hash | **`sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc`**, the new 6% pilot protocol. It replaces `090985d7…`, the contaminated split. Identical on all five runs |
 
 ## Partition declaration
 
 | Field | Value | How a reviewer checks it |
 |---|---|---|
-| Partition(s) read | `holdout` (the 6% subsample's own 28-day window) | `split.test` is built by `temporal_split` and never used by the trainer |
+| Partition(s) read | `holdout` (the full split's 28-day window, restricted to the 6% users) | `split.test` is built by `temporal_split` and never used by the trainer |
 | Owner unseal approval | not applicable | — |
-| Sealed boundary this run used | `holdout_end` = 1469256597 (2016-07-23 06:49:57 UTC), derived from the full 25M frame before subsampling | the restored-loop runs log `sealed_boundary_timestamp`. The control at `89520be^` logs no such parameter, so the preflight below covers it |
-| Feature source and its as-of | none. The sequence model reads raw ratings, and no Feast source is involved | — |
-| Latest event timestamp that entered fitting | _from `latest_fit_timestamp`_ | strictly less than 1469256597 |
-| Latest event timestamp that entered scoring | _from `latest_scored_timestamp`_ | strictly less than 1469256597 |
+| Sealed boundary this run used | `holdout_end` = 1469256597 (2016-07-23 06:49:57 UTC), derived from the full 25M frame | restored-loop runs log `sealed_boundary_timestamp` and `holdout_end_timestamp` = 1469256597 |
+| Feature source and its as-of | none. Raw ratings, strict prefix | — |
+| Latest event timestamp that entered fitting | 1466819964 (2016-06-25) | `latest_fit_timestamp`; below 1469256597 |
+| Latest event timestamp that entered scoring | 1469247943 (2016-07-23 04:25:43 UTC) | `latest_scored_timestamp`; below 1469256597 |
 
-The subsample computes its own 80th-percentile cutoff, so its 28-day holdout can end later than the
-full split's. `run_once` now refuses a run (`SealedPartitionError`) whose fitted or scored rows
-reach the full frame's sealed boundary. The 2026-09 pilots ran without this check. The preflight
-prints the same four numbers before the control runs. If it fails, nothing runs and this goes back
-to the owner.
+**First preflight, 2026-10-05, before O-25: FAILED, and nothing ran.** The 6% subsample computed its
+own cutoff, **1471288304**, which is 23.5 days *after* the boundary; its `holdout_end` was
+1473707504. Its train held 4,870 rows at or after 1469256597, all inside WO-8's window
+`[1469256597, 1471675797)`. Its holdout's 7,528 rows were all at or after the boundary, and 1,126 of
+them were inside that window. Every 6% pilot before O-25 trained and scored on that split. The scope
+is recorded in
+[`../memos/sealed-test-and-dataset-policy.md`](../memos/sealed-test-and-dataset-policy.md)
+(2026-10-05).
 
-**Preflight, 2026-10-05: FAILED. No run started.** The full 25M CSVs were freshly downloaded and
-`dvc status` reports them clean. The full split gives cutoff 1466837397 and boundary 1469256597,
-as expected. The 6% subsample (`SUBSAMPLE_SEED` 42: 9,752 users, 1,517,399 ratings) computes its
-own cutoff of **1471288304**, about 23.5 days *after* the boundary, and so its holdout_end is
-1473707504. As a result:
+**Second preflight, after O-25: PASSED.** Both worktrees ran the same script:
+- cutoff 1466837397 and `holdout_end` 1469256597;
+- identical train frame hash;
+- protocol hash `faf2828d…`;
+- latest fitted and scored timestamps as in the table above;
+- examples byte-identical between the control's copied builder and the new store: 1,186,847 × 50,
+  sha256 `62cc7e7af8ba3a48677c5bab417bb403cc46624e706ec87e301426568af4ef78`, with identical
+  `SequenceExampleStats` (841,262 truncated examples, 262,417,767 omitted interactions).
 
-| Slice of the 6% split | Rows | Rows at or after 1469256597 | Of those, inside WO-8's one-time window `[1469256597, 1471675797)` |
-|---|---:|---:|---:|
-| train (fitted) | 1,213,918 | 4,870 | 4,870 |
-| holdout (scored) | 7,528 | 7,528 (all) | 1,126 |
+**Affirmation.** Claude (WO-1 implementer), 2026-10-05: the five runs in this record read no
+interaction at or after 1469256597, as the logged latest-fit and latest-scored timestamps show.
 
-Every 6% pilot run on this protocol fitted on and scored sealed-window ratings. That includes the
-2026-09-04/05 values 0.3186 / 0.3103 / 0.3258 / 0.2957, which share the subsample and split, and
-the all-positions pilot `f837955c…`. The 0.5% pilot sample's split (cutoff 1466662482,
-holdout_end 1469081682) stays inside the boundary. `SealedPartitionError` refuses the restored-loop
-runs. The control at `89520be^` has no guard and was not started. WO-1's pilots wait for an owner
-decision on the pilot protocol.
+### How both arms got the same partition (O-25 control choice)
 
-**Affirmation.** _To be completed after the runs._
+The control runs the real `89520be^` code with a minimal, recorded patch of the same cut. I chose
+this over running the test-suite copy of the old loop through a new harness, for three reasons:
+- the control stays the code git holds, including its own `run_once`, FAISS evaluation and export;
+- it needs no new tooling;
+- the patch touches only the partition, never the loop.
+
+The patch, applied in a detached worktree at `89520be^`:
+
+- **`src/data/split.py`:** byte-for-byte the WO-1 branch's change. `temporal_split` gains an
+  optional keyword `cutoff`, and `temporal_cutoff` is added. `split.py` is identical at `89520be^`
+  and at `main`, so the hunk applies unchanged.
+- **`src/training/sasrec.py`:** three lines.
+
+```diff
+-from src.data.split import temporal_split
++from src.data.split import temporal_cutoff, temporal_split  # O-25 control patch
+@@ def run_once(
++    full_cutoff = temporal_cutoff(ratings)  # O-25 control patch
+     if sample_fraction != 1.0:
+         ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
+-    split = temporal_split(ratings)
++    split = temporal_split(ratings, cutoff=full_cutoff)  # O-25 control patch
+```
+
+Before training, the examples were checked byte-identical in both arms (second preflight above).
 
 ## Cohorts and slices
 
-Natural warm/cold/overall only. A pilot has no synthetic cohort, since `run_once` attaches it only
-at `sample_fraction` 1.0. The per-user recall export is logged for the bootstrap.
+Natural warm/cold/overall only (108 warm / 39 cold). A pilot has no synthetic cohort. The per-user
+recall export is logged for the bootstrap.
 
 ## Metrics
 
 **Primary (equivalence, control against s42):**
-- `encoder_weights_sha256` over the exported archives must be equal. This digest covers names,
-  dtypes, shapes and raw bytes, and omits the archive's metadata, which now carries
-  `training_objective`.
-- Warm, cold and overall recall@500 and NDCG@500 must be exactly equal.
+- The encoder-weights digest (`encoder_weights_sha256`: names, dtypes, shapes, raw bytes) must be
+  equal.
+- All six @500 metrics must be exactly equal.
 - The per-user recall export must be identical.
 
-**Reference set:** warm recall@500 at seeds 42, 7, 13 and 21. Report the mean and range. These
-replace 0.3186 / 0.3103 / 0.3258 / 0.2957.
+**Reference set:** warm recall@500 at seeds 42, 7, 13 and 21.
 
-**Guardrails:** cold recall must be identical across all five runs, because cold users are served by
-popularity.
+**Guardrail:** cold recall must be identical across all runs, since popularity routes the cold users.
 
-**Diagnostics:**
-- `fit_seconds`.
-- `fit_peak_rss_bytes` and `peak_rss_bytes`: process high-water marks from `resource.getrusage`.
-- `training_example_store_bytes`.
-- `epoch_peak_rss_bytes`.
-- Catalog coverage and mean retrieved popularity rank.
-- Training example count: it must be identical across all five runs.
+**Diagnostics:** `fit_seconds`; peak RSS (`fit_peak_rss_bytes`, `peak_rss_bytes`, from
+`resource.getrusage`); `training_example_store_bytes`.
 
-**Evaluation index caveat.** The control evaluates with FAISS `IndexFlatIP`, as `89520be^` did. The
-restored loop evaluates with exact `torch` top-k (`torch-exact-inner-product-v1`). That index has
-been the trainer's since PR #183 because it keeps FAISS's second OpenMP runtime out of the training
-process. `test_torch_exact_top_k_matches_exact_faiss` pins the two to the same order on small data.
-If the weights match and a metric still differs, the index is the only remaining cause. That is
-reported, and it is not explained away.
+**Evaluation index:** the control scores with FAISS `IndexFlatIP` (as `89520be^` did) and the
+restored loop with exact torch top-k. With the weights equal, every metric and every per-user value
+also came out equal, so the two indexes agreed on this population.
 
 ## Grid and seeds
 
-| Cell | Changed fields | Seeds | Advance/stop rule |
+| Cell | Changed fields | Seed | Advance/stop rule |
 |---|---|---|---|
-| `wo1-oldloop-pilot6-bce-neg32-s42` (at `89520be^`) | none (control) | 42 | — |
-| `wo1-pilot6-bce-neg32-s42` | data path | 42 | must equal the control in weights digest and metrics, or WO-1 stops |
-| `wo1-pilot6-bce-neg32-s{7,13,21}` | data path, seed | 7, 13, 21 | run only after s42 matched; recorded whatever they show |
+| `wo1-oldloop-pilot6-bce-neg32-s42` (at `89520be^` plus the O-25 patch) | none (control) | 42 | — |
+| `wo1-pilot6-bce-neg32-s42` | data path | 42 | must equal the control, or WO-1 stops. **Equal** |
+| `wo1-pilot6-bce-neg32-s{7,13,21}` | data path, seed | 7, 13, 21 | ran only after s42 matched; recorded as they came out |
 
 ## Compute and storage budget
 
-- **Hardware and environment:** the laptop's Apple-silicon CPU, `OMP_NUM_THREADS=1`. The control
-  also needs `KMP_DUPLICATE_LIB_OK=TRUE`, because `89520be^` imports FAISS beside torch (see the
-  ADR 0006 2026-09-05 environment note); all five runs set it so the environments are identical.
-- **Maximum wall-clock per run:** projected 18–27 min (brief). A run past 54 min is killed and
-  reported.
-- **Total:** about 1.5–2.25 h of machine time and no spend.
-- **Peak RAM:** recorded, with no ceiling at 6%. On full data the old loop peaked at about 8.8 GiB.
-  The restored store is about 0.37 GiB there (20.0M int32 items, plus 19.74M × (int64 end + int32
-  length + int32 target)), against 3.95 GB for the copied table.
-- **Disk:** about 10 MB of artifacts per run.
-- **Automatic termination:** the sealed-partition preflight, the stop rule above, and the 2×
-  time rule.
+- **Hardware and environment:** the laptop CPU (Apple silicon, 36 GiB), `OMP_NUM_THREADS=1`,
+  `caffeinate -i`. An Alembic migration was running against the shared Postgres in the background;
+  it is I/O-bound. Load averages at each run's start:
+
+  | Run | 1 / 5 / 15 min |
+  |---|---|
+  | control | 2.53 / 4.29 / 4.50 |
+  | s42 | 1.93 / 2.60 / 3.39 |
+  | seeds | 1.45 / 1.89 / 2.31 |
+
+- **Wall-clock:** limit 54 min per run, enforced by a watchdog. Measured:
+
+  | Run | Fit time | Wall time |
+  |---|---:|---:|
+  | control | 1,207.4 s | 20 min 31 s |
+  | s42 | 1,080.8 s | 18 min 21 s |
+  | s7, s13, s21 (one sweep process) | 1,080.4 s, 1,088.9 s, 1,099.0 s | 54 min 39 s in total |
+
+- **Peak RSS:** restored loop 3.04 GB (2.83 GiB) in the s42 process, and 2.92 GB (2.72 GiB) in the
+  three-seed process; each was measured after fit and at the end of the run. The
+  example store is 23,799,328 bytes, against 237,369,400 bytes for the copied table it replaces. The
+  control at `89520be^` predates the peak-RSS logging.
+- **Spend:** none.
 
 ## Pre-run correctness checklist
 
-- [x] Governing ADR is approved for this work (ADR 0020 decision note 2026-09-15, brief WO-1)
-- [ ] Protocol fingerprint is generated and matches baselines
-- [x] Temporal/equal-time leakage tests pass (`tests/unit/test_sequence_data.py`)
-- [x] Model-specific correctness gate passes. `tests/unit/test_sasrec_trainer_of_record.py`
-      checks the restored loop bit for bit against the `89520be^` loop in three configurations,
-      and checks that no examples × window table is built
-- [x] Baseline and control implementations are fixed (`89520be^`, and this branch's commit)
-- [ ] Stop rule and compute cap are approved
-- [ ] The partition declaration's pre-run rows are filled in, and the preflight shows the
-      subsample reads nothing at or after 1469256597
-- [x] The feature source is point-in-time per row (raw ratings, strict prefix)
-- [ ] Output paths and MLflow experiment are immutable/known
-- [ ] `pgrep -fl src.training` prints nothing
+- [x] Governing ADR is approved for this work (ADR 0020 decision note 2026-09-15, brief WO-1, O-25).
+- [x] Protocol fingerprint is generated and identical across all five runs (`faf2828d…`). It is new
+      by design under O-25, so there is no earlier baseline for it to match.
+- [x] Temporal/equal-time leakage tests pass (`tests/unit/test_sequence_data.py`).
+- [x] Model-specific correctness gate passes (`tests/unit/test_sasrec_trainer_of_record.py`).
+- [x] Baseline and control implementations are fixed (`89520be^` plus the recorded patch;
+      branch commit `ec3196d`).
+- [x] Stop rule and compute cap are approved (brief WO-1, coordinator, 2026-10-05).
+- [x] The partition declaration's pre-run rows are filled in; the second preflight passed.
+- [x] The feature source is point-in-time per row (raw ratings, strict prefix).
+- [x] Output paths and MLflow experiment are known (see Deviations).
+- [x] `pgrep -fl src.training` printed nothing before each run.
 
 ## Commands
 
-Prerequisites found on 2026-10-05, none of them satisfied on this machine yet:
-
-- **Ratings CSVs.** `data/raw/ml-25m/` holds only its `.dvc` pointer, and no DVC remote is
-  configured. Fetch it with `make data-download` from the main checkout (about 265 MB from
-  GroupLens, no spend), then confirm the md5 with `.venv/bin/dvc status data/raw/ml-25m.dvc`.
-  The trainer reads the CSVs directly through `TWOTOWER_INPUT_DIR`, so Postgres is not needed.
-- **MLflow.** Docker is not running, so there is no tracking server at `localhost:5000`. The
-  commands below use a local file store and need no stack.
-
 ```bash
 MAIN=/Users/kudratsingh/Machine-Learning-Projects/movielens-recsys
-WO1=/Users/kudratsingh/Machine-Learning-Projects/movielens-recsys-wt-wo1
-CTRL=/Users/kudratsingh/Machine-Learning-Projects/movielens-recsys-wt-wo1-control
+WO1=$MAIN-wt-wo1
+CTRL=$MAIN-wt-wo1-control
 PY=$MAIN/.venv/bin/python
 RUN_ENV="OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE MLFLOW_ALLOW_FILE_STORE=true \
-  MLFLOW_TRACKING_URI=file://$MAIN/artifacts/mlflow-wo1 \
+  MLFLOW_TRACKING_URI=file://$MAIN/mlruns \
   TWOTOWER_INPUT_DIR=$MAIN/data/raw/ml-25m SASREC_ARTIFACT_DIR=$MAIN/artifacts/sasrec"
-mkdir -p $MAIN/artifacts/sasrec/logs
 
-# 0. Preflight: nothing else is training, and the 6% split stays out of the sealed window.
-pgrep -fl src.training || echo "no training process"
-cd $WO1 && $PY -c "
-import pandas as pd
-from src.data.split import temporal_split
-from src.training.candidate_data import subsample_users
-from src.training.sasrec import SUBSAMPLE_SEED, sealed_partition_params
-r = pd.read_csv('$MAIN/data/raw/ml-25m/ratings.csv', usecols=['userId','movieId','rating','timestamp'])
-s = temporal_split(subsample_users(r, 0.06, SUBSAMPLE_SEED))
-print(sealed_partition_params(r, s, s.train))"
-
-# 1. Control: the old loop exactly as git holds it.
-git -C $MAIN worktree add --detach $CTRL 89520be^
+# Control: 89520be^ plus the O-25 patch above, in a detached worktree.
+git -C $MAIN worktree add --detach $CTRL 89520be^   # then apply the patch
 cd $CTRL && caffeinate -i env $RUN_ENV $PY -m src.training.sasrec_sweep \
-  $WO1/docs/experiments/sasrec/wo1-old-loop-control-6pct.json \
-  2>&1 | tee $MAIN/artifacts/sasrec/logs/wo1-control-s42.log
-
-# 2. Restored loop, seed 42 (the equivalence run).
+  $WO1/docs/experiments/sasrec/wo1-old-loop-control-6pct.json > $MAIN/artifacts/sasrec/logs/wo1-control-s42.log 2>&1
+# Restored loop, seed 42, then (after the comparison matched) seeds 7, 13 and 21.
 cd $WO1 && caffeinate -i env $RUN_ENV $PY -m src.training.sasrec_sweep \
-  docs/experiments/sasrec/wo1-restored-loop-6pct-s42.json \
-  2>&1 | tee $MAIN/artifacts/sasrec/logs/wo1-restored-s42.log
-
-# 3. Compare: weights digest of both archives, then the six metrics in MLflow.
-cd $WO1 && $PY -c "
-import sys; from pathlib import Path
-from src.models.candidates.sasrec_artifact import _read_model_archive
-from src.training.sasrec import encoder_weights_sha256
-for p in sys.argv[1:]: print(p, encoder_weights_sha256(_read_model_archive(Path(p))[1]))
-" $MAIN/artifacts/sasrec/<control-run-id>/sasrec-model.zip $MAIN/artifacts/sasrec/<s42-run-id>/sasrec-model.zip
-
-# 4. Only if step 3 matched: seeds 7, 13, 21.
+  docs/experiments/sasrec/wo1-restored-loop-6pct-s42.json > $MAIN/artifacts/sasrec/logs/wo1-restored-s42.log 2>&1
 cd $WO1 && caffeinate -i env $RUN_ENV $PY -m src.training.sasrec_sweep \
-  docs/experiments/sasrec/wo1-restored-loop-6pct-seeds.json \
-  2>&1 | tee $MAIN/artifacts/sasrec/logs/wo1-restored-seeds.log
+  docs/experiments/sasrec/wo1-restored-loop-6pct-seeds.json > $MAIN/artifacts/sasrec/logs/wo1-restored-seeds.log 2>&1
 ```
+
+## Deviations
+
+- **MLflow store.** The runs went to a local file store (`$MAIN/mlruns`), not to the shared server
+  at `localhost:5001`.
+  - **Why not the server:** it runs with `--default-artifact-root /mlartifacts`, a container volume.
+    So `phase-2-candidates` has the artifact location `/mlartifacts/1`, which the host client cannot
+    write. `run_once` logs artifacts before metrics, so every run would have failed after training.
+    This is the same failure as attempt `833812ee…` on 2026-09-11.
+  - **First attempt at a local store:** the control's first launch used a file store under
+    `artifacts/mlflow-wo1`. It failed in one second at `start_run`, before any split or training,
+    because MLflow 3.15's file store refuses run directories whose path contains a folder named
+    `artifacts`. That empty store is kept at `artifacts/mlflow-wo1-failed-attempt-artifacts-path`,
+    with log `artifacts/sasrec/logs/wo1-control-s42-failed-mlflow-path.log`.
+  - All five runs are FINISHED in that store, and each carries its `model/` and
+    `per_user_recall.json` artifacts. They can be imported into the shared server later.
+  - The coordinator's 2026-10-05 note says the shared server, since recreated with
+    `--serve-artifacts`, failed artifact uploads for experiments created earlier that day. It does not
+    apply to these runs: none of them used the server. No WO-1 pilot started after that note, so
+    none needed a new `-phase-a` experiment name.
+  - The durable records are the local archives under `artifacts/sasrec/<run-id>/` and the weights
+    digests listed below.
+- **Control patch.** The control is `89520be^` plus the recorded O-25 partition patch, as described
+  above.
 
 ## Expected artifacts
 
-- **MLflow runs** in `phase-2-candidates`, one per cell. Each carries params, the six @500
-  metrics, `per_user_recall.json`, the protocol envelope tags, and the
-  `sasrec_weights_sha256` tag (restored loop only).
-- **Model archives:** `artifacts/sasrec/<run-id>/` (archive, manifest, popularity order).
-- **Console logs:** `artifacts/sasrec/logs/wo1-*.log`.
-- **Resource diagnostics:** peak RSS and example-store bytes per run.
-- **`docs/results.md` entry:** the equivalence verdict and the four reference values.
+- **MLflow file store** `$MAIN/mlruns`, experiment `phase-2-candidates`. Each run has params, the
+  six @500 metrics, `per_user_recall.json` and the protocol envelope. The restored-loop runs also
+  carry `sasrec_weights_sha256`, peak RSS and the partition timestamps.
+- **Model archives:** `$MAIN/artifacts/sasrec/<run-id>/`.
+- **Logs:** `$MAIN/artifacts/sasrec/logs/wo1-*.log`.
+- **Results entry:** `docs/results.md`, "SASRec trainer of record restored (WO-1)".
 
 ## Verdict
 
-_Complete only after the runs._
+**Validity:** valid. All five runs ran on protocol `faf2828d…`, the O-25 partition.
 
-**Validity:**
+**Partition affirmation:** intact. Latest fitted timestamp 1466819964 and latest scored timestamp
+1469247943, both below 1469256597.
 
-**Partition affirmation:**
+**Decision:** advance. The restored loop on the P1 data path is the trainer of record.
 
-**Decision:**
+**Rule application (equivalence, control `3e031fa2…` against s42 `7baeb7d0…`):**
 
-**Rule application:**
+| | control (old loop) | s42 (restored loop) | |
+|---|---|---|---|
+| encoder weights digest | `sha256:86e112c75929763e78dae3b4b820237aeca0837c9de6187008cf5930f9afa8ec` | same | **equal** |
+| epoch losses | 0.09626240980758807, 0.06954592609165197 | same | **equal** |
+| warm recall@500 | 0.36254870756392454 | 0.36254870756392454 | **equal** |
+| warm NDCG@500 | 0.13540066428140057 | 0.13540066428140057 | **equal** |
+| cold recall@500 | 0.5427033422192526 | 0.5427033422192526 | **equal** |
+| cold NDCG@500 | 0.4341170760032304 | 0.4341170760032304 | **equal** |
+| overall recall@500 | 0.41034483512554226 | 0.41034483512554226 | **equal** |
+| overall NDCG@500 | 0.2146519571871922 | 0.2146519571871922 | **equal** |
+| per-user recall export | — | — | **identical** |
 
-**Runs:**
+The archives' own SHA-256s differ (`9213b61f…` and `b63a6c5a…`). That is expected: the new archive's
+metadata carries `training_objective`, which is why the weights digest is the comparison.
 
-**What is not authorized next:** no full-data run, no WO-2 pilot comparison, and no change to any
-gate threshold or to the champion follow from this record by itself.
+**Reference set (warm recall@500, protocol `faf2828d…`):**
+
+| Seed | Run | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Overall recall@500 |
+|---:|---|---:|---:|---:|---:|
+| 42 | `7baeb7d0b812486e9c86fdd3435ea715` | 0.3625487076 | 0.1354006643 | 0.5427033422 | 0.4103448351 |
+| 7 | `d71f0fa6321d4fd6bf3288ee9c28e710` | 0.3611061547 | 0.1307310996 | 0.5427033422 | 0.4092850003 |
+| 13 | `2d9f3cc1ed1943b495fbecc7ac101485` | 0.3714076606 | 0.1253087969 | 0.5427033422 | 0.4168534537 |
+| 21 | `8668ca0c57f6411dacd0d53af0b8b2fa` | 0.3936318283 | 0.1483434889 | 0.5427033422 | 0.4331814136 |
+
+**Warm recall@500 across the four seeds:**
+- mean **0.372174**;
+- sample standard deviation 0.015013;
+- range 0.361106 to 0.393632, which is **8.74%** relative.
+
+**What the spread means.** There are 108 warm users, so one user is 0.93% of the slice. A relative
+range of 8.74% is a handful of users moving, and this is a correctness-and-direction surface, not a
+place for final results.
+
+**Other checks:**
+- Cold recall@500 is 0.5427033422 on all five runs, as the popularity routing requires.
+- The four weight digests are distinct, so the seed reaches the model:
+  - s7: `1995ea69…`
+  - s13: `b3c4d1f7…`
+  - s21: `2db2b3bd…`
+  - s42: `86e112c7…`
+
+**Superseded values.** These four values replace 0.3186 / 0.3103 / 0.3258 / 0.2957, which had mean
+0.3126 and a range of 9.65%. They are not comparable: the old values were measured on the
+contaminated split (protocol `090985d7…`), before PR #162.
+
+**Runs:** control `3e031fa2046b42b4a1f50fc6e91fcc71`; restored s42
+`7baeb7d0b812486e9c86fdd3435ea715`; restored s7 `d71f0fa6321d4fd6bf3288ee9c28e710`, s13 `2d9f3cc1ed1943b495fbecc7ac101485`, s21 `8668ca0c57f6411dacd0d53af0b8b2fa`.
+
+**What is not authorized next:**
+- No full-data run.
+- No change to any gate threshold or to the champion.
+- No comparison of these values with the September 6% numbers: those read the sealed window.
+
+WO-2 and WO-3 judge their pilots against this reference set, on protocol `faf2828d…`.

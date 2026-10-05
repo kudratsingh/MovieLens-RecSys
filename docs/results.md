@@ -1706,6 +1706,13 @@ v1's, which a test also asserts.
 
 ### The pilot: 6% of users, chosen by seed
 
+> **2026-10-05 (O-25): the 6% numbers in this section were measured on a contaminated split.** The
+> seed-42 6% subsample computed its own cutoff (1471288304), 23.5 days past the sealed boundary
+> 1469256597. Its train read 4,870 sealed rows, and its whole holdout was sealed data. The numbers
+> are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
+> in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
+> and the WO-1 section at the end of this file.
+
 Twelve configurations at 78 minutes each does not fit in a day, so the orders of
 magnitude were found on a subsample first. The subsample keeps **every
 interaction of 6% of users** (9,752 of 162,541, drawn at seed 42), not 6% of
@@ -2207,6 +2214,13 @@ the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
 
 ## Two-Tower v2 bounded pilot — 2026-09-04
 
+> **2026-10-05 (O-25): the 6% numbers in this section were measured on a contaminated split.** The
+> seed-42 6% subsample computed its own cutoff (1471288304), 23.5 days past the sealed boundary
+> 1469256597. Its train read 4,870 sealed rows, and its whole holdout was sealed data. The numbers
+> are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
+> in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
+> and the WO-1 section at the end of this file.
+
 ADR 0015's five-arm Gate 1 ran locally from the checked-in DVC dataset using
 [`v2-pilot.json`](experiments/twotower-sweep/v2-pilot.json). It used the same
 seed-42 6% user sample in every arm: 9,752 users before the temporal split,
@@ -2282,6 +2296,13 @@ modeling track proceeds to SASRec under ADR 0016.
 
 ## SASRec seed dispersion at 6% — 2026-09-05 (M0-14, raw; not a certified tolerance)
 
+> **2026-10-05 (O-25): the 6% numbers in this section were measured on a contaminated split.** The
+> seed-42 6% subsample computed its own cutoff (1471288304), 23.5 days past the sealed boundary
+> 1469256597. Its train read 4,870 sealed rows, and its whole holdout was sealed data. The numbers
+> are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
+> in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
+> and the WO-1 section at the end of this file.
+
 Three runs of ADR 0016's frozen cell at `sample_fraction = 0.06`, differing only in training seed,
 against the item-item incumbent on the identical subsample. Machine: local, `OMP_NUM_THREADS=1`,
 ~18 minutes per run. The subsample population is held fixed by `SUBSAMPLE_SEED` (#147), so what is
@@ -2327,6 +2348,13 @@ one that should pay for a certified derivation, at full scale.
 Spec: [`experiments/tolerance/surrogate-seed-noise-6pct.json`](experiments/tolerance/surrogate-seed-noise-6pct.json).
 
 ## SASRec bounded loss pilot — 2026-09-04
+
+> **2026-10-05 (O-25): the 6% numbers in this section were measured on a contaminated split.** The
+> seed-42 6% subsample computed its own cutoff (1471288304), 23.5 days past the sealed boundary
+> 1469256597. Its train read 4,870 sealed rows, and its whole holdout was sealed data. The numbers
+> are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
+> in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
+> and the WO-1 section at the end of this file.
 
 ADR 0016's matched loss ablation ran on the established deterministic 6% user
 sample using [`pilot-6pct.json`](experiments/sasrec/pilot-6pct.json). Both arms
@@ -3224,6 +3252,13 @@ verdicts are unchanged.
 
 ## SASRec canonical all-position training — 2026-09-10/11
 
+> **2026-10-05 (O-25): the 6% numbers in this section were measured on a contaminated split.** The
+> seed-42 6% subsample computed its own cutoff (1471288304), 23.5 days past the sealed boundary
+> 1469256597. Its train read 4,870 sealed rows, and its whole holdout was sealed data. The numbers
+> are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
+> in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
+> and the WO-1 section at the end of this file.
+
 W28 replaced the copied-prefix training shape with the objective described by
 Kang and McAuley: each bounded sequence window is encoded once and every causal
 position with a strictly later timestamp predicts its next item. Timestamp
@@ -3321,3 +3356,63 @@ that cause and terminated `KILLED` in MLflow.
 
 Machine-readable evidence:
 [`experiments/sasrec/all-positions-training-2026-09-11.json`](experiments/sasrec/all-positions-training-2026-09-11.json).
+
+## SASRec trainer of record restored (WO-1) — 2026-10-05
+
+**The setup.**
+- **Code.** The copied-prefix loop behind warm recall@500 0.5092 (run `528b1451…`) is back as the
+  default objective, `strict-prefix-final-position-v1`. It now runs on ADR 0020 step P1's
+  memory-bounded data path: each user's sequence is stored once and the 50-movie window is cut per
+  batch. Branch `feat/wo1-restore-trainer-of-record`, PR #194.
+- **Cell.** `pilot6-bce-neg32`, with `epochs 2` and `faiss_exact true`.
+- **Partition.** The 6% user subsample (`SUBSAMPLE_SEED` 42, 9,752 users), cut at the **full split's
+  boundaries** under O-25: cutoff 1466837397, `holdout_end` 1469256597. Train 1,202,444 rows,
+  holdout 6,604 rows, 108 warm / 39 cold users, 1,186,847 training examples.
+- **Protocol.** New 6% pilot protocol
+  `sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc`, identical on all five
+  runs.
+- **Machine.** Local CPU, `OMP_NUM_THREADS=1`.
+
+**Equivalence: the restored loop reproduces the old loop bit for bit.** The control was the loop at
+`89520be^`, given only the same O-25 partition cut (a recorded three-line patch). Its examples were
+checked byte-identical to the new store's before training: 1,186,847 × 50, sha256 `62cc7e7a…`.
+
+| Seed 42 | old loop `3e031fa2…` | restored loop `7baeb7d0…` |
+|---|---|---|
+| encoder weights digest | `sha256:86e112c7…f9afa8ec` | **identical** |
+| epoch losses | 0.0962624098, 0.0695459261 | **identical** |
+| warm recall@500 / NDCG@500 | 0.3625487076 / 0.1354006643 | **identical** |
+| cold recall@500 / NDCG@500 | 0.5427033422 / 0.4341170760 | **identical** |
+| overall recall@500 / NDCG@500 | 0.4103448351 / 0.2146519572 | **identical** |
+| per-user recall export | — | **identical** |
+| fit seconds | 1,207.4 | 1,080.8 |
+
+**The new reference pilots.** These replace 0.3186 / 0.3103 / 0.3258 / 0.2957, which were read on
+the contaminated split.
+
+| Seed | Run | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Overall recall@500 | Fit s |
+|---:|---|---:|---:|---:|---:|---:|
+| 42 | `7baeb7d0b812486e9c86fdd3435ea715` | **0.3625487076** | 0.1354006643 | 0.5427033422 | 0.4103448351 | 1,080.8 |
+| 7 | `d71f0fa6321d4fd6bf3288ee9c28e710` | **0.3611061547** | 0.1307310996 | 0.5427033422 | 0.4092850003 | 1,080.4 |
+| 13 | `2d9f3cc1ed1943b495fbecc7ac101485` | **0.3714076606** | 0.1253087969 | 0.5427033422 | 0.4168534537 | 1,088.9 |
+| 21 | `8668ca0c57f6411dacd0d53af0b8b2fa` | **0.3936318283** | 0.1483434889 | 0.5427033422 | 0.4331814136 | 1,099.0 |
+
+**Warm recall@500 over the four seeds:**
+- mean **0.372174**;
+- sample standard deviation 0.015013;
+- range 0.361106–0.393632, which is 8.74% relative.
+
+Cold is identical on every run because popularity routes those users. With 108 warm users, one user
+is 0.93% of the slice. WO-2 and WO-3 judge their pilots against this set, on this protocol.
+
+**Memory.** On this sample the example store is 23.8 MB, against the 237.4 MB copied table it
+replaces. Process peak RSS was 3.04 GB (s42) and 2.92 GB (seed sweep). At full data the copied
+table was 3.95 GB, inside an 8.8 GiB peak. The store's arrays scale with interactions and examples,
+not with examples × 50, so it is about 0.37 GiB there.
+
+**What this does not show.** These are pilots on 108 warm users: they check correctness and
+direction, not quality. No full-data run was made, and no threshold, verdict or champion changes.
+
+The MLflow runs are in a local file store, because the shared server could not accept host
+artifact uploads; the run record explains this. Run record:
+[`model-planning/experiments/wo1-restore-trainer-of-record.md`](model-planning/experiments/wo1-restore-trainer-of-record.md).
