@@ -23,6 +23,7 @@
 | Compose models | `demo-compose` | |
 | Serving-bundle reproducibility | `serving-artifacts` | |
 | Realm drift | `realm-drift` | |
+| Offline evaluation gate (ADR 0001 / 0004) | — local: cite the MLflow run id and the gate JSON | |
 
 <!-- If this touches src/serving/, quote the measured p50/p95/p99 from the load
      gate rather than saying it passed. -->

@@ -2,7 +2,8 @@
 
 This register distinguishes assumptions that let planning continue from choices that require
 the owner. Recommended defaults are proposals, not approvals. Once decided, record the outcome
-in the governing ADR or a dated ADR note and replace `open` here with a link.
+in the governing ADR or a dated ADR note and replace `open` here with a link. Decisions taken
+from 2026-09-05 onward carry `O-n` IDs and are listed in [`owner-decisions.md`](owner-decisions.md).
 
 | ID | Decision | Needed by | Recommended default | Status |
 |---|---|---|---|---|
@@ -20,7 +21,7 @@ in the governing ADR or a dated ADR note and replace `open` here with a link.
 | D-011 | Re-ranking objective | Before M6 | Choose one primary diversity metric plus relevance guardrail; begin with MMR as interpretable baseline | Open |
 | D-012 | M5 versus M6 ordering | After M4 | Prefer M6 first if multiple retrievers are useful; prefer M5 first only when utility and labels are ready | Open later |
 | D-013 | Frontier compute/provider budget | Before M8 | A fixed-cost research spike; no open-ended foundation-model training | Owner input required later |
-| D-014 | Fate of untracked `docs/progress.md` | Before status-doc cleanup | Preserve untouched; owner chooses archive, refresh, or delete in a separate change | Owner input required |
+| D-014 | Fate of the stale `docs/progress.md` | Before status-doc cleanup | Preserve untouched; owner chooses archive, refresh, or delete in a separate change | **Settled:** archived as [`docs/records/progress-log-2026-05-31.md`](../records/progress-log-2026-05-31.md) (#164, owner decision O-4) and deleted from `docs/` |
 | D-015 | Phase 4 automation timing | Before M3 | Stabilize SASRec experiment/export contracts first, then automate; SASRec pilots may continue meanwhile, but promotion/serving waits for M0 | Answered 2026-09-04 |
 | D-016 | Meaning of the requested 300–400 ms runtime | Before M2 latency review | Preserve existing stricter p99 targets: SASRec encoder <15 ms and authenticated service <100 ms | Answered 2026-09-04; 300–400 ms was an assumption about growth, not a request to relax gates |
 

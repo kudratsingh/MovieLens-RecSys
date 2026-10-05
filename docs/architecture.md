@@ -11,18 +11,25 @@ of the same authenticated API any other client would use.
 This document describes the engineering around the models — the isolation
 boundary, the feature-freshness contract, the artifact pinning, the latency gate,
 and the deployment — because that is what makes them usable by a real person.
-The models are the project's main line of work: the current two-stage stack is
+The models are the project's main line of work: the two-stage stack is
 documented in ADRs 0003–0006 and measured in [`results.md`](results.md), and the
-modeling track continues past it toward sequence models with transformer
-encoders once the Phase 3 harness is closed.
+first sequence model is already past its gates — SASRec
+([ADR 0016](adr/0016-sasrec-sequential-retrieval.md)) is trained, clears the
+retrieval and end-to-end gates offline, and the private sidecar can load it
+(#161). It is measured, not promoted: the demo stack still serves the
+item-item fixture, and the champion swap is deferred. The ladder of what
+comes next, with its approval gate, is
+[`modeling-roadmap.md`](modeling-roadmap.md).
 
 **What is running right now: nothing.** The production target is specified,
 built and rehearsed end to end — one Hetzner CX22 running `docker-compose.prod.yml`
 behind its own Caddy edge, a deploy workflow that ships on a green CI run and
 rolls back automatically on a failed verify — but the machine has not been
-created, so there is no URL. Everything below is on `main` and runs locally
-through Docker Compose. Where something is planned rather than built, this
-document says so in the same sentence.
+created, so there is no URL. As of the owner's 2026-10-05 brief, serving work
+is parked behind the modeling track: the first deploy and the SASRec champion
+swap both wait. Everything below is on `main` and runs locally through Docker
+Compose. Where something is planned rather than built, this document says so in
+the same sentence.
 
 ---
 
@@ -38,7 +45,7 @@ Two paths run through it.
 **The offline path** turns MovieLens into a serving bundle: ingest into Postgres,
 a time-respecting split, point-in-time features into `feature_store.*`, a
 candidate generator and a ranker, and a manifest that pins each artifact by
-SHA-256. The bundle is committed to the repository and baked into an image. It
+SHA-256. Bundles are committed to the repository and baked into an image. It
 is run by hand today — there is no orchestrator on `main`.
 
 **The online path** answers a request: request-id, auth, rate limit, audit, then
@@ -89,9 +96,17 @@ If there are fewer than ten positive signals (ADR 0001's `COLD_START_THRESHOLD`,
 amended to 10 on 2026-08-30), the request takes the popularity
 fallback. Otherwise the coordinator asks the sidecar for
 `max(100, limit × 10)` candidates over a 0.5-second timeout. The sidecar
-retrieves from the item-item index, batch-reads eight features per candidate
-from Redis through Feast, scores with LightGBM, and returns the ranked list with
-its own per-stage timings and attribution.
+retrieves through whichever retriever its bundle's family names — the generic
+interface in `src/serving/sequence_retrieval.py`, with `ItemItemSidecarRetriever`
+over the item-item index and `SASRecSidecarRetriever` over a SASRec encoder —
+batch-reads eight features per candidate from Redis through Feast, scores with
+the LightGBM booster for the request's route (learned or fallback, chosen from
+the history size against the bundle's threshold), and returns the ranked list
+with its own per-stage timings and attribution. The bundle loaded today in the
+demo stack is the item-item fixture. A SASRec bundle loads fail-closed in the
+same sidecar and its encoder was timed inside the `linux/amd64` image (#165),
+but the authenticated k6 gate has not measured it and no committed tenant row
+names it as champion.
 
 **Exclusions are re-applied at every stage that could reintroduce a title** —
 retrieval, the sidecar's ranking loop, the client's contract check, the
@@ -186,7 +201,7 @@ and `/readyz` requires a valid token; both exceptions serve no tenant or user
 data and, in production, publish no port.
 
 **Isolation** is Postgres row-level security
-([ADR 0008](adr/0008-multi-tenancy-rls.md)). Seven tables carry `tenant_id` with
+([ADR 0008](adr/0008-multi-tenancy-rls.md)). Eight tables carry `tenant_id` with
 `FORCE ROW LEVEL SECURITY` and a policy of
 `tenant_id = current_setting('app.tenant_id', true)` on both `USING` and
 `WITH CHECK`. The auth middleware opens a transaction and issues
@@ -216,14 +231,17 @@ realm role; `/whoami` is the only authenticated route without that gate.
 
 **Rate limiting** ([ADR 0014](adr/0014-request-rate-limiting.md)) is a token
 bucket keyed on `(tenant, subject)` from the verified token rather than on a
-client address, because behind an edge every request comes from a proxy. Two
-limits are written down rather than hidden. The first defaults — 120/minute with
-a burst of 30 — refused **37.9% of one subject's 301 canary requests**, because
-the bucket lives in the worker process and keep-alive pins a client to one of
-them; the defaults are now 600/minute with a burst of 120 and a Redis-backed
-shared bucket is the named follow-up. And the limits are global rather than
-per-tenant, because the per-tenant quota column belongs with the tenant-config
-work that Phase 6's routing needs anyway.
+client address, because behind an edge every request comes from a proxy. The
+bucket lives in Redis and is charged by one atomic Lua script
+(`src/serving/ratelimit.py`), so every uvicorn worker meets the same bucket and
+the configured limit describes the service: 600/minute with a burst of 120 by
+default. If Redis is unreachable the limiter fails open onto a per-worker
+in-process bucket and `/readyz` reports it. A tenant can carry its own quota in
+`public.tenants.rate_limit_requests_per_minute` and `rate_limit_burst`; a NULL
+column falls back to the global setting. The shared bucket replaced a per-worker
+one that, at the first defaults of 120/minute and a burst of 30, refused
+**37.9% of one subject's 301 canary requests** because keep-alive pinned a
+client to one worker (ADR 0014's 2026-08-30 note).
 
 ---
 
@@ -231,7 +249,7 @@ work that Phase 6's routing needs anyway.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/offline-training-to-serving.dark.svg">
-  <img alt="The offline path: MovieLens 25M through ingest, the temporal split, point-in-time features, the candidate and ranker stages, the SHA-256-pinned serving manifest, the committed bundle, and how it reaches a running sidecar." src="diagrams/offline-training-to-serving.svg" width="100%">
+  <img alt="The offline path: MovieLens 25M through ingest, the temporal split, point-in-time features, the candidate and ranker stages, the SHA-256-pinned schema 2 serving manifest, the two bundles baked at distinct paths, and how one reaches a running sidecar." src="diagrams/offline-training-to-serving.svg" width="100%">
 </picture>
 
 **The split respects time** ([ADR 0001](adr/0001-evaluation-protocol.md)). The
@@ -256,12 +274,22 @@ online value for the same key. This is the bug class that quietly ruins most
 recommender deployments, and the only way to know it has not happened is to
 check.
 
-**Serving artifacts are pinned by content.** A `ServingManifest` binds the
-item-item index, the LightGBM booster, the tenant, and the ordered feature
-contract, with a SHA-256 for each artifact. The bundle is committed at
-`infra/model-bundle/` and **baked into the sidecar image at build time**, along
-with the applied Feast registry. Three consequences follow, and all three are
-the point:
+**Serving artifacts are pinned by content.** A `ServingManifest`
+(`src/models/artifacts.py`, schema 2) binds a retriever family — item-item or
+SASRec — one LightGBM booster per route, the tenant, the ordered feature
+contract and the bundle's lineage, with a SHA-256 for each artifact. A schema 1
+manifest still loads and is normalised into that shape, because rollback is by
+image and an older bundle must stay servable. Two bundles are **baked into the
+sidecar image at build time** at distinct paths, along with the applied Feast
+registry (`infra/features/Dockerfile`): the compact demo fixture from
+`infra/model-bundle/` at `/app/models/serving`, and the full-data served bundle
+from `infra/model-bundle-served/` at `/app/models/served-bundle`.
+`MODEL_ARTIFACT_DIR` picks one. The demo stack names the fixture;
+`docker-compose.prod.yml` names the served path as a literal. Today
+`infra/model-bundle-served/` holds only a placeholder `.gitkeep` — no bundle has
+been published into it with `make serving-artifacts-publish` — so a production
+sidecar would refuse to boot rather than fall back to the fixture. Three
+consequences follow, and all three are the point:
 
 - Rolling back the model is rolling back the image. There is no second
   mechanism to get wrong at 02:00.
@@ -270,13 +298,17 @@ the point:
   `/healthz` returns 503 until that finishes. Warmth is by construction rather
   than by luck, and a warm-up that produces an all-zero feature matrix is
   treated as a failure rather than a fast success.
-- CI's `serving-artifacts` job rebuilds the bundle in the image and diffs it
-  against the committed one, so a change to training that would silently move
-  the artifacts fails the build instead.
+- CI's `serving-artifacts` job rebuilds the demo fixture in the image and
+  diffs it against the committed one, so a change to training that would
+  silently move the artifacts fails the build instead. A served bundle is
+  assembled rather than trained, so it gets a different check:
+  `make serving-artifacts-verify` re-hashes every artifact and re-runs every
+  manifest validator.
 
-**No offline metric values appear in this repository.** Recall@500 and NDCG@10
-are what the harness computes and what MLflow records, but no run's numbers are
-committed, so none are quoted here or drawn on any diagram.
+**The offline numbers are in [`results.md`](results.md)**, each with its run,
+date and machine, and the grids, gate verdicts and benchmark outputs behind them
+are committed under [`experiments/`](experiments/README.md). None are drawn on a
+diagram.
 
 ---
 
@@ -284,11 +316,11 @@ committed, so none are quoted here or drawn on any diagram.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/data-model.dark.svg">
-  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model, and the tenant-scoped movie state, feedback events, preferences, prediction audits and request audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
+  <img alt="Entity-relationship diagram of every table: the tenants registry, the MovieLens base tables, the shared catalog read model and the twelve TMDB snapshot tables, and the tenant-scoped movie state, feedback events, preferences, prediction audits and request audits, with forced-RLS tables marked." src="diagrams/data-model.svg" width="100%">
 </picture>
 
-Fourteen migrations, and the shape is worth a paragraph each for the three
-tables that carry the design.
+Nineteen migrations, and the shape is worth a paragraph each for the tables
+that carry the design.
 
 **`user_movie_state`** is the current state of one user's relationship to one
 movie: watched, rated, watchlisted, dismissed, plus a `state_version` the write
@@ -307,7 +339,13 @@ against. Append-only is enforced by grant: neither runtime role has `UPDATE` or
 one row carrying the exact predictions and the feature values behind them, the
 four per-stage latencies, the model, candidate, ranker and feature versions, the
 policy and its structured reason, the input-state revision and hash, the
-exclusion hash, the feature event time, and the correlation id. `request_id` is
+exclusion hash, the feature event time, and the correlation id. Migration
+0019 (#168) added retrieval provenance: `retriever_family` (which family
+answered), `retriever_sha256` (the manifest's digest for its primary artifact,
+which is what makes a row replayable), `ranker_route` (which of the bundle's two
+boosters scored it) and `encoder_ms` (time inside the sequence encoder alone,
+0.0 for item-item). All four are nullable with no default, so rows older than
+the columns read NULL rather than a claim nobody measured. `request_id` is
 the row's own identity and `correlation_id` is the echoed `X-Request-ID`, kept
 separate so a replayed header cannot collide with an existing row's primary key.
 
@@ -324,9 +362,15 @@ audit, so it is append-only from the request path's point of view.
 The `feature_store.*` tables are outside RLS on purpose: `app_user` has no grant
 on them at all, because online reads go through Redis and nothing serving a
 request has any business reading the offline store. `movies`, `links`,
-`movie_catalog_metadata` and `public.tenants` are shared by design — a movie
-catalog is not tenant data, and the tenant registry is by definition the thing
-RLS is looking things up in.
+`movie_catalog_metadata`, the twelve `tmdb_*` tables and `public.tenants` are
+shared by design — a movie catalog is not tenant data, and the tenant registry
+is by definition the thing RLS is looking things up in. The `tmdb_*` tables
+(migration 0018) hold the normalised 2026-09-05 TMDB snapshot
+([`data/tmdb-metadata.md`](data/tmdb-metadata.md)); `app_user` reads them and
+only `admin_user` writes. Six `tmdb_movies` columns — `vote_average`,
+`vote_count`, `popularity`, `budget`, `revenue`, `status` — are as-of-pull
+values with no observation timestamp, carry a column comment saying so, and are
+kept out of the feature contract by `tests/unit/test_tmdb_leakage.py`.
 
 ---
 
@@ -444,8 +488,13 @@ them is drawn on a diagram as though it exists.
   process. Splitting traffic between them — and the shadow path that logs a
   challenger's predictions without shipping them — is Phase 6's work.
 - **Orchestration.** The offline path is a set of entrypoints run by hand.
-  Prefect flows, an evaluation gate wired into promotion, and idempotent
-  retraining are Phase 4.
+  The evaluation gates exist as commands — `make gate` (ADR 0001's NDCG@10
+  gate) and `make gate-retrieval` (ADR 0004's recall@500 gate) — and
+  `make promote` / `make promote-revert` (`src/release/promote.py`, #175/#177)
+  is the manual champion repoint: it verifies a bundle, snapshots the tenant's
+  current champion columns, then moves them. Nothing calls one from the other.
+  Prefect flows, a gate wired into promotion, and idempotent retraining are
+  Phase 4.
 - **Drift detection.** Evidently, the feature-distribution dashboards, and the
   synthetic drift cohort that proves an alert fires are Phase 5.
 - **A `/metrics` endpoint.** Prometheus and Grafana are in the dev stack and are
@@ -469,25 +518,33 @@ them is drawn on a diagram as though it exists.
   (`GET /users/{user_id}/request-audits`). A tenant-wide operator view belongs
   to Phase 5's Grafana rather than to a second endpoint here, and the retention
   question sits with the same one `feature_store.*` has.
-- **Cold-start cohorts.** [ADR 0011](adr/0011-cold-start-coverage.md) specifies a
-  fixed-seed synthetic cohort at history sizes 0/1/3/10 scored per bucket. The
-  methodology is pinned; the harness is not built. Cold-start *handling* exists
-  and is exercised — a persona below the cold-start threshold takes the
-  fallback and says so — but its coverage is not yet a metric line.
+- **A cold-start cohort for sequence models.** The
+  [ADR 0011](adr/0011-cold-start-coverage.md) cohort is built
+  (`synthetic/cold_start/`, migration 0015) and every trainer logs its
+  per-bucket recall ([`results.md`](results.md#cold-start-coverage-adr-0011)).
+  Its h10 bucket stamps all ten events at one timestamp, which is valid for
+  routing and for order-insensitive retrievers but defines no sequence, so a
+  SASRec h10 number is an out-of-distribution probe rather than a measure of
+  sequential quality. A separate cohort with strictly increasing timestamps is
+  owed before one is claimed.
 - **Feast-backed training rows.** Training still builds features with the
-  point-in-time `FeatureIndex` rather than Feast's historical retrieval, so
-  parity is proven on the served snapshot and not yet on training rows.
-  Relatedly, training-time candidate generation applies no exclusions, so the
-  ranker learns over a candidate mix serving no longer produces — that needs
-  either the serving filter applied offline or a written argument for why the
-  difference is acceptable.
+  point-in-time `FeatureIndex` rather than Feast's historical retrieval. What
+  is proven is the boundary: feature-parity CI checks all eight values agree
+  across Python, Feast historical and Feast online at a materialization
+  timestamp. Which source training should use is deferred by the owner as
+  D-009 (`model-planning/memos/feature-source-boundary.md`). Training-time
+  exclusions are no longer a gap: since #126 the ranker's negative pool drops
+  each user's history before the target timestamp, as serving does.
+- **Serving the models the modeling track has produced.** Parked as of
+  2026-10-05: the served bundle is unpublished, the first deploy has not run,
+  and the SASRec champion swap waits behind the modeling brief.
 
 ---
 
 ## Where to read next
 
 - [`adr/README.md`](adr/README.md) — every decision, with its alternatives and
-  the signals that would reopen it. Fourteen backend ADRs and two frontend ones.
+  the signals that would reopen it. Twenty backend ADRs and two frontend ones.
 - [`deployment-runbook.md`](deployment-runbook.md) — the machine, DNS, host
   bootstrap, secrets, the one-time SQL, the first deploy, verify, rollback,
   backups and the restore drill.

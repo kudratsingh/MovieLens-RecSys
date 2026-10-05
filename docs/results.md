@@ -1116,7 +1116,7 @@ fourth independent confirmation, on a fourth checkout.
 **Machine:** the same Apple M3 / 8 cores / 16 GiB / macOS 26.5.2 box and library
 set as ["The machine, and what it was doing at the time"](#the-machine-and-what-it-was-doing-at-the-time)
 above. Postgres 16 in Docker on host port 5433, MLflow on 5001. `nice -n 15`,
-thread caps of 4, one job of mine at a time — but a second agent's two-tower
+thread caps of 4, one job at a time — but a concurrent two-tower
 sweep held one core at 100% for the whole session (1-minute load average 2.5–7.1
 on 8 cores at job start, recorded per run below), so **every wall-clock here is
 an upper bound, not a benchmark**. The metrics are unaffected.
@@ -2718,8 +2718,8 @@ an out-of-distribution probe for a sequence model rather than a quality slice.
 
 ### Both repairs work, and both were predicted before they were run
 
-The diagnosis above makes two predictions, and both were written into
-the private coordination notes before either arm was launched.
+The diagnosis above makes two predictions, and both were written down
+before either arm was launched.
 
 **The per-route bundle** (`566f5309767a4076a4f5e8151be16645`) keys the two
 already-saved boosters on the route serving already takes: SASRec candidates and

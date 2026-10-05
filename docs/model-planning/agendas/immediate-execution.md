@@ -1,5 +1,8 @@
 # Immediate execution agenda — M0 and M1
 
+> **Record.** Accurate as of 2026-09-04 (`1d189a8`). Superseded by
+> [`../../status/`](../../status/README.md) and [`../work-items.md`](../work-items.md). Not maintained.
+
 This is the concrete session order from the repository snapshot. A “session” is one focused
 decision or PR-sized unit, not a promised day. Stop at owner-decision gates rather than filling in
 an answer implicitly.
@@ -38,7 +41,8 @@ Output: M1-01 complete.
 3. Run conflict-focused tests.
 4. Normalize model status/index documents after ancestry is settled.
 
-Output: M0-01/02 complete; user-owned `docs/progress.md` still untouched.
+Output: M0-01/02 complete; `docs/progress.md` left for D-014 (since archived as
+[`docs/records/progress-log-2026-05-31.md`](../../records/progress-log-2026-05-31.md)).
 
 ## Session 3 — Freeze evaluation identity
 
