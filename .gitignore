@@ -95,3 +95,6 @@ src/features/feast_repo/data/registry.db
 # target everyone's, and `git status` in /opt/movielens has to stay clean or
 # the workflow's `git checkout --detach` starts refusing.
 /.release/
+
+# Private working notes for the agents coordinating on this repo; never published
+.coordination/

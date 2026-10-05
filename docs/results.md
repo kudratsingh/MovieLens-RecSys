@@ -2719,7 +2719,7 @@ an out-of-distribution probe for a sequence model rather than a quality slice.
 ### Both repairs work, and both were predicted before they were run
 
 The diagnosis above makes two predictions, and both were written into
-`.coordination/reports/megatron.md` before either arm was launched.
+the private coordination notes before either arm was launched.
 
 **The per-route bundle** (`566f5309767a4076a4f5e8151be16645`) keys the two
 already-saved boosters on the route serving already takes: SASRec candidates and
