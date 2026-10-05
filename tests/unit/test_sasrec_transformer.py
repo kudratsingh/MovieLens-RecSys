@@ -29,6 +29,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,13 @@ import pytest
 import torch
 
 from src.evaluation.metrics import recall_at_k
-from src.models.candidates.sasrec import SASRecConfig, SASRecEncoder, SASRecModel
+from src.models.candidates.sasrec import (
+    SASRecConfig,
+    SASRecEncoder,
+    SASRecModel,
+    sample_negatives,
+    sampled_gbce_loss,
+)
 from src.models.candidates.sasrec_artifact import (
     ENCODER_IMPL_HAND_WRITTEN,
     ENCODER_IMPL_LEGACY,
@@ -45,6 +52,10 @@ from src.models.candidates.sasrec_artifact import (
     export_sasrec,
     legacy_state_to_hand_written,
     load_sasrec,
+)
+from src.models.candidates.sequence_data import (
+    StrictPrefixExamples,
+    build_strict_prefix_example_store,
 )
 from src.models.candidates.transformer import attention_mask, scaled_dot_product
 from tests.unit.legacy_sasrec_encoder import (
@@ -195,6 +206,7 @@ def test_a_fresh_encoder_is_a_fresh_v1_encoder_bit_for_bit(
     config = _config(**changes)
     torch.manual_seed(seed)
     legacy = LegacySASRecEncoder(CATALOG, config)
+    legacy_rng = torch.get_rng_state()
     torch.manual_seed(seed)
     hand_written = SASRecEncoder(CATALOG, config)
 
@@ -203,6 +215,9 @@ def test_a_fresh_encoder_is_a_fresh_v1_encoder_bit_for_bit(
     assert set(converted) == set(state)
     for name, tensor in state.items():
         assert torch.equal(torch.from_numpy(converted[name]), tensor), name
+    # The same number of draws, so whatever runs next — the training permutation,
+    # the first dropout mask — starts from the same generator state.
+    assert torch.equal(torch.get_rng_state(), legacy_rng)
 
 
 @pytest.mark.parametrize("history_length", HISTORY_LENGTHS)
@@ -312,6 +327,235 @@ def test_the_converter_refuses_anything_it_cannot_place() -> None:
     missing = {k: v for k, v in arrays.items() if k != "transformer.layers.1.norm2.bias"}
     with pytest.raises(ValueError, match="block 1 is missing tensors: norm2.bias"):
         legacy_state_to_hand_written(missing, num_blocks=2)
+
+
+# --- 2b. training parity (owner ruling, 2026-10-05) ----------------------------
+#
+# Inference equivalence does not prove that training behaves the same. These
+# drive both encoders through the trainer of record's own step — WO-1's
+# strict-prefix example store, the per-example negative sampler, BCE — from the
+# same weights and the same generator state, and compare the loss and every
+# gradient. Before the attention-output layout fix, dropout 0.2 failed here: the
+# masks were the same random numbers laid on different elements.
+
+
+def _training_loss(
+    encoder: torch.nn.Module,
+    histories: torch.Tensor,
+    positives: torch.Tensor,
+    negatives: torch.Tensor,
+) -> torch.Tensor:
+    """The loss of ``SASRecModel._train_strict_prefix``, statement for statement."""
+    user_vectors = encoder.training_user_vectors(histories)  # type: ignore[operator]
+    positive_logits = (
+        user_vectors * encoder.item_vectors(positives, normalize=False)  # type: ignore[operator]
+    ).sum(dim=1)
+    negative_logits = torch.einsum(
+        "bd,bkd->bk",
+        user_vectors,
+        encoder.item_vectors(negatives, normalize=False),  # type: ignore[operator]
+    )
+    return sampled_gbce_loss(positive_logits, negative_logits, beta=1.0)
+
+
+def _gradients(encoder: torch.nn.Module, *, legacy: bool) -> dict[str, torch.Tensor]:
+    """Every parameter's gradient under the hand-written names."""
+    raw = {
+        name: (parameter.grad if parameter.grad is not None else torch.zeros_like(parameter))
+        .detach()
+        .clone()
+        for name, parameter in encoder.named_parameters()
+    }
+    if not legacy:
+        return raw
+    converted = legacy_state_to_hand_written(
+        {name: tensor.numpy() for name, tensor in raw.items()},
+        num_blocks=encoder.config.num_blocks,  # type: ignore[union-attr]
+    )
+    return {name: torch.from_numpy(array) for name, array in converted.items()}
+
+
+def _hand_written_state(encoder: torch.nn.Module) -> dict[str, torch.Tensor]:
+    converted = legacy_state_to_hand_written(
+        {name: tensor.detach().numpy() for name, tensor in encoder.state_dict().items()},
+        num_blocks=encoder.config.num_blocks,  # type: ignore[union-attr]
+    )
+    return {name: torch.from_numpy(array) for name, array in converted.items()}
+
+
+def training_parity(
+    examples: StrictPrefixExamples,
+    *,
+    n_items: int,
+    config: SASRecConfig,
+    dtype: torch.dtype,
+    batches: int = 3,
+) -> dict[str, Any]:
+    """Run the first ``batches`` steps of the trainer of record through both encoders.
+
+    Mirrors ``SASRecModel.fit``'s order of random draws: seed, encoder
+    initialization, the epoch permutation, then the sampler's NumPy generator.
+    The packaged encoder is built first and its weights converted into the
+    hand-written one, so both start identical. Each batch is compared at those
+    starting weights (loss, every gradient); then both take the same three Adam
+    steps and the losses and weights are compared again.
+    """
+    torch.manual_seed(config.seed)
+    legacy = LegacySASRecEncoder(n_items + 2, config)
+    hand_written = SASRecEncoder(n_items + 2, config)
+    hand_written.load_state_dict(_hand_written_state(legacy))
+    legacy, hand_written = legacy.to(dtype).train(), hand_written.to(dtype).train()
+    permutation = torch.randperm(len(examples))
+    generator_state = torch.get_rng_state()
+    rng = np.random.default_rng(config.seed)
+    drawn = []
+    for index in range(batches):
+        rows = permutation[index * config.batch_size : (index + 1) * config.batch_size]
+        histories, positives = examples.batch(rows)
+        negatives = sample_negatives(
+            histories, positives, n_items=n_items, count=config.negative_count, rng=rng
+        )
+        drawn.append((histories, positives, negatives))
+
+    per_batch = []
+    for histories, positives, negatives in drawn:
+        legacy.zero_grad()
+        hand_written.zero_grad()
+        torch.set_rng_state(generator_state)
+        legacy_loss = _training_loss(legacy, histories, positives, negatives)
+        legacy_loss.backward()  # type: ignore[no-untyped-call]
+        legacy_after = torch.get_rng_state()
+        torch.set_rng_state(generator_state)
+        hand_written_loss = _training_loss(hand_written, histories, positives, negatives)
+        hand_written_loss.backward()  # type: ignore[no-untyped-call]
+        expected = _gradients(legacy, legacy=True)
+        actual = _gradients(hand_written, legacy=False)
+        differences = {name: (actual[name] - expected[name]).abs().max().item() for name in actual}
+        per_batch.append(
+            {
+                "rows": len(histories),
+                "loss_packaged": legacy_loss.item(),
+                "loss_hand_written": hand_written_loss.item(),
+                "loss_abs_difference": abs(legacy_loss.item() - hand_written_loss.item()),
+                "max_gradient_abs_difference": max(differences.values()),
+                "worst_gradient_tensor": max(differences, key=differences.__getitem__),
+                "max_gradient_abs": max(t.abs().max().item() for t in expected.values()),
+                "rng_draws_identical": torch.equal(legacy_after, torch.get_rng_state()),
+            }
+        )
+
+    trajectories = []
+    for encoder in (legacy, hand_written):
+        optimizer = torch.optim.Adam(encoder.parameters(), lr=config.learning_rate)
+        torch.set_rng_state(generator_state)
+        losses = []
+        for histories, positives, negatives in drawn:
+            optimizer.zero_grad()
+            loss = _training_loss(encoder, histories, positives, negatives)
+            loss.backward()  # type: ignore[no-untyped-call]
+            optimizer.step()
+            with torch.no_grad():
+                encoder.item_embedding.weight[0].zero_()  # type: ignore[union-attr,index]
+            losses.append(loss.item())
+        trajectories.append(losses)
+    after_legacy = _hand_written_state(legacy)
+    after_hand_written = hand_written.state_dict()
+    return {
+        "dtype": str(dtype).removeprefix("torch."),
+        "dropout": config.dropout,
+        "batches": per_batch,
+        "adam_losses_packaged": trajectories[0],
+        "adam_losses_hand_written": trajectories[1],
+        "adam_max_loss_abs_difference": max(
+            abs(a - b) for a, b in zip(trajectories[0], trajectories[1], strict=True)
+        ),
+        "adam_max_weight_abs_difference_after_steps": max(
+            (after_hand_written[name] - after_legacy[name]).abs().max().item()
+            for name in after_hand_written
+        ),
+    }
+
+
+def _synthetic_examples() -> tuple[StrictPrefixExamples, int]:
+    rows = [
+        (user, 1_000 + (user * 7 + step * 3) % 400, step)
+        for user in range(1, 200)
+        for step in range(60)
+    ]
+    frame = pd.DataFrame(rows, columns=["userId", "movieId", "timestamp"])
+    frame = frame.drop_duplicates(subset=["userId", "movieId"], keep="first")
+    items = sorted(int(item) for item in frame["movieId"].unique())
+    store = build_strict_prefix_example_store(
+        frame, item_to_index={item: index + 1 for index, item in enumerate(items)}, max_length=50
+    )
+    return store, len(items)
+
+
+# float32 is the training dtype and is held to the owner's 1e-5; float64 shows
+# what is left once rounding is out of the way.
+PARITY_TOLERANCE = {torch.float32: 1e-5, torch.float64: 1e-10}
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64], ids=["float32", "float64"])
+@pytest.mark.parametrize("dropout", [0.0, 0.2], ids=["dropout-0", "dropout-0.2"])
+def test_same_seed_training_steps_match_the_packaged_encoder(
+    dropout: float, dtype: torch.dtype
+) -> None:
+    store, n_items = _synthetic_examples()
+    report = training_parity(
+        store,
+        n_items=n_items,
+        config=SASRecConfig(dropout=dropout, negative_count=32, loss="bce", seed=42),
+        dtype=dtype,
+    )
+    tolerance = PARITY_TOLERANCE[dtype]
+
+    for batch in report["batches"]:
+        assert batch["rng_draws_identical"]
+        assert batch["loss_abs_difference"] <= tolerance, batch
+        assert batch["max_gradient_abs_difference"] <= tolerance, batch
+    assert report["adam_max_loss_abs_difference"] <= tolerance, report
+    # Adam's first steps move each weight by about the learning rate whatever the
+    # gradient's size, so a rounding-level gradient on a near-zero element can
+    # move a weight by more than the gradients differ. Bounded well below 1e-3.
+    assert report["adam_max_weight_abs_difference_after_steps"] <= 1e3 * tolerance, report
+
+
+def test_dropout_sites_and_rates_match_the_packaged_encoder() -> None:
+    """Four sites per block, in the same order, at the configured rate; none elsewhere."""
+    config = _config(dropout=0.2, num_blocks=2)
+    legacy = LegacySASRecEncoder(CATALOG, config)
+    hand_written = SASRecEncoder(CATALOG, config)
+
+    legacy_sites = []
+    for layer in legacy.transformer.layers:
+        legacy_sites += [
+            ("attention weights", layer.self_attn.dropout),
+            ("attention output, before the residual add", layer.dropout1.p),
+            ("feed-forward, after GELU", layer.dropout.p),
+            ("feed-forward output, before the residual add", layer.dropout2.p),
+        ]
+    hand_written_sites = []
+    for block in hand_written.transformer.blocks:
+        hand_written_sites += [
+            ("attention weights", block.attention.weight_dropout.p),
+            ("attention output, before the residual add", block.attention_dropout.p),
+            ("feed-forward, after GELU", block.feed_forward.dropout.p),
+            ("feed-forward output, before the residual add", block.feed_forward_dropout.p),
+        ]
+    assert hand_written_sites == legacy_sites
+    assert all(rate == 0.2 for _site, rate in hand_written_sites)
+    # No embedding dropout or any other site, in either encoder.
+    dropouts = [
+        name
+        for name, module in hand_written.named_modules()
+        if isinstance(module, torch.nn.Dropout)
+    ]
+    assert len(dropouts) == 4 * config.num_blocks
+    legacy_dropouts = [
+        name for name, module in legacy.named_modules() if isinstance(module, torch.nn.Dropout)
+    ]
+    assert len(legacy_dropouts) == 3 * config.num_blocks  # plus the float rate inside attention
 
 
 # --- 3. saved models keep loading ---------------------------------------------
@@ -614,3 +858,123 @@ def test_pinned_v1_population_lists_against_the_packaged_encoder() -> None:
     print(json.dumps(document, indent=2, sort_keys=True))
 
     assert document["hand_written"]["passed"], document
+
+
+# Initialization scheme per tensor, in the order the random generator is drawn.
+# "none" draws nothing. The packaged encoder's scheme is PyTorch's defaults for
+# the classes it used; the hand-written one replays them (transformer.py).
+INIT_SCHEMES = [
+    ("item_embedding.weight", "normal(0, 1), redrawn last as normal(0, 1/sqrt(d)); row 0 zeroed"),
+    ("position_embedding.weight", "normal(0, 1)"),
+    ("transformer.blocks.0.attention.output.weight", "kaiming_uniform(a=sqrt(5)): U(+-1/sqrt(d))"),
+    ("transformer.blocks.0.attention.output.bias", "U(+-1/sqrt(d)) drawn, then zeroed"),
+    (
+        "transformer.blocks.0.attention.{query,key,value}.weight",
+        "one xavier_uniform (3d, d) draw, rows sliced: U(+-sqrt(6/(d+3d)))",
+    ),
+    ("transformer.blocks.0.attention.{query,key,value}.bias", "zeros (no draw)"),
+    (
+        "transformer.blocks.0.feed_forward.expand.weight",
+        "kaiming_uniform(a=sqrt(5)): U(+-1/sqrt(d))",
+    ),
+    ("transformer.blocks.0.feed_forward.expand.bias", "U(+-1/sqrt(d))"),
+    (
+        "transformer.blocks.0.feed_forward.contract.weight",
+        "kaiming_uniform(a=sqrt(5)): U(+-1/sqrt(F))",
+    ),
+    ("transformer.blocks.0.feed_forward.contract.bias", "U(+-1/sqrt(F))"),
+    ("transformer.blocks.*.{attention,feed_forward}_norm, output_norm", "ones / zeros (no draw)"),
+    ("transformer.blocks.1..N-1.*", "deep copies of block 0 (no draw)"),
+]
+
+
+def test_training_parity_on_three_real_pilot_batches() -> None:
+    """The owner's ruling, on the pilot's own data: WO-1's first three batches at seed 42.
+
+    The partition is built exactly as ``run_once`` builds it for the 6% pilot
+    under O-25, so these are the batches the seed-42 pilot trained on first.
+    Writes a JSON report to ``SASREC_WO2_TRAINING_PARITY_OUT``; skipped without it.
+    """
+    out = os.environ.get("SASREC_WO2_TRAINING_PARITY_OUT", "").strip()
+    input_dir = os.environ.get("TWOTOWER_INPUT_DIR", "").strip()
+    if not out or not input_dir:
+        pytest.skip("SASREC_WO2_TRAINING_PARITY_OUT and TWOTOWER_INPUT_DIR are not both set")
+
+    from src.config import Settings
+    from src.data.split import temporal_cutoff, temporal_split
+    from src.training.candidate_data import load_inputs, subsample_users
+    from src.training.sasrec import SUBSAMPLE_SEED
+
+    full, _movies = load_inputs(Settings(), input_dir=Path(input_dir))
+    sample = subsample_users(full, 0.06, SUBSAMPLE_SEED)
+    split = temporal_split(sample, cutoff=temporal_cutoff(full))
+    assert int(split.train["timestamp"].max()) < split.cutoff < split.holdout_end == 1469256597
+    items = sorted(int(item) for item in split.train["movieId"].unique())
+    store = build_strict_prefix_example_store(
+        split.train,
+        item_to_index={item: index + 1 for index, item in enumerate(items)},
+        max_length=50,
+    )
+    cell = SASRecConfig(loss="bce", negative_count=32, epochs=2, faiss_exact=True, seed=42)
+
+    torch.manual_seed(cell.seed)
+    legacy = LegacySASRecEncoder(len(items) + 2, cell)
+    legacy_rng = torch.get_rng_state()
+    torch.manual_seed(cell.seed)
+    hand_written = SASRecEncoder(len(items) + 2, cell)
+    same_draws = torch.equal(torch.get_rng_state(), legacy_rng)
+    converted = _hand_written_state(legacy)
+    initialization = [
+        {
+            "tensor": name,
+            "shape": list(tensor.shape),
+            "mean": tensor.mean().item(),
+            "std": tensor.std().item() if tensor.numel() > 1 else 0.0,
+            "min": tensor.min().item(),
+            "max": tensor.max().item(),
+            "bit_identical_to_packaged": torch.equal(tensor, converted[name]),
+        }
+        for name, tensor in hand_written.state_dict().items()
+    ]
+
+    reports = [
+        training_parity(
+            store,
+            n_items=len(items),
+            config=SASRecConfig(**{**cell.as_params(), "dropout": dropout}),
+            dtype=dtype,
+        )
+        for dropout in (0.0, cell.dropout)
+        for dtype in (torch.float32, torch.float64)
+    ]
+    document = {
+        "partition": {
+            "sample_fraction": 0.06,
+            "subsample_seed": SUBSAMPLE_SEED,
+            "cutoff": split.cutoff,
+            "holdout_end": split.holdout_end,
+            "train_rows": len(split.train),
+            "latest_fit_timestamp": int(split.train["timestamp"].max()),
+            "n_items": len(items),
+            "n_examples": len(store),
+        },
+        "initialization": {
+            "schemes_in_draw_order": [list(row) for row in INIT_SCHEMES],
+            "generator_state_identical_after_construction": same_draws,
+            "per_tensor": initialization,
+        },
+        "parity": reports,
+    }
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    assert document["initialization"]["generator_state_identical_after_construction"]
+    assert all(row["bit_identical_to_packaged"] for row in initialization)
+    for report in reports:
+        tolerance = PARITY_TOLERANCE[
+            torch.float32 if report["dtype"] == "float32" else torch.float64
+        ]
+        for batch in report["batches"]:
+            assert batch["rng_draws_identical"]
+            assert batch["loss_abs_difference"] <= tolerance, batch
+            assert batch["max_gradient_abs_difference"] <= tolerance, batch

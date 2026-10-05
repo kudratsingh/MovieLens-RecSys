@@ -185,8 +185,14 @@ class MultiHeadSelfAttention(nn.Module):
             allowed,
             self.weight_dropout,
         )
-        merged = attended.transpose(1, 2).reshape(batch, length, dim)
-        output: torch.Tensor = self.output(merged)
+        # Merge the heads position-major — ``(length, batch, d)`` in memory —
+        # and hand back a ``(batch, length, d)`` view of it. The values are the
+        # same either way; the memory order is not. Dropout draws its mask in
+        # memory order, and v1's attention returned exactly this layout, so the
+        # residual dropout that follows lands on the same elements at the same
+        # seed (``test_same_seed_training_steps_match_the_packaged_encoder``).
+        merged = attended.permute(2, 0, 1, 3).reshape(length, batch, dim)
+        output: torch.Tensor = self.output(merged).transpose(0, 1)
         return output
 
 
