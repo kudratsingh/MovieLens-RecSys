@@ -6,7 +6,9 @@ import hashlib
 import io
 import json
 import os
+import re
 import zipfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,46 @@ MANIFEST_FILENAME = "sasrec-manifest.json"
 METADATA_MEMBER = "metadata.json"
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 
+# Which parameter layout an archive's weights are stored in (WO-2). Every archive
+# written before WO-2 used PyTorch's packaged encoder layout and carries no field,
+# so a missing value means the legacy layout; the manifest and metadata of those
+# archives are checksummed by published bundles and are never rewritten. New
+# exports store the hand-written layout and say so. Either way the model that
+# loads is the hand-written encoder: a legacy archive is converted in memory, and
+# the bytes on disk are untouched.
+ENCODER_IMPL_LEGACY = "torch-packaged-encoder-v1"
+ENCODER_IMPL_HAND_WRITTEN = "hand-written-transformer-v1"
+ENCODER_IMPLS = frozenset({ENCODER_IMPL_LEGACY, ENCODER_IMPL_HAND_WRITTEN})
+
+# Legacy name -> hand-written name for every per-block tensor except the packed
+# input projection, which is split three ways (see ``legacy_state_to_hand_written``).
+_LEGACY_BLOCK_RENAMES = {
+    "self_attn.out_proj.weight": "attention.output.weight",
+    "self_attn.out_proj.bias": "attention.output.bias",
+    "linear1.weight": "feed_forward.expand.weight",
+    "linear1.bias": "feed_forward.expand.bias",
+    "linear2.weight": "feed_forward.contract.weight",
+    "linear2.bias": "feed_forward.contract.bias",
+    "norm1.weight": "attention_norm.weight",
+    "norm1.bias": "attention_norm.bias",
+    "norm2.weight": "feed_forward_norm.weight",
+    "norm2.bias": "feed_forward_norm.bias",
+}
+_LEGACY_PACKED_PROJECTIONS = {
+    "self_attn.in_proj_weight": "weight",
+    "self_attn.in_proj_bias": "bias",
+}
+_LEGACY_BLOCK_KEY = re.compile(r"^transformer\.layers\.(\d+)\.(.+)$")
+# Outside the blocks the names did not change.
+_UNCHANGED_KEYS = frozenset(
+    {
+        "item_embedding.weight",
+        "position_embedding.weight",
+        "output_norm.weight",
+        "output_norm.bias",
+    }
+)
+
 
 @dataclass(frozen=True)
 class SASRecArtifactManifest:
@@ -64,6 +106,9 @@ class SASRecArtifactManifest:
     # by filename and pinned by the serving manifest instead.
     popularity_filename: str | None = None
     popularity_sha256: str | None = None
+    # The parameter layout of the archive's weights, not the code that runs them:
+    # whatever this says, the loaded model is the hand-written encoder.
+    encoder_impl: str = ENCODER_IMPL_LEGACY
 
     @classmethod
     def load(cls, path: Path) -> SASRecArtifactManifest:
@@ -95,6 +140,7 @@ class SASRecArtifactManifest:
                 popularity_sha256=(
                     None if raw.get("popularity_sha256") is None else str(raw["popularity_sha256"])
                 ),
+                encoder_impl=str(raw.get("encoder_impl", ENCODER_IMPL_LEGACY)),
             )
         except KeyError as error:
             raise ValueError(f"SASRec manifest is missing {error.args[0]!r}") from error
@@ -115,6 +161,8 @@ class SASRecArtifactManifest:
             ALL_POSITION_TRAINING_OBJECTIVE,
         }:
             raise ValueError(f"unsupported SASRec training objective {self.training_objective!r}")
+        if self.encoder_impl not in ENCODER_IMPLS:
+            raise ValueError(f"unsupported SASRec encoder layout {self.encoder_impl!r}")
         model_path = directory / self.model_filename
         if not model_path.is_file():
             raise ValueError(f"SASRec model artifact is missing: {self.model_filename}")
@@ -177,6 +225,7 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
         "config": model.config.as_params(),
         "cold_start_threshold": model.cold_start_threshold,
         "training_objective": model._training_objective,
+        "encoder_impl": ENCODER_IMPL_HAND_WRITTEN,
         "item_ids": item_ids,
         "unknown_index": model._unknown_index,
         "vocabulary_sha256": vocabulary_sha256,
@@ -198,6 +247,7 @@ def export_sasrec(model: SASRecModel, directory: Path) -> SASRecArtifactManifest
         training_objective=model._training_objective,
         popularity_filename=POPULARITY_ARTIFACT_FILENAME,
         popularity_sha256=popularity_sha256,
+        encoder_impl=ENCODER_IMPL_HAND_WRITTEN,
     )
     manifest.write(manifest_path)
     return manifest
@@ -233,6 +283,8 @@ def load_sasrec(manifest_path: Path) -> SASRecModel:
         raise ValueError("SASRec artifact unknown index does not follow the vocabulary")
     model._encoder = SASRecEncoder(len(item_ids) + 2, config)
 
+    if manifest.encoder_impl == ENCODER_IMPL_LEGACY:
+        arrays = legacy_state_to_hand_written(arrays, num_blocks=config.num_blocks)
     expected = model._encoder.state_dict()
     if set(arrays) != set(expected):
         raise ValueError("SASRec artifact tensor names do not match the encoder")
@@ -369,6 +421,62 @@ def _validate_metadata(metadata: dict[str, Any], manifest: SASRecArtifactManifes
         raise ValueError("SASRec artifact config does not match its manifest")
     if metadata.get("training_objective", LEGACY_TRAINING_OBJECTIVE) != manifest.training_objective:
         raise ValueError("SASRec artifact training objective does not match its manifest")
+    if metadata.get("encoder_impl", ENCODER_IMPL_LEGACY) != manifest.encoder_impl:
+        raise ValueError("SASRec artifact encoder layout does not match its manifest")
+
+
+def legacy_state_to_hand_written(
+    arrays: Mapping[str, np.ndarray[Any, Any]], *, num_blocks: int
+) -> dict[str, np.ndarray[Any, Any]]:
+    """Rename a pre-WO-2 encoder state to the hand-written layout, losslessly.
+
+    Every tensor is carried over unchanged except the packed attention input
+    projection: the legacy layout kept query, key and value as one ``(3d, d)``
+    weight and one ``(3d,)`` bias, stacked in that order, and the hand-written
+    layout keeps three ``(d, d)`` / ``(d,)`` pieces. Splitting is row slicing, so
+    no value is changed — the converted model computes the same function, and
+    the only differences in its output are float rounding from evaluating that
+    function with different kernels.
+
+    Strict in both directions. A legacy key this mapping does not know, a block
+    beyond ``num_blocks``, or a block missing any tensor is refused rather than
+    passed through, because a silently dropped tensor would leave a parameter at
+    its random initialization and still load.
+    """
+    converted: dict[str, np.ndarray[Any, Any]] = {}
+    seen_blocks: dict[int, set[str]] = {}
+    for name, array in arrays.items():
+        if name in _UNCHANGED_KEYS:
+            converted[name] = array
+            continue
+        match = _LEGACY_BLOCK_KEY.match(name)
+        if match is None:
+            raise ValueError(f"SASRec legacy tensor {name!r} has no hand-written counterpart")
+        block, suffix = int(match.group(1)), match.group(2)
+        if block >= num_blocks:
+            raise ValueError(f"SASRec legacy tensor {name!r} is beyond {num_blocks} blocks")
+        prefix = f"transformer.blocks.{block}."
+        if suffix in _LEGACY_BLOCK_RENAMES:
+            converted[prefix + _LEGACY_BLOCK_RENAMES[suffix]] = array
+        elif suffix in _LEGACY_PACKED_PROJECTIONS:
+            if array.shape[0] % 3:
+                raise ValueError(f"SASRec legacy tensor {name!r} does not split into three")
+            width = array.shape[0] // 3
+            kind = _LEGACY_PACKED_PROJECTIONS[suffix]
+            for index, projection in enumerate(("query", "key", "value")):
+                piece = np.ascontiguousarray(array[index * width : (index + 1) * width])
+                converted[f"{prefix}attention.{projection}.{kind}"] = piece
+        else:
+            raise ValueError(f"SASRec legacy tensor {name!r} has no hand-written counterpart")
+        seen_blocks.setdefault(block, set()).add(suffix)
+    expected_suffixes = set(_LEGACY_BLOCK_RENAMES) | set(_LEGACY_PACKED_PROJECTIONS)
+    for block in range(num_blocks):
+        missing = expected_suffixes - seen_blocks.get(block, set())
+        if missing:
+            raise ValueError(
+                f"SASRec legacy block {block} is missing tensors: {', '.join(sorted(missing))}"
+            )
+    return converted
 
 
 def _integer_list(value: Any, *, name: str) -> list[int]:

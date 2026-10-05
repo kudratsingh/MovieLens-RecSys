@@ -22,11 +22,13 @@ rather than pushing them into ``CandidateIndex`` and ``SASRecModel``, is what
 lets the sidecar treat both families identically without either model class
 growing a serving concern.
 
-**The attention fastpath defect is a load-time gate.** See
-``_resolve_fastpath_guard`` below: an unguarded SASRec encoder returns NaN for
-any left-padded history and therefore retrieves nothing, and a sidecar that
-booted anyway would answer a warm user with the popularity fallback and call it
-a healthy deployment.
+**A non-finite encoder is a load-time gate.** See ``_assert_encoder_is_finite``
+below: an encoder that returns NaN for a left-padded history retrieves nothing,
+and a sidecar that booted anyway would answer a warm user with the popularity
+fallback and call it a healthy deployment. That was PyTorch's attention fast
+path until WO-2 replaced the packaged encoder with a hand-written one that zeroes
+padded rows by construction; the probe stays because it tests the behaviour, not
+the cause.
 """
 
 from __future__ import annotations
@@ -57,44 +59,15 @@ logger = logging.getLogger(__name__)
 # worker realised — has nothing on its chain to write it, and is dropped.
 ensure_stdout_logging(logger)
 
-# The module the shared SASRec encoder lives in, and the symbol O-9/W17 is
-# expected to export from it once that work lands. Named as constants because
-# the failure message has to be able to quote them: an operator reading
-# "the encoder guard is missing" needs to be told exactly what would satisfy it.
-SHARED_ENCODER_MODULE = "src.models.candidates.sasrec"
-FASTPATH_GUARD_SYMBOL = "disable_attention_fastpath"
-
-# Where the guard came from, for the boot log and for tests. Three values rather
-# than a boolean because "W17 landed as a callable" and "W17 landed as an import
-# side effect" are different facts about the tree, and the day the hook is
-# renamed we want the log to say which one stopped being true.
-GUARD_SOURCE_HOOK = "shared-encoder-hook"
-GUARD_SOURCE_IMPORT = "shared-encoder-import"
-# W17 landed the fix inside ``SASRecEncoder.encode_positions``, so it applies on
-# every encode rather than at import. Nothing is observable until the encoder is
-# called, which is why the finiteness probe — not this lookup — is authoritative.
-GUARD_SOURCE_CALL_TIME = "call-time-encoder"
-
-
-class AttentionFastpathGuardUnavailableError(RuntimeError):
-    """The shared encoder path does not (yet) disable the fused attention fastpath.
-
-    Raised from ``load``, which runs inside the sidecar's ``lifespan``, so the
-    worker dies before it joins uvicorn's accept loop. That is the whole point:
-    the alternative to this exception is a sidecar that starts, reports healthy,
-    encodes every sub-window history to NaN, retrieves zero candidates, and lets
-    the coordinator degrade each of those requests to popularity — a silent
-    quality outage that no gate in this system would catch.
-    """
-
 
 class EncoderProducesNonFiniteVectorsError(RuntimeError):
     """The load-time probe found a history length the encoder cannot represent.
 
-    Distinct from the guard error above because it answers a different question.
-    That one says "the fix is not in the tree"; this one says "the fix is in the
-    tree and did not work" — a different bug, a different owner, and the only
-    one of the two that a torch upgrade can reintroduce on its own.
+    Raised from ``load``, which runs inside the sidecar's ``lifespan``, so the
+    worker dies before it joins uvicorn's accept loop. The alternative is a
+    sidecar that starts, reports healthy, encodes every sub-window history to
+    NaN, retrieves zero candidates, and lets the coordinator degrade each of those
+    requests to popularity — a silent quality outage no other gate would catch.
     """
 
 
@@ -114,11 +87,9 @@ class EncoderForwardTimer:
     candidates. A pair of torch hooks measures the real pass, once, and needs no
     change to the model at all.
 
-    Hooks do not perturb the numerics here: ``SASRecEncoder.encode_positions``
-    disables the fused-attention fastpath on every encode, so the transformer's
-    own fastpath decision is already made before a hook could influence it. What
-    they do cost is ``nn.Module``'s hook-free call shortcut — two dict lookups
-    per forward.
+    Hooks do not perturb the numerics here: the hand-written encoder has one code
+    path, with no fast path a hook could switch it off of. What they do cost is
+    ``nn.Module``'s hook-free call shortcut — two dict lookups per forward.
 
     Thread-local because the sidecar ranks inside ``run_in_threadpool``: several
     requests can be inside one loaded model at the same moment, and a shared
@@ -264,7 +235,10 @@ class SASRecSidecarRetriever:
     vocabulary: tuple[int, ...]
     max_sequence_length: int
     cold_start_threshold: int | None
-    fastpath_guard_source: str
+    # The parameter layout the encoder archive was stored in (WO-2). The code that
+    # runs it is the hand-written encoder either way; this says whether the loader
+    # converted a pre-WO-2 archive to get there.
+    encoder_impl: str
     # Attached to the loaded encoder by ``load_sequence_retriever``. Defaulted so
     # a test that builds this adapter around a stub model still constructs; an
     # unattached timer reports 0.0, which is the truth for a stub that never
@@ -512,81 +486,21 @@ def top_up_to_limit(
     )
 
 
-def _resolve_fastpath_guard() -> str:
-    """Obtain — never duplicate — the fix for the fused-attention NaN defect.
-
-    In ``eval()`` mode PyTorch's fused multi-head-attention fastpath returns NaN
-    for a query position whose whole key row is masked. A SASRec history shorter
-    than ``max_sequence_length`` is left-padded, so those rows exist for every
-    real user, and the corruption is **depth-dependent**: at one encoder block it
-    stays confined to the padded rows, and at two — ADR 0016's configuration —
-    the padded row feeds the second block, the causal mask lets the last position
-    attend over it, and the NaN lands in exactly the vector retrieval reads.
-    Measured on torch 2.12.0 against this repo's ``SASRecEncoder``: at
-    ``num_blocks=2`` every history length from 1 to 49 encodes to NaN and length
-    50 — a full window, no padding — is clean. A single-layer regression test
-    would pass and prove nothing.
-
-    The one-line fix is ``torch.backends.mha.set_fastpath_enabled(False)``, and
-    it belongs in the shared encoder path where training, evaluation and serving
-    all inherit it — that work (O-9/W17) is not on ``main`` yet. This function
-    therefore *depends* on it rather than reimplementing it: a second copy of a
-    global toggle is how the two paths end up disagreeing about which numbers
-    the published metrics were measured under.
-
-    Three shapes are recognised, because the choice was not this lane's to make
-    and the one that landed was not one of the two originally guessed:
-
-    * a callable ``disable_attention_fastpath`` exported from the shared module,
-      which is called here;
-    * the module disabling the fastpath as an import side effect, detected by
-      reading the flag back; or
-    * the shared encoder applying it **at call time**, which is what W17 does —
-      `encode_positions` sets the toggle on every encode, so nothing is
-      observable until the encoder actually runs.
-
-    That third shape is why this function no longer refuses. A symbol lookup
-    cannot see a fix that only exists once the code runs, and refusing on its
-    absence would have kept a correctly-fixed bundle from booting. So this
-    returns a *description of how the fix arrived*, for the audit, and
-    ``_assert_encoder_is_finite`` decides whether the sidecar starts — it calls
-    the real encoder at the lengths that were broken and refuses a hook that
-    exists but does nothing. Behaviour was always the load-bearing check; this
-    lookup was a cheap early signal that stopped mapping onto reality.
-    """
-    import torch
-
-    from src.models.candidates import sasrec as shared_encoder
-
-    guard = getattr(shared_encoder, FASTPATH_GUARD_SYMBOL, None)
-    if callable(guard):
-        guard()
-        return GUARD_SOURCE_HOOK
-    if not torch.backends.mha.get_fastpath_enabled():
-        return GUARD_SOURCE_IMPORT
-    # Not a failure. W17 applies the toggle inside `encode_positions`, so at
-    # import time the flag still reads enabled and no symbol is exported. The
-    # finiteness probe is what establishes whether the fix is really present;
-    # refusing here would reject a correctly-fixed bundle.
-    return GUARD_SOURCE_CALL_TIME
-
-
 def _assert_encoder_is_finite(model: Any, vocabulary: tuple[int, ...]) -> None:
     """Prove the loaded encoder represents padded histories, at the configured depth.
 
-    Behavioural rather than a version check, because the guard above establishes
-    that the fix is *present* and this establishes that it *worked* — against
-    whichever torch the image resolved, at whichever ``num_blocks`` the bundle
-    was trained with. A torch upgrade that reintroduces the defect under a
-    different flag fails here, at boot, rather than in production.
+    Behavioural rather than a version check: it calls the loaded encoder, against
+    whichever torch the image resolved, at whichever ``num_blocks`` the bundle was
+    trained with. Before WO-2 the failure it catches was PyTorch's attention fast
+    path, which turned every padded history to NaN at two blocks; the hand-written
+    encoder zeroes padded rows by construction, so this should never fire, and if
+    it does the cause is new.
 
     Probed at the two lengths that matter and no more: 1, the shortest history
     that can reach the encoder, and ``max_sequence_length - 1``, the longest one
-    that is still padded. The defect is uniform across padded lengths — every
-    length from 1 to 49 fails together — so a wider sweep costs forward passes
-    and proves nothing extra. The unpadded control at exactly
-    ``max_sequence_length`` is clean even when the bug is live, which is why it
-    is a fixture assertion and not a boot check.
+    that is still padded. Padding is what made a length fail, so a wider sweep
+    costs forward passes and proves nothing extra; the unpadded length is covered
+    by the fixture tests instead.
     """
     import torch
 
@@ -600,9 +514,10 @@ def _assert_encoder_is_finite(model: Any, vocabulary: tuple[int, ...]) -> None:
         if not bool(torch.isfinite(encoded).all()):
             raise EncoderProducesNonFiniteVectorsError(
                 f"the loaded SASRec encoder returned a non-finite query vector for a "
-                f"{length}-item history against a {max_length}-item window. This is the fused "
-                "attention fastpath defect and it means retrieval would return no candidates at "
-                "all for that user; the guard resolved but did not take effect."
+                f"{length}-item history against a {max_length}-item window, so retrieval would "
+                "return no candidates at all for that user. Padded positions are supposed to "
+                "encode to exact zeros (src/models/candidates/transformer.py); this is a padding "
+                "defect in the encoder that loaded."
             )
         # The end-to-end half of the same claim: a finite query vector that still
         # retrieves nothing would be a different fault with the same symptom.
@@ -630,8 +545,6 @@ def load_sequence_retriever(retriever: RetrieverRef, artifact_dir: Path) -> SASR
     the two manifests against each other rather than trusting either alone, and
     refuses a layout it does not recognise instead of guessing at one.
     """
-    guard_source = _resolve_fastpath_guard()
-
     from src.models.candidates.sasrec_artifact import (
         MANIFEST_FILENAME,
         SASRecArtifactManifest,
@@ -675,21 +588,21 @@ def load_sequence_retriever(retriever: RetrieverRef, artifact_dir: Path) -> SASR
     # family rather than only for the one that names itself.
     logger.info(
         "sasrec_retriever_loaded family=%s encoder=%s items=%s window=%s "
-        "cold_start_threshold=%s index_type=%s fastpath_guard=%s",
+        "cold_start_threshold=%s index_type=%s encoder_impl=%s",
         RETRIEVER_FAMILY_SASREC,
         encoder.version,
         len(vocabulary),
         artifact_manifest.max_sequence_length,
         model.cold_start_threshold,
         INDEX_TYPE_FLAT_IP_EXACT,
-        guard_source,
+        artifact_manifest.encoder_impl,
     )
     return SASRecSidecarRetriever(
         model=model,
         vocabulary=vocabulary,
         max_sequence_length=artifact_manifest.max_sequence_length,
         cold_start_threshold=model.cold_start_threshold,
-        fastpath_guard_source=guard_source,
+        encoder_impl=artifact_manifest.encoder_impl,
         encoder_timer=encoder_timer,
     )
 

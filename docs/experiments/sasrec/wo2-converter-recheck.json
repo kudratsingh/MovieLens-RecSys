@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "WO-2 done-criterion 3 (2026-10-05 build brief). PREPARED, NOT RUN: held until",
+    "the owner confirms the archive and the data are on the machine and approves runs.",
+    "Inference only: no training, no new artifact, the pinned archive is read and",
+    "never rewritten. Two commands, because the packaged PyTorch encoder needed for",
+    "the list comparison may exist only under tests/ (rule D7)."
+  ],
+  "date_prepared": "2026-10-05",
+  "artifact": {
+    "manifest": "artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/sasrec-manifest.json",
+    "model_sha256": "43320b87e3cbc4a0dfbc90bce2e9d9b033fbd4c6cebe7f09447fa6cd5e1215e6",
+    "stored_layout": "torch-packaged-encoder-v1 (no encoder_impl field; converted in memory on load)"
+  },
+  "reference": {
+    "run_id": "528b14513d9a49e098a0525417f23285",
+    "protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+    "warm_recall_at_500": 0.5091713455402272,
+    "cold_recall_at_500": 0.5262729520330651,
+    "n_warm_users": 1931,
+    "n_cold_users": 710
+  },
+  "acceptance": {
+    "warm_recall_at_500": "equal to the reference when both are rounded to 4 decimals",
+    "cold_recall_at_500": "exactly equal (cold users are popularity-routed and never reach the encoder)",
+    "report": [
+      "the exact warm and cold differences from the reference",
+      "how many users' top-500 lists changed (membership vs order only), all users and warm users"
+    ],
+    "on_failure": "the record is written first, then the run raises; stop and report to the owner"
+  },
+  "preconditions": [
+    "the archive above exists locally with the stated SHA-256 (load_sasrec verifies it)",
+    "the DVC-pinned cold-start cohort parquet is present (the runner checks before loading data)",
+    "ratings come from the dev Postgres or from TWOTOWER_INPUT_DIR (CSV snapshot); either must reproduce the protocol hash, which the runner checks",
+    "no other src.training process is running"
+  ],
+  "commands": {
+    "record": "SASREC_RECHECK_SCOPE=converter SASREC_FASTPATH_RETRIEVAL_TRACKING_URI=<mlflow uri> caffeinate -i python -m src.training.sasrec_fastpath_recheck",
+    "list_comparison": "SASREC_PINNED_MANIFEST=artifacts/sasrec/a11af5ed0f0745f68572407237cfa4b9/sasrec-manifest.json SASREC_V1_LIST_DIFF_OUT=artifacts/sasrec/wo2-converter/list-diff.json OMP_NUM_THREADS=1 caffeinate -i pytest tests/unit/test_sasrec_transformer.py -k pinned -s"
+  },
+  "outputs": {
+    "record": "an MLflow run tagged sweep_label=wo2-converter-reevaluation, reproduction_passed, top500_lists_sha256; evidence under artifacts/sasrec/fastpath-reevaluation/<run-id>/ (retrieval-summary.json with the verdict, per-user-recall.json, top500-lists.json)",
+    "list_comparison": "artifacts/sasrec/wo2-converter/list-diff.json"
+  },
+  "result": null
+}

@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "WO-2 done-criterion 5 (2026-10-05 build brief). PREPARED, NOT RUN: held until",
+    "WO-1 has merged and this branch is rebased onto it, and until the owner",
+    "approves runs. The cell is pilot6-bce-neg32 from pilot-6pct.json, copied",
+    "unchanged except for the label, an explicit seed, and an explicit",
+    "training_objective. The objective field only exists after WO-1",
+    "(SASRecConfig.training_objective); on a tree without it, parse_grid refuses",
+    "the cell rather than silently training the fast all-positions objective.",
+    "The one variable is the encoder: hand-written (WO-2) instead of the packaged",
+    "PyTorch encoder. Initialization is bit-identical to v1 at the same seed;",
+    "training rounds differently, so the result is compared with the RANGE of",
+    "WO-1's four reference pilots (seeds 42, 7, 13, 21), not with any one of them.",
+    "Run: caffeinate -i python -m src.training.sasrec_sweep docs/experiments/sasrec/wo2-handwritten-pilot-6pct.json",
+    "Record the result in docs/results.md beside the WO-1 references, pass or fail."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo2-handwritten-pilot6-bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1"
+    }
+  ]
+}

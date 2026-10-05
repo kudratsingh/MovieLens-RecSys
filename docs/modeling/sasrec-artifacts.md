@@ -39,8 +39,25 @@ for every encoder state tensor. Metadata records:
 - every `SASRecConfig` value;
 - the dense-index-to-movie-id vocabulary and its SHA-256;
 - the explicit unknown index and cold-start threshold;
-- the complete, sorted state-key list; and
-- the artifact type and schema version.
+- the complete, sorted state-key list;
+- the artifact type and schema version; and
+- since WO-2 (2026-10-05), `encoder_impl`: the parameter layout the tensors are
+  stored in.
+
+**Encoder layout (WO-2).** The encoder is now the hand-written Transformer in
+`src/models/candidates/transformer.py`, and its tensor names differ from those
+of PyTorch's packaged encoder that every earlier archive was written with. The
+on-disk format does **not** change: schema version 1, the same deterministic
+zip, one `.npy` per tensor, the same manifest fields plus one optional
+`encoder_impl`, and the same checksum rules. Existing
+archives, the pinned `a11af5ed…` among them, are never rewritten; an archive or
+manifest with no `encoder_impl` is read as `torch-packaged-encoder-v1`, and
+`load_sasrec` converts its tensors to the hand-written names in memory before the
+strict name, shape and dtype checks below. New exports store the hand-written
+names and record `"encoder_impl": "hand-written-transformer-v1"` in both the
+metadata and the manifest; the two must agree, and an unknown value is refused.
+The name mapping and the measured equivalence are in
+[`transformer-from-scratch.md`](transformer-from-scratch.md).
 
 `sasrec-manifest.json` pins the archive SHA-256, vocabulary SHA-256, model
 dimensions, sequence length, loss parameters, and the ordered-history contract:
@@ -62,7 +79,9 @@ Loading fails before retrieval on any of these conditions:
 - unsupported schema, artifact type, sequence order, padding, or normalization;
 - unsafe, duplicate, missing, or unexpected archive members;
 - manifest/config/item-count/vocabulary disagreement;
-- duplicate item ids or an invalid unknown index; or
+- duplicate item ids or an invalid unknown index;
+- an unknown `encoder_impl`, or metadata and manifest disagreeing about it;
+- a legacy-layout tensor the converter cannot place, or a block missing one; or
 - missing, additional, wrong-shaped, or wrong-typed encoder tensors.
 
 After validation, loading reconstructs the encoder strictly, switches it to

@@ -24,6 +24,7 @@ from .sequence_data import (
     build_strict_prefix_example_store,
     build_user_history,
 )
+from .transformer import LayerNormalization, TransformerStack
 
 # The objective of record: one example per target, scored at the final
 # position of its strict prefix. Run 528b1451 / model a11af5ed (warm
@@ -110,49 +111,45 @@ class SASRecConfig:
 
 
 class SASRecEncoder(nn.Module):
-    """Pre-normalized causal Transformer with tied input/output items."""
+    """Pre-normalized causal Transformer with tied input/output items.
+
+    The Transformer itself is the hand-written stack in ``transformer.py`` (WO-2,
+    rule D7). Its parameter layout differs from the one SASRec v1 was saved in;
+    ``sasrec_artifact`` converts old archives on load, so every saved model keeps
+    loading and scoring as it did.
+    """
 
     def __init__(self, n_item_rows: int, config: SASRecConfig) -> None:
         super().__init__()
         self.config = config
         self.item_embedding = nn.Embedding(n_item_rows, config.hidden_dim, padding_idx=0)
         self.position_embedding = nn.Embedding(config.max_sequence_length, config.hidden_dim)
-        layer = nn.TransformerEncoderLayer(
-            d_model=config.hidden_dim,
-            nhead=config.num_heads,
-            dim_feedforward=config.feedforward_dim,
+        self.transformer = TransformerStack(
+            dim=config.hidden_dim,
+            heads=config.num_heads,
+            hidden=config.feedforward_dim,
+            num_blocks=config.num_blocks,
             dropout=config.dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(layer, num_layers=config.num_blocks)
-        self.output_norm = nn.LayerNorm(config.hidden_dim)
+        self.output_norm = LayerNormalization(config.hidden_dim)
         nn.init.normal_(self.item_embedding.weight, std=1.0 / math.sqrt(config.hidden_dim))
         with torch.no_grad():
             self.item_embedding.weight[0].zero_()
 
     def encode_positions(self, sequences: torch.Tensor) -> torch.Tensor:
-        # PyTorch's inference fast path propagates NaN from fully masked query
-        # positions through a multi-block encoder. Every left-padded sequence
-        # has such positions. This process-wide switch is the only supported
-        # backend control; setting it here makes training, artifact reload,
-        # evaluation, and serving share the same safe path even if a caller
-        # enabled the optimization after constructing the encoder.
-        torch.backends.mha.set_fastpath_enabled(False)
+        """``(batch, length)`` left-padded dense ids -> ``(batch, length, hidden_dim)``.
+
+        Padded positions come out as exact zeros. No process-wide backend switch
+        is involved: the stack never produces NaN for a padded row, in training or
+        inference, so there is no fast path to keep turned off.
+        """
         length = sequences.shape[1]
+        padding = sequences.eq(0)
         positions = torch.arange(length, device=sequences.device).unsqueeze(0)
         values = self.item_embedding(sequences) + self.position_embedding(positions)
-        causal_mask = torch.triu(
-            torch.ones(length, length, dtype=torch.bool, device=sequences.device), diagonal=1
-        )
-        encoded = self.transformer(
-            values,
-            mask=causal_mask,
-            src_key_padding_mask=sequences.eq(0),
-        )
+        encoded = self.transformer(values, padding)
         normalized: torch.Tensor = self.output_norm(encoded)
-        normalized = normalized.masked_fill(sequences.eq(0).unsqueeze(-1), 0.0)
+        normalized = normalized.masked_fill(padding.unsqueeze(-1), 0.0)
         return normalized
 
     def forward(self, sequences: torch.Tensor) -> torch.Tensor:
