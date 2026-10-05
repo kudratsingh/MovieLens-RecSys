@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "WO-4 done-criterion (2026-10-05 build brief; ADR 0020 and its 2026-10-05 amendment):",
+    "a pilot of cell 0b completes on CPU. Cell 0b is v1's shape -- hidden 64, 2 blocks,",
+    "2 heads, feed-forward 256, dropout 0.2, history 50, 512 examples per optimizer step,",
+    "Adam 1e-3 -- with the sampled softmax at 1,024 uniform negatives (the vectorized",
+    "sampler) and ADR 0020's early stopping: a seeded 1% of training users each give up",
+    "their last training example as the probe; recall@500 on it after every pass; stop",
+    "once it improves by less than 0.5% relative; 3 to 5 passes. The 28-day holdout",
+    "plays no part in stopping. Objective of record strict-prefix-final-position-v1;",
+    "WO-3's outcome may change the objective WO-5 trains on. Seed 42, exact search, CPU.",
+    "This is also the CPU half of the paired device pilot (wo4-cell0b-mps-pilot-6pct.json).",
+    "A pilot checks correctness and direction, never a result (about 108 warm users).",
+    "No warm-recall threshold is predeclared; for direction, WO-1's four reference pilots",
+    "(BCE, 32 negatives, 2 passes) read 0.3625 / 0.3611 / 0.3714 / 0.3936. Predeclared",
+    "checks: the protocol hash below equals the run's before any number is read; cold",
+    "recall@500 equals the WO-1 references' 0.5427033422 exactly (cold users are",
+    "popularity-routed; a difference is a defect); the probe's latest timestamp is below",
+    "the cutoff; the run fits inside twice its projected time."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo4-cell0b-pilot6-ssm-neg1024-cpu",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "cpu"
+    }
+  ],
+  "projection": {
+    "measured": "2026-10-05, 60 optimizer steps of this cell on the O-25 6% partition, steady-state steps 11-60, one thread, load average about 3.9 with two other 6% pilots running",
+    "cpu_seconds_per_step": 0.416,
+    "mps_seconds_per_step": 0.135,
+    "steps_per_pass": 2318,
+    "training_examples": 1186765,
+    "probe_users": 82,
+    "this_run_device": "cpu",
+    "seconds_per_pass": 965,
+    "projected_wall_minutes": [
+      50,
+      85
+    ],
+    "basis": "3 to 5 passes at the measured step time, plus data load and per-pass probe and holdout scoring",
+    "stop_if_wall_minutes_exceed": 170
+  },
+  "result": {
+    "status": "completed; every predeclared check holds",
+    "date_run": "2026-10-05",
+    "run_id": "bd1b04082e5b4c1db354d5df1b3cdcd0",
+    "commit": "88b5d6b (pre-rebase, on bfbd707: pre-WO-2-fix encoder)",
+    "protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+    "protocol_hash_matches_expected": true,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "cold_recall_at_500": 0.5427033422192526,
+    "cold_identical_to_references": true,
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "probe_latest_timestamp": 1464506906,
+      "cutoff": 1466837397,
+      "sealed_boundary": 1469256597
+    },
+    "tracking_store": "local file store <wo4 worktree>/mlruns (MLFLOW_ALLOW_FILE_STORE=true)",
+    "record": "docs/model-planning/experiments/wo4-trainer-upgrades.md",
+    "warm_recall_at_500": 0.4556720321269613,
+    "warm_ndcg_at_500": 0.14816564142448943,
+    "overall_recall_at_500": 0.47876197153920186,
+    "epochs_completed": 5,
+    "stopped_early": false,
+    "probe_recall_by_pass": [
+      0.6097560975609756,
+      0.6463414634146342,
+      0.6829268292682927,
+      0.7560975609756098,
+      0.7073170731707317
+    ],
+    "epoch_train_seconds": [
+      969.5,
+      812.5,
+      688.4,
+      686.5,
+      687.7
+    ],
+    "fit_seconds": 3848.0,
+    "wall": "64.3 min (13:52:29 to 14:56:49 UTC)",
+    "peak_rss_bytes": 2147074048,
+    "catalog_coverage": 0.3685163489189477,
+    "concurrent": "WO-2 pilots s13 and s21 during passes 1-2"
+  }
+}

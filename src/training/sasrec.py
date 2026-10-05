@@ -8,6 +8,7 @@ import logging
 import os
 import resource
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 import mlflow
 import numpy as np
 import pandas as pd
+import torch
 
 from src.config import Settings
 from src.data.split import (
@@ -33,8 +35,10 @@ from src.evaluation.protocol import (
 )
 from src.models.candidates.sasrec import (
     LEGACY_TRAINING_OBJECTIVE,
+    POST_RECORD_FIELDS,
     SASRecConfig,
     SASRecModel,
+    SASRecTrainingReport,
     gbce_beta,
 )
 from src.models.candidates.sasrec_artifact import (
@@ -48,6 +52,12 @@ from src.training.candidate_data import (
     PHASE_2_EXPERIMENT,
     load_inputs,
     subsample_users,
+)
+from src.training.sasrec_training_log import (
+    LOSS_CURVE_ARTIFACT_PATH,
+    LOSS_CURVE_FILENAME,
+    StepMetricsLogger,
+    render_loss_curve,
 )
 from synthetic.cold_start import harness as synth_cold
 
@@ -73,6 +83,10 @@ EVALUATION_INDEX = "torch-exact-inner-product-v1"
 
 class SealedPartitionError(RuntimeError):
     """A run would fit on or score a rating at or after the sealed-test boundary."""
+
+
+class StoppingProbeError(RuntimeError):
+    """The early-stopping probe could reach a row at or after the training cutoff."""
 
 
 def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> str:
@@ -104,11 +118,19 @@ def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> 
     existed. Leaving it out there keeps a restored-loop v1 run carrying the same
     id as run 528b1451 (it is the same experiment), while an all-positions run
     keeps the id PR #183 gave it.
+
+    WO-4's fields follow the same rule (``POST_RECORD_FIELDS``): each is left out
+    while it holds the default that reproduces the earlier trainer, and is part of
+    the id as soon as it does not. That includes ``device``, so a run trained on
+    ``mps`` can never be aggregated with CPU runs under one id by accident.
     """
     parameters = config.as_params()
     parameters.pop("seed")
-    if parameters["training_objective"] == LEGACY_TRAINING_OBJECTIVE:
-        parameters.pop("training_objective")
+    defaults = SASRecConfig().as_params()
+    assert defaults["training_objective"] == LEGACY_TRAINING_OBJECTIVE
+    for name in POST_RECORD_FIELDS:
+        if parameters[name] == defaults[name]:
+            parameters.pop(name)
     parameters["sample_fraction"] = sample_fraction
     if sample_fraction != 1.0:
         parameters["subsample_seed"] = SUBSAMPLE_SEED
@@ -245,6 +267,14 @@ def run_once(
     holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
     user_ids = list(holdout)
     cohort_user_ids = list(cohort.user_ids) if cohort is not None else []
+    if config.early_stopping and partition["latest_fit_timestamp"] >= split.cutoff:
+        # The probe is carved from the frame the model fits on, so this is the
+        # condition under which it could hold a holdout row. It never holds today;
+        # this refuses the run rather than let a stopping decision see the holdout.
+        raise StoppingProbeError(
+            f"the fitted frame reaches timestamp {partition['latest_fit_timestamp']}, at or "
+            f"after the training cutoff {split.cutoff}; the early-stopping probe would too"
+        )
     model = SASRecModel(config=config, cold_start_threshold=COLD_START_THRESHOLD)
     protocol = protocol_manifest.build_protocol(
         split=split,
@@ -274,6 +304,12 @@ def run_once(
                 "n_holdout_rows": len(split.holdout),
                 "k_candidates": K_CANDIDATES,
                 "evaluation_index": EVALUATION_INDEX,
+                # Batch size is examples per optimizer step; the pass size and the
+                # accumulation count say how each step was executed.
+                "examples_per_step": config.batch_size,
+                "microbatch_examples": config.microbatch_examples,
+                "gradient_accumulation_steps": config.gradient_accumulation_steps,
+                "torch_version": torch.__version__,
                 **partition,
             }
         )
@@ -300,9 +336,11 @@ def run_once(
                 result.warm.recall,
             )
 
+        step_log = StepMetricsLogger(run.info.run_id)
         started = time.perf_counter()
-        model.fit(train_frame, on_epoch=on_epoch, retrieval_backend="torch")
+        model.fit(train_frame, on_epoch=on_epoch, retrieval_backend="torch", on_step=step_log)
         fit_seconds = time.perf_counter() - started
+        step_log.flush()
         fit_peak_rss = peak_rss_bytes()
         logger.info(
             "Fit %.1fs objective=%s example store %.3f GiB, peak RSS after fit %.3f GiB",
@@ -349,13 +387,13 @@ def run_once(
             catalog_size=len(model._index_to_item),
         )
         beta = (
-            1.0
-            if config.loss == "bce"
-            else gbce_beta(
+            gbce_beta(
                 negative_count=config.negative_count,
                 catalog_size=len(model._index_to_item),
                 calibration_t=config.calibration_t,
             )
+            if config.loss == "gbce"
+            else 1.0
         )
         mlflow.log_params(
             {
@@ -397,6 +435,19 @@ def run_once(
                 **diagnostics,
             }
         )
+        assert model.training_report is not None
+        log_training_report(
+            model.training_report,
+            cutoff=split.cutoff,
+            latest_fit_timestamp=partition["latest_fit_timestamp"],
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            curve = render_loss_curve(
+                step_log,
+                Path(scratch) / LOSS_CURVE_FILENAME,
+                title=f"{run_name} · {config.loss} · {config.device} · run {run.info.run_id[:8]}",
+            )
+            mlflow.log_artifact(str(curve), artifact_path=LOSS_CURVE_ARTIFACT_PATH)
         mlflow.log_dict(
             per_user_recall_document(
                 result,
@@ -415,6 +466,39 @@ def run_once(
             mlflow.set_tag(
                 synth_cold.ROUTING_TAG, str(synth_cold.routing_is_correct(result)).lower()
             )
+
+
+def log_training_report(
+    report: SASRecTrainingReport, *, cutoff: int, latest_fit_timestamp: int
+) -> None:
+    """Log what the fit did: passes run, why it stopped, and the probe it stopped on.
+
+    The probe's latest timestamp is checked once more here against the cutoff
+    and against the fitted frame it was carved from: a probe row outside the
+    training window would mean the stopping decision saw data it must not.
+    """
+    latest_probe = report.probe_latest_timestamp
+    if latest_probe is not None and (latest_probe >= cutoff or latest_probe > latest_fit_timestamp):
+        raise StoppingProbeError(
+            f"probe row at timestamp {latest_probe} is outside the training window "
+            f"(cutoff {cutoff}, latest fitted {latest_fit_timestamp})"
+        )
+    mlflow.log_params(
+        {
+            "epochs_completed": report.epochs_completed,
+            "optimizer_steps": report.optimizer_steps,
+            "stopped_early": report.stopped_early,
+            "early_stopping_probe_users": report.probe_users,
+            "early_stopping_dropped_targets": report.probe_dropped_targets,
+            "early_stopping_probe_latest_timestamp": (
+                latest_probe if latest_probe is not None else "none"
+            ),
+        }
+    )
+    for epoch, seconds in enumerate(report.epoch_train_seconds, start=1):
+        mlflow.log_metric("epoch_train_seconds", seconds, step=epoch)
+    for epoch, recall in enumerate(report.probe_recalls, start=1):
+        mlflow.log_metric("early_stopping_probe_recall_at_k_candidates", recall, step=epoch)
 
 
 def main() -> None:
