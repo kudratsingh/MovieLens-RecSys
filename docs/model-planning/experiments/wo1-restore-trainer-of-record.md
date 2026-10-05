@@ -89,6 +89,24 @@ reach the full frame's sealed boundary. The 2026-09 pilots ran without this chec
 prints the same four numbers before the control runs. If it fails, nothing runs and this goes back
 to the owner.
 
+**Preflight, 2026-10-05: FAILED. No run started.** The full 25M CSVs were freshly downloaded and
+`dvc status` reports them clean. The full split gives cutoff 1466837397 and boundary 1469256597,
+as expected. The 6% subsample (`SUBSAMPLE_SEED` 42: 9,752 users, 1,517,399 ratings) computes its
+own cutoff of **1471288304**, about 23.5 days *after* the boundary, and so its holdout_end is
+1473707504. As a result:
+
+| Slice of the 6% split | Rows | Rows at or after 1469256597 | Of those, inside WO-8's one-time window `[1469256597, 1471675797)` |
+|---|---:|---:|---:|
+| train (fitted) | 1,213,918 | 4,870 | 4,870 |
+| holdout (scored) | 7,528 | 7,528 (all) | 1,126 |
+
+Every 6% pilot run on this protocol fitted on and scored sealed-window ratings. That includes the
+2026-09-04/05 values 0.3186 / 0.3103 / 0.3258 / 0.2957, which share the subsample and split, and
+the all-positions pilot `f837955c…`. The 0.5% pilot sample's split (cutoff 1466662482,
+holdout_end 1469081682) stays inside the boundary. `SealedPartitionError` refuses the restored-loop
+runs. The control at `89520be^` has no guard and was not started. WO-1's pilots wait for an owner
+decision on the pilot protocol.
+
 **Affirmation.** _To be completed after the runs._
 
 ## Cohorts and slices
