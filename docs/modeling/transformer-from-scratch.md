@@ -134,8 +134,8 @@ already exactly 0.
 q = query(x), k = key(x), v = value(x)        each (B, L, d)        nn.Linear(d, d)
 split:  (B, L, d) -> (B, L, H, d_h) -> (B, H, L, d_h)                view + transpose
 attend: scaled_dot_product(q, k, v, allowed)  (B, H, L, d_h)
-merge:  (B, H, L, d_h) -> (B, L, H, d_h) -> (B, L, d)                transpose + reshape
-out   = output(merged)                        (B, L, d)             nn.Linear(d, d)
+merge:  (B, H, L, d_h) -> (L, B, H, d_h) -> (L, B, d)                permute + reshape
+out   = output(merged), viewed as (B, L, d)   (B, L, d)             nn.Linear(d, d)
 ```
 
 Three learned projections give three views of each position: what it is looking
@@ -144,6 +144,15 @@ for (query), what it offers to be matched on (key), and what it passes along
 match; head `h` owns components `32h` to `32h + 31` of each projected vector
 (rows `32h` to `32h + 31` of each weight matrix). The output projection mixes the
 heads back together.
+
+The heads are merged in `(L, B, d)` memory order and handed back as a `(B, L, d)`
+view. The values are identical either way. What differs is memory order, and
+dropout draws its random mask in memory order. PyTorch's attention returned this
+layout, so the residual dropout that follows lands on the same elements at the
+same seed. Without it the masks were the same random numbers laid on different
+elements: a statistically identical model, but a different training trajectory
+from the same seed. The owner's training-parity check on 2026-10-05 found this
+(`test_same_seed_training_steps_match_the_packaged_encoder`).
 
 ## Step 6 — the feed-forward layer (`FeedForward`)
 
@@ -284,6 +293,11 @@ Two consequences:
   error, which is why done-criterion 3 asks for warm recall to 4 decimals and
   counts the changed lists, while cold must match exactly (cold users go to the
   popularity fallback and never reach the encoder).
+- **Training matches step for step.** From the same weights and the same seed,
+  with dropout on, both encoders consume the random generator identically, draw
+  the same dropout masks, and give the same loss and gradients. On the first three
+  real batches of the 6% pilot the largest gradient difference was 1.1e-8 in
+  float32 and 2.4e-17 in float64.
 - **Retraining v1 now gives an equivalent model, not a bit-identical one.**
   Initialization is identical, but each training step rounds a little differently
   and dropout draws its masks in a different order, so the weights drift apart over
@@ -297,6 +311,7 @@ Two consequences:
 | No packaged Transformer code under `src/` | `test_src_uses_no_packaged_transformer_code` |
 | Same outputs as v1 | `test_eval_outputs_match_the_packaged_encoder`, `test_train_mode_without_dropout_matches_outputs_and_gradients`, `test_learned_weights_match_through_the_packaged_encoder` |
 | Same initialization as v1 | `test_a_fresh_encoder_is_a_fresh_v1_encoder_bit_for_bit` |
+| Same training step as v1 (loss, gradients, dropout masks, generator use) | `test_same_seed_training_steps_match_the_packaged_encoder`, `test_dropout_sites_and_rates_match_the_packaged_encoder`; on real pilot batches `test_training_parity_on_three_real_pilot_batches` (data-gated) |
 | Old archives load and retrieve the same | `test_a_pre_wo2_archive_loads_and_retrieves_what_the_old_encoder_retrieved`; `test_a_pre_wo2_archive_serves_what_the_offline_model_retrieves` in `test_sidecar_sasrec_load.py` |
 | Can learn | `test_memorization_recovers_a_deterministic_next_movie` |
 | Every weight trains | `test_every_weight_receives_a_gradient` |

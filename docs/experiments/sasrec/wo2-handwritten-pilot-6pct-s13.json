@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "WO-2 pilots after the owner's training-parity ruling (2026-10-05). The parity check found",
+    "one difference (the attention output's memory layout, which decided where same-seed dropout",
+    "masks landed), fixed in commit 82bba87. This cell is WO-1's reference cell for the same seed,",
+    "unchanged except the label, run with the hand-written encoder. Ruling step c; run concurrently with the other seeds, at most 3 pilots in flight.",
+    "Decision rule (owner): accept WO-2 if the four-seed mean (42, 7, 13, 21) is not below 0.353565,",
+    "within 5% of WO-1's 0.372174. The run must carry the expected protocol hash before it is read."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "wo1_reference": {
+    "run": "2d9f3cc1",
+    "seed": 13,
+    "warm_recall_at_500": 0.3714076606
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo2-handwritten-pilot6-bce-neg32-s13",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 13,
+      "training_objective": "strict-prefix-final-position-v1"
+    }
+  ],
+  "result": null
+}
