@@ -41,5 +41,50 @@
     "basis": "3 to 5 passes at bd1b0408's measured solo pass time, plus load and scoring",
     "stop_if_wall_minutes_exceed": 130,
     "measured_cell0b_run": "bd1b0408: 688 s per pass once alone (0.297 s per step), 64.3 min wall for 5 passes"
+  },
+  "result": {
+    "status": "completed; every predeclared check holds",
+    "date_run": "2026-10-05",
+    "run_id": "9b0d499430474fde9de6a5305bcda649",
+    "commit": "ce4b314 (main c07b4e0 + WO-4)",
+    "protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+    "protocol_hash_matches_expected": true,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "cold_recall_at_500": 0.5427033422192526,
+    "cold_identical_to_references": true,
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "probe_latest_timestamp": 1464506906,
+      "cutoff": 1466837397,
+      "sealed_boundary": 1469256597
+    },
+    "tracking_store": "local file store <wo4 worktree>/mlruns (MLFLOW_ALLOW_FILE_STORE=true)",
+    "record": "docs/model-planning/experiments/wo4-trainer-upgrades.md",
+    "warm_recall_at_500": 0.4563981550719796,
+    "warm_ndcg_at_500": 0.15124663977701985,
+    "overall_recall_at_500": 0.47929544962125614,
+    "epochs_completed": 5,
+    "stopped_early": false,
+    "probe_recall_by_pass": [
+      0.5853658536585366,
+      0.6463414634146342,
+      0.7073170731707317,
+      0.7439024390243902,
+      0.7195121951219512
+    ],
+    "epoch_train_seconds": [
+      792.0,
+      735.0,
+      687.8,
+      687.6,
+      688.4
+    ],
+    "fit_seconds": 3593.6,
+    "wall": "60.1 min (15:53:18 to 16:53:34 UTC)",
+    "peak_rss_bytes": 2601156608,
+    "catalog_coverage": 0.35999573969538823,
+    "concurrent": "one WO-3 6% pilot during passes 1-2"
   }
 }

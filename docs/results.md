@@ -3596,6 +3596,7 @@ cold users.
 | `7baeb7d0…` (WO-1 s42) | BCE, 32 negatives | 2 | 0.3625487076 | 0.1354006643 | 0.5427033422 | 1,080.8 | 3.04 GB |
 | WO-1 s7 / s13 / s21 | BCE, 32 negatives | 2 | 0.3611 / 0.3714 / 0.3936 | — | 0.5427033422 | 1,080–1,099 | 2.92 GB |
 | **`bd1b04082e5b4c1db354d5df1b3cdcd0`** | **sampled softmax, 1,024 negatives** | **5** | **0.4556720321** | 0.1481656414 | 0.5427033422 | 3,848.0 | 2.15 GB |
+| `9b0d499430474fde9de6a5305bcda649` (same cell, fixed encoder) | sampled softmax, 1,024 negatives | 5 | 0.4563981551 | 0.1512466398 | 0.5427033422 | 3,593.6 | 2.60 GB |
 
 **Encoder version.** This run was cut before WO-2's training-parity fix (the residual-dropout mask
 layout, in the section above), so it trained on the pre-fix hand-written encoder. That is a
@@ -3617,6 +3618,16 @@ cells exist to answer that.
   than 0.5% through pass 4, so all 5 passes ran.
 - The probe's latest target, 1464506906, is before the cutoff.
 - Catalog coverage was 36.85% (6,920 of 18,778 movies), and mean retrieved popularity rank 2,792.5.
+
+**The same cell on the fixed encoder.** `9b0d4994…` reruns the cell at seed 42 after WO-2's
+training-parity fix, as the CPU half of WO-4's device pair:
+- warm recall@500 0.4563981551, +0.16% on `bd1b0408` (20 users higher, 21 lower, 67 identical);
+- what a same-seed change of trajectory does, here;
+- cold recall exact; all 5 passes ran.
+
+The pair's other half trained on the Mac's GPU (`mps`). It is not a result of record: it was
+measured to propose ADR 0020's D6 CPU-versus-GPU tolerance, and its numbers, the speed-up and the
+proposal are in the run record only.
 
 **Speed:**
 - **Fit:** 64.3 min against a projection of 50–85 min.

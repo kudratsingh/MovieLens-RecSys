@@ -48,5 +48,15 @@
     ],
     "basis": "3 to 5 passes at the measured step time, plus data load and per-pass probe and holdout scoring",
     "stop_if_wall_minutes_exceed": 60
+  },
+  "result": {
+    "status": "completed; not a result of record; measured to propose the D6 tolerance",
+    "date_run": "2026-10-05",
+    "run_id": "faeb03a68e514941b8d37d1f74574318",
+    "commit": "ce4b314 (main c07b4e0 + WO-4)",
+    "protocol_hash_matches_expected": true,
+    "cold_identical_to_references": true,
+    "numbers": "in the run record only",
+    "record": "docs/model-planning/experiments/wo4-trainer-upgrades.md"
   }
 }
