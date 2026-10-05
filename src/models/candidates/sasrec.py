@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import os
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -14,8 +17,32 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
+from src.evaluation.metrics import recall_at_k
+from src.evaluation.protocol import K_CANDIDATES
+
 from . import routing
 from .popularity import PopularityModel
+from .sasrec_early_stopping import (
+    DEFAULT_MIN_EPOCHS,
+    DEFAULT_MIN_RELATIVE_IMPROVEMENT,
+    DEFAULT_PROBE_FRACTION,
+    DEFAULT_PROBE_SEED,
+    StoppingProbe,
+    carve_stopping_probe,
+    should_stop,
+)
+from .sasrec_objectives import (
+    BCE_LOSSES,
+    FULL_SOFTMAX_LOSS,
+    LOSSES,
+    SAMPLED_SOFTMAX_LOSS,
+    SOFTMAX_LOSSES,
+    causal_prefixes,
+    forbidden_ids,
+    full_softmax_loss,
+    sample_uniform_negatives,
+    sampled_softmax_loss,
+)
 from .sequence_data import (
     AllPositionTrainingData,
     SequenceExampleStats,
@@ -34,6 +61,30 @@ LEGACY_TRAINING_OBJECTIVE = "strict-prefix-final-position-v1"
 ALL_POSITION_TRAINING_OBJECTIVE = "all-positions-strict-timestamp-v1"
 TRAINING_OBJECTIVES = (LEGACY_TRAINING_OBJECTIVE, ALL_POSITION_TRAINING_OBJECTIVE)
 
+# ``cpu`` is the default and the only bit-reproducible device. ``mps`` (the Mac's
+# GPU) and ``cuda`` come after it under ADR 0020's D6 hardware order; a model
+# trained on either is moved back to the CPU before it scores anything.
+DEVICES = ("cpu", "mps", "cuda")
+
+# Fields added after configuration ids were first minted: WO-1's objective and
+# WO-4's trainer settings. Each default reproduces the trainer as it was before the
+# field existed, and ``src.training.sasrec._configuration_id`` leaves a field out of
+# the id while it holds that default, so no run recorded earlier changes identity.
+POST_RECORD_FIELDS = (
+    "training_objective",
+    "microbatch_size",
+    "device",
+    "early_stopping",
+    "early_stopping_min_epochs",
+    "early_stopping_min_relative_improvement",
+    "early_stopping_probe_fraction",
+    "early_stopping_probe_seed",
+)
+
+# Probe users are encoded and scored this many at a time. Fixed, because float
+# results depend on the batch shape and the stopping decision should not.
+_PROBE_BATCH = 256
+
 
 @dataclass(frozen=True)
 class SASRecConfig:
@@ -44,7 +95,7 @@ class SASRecConfig:
     feedforward_dim: int = 256
     dropout: float = 0.2
     negative_count: int = 64
-    loss: Literal["gbce", "bce"] = "gbce"
+    loss: Literal["gbce", "bce", "sampled-softmax", "full-softmax"] = "gbce"
     calibration_t: float = 0.5
     batch_size: int = 512
     epochs: int = 3
@@ -54,6 +105,20 @@ class SASRecConfig:
     faiss_exact: bool = False
     seed: int = 42
     training_objective: str = LEGACY_TRAINING_OBJECTIVE
+    # WO-4 (ADR 0020). ``batch_size`` is examples per optimizer step — targets per
+    # step under the all-positions objective. A positive ``microbatch_size`` runs
+    # each step as several forward/backward passes of at most that many examples
+    # and accumulates their gradients, for a step memory cannot hold at once; 0
+    # means one pass per step.
+    microbatch_size: int = 0
+    device: str = "cpu"
+    # Early stopping on a probe carved from train (``sasrec_early_stopping``).
+    # Off, ``epochs`` is the number of passes; on, it is the most passes allowed.
+    early_stopping: bool = False
+    early_stopping_min_epochs: int = DEFAULT_MIN_EPOCHS
+    early_stopping_min_relative_improvement: float = DEFAULT_MIN_RELATIVE_IMPROVEMENT
+    early_stopping_probe_fraction: float = DEFAULT_PROBE_FRACTION
+    early_stopping_probe_seed: int = DEFAULT_PROBE_SEED
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SASRecConfig:
@@ -87,10 +152,37 @@ class SASRecConfig:
             faiss_exact=value("FAISS_EXACT", boolean, defaults.faiss_exact),
             seed=value("SEED", int, defaults.seed),
             training_objective=value("TRAINING_OBJECTIVE", str, defaults.training_objective),
+            microbatch_size=value("MICROBATCH_SIZE", int, defaults.microbatch_size),
+            device=value("DEVICE", str, defaults.device),
+            early_stopping=value("EARLY_STOPPING", boolean, defaults.early_stopping),
+            early_stopping_min_epochs=value(
+                "EARLY_STOPPING_MIN_EPOCHS", int, defaults.early_stopping_min_epochs
+            ),
+            early_stopping_min_relative_improvement=value(
+                "EARLY_STOPPING_MIN_RELATIVE_IMPROVEMENT",
+                float,
+                defaults.early_stopping_min_relative_improvement,
+            ),
+            early_stopping_probe_fraction=value(
+                "EARLY_STOPPING_PROBE_FRACTION", float, defaults.early_stopping_probe_fraction
+            ),
+            early_stopping_probe_seed=value(
+                "EARLY_STOPPING_PROBE_SEED", int, defaults.early_stopping_probe_seed
+            ),
         )
 
     def as_params(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def microbatch_examples(self) -> int:
+        """Examples in one forward/backward pass (``batch_size`` when not split)."""
+        return self.microbatch_size or self.batch_size
+
+    @property
+    def gradient_accumulation_steps(self) -> int:
+        """Forward/backward passes accumulated into one optimizer step, at most."""
+        return math.ceil(self.batch_size / self.microbatch_examples)
 
     def validate(self) -> None:
         if self.max_sequence_length <= 0 or self.hidden_dim <= 0:
@@ -108,6 +200,79 @@ class SASRecConfig:
                 f"unsupported training_objective {self.training_objective!r}; "
                 f"expected one of {list(TRAINING_OBJECTIVES)}"
             )
+        if self.loss not in LOSSES:
+            raise ValueError(f"unsupported loss {self.loss!r}; expected one of {list(LOSSES)}")
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if not 0 <= self.microbatch_size <= self.batch_size:
+            raise ValueError("microbatch_size must be 0 (one pass per step) or 1..batch_size")
+        if self.device not in DEVICES:
+            raise ValueError(f"unsupported device {self.device!r}; expected one of {list(DEVICES)}")
+        if self.early_stopping:
+            if not 1 <= self.early_stopping_min_epochs <= self.epochs:
+                raise ValueError("early_stopping_min_epochs must be between 1 and epochs")
+            if not 0.0 < self.early_stopping_probe_fraction < 1.0:
+                raise ValueError("early_stopping_probe_fraction must be in (0, 1)")
+            if self.early_stopping_min_relative_improvement < 0.0:
+                raise ValueError("early_stopping_min_relative_improvement must be non-negative")
+
+
+def resolve_device(name: str) -> torch.device:
+    """The torch device a fit runs on. Refuses a device this machine does not have."""
+    if name not in DEVICES:
+        raise ValueError(f"unsupported device {name!r}; expected one of {list(DEVICES)}")
+    if name == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("device 'mps' requested, but torch.backends.mps.is_available() is False")
+    if name == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("device 'cuda' requested, but torch.cuda.is_available() is False")
+    return torch.device(name)
+
+
+@dataclass(frozen=True)
+class SASRecTrainingStep:
+    """One optimizer step, as reported to ``fit``'s ``on_step`` callback."""
+
+    epoch: int
+    # Optimizer steps taken so far, counted across epochs from 1.
+    step: int
+    # Mean loss over the step's examples (targets, under all-positions).
+    loss: float
+    # Global L2 norm over every parameter's gradient, after backward and before
+    # the update. Nothing clips it; it is measured, not used.
+    grad_norm: float
+    examples: int
+
+
+@dataclass
+class SASRecTrainingReport:
+    """What one ``fit`` did, beyond its weights: the numbers a run record needs."""
+
+    device: str
+    examples_per_step: int
+    microbatch_examples: int
+    gradient_accumulation_steps: int
+    max_epochs: int
+    early_stopping: bool
+    epochs_completed: int = 0
+    optimizer_steps: int = 0
+    stopped_early: bool = False
+    epoch_losses: list[float] = field(default_factory=list)
+    epoch_train_seconds: list[float] = field(default_factory=list)
+    probe_recalls: list[float] = field(default_factory=list)
+    probe_users: int = 0
+    probe_dropped_targets: int = 0
+    probe_latest_timestamp: int | None = None
+
+    @classmethod
+    def for_config(cls, config: SASRecConfig) -> SASRecTrainingReport:
+        return cls(
+            device=config.device,
+            examples_per_step=config.batch_size,
+            microbatch_examples=config.microbatch_examples,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            max_epochs=config.epochs,
+            early_stopping=config.early_stopping,
+        )
 
 
 class SASRecEncoder(nn.Module):
@@ -279,6 +444,93 @@ def _window_batches(
         yield torch.tensor(current, dtype=torch.long)
 
 
+@dataclass(frozen=True)
+class _TrainingLoop:
+    """Everything a training step needs besides the batch, fixed for one ``fit``."""
+
+    optimizer: torch.optim.Optimizer
+    rng: np.random.Generator
+    beta: float
+    n_items: int
+    device: torch.device
+    on_epoch: Callable[[int, float], None] | None
+    on_step: Callable[[SASRecTrainingStep], None] | None
+    probe: StoppingProbe | None
+
+
+def _microbatch_slices(total: int, limit: int) -> list[slice]:
+    """Split ``total`` examples into consecutive passes of at most ``limit`` (0: one pass)."""
+    if limit <= 0 or total <= limit:
+        return [slice(0, total)]
+    return [slice(start, min(total, start + limit)) for start in range(0, total, limit)]
+
+
+def _window_groups(
+    prediction_windows: torch.Tensor, n_windows: int, limit: int
+) -> list[tuple[slice, slice]]:
+    """Group consecutive windows into passes of at most ``limit`` targets.
+
+    ``AllPositionTrainingData.batch`` lists targets window by window, so each
+    group is a slice of windows and the matching slice of targets. A window is
+    never split — its targets share one encoder pass — so one window holding more
+    than ``limit`` targets is a pass of its own.
+    """
+    total = len(prediction_windows)
+    if limit <= 0 or total <= limit:
+        return [(slice(0, n_windows), slice(0, total))]
+    if total and bool((prediction_windows[1:] < prediction_windows[:-1]).any()):
+        raise ValueError("targets must be listed window by window")
+    counts = torch.bincount(prediction_windows, minlength=n_windows).tolist()
+    groups: list[tuple[slice, slice]] = []
+    window_start = 0
+    target_start = 0
+    in_group = 0
+    for window, count in enumerate(counts):
+        if in_group and in_group + int(count) > limit:
+            groups.append(
+                (slice(window_start, window), slice(target_start, target_start + in_group))
+            )
+            window_start = window
+            target_start += in_group
+            in_group = 0
+        in_group += int(count)
+    groups.append((slice(window_start, n_windows), slice(target_start, target_start + in_group)))
+    return groups
+
+
+def _on(tensor: torch.Tensor, part: slice, whole: bool, device: torch.device) -> torch.Tensor:
+    """``tensor[part]`` on ``device``; the tensor itself when the step is one pass."""
+    return (tensor if whole else tensor[part]).to(device)
+
+
+def _backward(loss: torch.Tensor, part: slice, total: int, whole: bool) -> float:
+    """Backpropagate one pass's mean loss, weighted by its share of the step.
+
+    Accumulated over the passes, the gradient is the gradient of the step's mean
+    loss — equal to one big pass up to float summation order, not bit for bit. A
+    one-pass step backpropagates the loss untouched, exactly as v1 did.
+    """
+    if whole:
+        loss.backward()  # type: ignore[no-untyped-call]
+        return float(loss.item())
+    share = float(int(part.stop) - int(part.start)) / total
+    weighted: torch.Tensor = loss * share
+    weighted.backward()  # type: ignore[no-untyped-call]
+    return float(loss.item()) * share
+
+
+def _gradient_norm(module: nn.Module) -> float:
+    """Global L2 norm of every parameter gradient. Reads the gradients, never changes them."""
+    norms = [
+        torch.linalg.vector_norm(parameter.grad.detach())
+        for parameter in module.parameters()
+        if parameter.grad is not None
+    ]
+    if not norms:
+        return 0.0
+    return float(torch.linalg.vector_norm(torch.stack(norms)).item())
+
+
 @dataclass
 class SASRecModel:
     config: SASRecConfig = field(default_factory=SASRecConfig)
@@ -291,6 +543,7 @@ class SASRecModel:
     _training_stats: SequenceExampleStats | None = None
     _training_example_bytes: int = 0
     _training_objective: str = LEGACY_TRAINING_OBJECTIVE
+    _training_report: SASRecTrainingReport | None = None
     _faiss_index: Any = None
     _exact_item_matrix: torch.Tensor | None = None
     _popularity: PopularityModel = field(default_factory=PopularityModel)
@@ -301,11 +554,22 @@ class SASRecModel:
         on_epoch: Callable[[int, float], None] | None = None,
         *,
         retrieval_backend: Literal["faiss", "torch"] = "faiss",
+        on_step: Callable[[SASRecTrainingStep], None] | None = None,
     ) -> SASRecModel:
+        """Train on ``train`` alone.
+
+        ``on_epoch(epoch, mean_loss)`` runs after each pass and ``on_step`` after
+        each optimizer step; both are for logging. Neither can change what is
+        trained or when training stops: with early stopping on, the decision is
+        taken from the probe carved out of ``train`` before ``on_epoch`` runs, and
+        nothing either callback returns is read.
+        """
         self.config.validate()
         if retrieval_backend not in {"faiss", "torch"}:
             raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
+        device = resolve_device(self.config.device)
         self._training_objective = self.config.training_objective
+        self._training_report = SASRecTrainingReport.for_config(self.config)
         self._popularity = PopularityModel().fit(train)
         if train.empty:
             return self
@@ -320,11 +584,27 @@ class SASRecModel:
         self._index_to_item = {index: item for item, index in self._item_to_index.items()}
         self._unknown_index = len(items) + 1
         self._user_history = build_user_history(train, self._item_to_index)
+        # The probe leaves the training examples only. The vocabulary, every
+        # user's history and the popularity fallback still come from all of
+        # ``train``: the model knows every movie, it just never trains on the
+        # probe targets. The probe draws from its own generator, so the
+        # training RNG stream is the same with early stopping on or off.
+        example_frame = train
+        probe: StoppingProbe | None = None
+        if self.config.early_stopping:
+            example_frame, probe = carve_stopping_probe(
+                train,
+                fraction=self.config.early_stopping_probe_fraction,
+                seed=self.config.early_stopping_probe_seed,
+            )
+            self._training_report.probe_users = len(probe)
+            self._training_report.probe_dropped_targets = len(train) - len(example_frame)
+            self._training_report.probe_latest_timestamp = probe.latest_timestamp
         examples: StrictPrefixExamples | None = None
         training_data: AllPositionTrainingData | None = None
         if self._training_objective == LEGACY_TRAINING_OBJECTIVE:
             examples = build_strict_prefix_example_store(
-                train,
+                example_frame,
                 item_to_index=self._item_to_index,
                 max_length=self.config.max_sequence_length,
             )
@@ -332,7 +612,7 @@ class SASRecModel:
             self._training_example_bytes = examples.nbytes
         else:
             training_data = build_all_position_training_data(
-                train,
+                example_frame,
                 item_to_index=self._item_to_index,
                 max_length=self.config.max_sequence_length,
             )
@@ -346,103 +626,197 @@ class SASRecModel:
                     training_data.positives,
                 )
             )
+        # Built on the CPU so initialization draws from the same generator, in the
+        # same order, whatever the device; then moved. On the CPU this is a no-op.
         self._encoder = SASRecEncoder(len(items) + 2, self.config)
+        if device.type != "cpu":
+            self._encoder.to(device)
         optimizer = torch.optim.Adam(self._encoder.parameters(), lr=self.config.learning_rate)
         rng = np.random.default_rng(self.config.seed)
         beta = (
-            1.0
-            if self.config.loss == "bce"
-            else gbce_beta(
+            gbce_beta(
                 negative_count=self.config.negative_count,
                 catalog_size=len(items),
                 calibration_t=self.config.calibration_t,
             )
+            if self.config.loss == "gbce"
+            else 1.0
+        )
+        loop = _TrainingLoop(
+            optimizer=optimizer,
+            rng=rng,
+            beta=beta,
+            n_items=len(items),
+            device=device,
+            on_epoch=on_epoch,
+            on_step=on_step,
+            probe=probe,
         )
         if examples is not None:
-            self._train_strict_prefix(
-                examples, optimizer, rng, beta=beta, n_items=len(items), on_epoch=on_epoch
-            )
+            self._train_strict_prefix(examples, loop)
         else:
             assert training_data is not None
-            self._train_all_positions(
-                training_data, optimizer, rng, beta=beta, n_items=len(items), on_epoch=on_epoch
-            )
+            self._train_all_positions(training_data, loop)
+        if device.type != "cpu":
+            # Everything this model scores from here on — the index, the final
+            # evaluation, the export — is computed on the CPU from the trained
+            # weights, so every published number comes from one machine (D6).
+            self._encoder.to("cpu")
         if retrieval_backend == "faiss":
             self.build_index()
         else:
             self.build_exact_tensor_index()
         return self
 
-    def _train_strict_prefix(
-        self,
-        examples: StrictPrefixExamples,
-        optimizer: torch.optim.Optimizer,
-        rng: np.random.Generator,
-        *,
-        beta: float,
-        n_items: int,
-        on_epoch: Callable[[int, float], None] | None,
-    ) -> None:
+    @property
+    def training_report(self) -> SASRecTrainingReport | None:
+        return self._training_report
+
+    def _train_strict_prefix(self, examples: StrictPrefixExamples, loop: _TrainingLoop) -> None:
         """The trainer of record's loop (``git show 89520be^``), on the P1 data path.
 
-        Statement for statement the loop behind run 528b1451, with one change:
-        ``examples.batch(rows)`` cuts each window from the stored sequences
-        where the original indexed a pre-built ``(n_examples, max_length)``
-        tensor. The permutation, the batches, the sampler's draws, and the
-        per-batch-mean epoch loss are untouched, so a fixed seed on CPU gives
-        the same weights bit for bit. The per-example negative sampler stays
-        as it was for this objective so v1 numbers remain reproducible.
+        For the BCE family it is, statement for statement, the loop behind run
+        528b1451, with one change: ``examples.batch(rows)`` cuts each window from
+        the stored sequences where the original indexed a pre-built
+        ``(n_examples, max_length)`` tensor. The permutation, the batches, the
+        sampler's draws, and the per-batch-mean epoch loss are untouched, so a
+        fixed seed on CPU gives the same weights bit for bit. The per-example
+        negative sampler stays as it was for this family so v1 numbers remain
+        reproducible (pinned by ``tests/unit/test_sasrec_trainer_upgrades.py``).
+
+        WO-4 adds, without changing that path: the softmax losses and their
+        vectorized sampler, gradient accumulation, a device, per-step reporting,
+        and early stopping.
         """
         assert self._encoder is not None
         for epoch in range(self.config.epochs):
             self._encoder.train()
+            started = time.perf_counter()
             permutation = torch.randperm(len(examples))
             epoch_loss = 0.0
             batches = 0
             for start in range(0, len(examples), self.config.batch_size):
                 rows = permutation[start : start + self.config.batch_size]
                 history_batch, positive_batch = examples.batch(rows)
-                negative_batch = sample_negatives(
-                    history_batch,
-                    positive_batch,
-                    n_items=n_items,
-                    count=self.config.negative_count,
-                    rng=rng,
-                )
-                user_vectors = self._encoder.training_user_vectors(history_batch)
-                positive_logits = (
-                    user_vectors * self._encoder.item_vectors(positive_batch, normalize=False)
-                ).sum(dim=1)
-                negative_logits = torch.einsum(
-                    "bd,bkd->bk",
-                    user_vectors,
-                    self._encoder.item_vectors(negative_batch, normalize=False),
-                )
-                loss = sampled_gbce_loss(positive_logits, negative_logits, beta=beta)
-                optimizer.zero_grad()
-                loss.backward()  # type: ignore[no-untyped-call]
-                optimizer.step()
-                with torch.no_grad():
-                    self._encoder.item_embedding.weight[0].zero_()
-                epoch_loss += float(loss.item())
+                step_loss = self._strict_prefix_step(history_batch, positive_batch, loop, epoch + 1)
+                epoch_loss += step_loss
                 batches += 1
-            if on_epoch is not None:
-                on_epoch(epoch + 1, epoch_loss / max(1, batches))
+            mean_loss = epoch_loss / max(1, batches)
+            if self._end_epoch(epoch + 1, mean_loss, time.perf_counter() - started, loop):
+                break
+
+    def _strict_prefix_step(
+        self,
+        histories: torch.Tensor,
+        positives: torch.Tensor,
+        loop: _TrainingLoop,
+        epoch: int,
+    ) -> float:
+        """One optimizer step over one batch of examples; returns its mean loss."""
+        assert self._encoder is not None
+        negatives = self._draw_negatives(histories, positives, loop)
+        chunks = _microbatch_slices(len(positives), self.config.microbatch_size)
+        loop.optimizer.zero_grad()
+        step_loss = 0.0
+        for chunk in chunks:
+            whole = len(chunks) == 1
+            loss = self._strict_prefix_loss(
+                _on(histories, chunk, whole, loop.device),
+                _on(positives, chunk, whole, loop.device),
+                None if negatives is None else _on(negatives, chunk, whole, loop.device),
+                loop,
+            )
+            step_loss += _backward(loss, chunk, len(positives), whole)
+        self._finish_step(loop, epoch, step_loss, len(positives))
+        return step_loss
+
+    def _strict_prefix_loss(
+        self,
+        histories: torch.Tensor,
+        positives: torch.Tensor,
+        negatives: torch.Tensor | None,
+        loop: _TrainingLoop,
+    ) -> torch.Tensor:
+        assert self._encoder is not None
+        user_vectors = self._encoder.training_user_vectors(histories)
+        return self._objective_loss(user_vectors, positives, negatives, lambda: histories, loop)
+
+    def _objective_loss(
+        self,
+        user_vectors: torch.Tensor,
+        positives: torch.Tensor,
+        negatives: torch.Tensor | None,
+        history: Callable[[], torch.Tensor],
+        loop: _TrainingLoop,
+    ) -> torch.Tensor:
+        """The configured loss for ``(rows, d)`` training vectors and their targets.
+
+        ``history`` builds each row's history only when the full softmax needs it
+        as a mask. The BCE family is v1's statements, untouched.
+
+        The sampled softmax computes its logits as one product with the whole
+        item table and then picks the target's and the negatives' columns. That
+        is the same arithmetic as gathering 1,024 item vectors per row, but a
+        dense matrix product and its gradient are far cheaper on a CPU than
+        gathering half a million rows and scattering their gradients back: at
+        cell 0b's shape it costs about 4% over the encoder instead of about 30%.
+        """
+        assert self._encoder is not None
+        if self.config.loss in SOFTMAX_LOSSES:
+            items = self._encoder.item_embedding.weight[1 : loop.n_items + 1]
+            if self.config.loss == FULL_SOFTMAX_LOSS:
+                return full_softmax_loss(user_vectors, items, positives, history())
+            assert negatives is not None
+            logits = user_vectors @ items.T
+            return sampled_softmax_loss(
+                logits.gather(1, (positives - 1).unsqueeze(1)).squeeze(1),
+                logits.gather(1, negatives - 1),
+            )
+        assert negatives is not None
+        positive_logits = (
+            user_vectors * self._encoder.item_vectors(positives, normalize=False)
+        ).sum(dim=1)
+        negative_logits = torch.einsum(
+            "bd,bkd->bk",
+            user_vectors,
+            self._encoder.item_vectors(negatives, normalize=False),
+        )
+        return sampled_gbce_loss(positive_logits, negative_logits, beta=loop.beta)
+
+    def _draw_negatives(
+        self, histories: torch.Tensor, positives: torch.Tensor, loop: _TrainingLoop
+    ) -> torch.Tensor | None:
+        """The step's negatives, drawn once before any microbatch so the stream
+        of draws does not depend on how the step is split."""
+        if self.config.loss in BCE_LOSSES:
+            # v1's per-example sampler, kept for the BCE family alone so every v1
+            # number stays reproducible bit for bit.
+            return sample_negatives(
+                histories,
+                positives,
+                n_items=loop.n_items,
+                count=self.config.negative_count,
+                rng=loop.rng,
+            )
+        if self.config.loss == SAMPLED_SOFTMAX_LOSS:
+            return torch.from_numpy(
+                sample_uniform_negatives(
+                    forbidden_ids(histories, positives),
+                    n_items=loop.n_items,
+                    count=self.config.negative_count,
+                    rng=loop.rng,
+                )
+            )
+        return None
 
     def _train_all_positions(
-        self,
-        training_data: AllPositionTrainingData,
-        optimizer: torch.optim.Optimizer,
-        rng: np.random.Generator,
-        *,
-        beta: float,
-        n_items: int,
-        on_epoch: Callable[[int, float], None] | None,
+        self, training_data: AllPositionTrainingData, loop: _TrainingLoop
     ) -> None:
         """One causal pass per bounded window, every eligible target supervised (PR #183)."""
         assert self._encoder is not None
         for epoch in range(self.config.epochs):
             self._encoder.train()
+            started = time.perf_counter()
             permutation = torch.randperm(len(training_data.sequences))
             epoch_loss = 0.0
             predictions_seen = 0
@@ -451,39 +825,192 @@ class SASRecModel:
                 permutation,
                 max_predictions=self.config.batch_size,
             ):
-                sequences, prediction_windows, prediction_positions, positive_batch = (
-                    training_data.batch(rows)
+                step_loss, batch_predictions = self._all_positions_step(
+                    training_data, rows, loop, epoch + 1
                 )
-                negative_batch = sample_position_negatives(
-                    sequences,
-                    prediction_windows,
-                    prediction_positions,
-                    positive_batch,
-                    n_items=n_items,
-                    count=self.config.negative_count,
-                    rng=rng,
-                )
-                encoded_positions = self._encoder.encode_positions(sequences.long())
-                user_vectors = encoded_positions[prediction_windows, prediction_positions]
-                positive_logits = (
-                    user_vectors * self._encoder.item_vectors(positive_batch, normalize=False)
-                ).sum(dim=1)
-                negative_logits = torch.einsum(
-                    "bd,bkd->bk",
-                    user_vectors,
-                    self._encoder.item_vectors(negative_batch, normalize=False),
-                )
-                loss = sampled_gbce_loss(positive_logits, negative_logits, beta=beta)
-                optimizer.zero_grad()
-                loss.backward()  # type: ignore[no-untyped-call]
-                optimizer.step()
-                with torch.no_grad():
-                    self._encoder.item_embedding.weight[0].zero_()
-                batch_predictions = len(positive_batch)
-                epoch_loss += float(loss.item()) * batch_predictions
+                epoch_loss += step_loss * batch_predictions
                 predictions_seen += batch_predictions
-            if on_epoch is not None:
-                on_epoch(epoch + 1, epoch_loss / max(1, predictions_seen))
+            mean_loss = epoch_loss / max(1, predictions_seen)
+            if self._end_epoch(epoch + 1, mean_loss, time.perf_counter() - started, loop):
+                break
+
+    def _all_positions_step(
+        self,
+        training_data: AllPositionTrainingData,
+        rows: torch.Tensor,
+        loop: _TrainingLoop,
+        epoch: int,
+    ) -> tuple[float, int]:
+        """One optimizer step over a batch of windows; returns (mean loss, targets)."""
+        assert self._encoder is not None
+        sequences, prediction_windows, prediction_positions, positive_batch = training_data.batch(
+            rows
+        )
+        negatives: torch.Tensor | None = None
+        if self.config.loss in BCE_LOSSES:
+            negatives = sample_position_negatives(
+                sequences,
+                prediction_windows,
+                prediction_positions,
+                positive_batch,
+                n_items=loop.n_items,
+                count=self.config.negative_count,
+                rng=loop.rng,
+            )
+        elif self.config.loss == SAMPLED_SOFTMAX_LOSS:
+            prefixes = causal_prefixes(sequences.long(), prediction_windows, prediction_positions)
+            negatives = torch.from_numpy(
+                sample_uniform_negatives(
+                    forbidden_ids(prefixes, positive_batch),
+                    n_items=loop.n_items,
+                    count=self.config.negative_count,
+                    rng=loop.rng,
+                )
+            )
+        groups = _window_groups(prediction_windows, len(rows), self.config.microbatch_size)
+        total = len(positive_batch)
+        loop.optimizer.zero_grad()
+        step_loss = 0.0
+        for windows, targets in groups:
+            whole = len(groups) == 1
+            local_windows = prediction_windows if whole else prediction_windows[targets]
+            loss = self._all_positions_loss(
+                _on(sequences, windows, whole, loop.device).long(),
+                (local_windows - (0 if whole else windows.start)).to(loop.device),
+                _on(prediction_positions, targets, whole, loop.device),
+                _on(positive_batch, targets, whole, loop.device),
+                None if negatives is None else _on(negatives, targets, whole, loop.device),
+                loop,
+            )
+            step_loss += _backward(loss, targets, total, whole)
+        self._finish_step(loop, epoch, step_loss, total)
+        return step_loss, total
+
+    def _all_positions_loss(
+        self,
+        sequences: torch.Tensor,
+        prediction_windows: torch.Tensor,
+        prediction_positions: torch.Tensor,
+        positives: torch.Tensor,
+        negatives: torch.Tensor | None,
+        loop: _TrainingLoop,
+    ) -> torch.Tensor:
+        assert self._encoder is not None
+        encoded_positions = self._encoder.encode_positions(sequences)
+        user_vectors = encoded_positions[prediction_windows, prediction_positions]
+        return self._objective_loss(
+            user_vectors,
+            positives,
+            negatives,
+            lambda: causal_prefixes(sequences, prediction_windows, prediction_positions),
+            loop,
+        )
+
+    def _finish_step(
+        self, loop: _TrainingLoop, epoch: int, step_loss: float, examples: int
+    ) -> None:
+        """Measure the gradient, update, re-zero the padding row, and report."""
+        assert self._encoder is not None and self._training_report is not None
+        grad_norm = _gradient_norm(self._encoder)
+        loop.optimizer.step()
+        with torch.no_grad():
+            self._encoder.item_embedding.weight[0].zero_()
+        self._training_report.optimizer_steps += 1
+        if loop.on_step is not None:
+            loop.on_step(
+                SASRecTrainingStep(
+                    epoch=epoch,
+                    step=self._training_report.optimizer_steps,
+                    loss=step_loss,
+                    grad_norm=grad_norm,
+                    examples=examples,
+                )
+            )
+
+    def _end_epoch(self, epoch: int, mean_loss: float, seconds: float, loop: _TrainingLoop) -> bool:
+        """Record the pass, decide whether to stop, then hand the pass to ``on_epoch``.
+
+        The decision comes first and from the probe alone. ``on_epoch`` — which in
+        ``run_once`` scores the 28-day holdout for the log — runs after it, and
+        whatever it returns is ignored, so the holdout has no way into the decision.
+        """
+        report = self._training_report
+        assert report is not None
+        report.epochs_completed = epoch
+        report.epoch_losses.append(mean_loss)
+        report.epoch_train_seconds.append(seconds)
+        stop = False
+        with self._scoring_on_cpu(loop.device):
+            if loop.probe is not None:
+                report.probe_recalls.append(self._probe_recall(loop.probe))
+                stop = should_stop(
+                    report.probe_recalls,
+                    min_epochs=self.config.early_stopping_min_epochs,
+                    min_relative_improvement=self.config.early_stopping_min_relative_improvement,
+                )
+            if loop.on_epoch is not None:
+                loop.on_epoch(epoch, mean_loss)
+        report.stopped_early = stop and epoch < self.config.epochs
+        return stop
+
+    @contextmanager
+    def _scoring_on_cpu(self, device: torch.device) -> Iterator[None]:
+        """Score a CPU copy of the encoder while training continues on ``device``.
+
+        The live encoder stays where its optimizer state is; the copy draws no
+        random numbers and is dropped afterwards. On the CPU there is nothing to
+        copy, and the live encoder is scored in place exactly as before WO-4.
+        """
+        if device.type == "cpu":
+            yield
+            return
+        live = self._encoder
+        assert live is not None
+        self._encoder = copy.deepcopy(live).to("cpu")
+        try:
+            yield
+        finally:
+            self._encoder = live
+
+    def _probe_recall(self, probe: StoppingProbe) -> float:
+        """Recall@500 on the probe: does each probe user's held-out movie make the top 500?
+
+        Scored as retrieval scores every warm user — the normalized encoding of
+        the latest ``max_sequence_length`` movies against normalized item vectors,
+        exact search, the user's whole history excluded — and averaged through
+        ``src.evaluation.metrics.recall_at_k``. The inputs are the probe's
+        histories and targets, all taken from the training frame.
+        """
+        assert self._encoder is not None
+        self._encoder.eval()
+        n_items = len(self._index_to_item)
+        length = self.config.max_sequence_length
+        recalls: list[float] = []
+        with torch.no_grad():
+            item_matrix = self._encoder.item_vectors(torch.arange(1, n_items + 1))
+            for start in range(0, len(probe), _PROBE_BATCH):
+                stop = min(len(probe), start + _PROBE_BATCH)
+                histories = [
+                    [self._item_to_index[movie] for movie in probe.histories[index]]
+                    for index in range(start, stop)
+                ]
+                batch = torch.zeros((len(histories), length), dtype=torch.long)
+                for row, history in enumerate(histories):
+                    window = history[-length:]
+                    batch[row, length - len(window) :] = torch.tensor(window)
+                queries = F.normalize(self._encoder.encode_positions(batch)[:, -1, :], p=2, dim=-1)
+                scores = queries @ item_matrix.T
+                for row, history in enumerate(histories):
+                    scores[row, torch.tensor(history) - 1] = float("-inf")
+                top_scores, top = torch.topk(scores, k=min(K_CANDIDATES, n_items), dim=1)
+                for row, index in enumerate(range(start, stop)):
+                    retrieved = [
+                        self._index_to_item[int(dense) + 1]
+                        for dense, score in zip(top[row].tolist(), top_scores[row].tolist())
+                        if score != float("-inf")
+                    ]
+                    recalls.append(recall_at_k({probe.targets[index]}, retrieved, K_CANDIDATES))
+        return float(np.mean(recalls)) if recalls else 0.0
 
     def build_index(self) -> None:
         if self._encoder is None:

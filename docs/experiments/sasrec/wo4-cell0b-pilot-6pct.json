@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "WO-4 done-criterion (2026-10-05 build brief; ADR 0020 and its 2026-10-05 amendment):",
+    "a pilot of cell 0b completes on CPU. Cell 0b is v1's shape -- hidden 64, 2 blocks,",
+    "2 heads, feed-forward 256, dropout 0.2, history 50, 512 examples per optimizer step,",
+    "Adam 1e-3 -- with the sampled softmax at 1,024 uniform negatives (the vectorized",
+    "sampler) and ADR 0020's early stopping: a seeded 1% of training users each give up",
+    "their last training example as the probe; recall@500 on it after every pass; stop",
+    "once it improves by less than 0.5% relative; 3 to 5 passes. The 28-day holdout",
+    "plays no part in stopping. Objective of record strict-prefix-final-position-v1;",
+    "WO-3's outcome may change the objective WO-5 trains on. Seed 42, exact search, CPU.",
+    "This is also the CPU half of the paired device pilot (wo4-cell0b-mps-pilot-6pct.json).",
+    "A pilot checks correctness and direction, never a result (about 108 warm users).",
+    "No warm-recall threshold is predeclared; for direction, WO-1's four reference pilots",
+    "(BCE, 32 negatives, 2 passes) read 0.3625 / 0.3611 / 0.3714 / 0.3936. Predeclared",
+    "checks: the protocol hash below equals the run's before any number is read; cold",
+    "recall@500 equals the WO-1 references' 0.5427033422 exactly (cold users are",
+    "popularity-routed; a difference is a defect); the probe's latest timestamp is below",
+    "the cutoff; the run fits inside twice its projected time."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo4-cell0b-pilot6-ssm-neg1024-cpu",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "cpu"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "WO-4 paired device pilot, approved explicitly by the owner (2026-10-05): cell 0b",
+    "exactly as wo4-cell0b-pilot-6pct.json, seed 42, trained on the Mac's GPU (mps).",
+    "NOT A RESULT OF RECORD; MEASURED TO PROPOSE THE D6 TOLERANCE. ADR 0020's 2026-10-05",
+    "amendment requires the accepted CPU-vs-GPU difference in warm recall@500 to be stated",
+    "before any non-CPU run counts; no tolerance is stated yet, so this run is the",
+    "measurement that proposes one. Its recall is not cited anywhere but its run record.",
+    "Training runs on mps; the trained weights are moved to the CPU before anything is",
+    "scored, so every number it reports -- the probe, the per-pass holdout diagnostic and",
+    "the final evaluation -- is computed on the CPU. Same seed: the negatives come from the",
+    "same NumPy stream, but dropout draws from the mps generator, which on the CPU run",
+    "shares the CPU generator with the shuffle, so from pass 2 the two runs see examples",
+    "in different orders. Recorded: the speed-up per pass (CPU epoch_train_seconds over",
+    "mps) and over the whole fit, and the difference in warm recall@500 against the CPU",
+    "pilot. Predeclared checks as for the CPU pilot (protocol hash, exact cold recall,",
+    "probe below the cutoff)."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "result_status": "not a result of record; measured to propose the D6 tolerance",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo4-cell0b-pilot6-ssm-neg1024-mps",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "mps"
+    }
+  ]
+}
