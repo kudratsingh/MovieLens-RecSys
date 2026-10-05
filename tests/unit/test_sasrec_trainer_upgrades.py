@@ -701,7 +701,11 @@ def test_wo4_cell_0b_pilots_hold_the_v1_shape_and_change_only_the_loss_and_stopp
     )
     v1 = v1_cells[0][1]
     pilots = {}
-    for name in ("wo4-cell0b-pilot-6pct.json", "wo4-cell0b-mps-pilot-6pct.json"):
+    for name in (
+        "wo4-cell0b-pilot-6pct.json",
+        "wo4-cell0b-pair-cpu-6pct.json",
+        "wo4-cell0b-mps-pilot-6pct.json",
+    ):
         spec = json.loads((Path("docs/experiments/sasrec") / name).read_text())
         fraction, cells = parse_grid(spec)
         assert fraction == v1_fraction == 0.06
@@ -717,6 +721,8 @@ def test_wo4_cell_0b_pilots_hold_the_v1_shape_and_change_only_the_loss_and_stopp
     assert cpu.loss == "sampled-softmax" and cpu.negative_count == 1024
     assert cpu.early_stopping and cpu.epochs == 5 and cpu.early_stopping_min_epochs == 3
     assert cpu.device == "cpu" and mps.device == "mps"
+    # The pair's CPU half is cell 0b exactly; the mps half differs in the device alone.
+    assert pilots["wo4-cell0b-pair-cpu-6pct.json"] == cpu
     assert dataclasses.replace(mps, device="cpu") == cpu
     assert dataclasses.replace(
         cpu, loss="bce", negative_count=32, epochs=2, early_stopping=False
