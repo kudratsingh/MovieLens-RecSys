@@ -1,7 +1,11 @@
 # Experiment: SASRec v1 / hand-written Transformer encoder / wo2-v1
 
-**Status:** measured. Done-criterion 3 passed. Done-criterion 5 came out **outside the range**, and
-that result is with the owner.
+**Status:** measured and accepted.
+- Done-criterion 3 passed.
+- The first seed-42 pilot missed the range.
+- The owner-ordered training-parity checks found one difference (the dropout-mask layout), which
+  was fixed.
+- After the fix all four seeds reproduce WO-1's pilots exactly, so the owner's rule accepts WO-2.
 
 **Governing ADR:** [ADR 0020](../../adr/0020-sasrec-v2.md), with its 2026-10-05 amendment (rule
 D7 and the equivalent-not-bit-identical note), and
@@ -11,6 +15,8 @@ D7 and the equivalent-not-bit-identical note), and
 - Next-Phase Build Brief 2026-10-05, WO-2.
 - Item 3 (inference check) runs approved 2026-10-05.
 - Item 5 (pilot) approved 2026-10-05, after WO-1 (PR #194) and O-25.
+- Owner ruling 2026-10-05 after the miss: training-parity checks, a fix if they find a difference,
+  seeds 7/13/21, and acceptance if the four-seed mean is not below 0.353565.
 
 **Specification version:** wo2-v1 (2026-10-05). The cells are
 [`wo2-converter-recheck.json`](../../experiments/sasrec/wo2-converter-recheck.json) and
@@ -98,15 +104,21 @@ the sealed boundary above.
 | Cell | Changed fields | Seed | Rule |
 |---|---|---|---|
 | converter recheck | encoder, plus the layout conversion on load | 42 (the artifact's) | warm equal to 4 dp and cold exact, else stop |
-| `wo2-handwritten-pilot6-bce-neg32` | encoder | 42 | inside [0.3611, 0.3936], else report to the owner |
+| `wo2-handwritten-pilot6-bce-neg32` (before the fix) | encoder | 42 | inside [0.3611, 0.3936], else report to the owner |
+| `…-rerun-s42`, `…-s7`, `…-s13`, `…-s21` (after the fix) | encoder | 42, 7, 13, 21 | four-seed mean not below 0.353565 (within 5% of 0.372174), else stop |
 
 ## Compute and storage budget
 
-- **Hardware:** the laptop CPU, `caffeinate -i`, one job at a time. `pgrep -fl src.training` was
-  empty before each run.
+- **Hardware:** the laptop CPU (8 cores), `caffeinate -i`, `OMP_NUM_THREADS=1`. Item 3 and the
+  first pilot ran with no other `src.training` process. The post-fix pilots ran under the owner's
+  concurrency rule: at most three 6% pilots in flight, counting another worker's gBCE pilot, with
+  at least two cores free.
 - **Item 3:** about 1 min per run. Three attempts; the reasons are under Deviations.
 - **Item 5:** projected about 20 min (WO-1's 18 min 21 s plus the measured encoder slowdown);
-  actual 22 min 03 s. Spend: none.
+  actual 22 min 03 s.
+- **Post-fix pilots:** wall time 34 min 44 s, 34 min 45 s, 31 min 28 s and 29 min 22 s, under
+  contention. That is within twice a contended projection, though above the 22 min solo figure.
+  The training-parity checks took about 30 min of test time. Spend: none.
 
 ## Pre-run correctness checklist
 
@@ -121,6 +133,90 @@ the sealed boundary above.
 - [x] The feature source is point-in-time per row.
 - [x] Output paths and MLflow stores are known (see Deviations).
 - [x] No other training process was running.
+
+## Training-parity checks (owner ruling, 2026-10-05)
+
+The first seed-42 pilot missed the range, and the equivalence evidence covered inference only. The
+owner therefore ordered three checks of training itself before more pilots. They are tests, not
+training runs.
+- **Code:** `tests/unit/test_sasrec_transformer.py`.
+- **Real-batch report:** `artifacts/wo2-pilot/training-parity.json` in the main checkout.
+- **How they ran:** both encoders go through `SASRecModel._train_strict_prefix`'s own step: WO-1's
+  strict-prefix store, the per-example sampler, BCE. They start from the same weights (the packaged
+  encoder's, converted) and the same generator state.
+
+**1. Initialization: identical. No change.**
+- **Construction order.** Both encoders draw from the generator in this order, which is v1's:
+  1. `item_embedding` normal(0, 1);
+  2. `position_embedding` normal(0, 1);
+  3. block 0's attention output projection (Kaiming-uniform weight, uniform bias, the bias then
+     zeroed);
+  4. one Xavier-uniform `(3d, d)` matrix, sliced into query, key and value (biases zeroed);
+  5. the `expand` layer (Kaiming-uniform, uniform bias), then the `contract` layer;
+  6. layer norms set to ones and zeros (no draws);
+  7. blocks 1..N−1 as deep copies (no draws);
+  8. `item_embedding` redrawn as normal(0, 1/√d), row 0 zeroed.
+- **Seed 42 at the pilot's shape** (18,780 item rows):
+  - every tensor is bit-identical, so shape, mean, standard deviation, minimum and maximum are
+    identical;
+  - the generator state after construction is identical, so the same number of draws was consumed.
+  - Example values: `item_embedding` mean −5.8e-5, sd 0.1249, range [−0.608, 0.583]. Block 0's
+    query weight sd 0.0887, range ±0.1531 against the Xavier bound √(6/256) = 0.1531.
+  - The per-tensor table is in the JSON report.
+- **Tests:** `test_a_fresh_encoder_is_a_fresh_v1_encoder_bit_for_bit` (now also asserting the
+  generator state) and `test_training_parity_on_three_real_pilot_batches`.
+
+**2. Gradients: within tolerance.** The first three batches of the seed-42 pilot (512 examples
+each), drawn from the O-25 6% partition exactly as `fit` draws them, compared at the same starting
+weights:
+
+| Dropout | Dtype | Max loss difference | Max gradient difference (all tensors) | Largest gradient |
+|---|---|---:|---:|---:|
+| 0 | float32 | 6.0e-8 | 1.1e-8 | 2.0e-2 |
+| 0 | float64 | 1.1e-16 | 2.4e-17 | 2.0e-2 |
+| 0.2 (same seed) | float32 | 0 | 6.5e-9 | 1.9e-2 |
+| 0.2 (same seed) | float64 | 1.1e-16 | 1.7e-17 | 1.9e-2 |
+
+Both are within the required 1e-5. After three Adam steps on those batches, the losses agree
+exactly in float32. The weights agree to 7.8e-6 to 8.4e-6 in float32 and about 2e-14 in float64.
+Adam's early steps move each weight by roughly the learning rate whatever the gradient's size, so
+rounding on a near-zero gradient shows up at that scale.
+- **Tests:** `test_same_seed_training_steps_match_the_packaged_encoder` (permanent, synthetic data,
+  both dtypes, both dropout settings) and the data-gated real-batch test.
+
+**3. Dropout: same sites and rates, one difference found and fixed.**
+
+| Site | `nn.TransformerEncoderLayer` (v1) | Hand-written | Rate |
+|---|---|---|---|
+| Attention weights, after softmax | `self_attn.dropout` (inside scaled-dot-product attention) | `attention.weight_dropout` | 0.2 |
+| Attention output, before the residual add | `dropout1` | `attention_dropout` | 0.2 |
+| Feed-forward, after GELU | `dropout` | `feed_forward.dropout` | 0.2 |
+| Feed-forward output, before the residual add | `dropout2` | `feed_forward_dropout` | 0.2 |
+| Embeddings, final norm, anywhere else | none | none | — |
+
+**Generator consumption.** Both implementations consume the generator in the same order:
+1. construction (above);
+2. per epoch, `randperm` over the examples;
+3. per forward pass and per block, four Bernoulli masks: attention weights `(B, H, L, L)`,
+   attention output `(B, L, d)`, inner feed-forward `(B, L, F)`, feed-forward output `(B, L, d)`.
+
+The sampler's negatives come from a separate NumPy generator, untouched by the encoder.
+
+**The difference.** The count and order of draws were already the same, but one mask landed on
+different elements.
+- PyTorch's batch-first attention returns a `(B, L, d)` view of an `(L, B, d)` buffer, and dropout
+  fills its mask in memory order. So `dropout1`'s random numbers fell on `(L, B, d)`-ordered
+  elements in v1 and on `(B, L, d)`-ordered elements in the hand-written encoder.
+- The two models are statistically the same, but they follow different training trajectories from
+  the same seed. That divergence starts at step 1 and fully explains why the first pilot's epoch-1
+  loss differed from WO-1's s42 in the fifth digit.
+- **Fix** (commit `82bba87`): merge the heads position-major and return the same view. Same-seed
+  train-mode outputs now agree to 7e-7.
+- **Proof the test catches it:** before the fix the dropout-0.2 parity tests fail. They now pass,
+  and `test_dropout_sites_and_rates_match_the_packaged_encoder` pins the table above.
+
+**Consequence.** Under the owner's rule (b), the pre-fix seed-42 pilot `38442d1a…` is superseded by
+a re-run. With identical masks, a same-seed run now differs from WO-1's only by float rounding.
 
 ## Commands
 
@@ -146,6 +242,20 @@ cd $WT && caffeinate -i env OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE MLFLOW_A
   /usr/bin/time -l $PY -m src.training.sasrec_sweep docs/experiments/sasrec/wo2-handwritten-pilot-6pct.json
 ```
 
+Post-fix pilots (owner ruling step c): one process per cell, each with the item-5 environment
+above, started by a queue that never let `src.training` processes in flight exceed three. The
+queue script is `wo2-pilot-queue.sh`, kept in the session scratchpad; its log is
+`artifacts/wo2-pilot/logs/queue.log`.
+
+```bash
+for name in rerun-s42 s7 s13 s21; do
+  while [ "$(ps -axo command | grep -cE '^/opt/homebrew/\S+/Python -m src\.training\.')" -ge 3 ]; do sleep 30; done
+  ( caffeinate -i env $ITEM5_ENV /usr/bin/time -l $PY -m src.training.sasrec_sweep \
+      docs/experiments/sasrec/wo2-handwritten-pilot-6pct-$name.json > $LOGS/wo2-pilot-$name.log 2>&1 ) &
+  sleep 45
+done; wait
+```
+
 ## Deviations
 
 - **MLflow stores.** The shared server at `localhost:5001` uses `--default-artifact-root
@@ -162,14 +272,17 @@ cd $WT && caffeinate -i env OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE MLFLOW_A
 
 ## Verdict
 
-**Validity:** valid (both runs).
+**Validity:** valid. All six runs are valid: item 3's record and its metrics-only twin, the pre-fix
+pilot, and the four post-fix pilots.
 
-**Partition affirmation:** intact. Item 3's latest fit timestamp is 1466837396 and its latest
-scored is 1469256332; item 5's are 1466819964 and 1469247943. All are below 1469256597.
+**Partition affirmation:** intact.
+- Item 3: latest fit 1466837396, latest scored 1469256332.
+- Every pilot: latest fit 1466819964, latest scored 1469247943.
+- All are below 1469256597.
 
-**Decision:**
-- **Item 3: advance (passed).**
-- **Item 5: report to the owner (criterion not met).**
+**Decision:** accept WO-2 (owner rule d).
+- The parity checks pass after the fix.
+- The four-seed mean is 0.3721736, equal to WO-1's 0.372174 and above the 0.353565 floor.
 
 **Rule application:**
 - **Item 3.**
@@ -178,25 +291,34 @@ scored is 1469256332; item 5's are 1466819964 and 1469247943. All are below 1469
   - Cold is 0.5262729520330651, exact.
   - Against the packaged encoder on the same weights, 36 of 1,931 warm top-500 lists changed, all
     in order only.
-- **Item 5.**
-  - Warm recall@500 is **0.3427768663** against the range [0.3611061547, 0.3936318283]: 0.0183
-    below the floor, −5.45% against WO-1 s42, and z = −1.96 against the reference mean.
-  - Cold is 0.5427033422, identical to the references.
-  - Epoch losses are within 0.09% of WO-1 s42.
-  - Per-epoch warm recall crossed over: 0.3313 vs 0.3225 after epoch 1, 0.3428 vs 0.3625 after
-    epoch 2.
-  - Per user against WO-1 s42: 72 warm users identical, 11 higher, 25 lower.
-  - Fit took 1,315.3 s against 1,080.8 s (+21.7%). Peak RSS was 3.08 GB against 3.04 GB.
+- **Pre-fix pilot `38442d1a…`.**
+  - Warm recall@500 0.3427768663, outside [0.3611, 0.3936] and −5.45% against WO-1 s42.
+  - Superseded: the training-parity check traced the gap to the dropout-mask layout.
+- **Post-fix pilots.** Warm recall@500 against WO-1's same-seed run:
+
+  | Seed | WO-2 | WO-1 |
+  |---:|---:|---:|
+  | 42 | 0.3625487076 | 0.3625487076 |
+  | 7 | 0.3611061547 | 0.3611061547 |
+  | 13 | 0.3714076606 | 0.3714076606 |
+  | 21 | 0.3936318283 | 0.3936318283 |
+
+  - All 108 warm users' recall is identical on every seed, and cold is identical.
+  - Epoch losses agree to about 1e-9. Weight digests differ, from float32 rounding.
+  - Mean 0.3721736 and sample standard deviation 0.0150130, both equal to WO-1's.
+- **Cost.**
+  - Solo fit (pre-fix run, the same arithmetic): 1,315.3 s against WO-1's 1,080.8 s, +21.7%.
+  - The post-fix runs were concurrent: up to three pilots, plus another worker's gBCE pilot and an
+    ingest. Fit 2,072.4 / 2,071.3 / 1,874.2 / 1,750.9 s, `ru_maxrss` 2.34 / 1.88 / 1.82 / 1.86 GB.
+    These describe the shared machine, not the encoder.
 
 **Runs:**
-- Item 3: `a2c3f5ac09064114b24d70897d68526c` (the record) and `7c1d3377de164914bb5758a6c7fb9527`
+- Item 3: `a2c3f5ac09064114b24d70897d68526c` (record) and `7c1d3377de164914bb5758a6c7fb9527`
   (metrics only).
-- Item 5: `38442d1a08dd42f3868c1f6147a56fd8`.
+- Pre-fix pilot: `38442d1a08dd42f3868c1f6147a56fd8` (superseded).
+- Post-fix pilots: `d0b596f7171a4623b22b6b9e774ade3f` (s42), `2d800544a27b4a67bc6f844a91ad0efc`
+  (s7), `76a1cd9e13d541958e564bcaea49c414` (s13) and `29ad5b791ebe48bdbf6e23de51966bfa` (s21).
 
-**What is not authorized next:** retuning, re-running, or running further seeds with the
-hand-written encoder. The owner chooses between, for example:
-- paired seeds 7, 13 and 21 with the new encoder, to compare four against four;
-- accepting the encoder on the equivalence and reproduction evidence; or
-- investigating further before WO-3.
-
-WO-3 should not start on the hand-written encoder until that decision is made.
+**What is not authorized next:** this accepts the encoder for WO-3 onward. It is not a quality
+claim: these are 108-user pilots that check correctness and direction. No full-data run, gate,
+threshold or champion changes.

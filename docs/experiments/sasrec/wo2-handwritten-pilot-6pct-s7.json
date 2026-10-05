@@ -25,5 +25,53 @@
       "training_objective": "strict-prefix-final-position-v1"
     }
   ],
-  "result": null
+  "result": {
+    "status": "identical-to-wo1-same-seed",
+    "date_run": "2026-10-05",
+    "run_id": "2d800544a27b4a67bc6f844a91ad0efc",
+    "tracking_store": "local file store <wo2 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.3611061546526366,
+    "warm_ndcg_at_500": 0.13073127778389176,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.4092850003335757,
+    "train_loss_by_epoch": [
+      0.09692250954894066,
+      0.07108395647879251
+    ],
+    "epoch_warm_recall": [
+      0.27360369162707193,
+      0.3611061546526366
+    ],
+    "vs_wo1_same_seed": {
+      "wo1_warm_recall_at_500": 0.3611061546526366,
+      "difference": 0.0,
+      "wo1_train_loss_by_epoch": [
+        0.09692250948468381,
+        0.07108395620088168
+      ],
+      "per_user_warm_identical": 108,
+      "per_user_warm_higher": 0,
+      "per_user_warm_lower": 0,
+      "cold_per_user_identical": true,
+      "weights_sha256": "sha256:efda0977de7ab8020cf75679e536b7ed3a17f148795a2ad4661433e7d9564656",
+      "wo1_weights_sha256": "sha256:1995ea694d5ed6f680186a1481b09c8647cce8275b260d8947928aff05de7ddc",
+      "weights_note": "digests differ: same function, float32 rounding differs; every metric and per-user value is identical"
+    },
+    "fit_seconds": 2071.3,
+    "peak_rss_bytes": 1882898432,
+    "concurrency_note": "run with up to 3 single-threaded pilots in flight (another worker's gBCE pilot and an ingest also ran); fit time and ru_maxrss are not comparable with WO-1's solo runs",
+    "started": "2026-10-05T13:15:11Z",
+    "ended": "2026-10-05T13:49:56Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "artifact": {
+      "directory": "artifacts/wo2-pilot/models/2d800544a27b4a67bc6f844a91ad0efc/ (main checkout, not committed)",
+      "model_sha256": "95775e692c4eda45d94136ce342f4ac07c3a052943c6e27a5111cd6cf2531088"
+    },
+    "log": "artifacts/wo2-pilot/logs/wo2-pilot-s7.log (main checkout)"
+  }
 }

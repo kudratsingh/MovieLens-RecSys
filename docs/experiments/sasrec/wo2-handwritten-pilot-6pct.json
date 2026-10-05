@@ -31,7 +31,7 @@
     "8668ca0c (s21)": 0.3936318283
   },
   "result": {
-    "status": "outside-range",
+    "status": "superseded",
     "criterion_met": false,
     "date_run": "2026-10-05",
     "run_id": "38442d1a08dd42f3868c1f6147a56fd8",
@@ -104,6 +104,11 @@
     },
     "log": "artifacts/wo2-pilot/logs/wo2-pilot-s42.log (main checkout)",
     "command": "caffeinate -i env OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE MLFLOW_ALLOW_FILE_STORE=true MLFLOW_TRACKING_URI=file://<wo2 worktree>/mlruns TWOTOWER_INPUT_DIR=<main>/data/raw/ml-25m SASREC_ARTIFACT_DIR=<main>/artifacts/wo2-pilot/models /usr/bin/time -l python -m src.training.sasrec_sweep docs/experiments/sasrec/wo2-handwritten-pilot-6pct.json",
-    "next": "none taken; not retuned and not re-run. Owner decision."
+    "next": "none taken; not retuned and not re-run. Owner decision.",
+    "superseded_by": {
+      "run_id": "d0b596f7171a4623b22b6b9e774ade3f",
+      "cells": "wo2-handwritten-pilot-6pct-rerun-s42.json",
+      "reason": "the owner's training-parity check found the attention output's memory layout put same-seed dropout masks on different elements (commit 82bba87); after the fix the seed-42 pilot equals WO-1's exactly"
+    }
   }
 }

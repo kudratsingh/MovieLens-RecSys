@@ -3480,7 +3480,11 @@ run; training rounds differently.
 | `8668ca0c…` (WO-1 s21) | packaged | 0.3936318283 | 0.1483434889 | 0.5427033422 | 1,099.0 | 2.92 GB |
 | **`38442d1a08dd42f3868c1f6147a56fd8`** | **hand-written** | **0.3427768663** | 0.1341754441 | 0.5427033422 | **1,315.3** | 3.08 GB |
 
-**Verdict: outside the range. Done-criterion 5 is not met.** The reference range is
+**Superseded (same day): see "Training parity, the fix it found, and the four seeds" below. The
+gap was a dropout-mask layout difference, since fixed, and the re-run equals WO-1's seed 42
+exactly.**
+
+**Verdict at the time: outside the range. Done-criterion 5 was not met.** The reference range is
 0.3611–0.3936. This run is 0.0183 below its floor and 0.0198 below WO-1's own seed-42 run (−5.45%).
 It sits 1.96 sample standard deviations below the reference mean of 0.3722. Nothing was retuned or
 re-run; the result goes to the owner.
@@ -3514,4 +3518,59 @@ owner decides what comes next.
 The MLflow run is in a local file store in the WO-2 worktree (`mlruns/`). The exported model is at
 `artifacts/wo2-pilot/models/38442d1a…/` in the main checkout, with archive SHA-256 `093e33ac…` and
 weights digest `sha256:609c3972…`. Run record:
+[`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
+
+### Training parity, the fix it found, and the four seeds — 2026-10-05 (owner ruling)
+
+The equivalence above covered inference only. After the first seed-42 pilot missed the range, the
+owner ordered training-parity checks, a fix for any difference they found, and seeds 7, 13 and 21.
+The decision rule: accept WO-2 if the checks pass and the four-seed mean is within 5% of WO-1's
+0.372174, that is, not below 0.353565.
+
+**Parity checks.** All three pass after one fix. The full record is in the run record.
+- **Initialization:** every tensor is bit-identical at the same seed, and the same number of draws
+  is consumed.
+- **Gradients:** on the pilot's first three real batches the largest loss difference is 6.0e-8 and
+  the largest gradient difference 1.1e-8 in float32, both against the 1e-5 bound. In float64 they
+  are 1.1e-16 and 2.4e-17.
+- **Dropout:** the same four sites per block at 0.2, with none elsewhere.
+- **The one difference.** PyTorch's attention returned a `(B, L, d)` view of an `(L, B, d)` buffer,
+  and dropout draws its mask in memory order. So the residual dropout after attention put the same
+  random numbers on different elements. That leaves a statistically identical model but a
+  different trajectory from the same seed.
+- **Fix:** commit `82bba87`, with the check kept as permanent unit tests.
+
+**All eight pilots** use the O-25 6% partition, protocol `faf2828d…` confirmed on every run before
+it was read, 108 warm / 39 cold users, and cold recall@500 0.5427033422 on all of them:
+
+| Seed | WO-1, packaged encoder | WO-2, hand-written encoder (after the fix) | Difference | Per-user warm recall |
+|---:|---|---|---:|---|
+| 42 | `7baeb7d0…` **0.3625487076** | `d0b596f7171a4623b22b6b9e774ade3f` **0.3625487076** | 0 | 108 of 108 identical |
+| 7 | `d71f0fa6…` **0.3611061547** | `2d800544a27b4a67bc6f844a91ad0efc` **0.3611061547** | 0 | 108 of 108 identical |
+| 13 | `2d9f3cc1…` **0.3714076606** | `76a1cd9e13d541958e564bcaea49c414` **0.3714076606** | 0 | 108 of 108 identical |
+| 21 | `8668ca0c…` **0.3936318283** | `29ad5b791ebe48bdbf6e23de51966bfa` **0.3936318283** | 0 | 108 of 108 identical |
+| mean (sd) | **0.3721736** (0.0150130) | **0.3721736** (0.0150130) | 0 | — |
+
+**Verdict: accepted under the owner's rule.** The new four-seed mean equals WO-1's, well above
+the 0.353565 floor.
+- **Every number matches.** Each seed reproduces its WO-1 counterpart's warm and overall recall and
+  NDCG, and every per-user value.
+- **Losses agree to about 1e-9.** At seed 42 they are 0.0962624101 and 0.0695459258, against WO-1's
+  0.0962624098 and 0.0695459261.
+- **Weights do not.** The digests differ, since float32 rounding accumulates differently, but at
+  this scale it moved no ranking.
+- **What the earlier miss was.** The pre-fix seed-42 pilot `38442d1a…` (0.3427768663) is
+  superseded. Its gap was the dropout-mask layout: a different same-seed trajectory, not a weaker
+  model.
+
+**Speed and memory.**
+- **Solo:** the clean comparison is the pre-fix solo run, 1,315.3 s against WO-1 s42's 1,080.8 s,
+  about 22% slower. The fix changes no arithmetic cost.
+- **Concurrent:** these four ran with up to three pilots in flight, alongside another worker's gBCE
+  pilot and an ingest. Their fit times (2,072.4 / 2,071.3 / 1,874.2 / 1,750.9 s) and
+  `ru_maxrss` peaks (2.34 / 1.88 / 1.82 / 1.86 GB) measure the shared machine, not the encoder.
+  The peaks read lower than WO-1's solo 2.9–3.0 GB, most likely because macOS memory compression
+  under contention lowers `ru_maxrss`.
+
+Records: `experiments/sasrec/wo2-handwritten-pilot-6pct-{rerun-s42,s7,s13,s21}.json` and
 [`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
