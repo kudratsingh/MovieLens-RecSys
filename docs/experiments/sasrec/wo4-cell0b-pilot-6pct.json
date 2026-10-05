@@ -32,5 +32,21 @@
       "training_objective": "strict-prefix-final-position-v1",
       "device": "cpu"
     }
-  ]
+  ],
+  "projection": {
+    "measured": "2026-10-05, 60 optimizer steps of this cell on the O-25 6% partition, steady-state steps 11-60, one thread, load average about 3.9 with two other 6% pilots running",
+    "cpu_seconds_per_step": 0.416,
+    "mps_seconds_per_step": 0.135,
+    "steps_per_pass": 2318,
+    "training_examples": 1186765,
+    "probe_users": 82,
+    "this_run_device": "cpu",
+    "seconds_per_pass": 965,
+    "projected_wall_minutes": [
+      50,
+      85
+    ],
+    "basis": "3 to 5 passes at the measured step time, plus data load and per-pass probe and holdout scoring",
+    "stop_if_wall_minutes_exceed": 170
+  }
 }
