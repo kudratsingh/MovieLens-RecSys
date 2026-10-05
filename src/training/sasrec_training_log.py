@@ -152,11 +152,13 @@ def render_loss_curve(log: StepMetricsLogger, path: Path, *, title: str) -> Path
         )
     axes[1].set_xlabel("optimizer step", color=_TEXT_SECONDARY, fontsize=9)
     if log.steps:
-        # Both panels use the same two marks, so one legend on the title row
-        # serves both and stays clear of the epoch labels.
-        figure.legend(
-            *axes[0].get_legend_handles_labels(),
-            loc="upper right",
+        # Both panels use the same two marks, so one legend serves both. It sits
+        # at the right end of the first panel's title row: clear of the figure
+        # title however long the run name, and of the epoch labels inside.
+        axes[0].legend(
+            loc="lower right",
+            bbox_to_anchor=(1.0, 1.0),
+            borderaxespad=0.0,
             ncols=2,
             frameon=False,
             fontsize=9,
