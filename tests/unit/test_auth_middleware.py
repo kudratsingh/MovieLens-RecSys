@@ -10,6 +10,11 @@ Unit tests for ``src.auth.middleware.AuthMiddleware``. Verifies:
   * Issuer that doesn't match Keycloak's ``/realms/<realm>`` shape → 401.
   * ``dev_auth_bypass=True`` short-circuits token check and returns
     the configured dev principal.
+  * A token whose unverified decode blows up in an unexpected way
+    (deep nesting, a RecursionError, any non-PyJWT exception) is a 401,
+    never a 500.
+  * The verification algorithm comes from the middleware's allow-list,
+    not from the JWK: a JWK advertising HS256 is refused.
   * The middleware runs a per-request transaction with
     ``SET LOCAL app.tenant_id = <tenant_id>`` (verified against a
     real Postgres via the app_user engine and a fixture RLS-scoped
@@ -180,9 +185,10 @@ def _build_app(
     fail_commit: bool = False,
     known_realms: tuple[str, ...] = ("default",),
     registered_tenants: tuple[str, ...] = ("default",),
+    jwk: dict[str, Any] | None = None,
 ) -> tuple[FastAPI, _StubEngine]:
     app = FastAPI()
-    jwk = _public_key_to_jwk(key, _KID)
+    jwk = jwk if jwk is not None else _public_key_to_jwk(key, _KID)
     jwks = _StubJwksCache({realm: {_KID: jwk} for realm in known_realms})
     engine = _StubEngine(
         fail_commit=fail_commit,
@@ -248,6 +254,113 @@ def test_malformed_bearer_returns_401() -> None:
     client = TestClient(app)
     resp = client.get("/whoami", headers={"Authorization": "Bearer not-a-jwt"})
     assert resp.status_code == 401
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def test_deeply_nested_token_header_returns_401() -> None:
+    # GHSA-42vr-xj54-vc7v: a header nested far past the interpreter's
+    # recursion limit used to escape PyJWT's unverified decode as a bare
+    # RecursionError. Whatever the library does with it, the API answers 401.
+    key = _generate_keypair()
+    app, engine = _build_app(key=key)
+    depth = 50_000
+    header = b'{"a":' * depth + b"1" + b"}" * depth
+    token = f"{_b64url(header)}.{_b64url(b'{}')}.{_b64url(b'sig')}"
+
+    resp = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert engine.set_local_calls == []
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [RecursionError("maximum recursion depth exceeded"), ValueError("bad"), TypeError("bad")],
+    ids=["recursion", "value", "type"],
+)
+def test_unexpected_unverified_decode_error_returns_401(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    # Pins the boundary rather than the library: an exception PyJWT does not
+    # wrap in InvalidTokenError must still be a malformed token, and the
+    # parser's own message must not reach the client.
+    key = _generate_keypair()
+    app, engine = _build_app(key=key)
+    token = _mint_token(key, realm="default", sub="alice")
+
+    def _explode(*_args: Any, **_kwargs: Any) -> Any:
+        raise exc
+
+    monkeypatch.setattr(jwt, "get_unverified_header", _explode)
+
+    resp = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert resp.json() == {"detail": "malformed token"}
+    assert engine.set_local_calls == []
+
+
+def test_jwk_advertising_hs256_is_refused() -> None:
+    # A hostile or misconfigured JWKS publishes a symmetric key whose `alg` is
+    # HS256, and the attacker signs with that same secret. If the JWK chose
+    # the algorithm this would verify; the allow-list means it never does.
+    key = _generate_keypair()
+    secret = b"attacker-chosen-shared-secret-32b"
+    hostile_jwk = {"kty": "oct", "kid": _KID, "alg": "HS256", "k": _b64url(secret)}
+    app, engine = _build_app(key=key, jwk=hostile_jwk)
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": f"{_BASE_URL}/realms/default",
+            "sub": "eve",
+            "aud": _AUDIENCE,
+            "azp": _API_CLIENT,
+            "iat": now,
+            "exp": now + 300,
+        },
+        secret,
+        algorithm="HS256",
+        headers={"kid": _KID},
+    )
+
+    resp = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert "HS256" in resp.json()["detail"]
+    assert engine.set_local_calls == []
+
+
+def test_symmetric_jwk_without_alg_is_refused_not_500() -> None:
+    # No `alg` to refuse up front, so the key reaches verification as raw
+    # bytes under the RS256 allow-list. PyJWT raises InvalidKeyError there,
+    # which has to land as a 401 rather than escape as a server error.
+    key = _generate_keypair()
+    oct_jwk = {"kty": "oct", "kid": _KID, "k": _b64url(b"some-shared-secret-of-32-bytes!!")}
+    app, engine = _build_app(key=key, jwk=oct_jwk)
+    token = _mint_token(key, realm="default", sub="alice")
+
+    resp = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+    assert engine.set_local_calls == []
+
+
+def test_jwk_without_alg_still_verifies_rs256_token() -> None:
+    # `alg` is optional in a JWK (RFC 7517 §4.4). Omitting it must not break
+    # verification: the allow-list, not the key, names the algorithm.
+    key = _generate_keypair()
+    jwk = _public_key_to_jwk(key, _KID)
+    del jwk["alg"]
+    app, _ = _build_app(key=key, jwk=jwk)
+    token = _mint_token(key, realm="default", sub="alice")
+
+    resp = TestClient(app).get("/whoami", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    assert resp.json()["user_id"] == "alice"
 
 
 def test_valid_token_attaches_principal_and_sets_tenant() -> None:

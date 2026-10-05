@@ -54,6 +54,14 @@ _COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="request
 UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(["/healthz", "/readyz"])
 _TENANT_EXISTS = text("SELECT 1 FROM public.tenants WHERE id = :tid")
 
+# The only signature algorithm the API accepts. Keycloak signs realm access
+# tokens with RS256 by default and none of our realm seeds override it. The
+# allow-list is a constant rather than whatever the JWK advertises: a JWKS is
+# fetched over the network, and letting its `alg` field pick the verification
+# algorithm would hand algorithm selection to whoever can influence that
+# document. Moving a realm to another algorithm is a deliberate change here.
+ALLOWED_SIGNING_ALGORITHMS: tuple[str, ...] = ("RS256",)
+
 
 @dataclass(frozen=True)
 class RequestPrincipal:
@@ -242,11 +250,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Peek at the unverified header + payload to learn kid + issuer.
         # We can't verify signature yet because we need the kid to find
         # the right key; the verify step below is the actual check.
+        #
+        # Everything in the token is attacker-controlled at this point, so a
+        # decode failure of *any* kind is a malformed token, not a server
+        # error. PyJWT before 2.15 let a deeply nested header or payload
+        # escape as a bare RecursionError (GHSA-42vr-xj54-vc7v); the pin is
+        # now past that, but the boundary shouldn't depend on every parser
+        # bug being wrapped upstream. The detail stays generic for those
+        # cases: a parser's own message is not something to echo back.
         try:
             unverified_header = jwt.get_unverified_header(token)
             unverified_payload = jwt.decode(token, options={"verify_signature": False})
         except jwt.InvalidTokenError as exc:
             raise UnauthenticatedError(f"malformed token: {exc}") from exc
+        except Exception as exc:
+            logger.info("unparseable bearer token rejected (%s)", type(exc).__name__)
+            raise UnauthenticatedError("malformed token") from exc
 
         kid = unverified_header.get("kid")
         if not kid:
@@ -264,17 +283,29 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if signing_jwk is None:
             raise UnauthorizedError("no matching signing key")
 
-        signing_key = jwt.PyJWK(signing_jwk).key
+        # A JWK that declares an algorithm outside the allow-list is refused
+        # outright rather than verified some other way. A JWK with no `alg`
+        # is fine: the allow-list below still decides what verifies.
+        jwk_alg = signing_jwk.get("alg")
+        if jwk_alg is not None and jwk_alg not in ALLOWED_SIGNING_ALGORITHMS:
+            raise UnauthorizedError(f"signing key algorithm not allowed (alg={jwk_alg!r})")
+        try:
+            signing_key = jwt.PyJWK(signing_jwk).key
+        except jwt.PyJWTError as exc:
+            raise UnauthorizedError(f"unusable signing key: {exc}") from exc
         try:
             payload = jwt.decode(
                 token,
                 signing_key,
-                algorithms=[signing_jwk.get("alg", "RS256")],
+                algorithms=list(ALLOWED_SIGNING_ALGORITHMS),
                 issuer=issuer,
                 audience=self._expected_audience,
                 options={"require": ["exp", "iss", "sub", "aud"]},
             )
-        except jwt.InvalidTokenError as exc:
+        except jwt.PyJWTError as exc:
+            # PyJWTError, not just InvalidTokenError: a key the JWKS served in
+            # a shape the pinned algorithm can't use raises InvalidKeyError,
+            # which is still a refused token and not a server error.
             raise UnauthorizedError(f"token verification failed: {exc}") from exc
 
         # `aud` above proves this API is an intended resource. `azp` names the
