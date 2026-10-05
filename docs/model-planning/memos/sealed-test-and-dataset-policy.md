@@ -540,7 +540,8 @@ days. Its one remaining use is as training data for the one-time read. It is not
 window, and no decision is evaluated on it.
 
 **What stays sealed.** Everything from 1478087276 on: 4,444,910 ratings to 2019-11-21. That leaves
-39 whole 28-day windows after this one.
+39 whole 28-day windows after this one. The development boundary does not move: "Sealed,
+operationally" above still holds every run to `timestamp < 1469256597`.
 
 **What the move costs:**
 - The read's models train on 102 more days than the holdout models: up to 1475668076 rather than

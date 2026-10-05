@@ -434,8 +434,9 @@ run list and the decisions that rested on those pilots are recorded in the seale
 4. Everything from 1478087276 on stays sealed: 4,444,910 ratings, and 39 further whole 28-day
    windows.
 
-`T`, the holdout, the gates and the unseal trigger are unchanged. The 2026-09-05 reasoning (read 28
-days, not 3.4 years) carries over as written; only the dates move.
+`T`, the holdout, the gates and the unseal trigger are unchanged, and so is the boundary every
+development run is held to: nothing reads a rating at or after 1469256597 outside the one-time read.
+The 2026-09-05 reasoning (read 28 days, not 3.4 years) carries over as written; only the dates move.
 
 **What this costs.** The read's models train on 102 more days than the holdout models, up to
 1475668076 rather than `T`. The number keeps the holdout's shape but not its calendar position, so it
