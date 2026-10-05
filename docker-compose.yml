@@ -72,6 +72,12 @@ services:
     # Custom image extending ghcr.io/mlflow/mlflow:v2.13.0 with psycopg2 so
     # MLflow can reach its Postgres backend store. The `image:` tag below
     # names the locally-built image so subsequent `up`s use the cache.
+    # Artifacts are served through the tracking server rather than handed to
+    # clients as a path: `--default-artifact-root /mlartifacts` told every
+    # client to write to a directory that exists only inside this container,
+    # so uploads failed and runs ended FAILED with their metrics intact
+    # (September run 833812ee…, WO-2's converter recheck). The volume stays
+    # the destination; the server is the only writer.
     build:
       context: ./infra/mlflow
     image: movielens-recsys/mlflow:v2.13.0-pg
@@ -80,7 +86,8 @@ services:
       --host 0.0.0.0
       --port 5000
       --backend-store-uri postgresql://recsys:recsys@postgres:5432/mlflow
-      --default-artifact-root /mlartifacts
+      --serve-artifacts
+      --artifacts-destination /mlartifacts
     ports:
       - "5000:5000"
     volumes:
