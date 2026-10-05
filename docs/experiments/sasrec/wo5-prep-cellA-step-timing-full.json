@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "WO-5 preparation only (owner-approved 2026-10-05): time ADR 0020's cell A before any cell runs,",
+    "and re-price the cell table from the measurement (WO-5 'Before the first cell'; ADR 0020 stop",
+    "rule 7). START NO CELL. Deviation from the brief's 'time one pass', approved by the coordinator:",
+    "one CPU pass of cell A was projected at about 23-24 h (ADR 0020's A(L,d,b) cost model scaled",
+    "from cell 0b's measured 0.297 s CPU step: 8.0x per example, about 2.2 s per step, 38,554",
+    "steps per full pass; ADR 0020's own projection was 27.1 h). So the first 2,000 optimizer steps",
+    "are timed on the full dataset and extrapolated by the step count. Every step has the same",
+    "shape (512 examples of 100-long left-padded windows, 1,024 negatives, a fixed catalog), so",
+    "the steady-state step time carries to the pass within a few percent. The owner can still ask",
+    "for the literal full pass. Steps 1-20 are excluded as warm-up. Data loading, the split, the",
+    "user-history build and the example-store build are timed separately from stepping; peak RSS is",
+    "the process's. CPU first (the one full-data run in flight, OMP_NUM_THREADS=1 as every recorded",
+    "full-data SASRec run used), then mps on the same 2,000 steps: TIMING ONLY, NOT A RESULT OF",
+    "RECORD. No evaluation, no export, no MLflow run: the fit is interrupted after the last step.",
+    "Cell A per ADR 0020: hidden 128, 2 blocks, 4 heads, feed-forward 4x (512), dropout 0.2,",
+    "history 100, sampled softmax with 1,024 negatives, 512 examples per step, Adam 1e-3, seed 42,",
+    "objective of record. Early stopping is off for the timing (the probe carve is setup, not",
+    "stepping)."
+  ],
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "wo5-prep-cellA-timing-cpu",
+      "max_sequence_length": 100,
+      "hidden_dim": 128,
+      "num_blocks": 2,
+      "num_heads": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.2,
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "batch_size": 512,
+      "epochs": 1,
+      "learning_rate": 0.001,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "cpu"
+    },
+    {
+      "label": "wo5-prep-cellA-timing-mps",
+      "max_sequence_length": 100,
+      "hidden_dim": 128,
+      "num_blocks": 2,
+      "num_heads": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.2,
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "batch_size": 512,
+      "epochs": 1,
+      "learning_rate": 0.001,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "mps"
+    }
+  ],
+  "timing": {
+    "steps": 2000,
+    "warmup_steps_excluded": 20,
+    "extrapolation": "steady-state mean step seconds x steps per pass (ceil(examples / 512))",
+    "projected_cpu_seconds_per_step": 2.2,
+    "projected_cpu_wall_minutes_for_2000_steps": [75, 90],
+    "stop_if_cpu_wall_minutes_exceed": 180
+  }
+}
