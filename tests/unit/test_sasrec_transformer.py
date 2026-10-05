@@ -232,8 +232,12 @@ def test_train_mode_without_dropout_matches_outputs_and_gradients(history_length
     """``train()`` mode at dropout 0: the same function, so the same loss surface.
 
     Dropout draws cannot match between two implementations, so this is the
-    strongest training-time comparison available. Gradients are compared after
-    converting the packaged encoder's gradients through the same converter.
+    strongest training-time comparison available. Outputs are held to the brief's
+    1e-5 in float32. Gradients are compared after converting the packaged
+    encoder's gradients through the same converter, with both encoders in
+    float64: a float32 gradient summed over a batch moves by an ulp-scale amount
+    with the BLAS's reduction order (it did on CI's linux/amd64 runner, by
+    1.5e-5), and double precision removes that noise so a real mismatch would show.
     """
     legacy = _perturbed_legacy(_config(dropout=0.0), seed=7).train()
     hand_written = _converted(legacy)
@@ -242,12 +246,14 @@ def test_train_mode_without_dropout_matches_outputs_and_gradients(history_length
         (sequences.shape[0], WINDOW, 64), generator=torch.Generator().manual_seed(3)
     )
 
-    expected = legacy.encode_positions(sequences)
-    actual = hand_written.encode_positions(sequences)
+    with torch.no_grad():
+        expected = legacy.encode_positions(sequences)
+        actual = hand_written.encode_positions(sequences)
     assert (actual - expected).abs().max().item() <= TOLERANCE
 
-    (expected * upstream).sum().backward()  # type: ignore[no-untyped-call]
-    (actual * upstream).sum().backward()  # type: ignore[no-untyped-call]
+    legacy, hand_written = legacy.double(), hand_written.double()
+    (legacy.encode_positions(sequences) * upstream.double()).sum().backward()  # type: ignore[no-untyped-call]
+    (hand_written.encode_positions(sequences) * upstream.double()).sum().backward()  # type: ignore[no-untyped-call]
     legacy_gradients = legacy_state_to_hand_written(
         {
             name: (parameter.grad if parameter.grad is not None else torch.zeros_like(parameter))
@@ -260,7 +266,7 @@ def test_train_mode_without_dropout_matches_outputs_and_gradients(history_length
     for name, parameter in hand_written.named_parameters():
         assert parameter.grad is not None, name
         torch.testing.assert_close(
-            parameter.grad, torch.from_numpy(legacy_gradients[name]), rtol=1e-4, atol=1e-5
+            parameter.grad, torch.from_numpy(legacy_gradients[name]), rtol=1e-9, atol=1e-10
         )
 
 
