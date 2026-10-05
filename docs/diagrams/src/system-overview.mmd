@@ -1,7 +1,8 @@
 %% Sources: docker-compose.yml, docker-compose.demo.yml, docker-compose.prod.yml,
 %% src/serving/app.py, src/serving/orchestration.py, src/serving/model_server.py,
 %% src/auth/middleware.py, src/features/online.py, src/features/feast_repo/,
-%% src/models/artifacts.py, infra/model-bundle/manifest.json,
+%% src/serving/sequence_retrieval.py, src/models/artifacts.py,
+%% infra/model-bundle/manifest.json, infra/features/Dockerfile,
 %% synthetic/personas/enrich_posters.py, alembic/versions/.
 %% Not drawn because they do not exist on main: Prefect, Evidently, a model
 %% registry, an A/B router, a /metrics endpoint.
@@ -24,15 +25,15 @@ flowchart TB
 
   subgraph SIDE["model-server — private sidecar, bearer token, no published port"]
     direction TB
-    CI["item-item CandidateIndex<br/>retrieve, then popularity fill"]
+    CI["Retriever named by the bundle's family<br/>item-item index, or a SASRec encoder<br/>retrieve, then popularity fill"]
     FT["Feast online read<br/>8 ranker features per candidate"]
-    LG["LightGBM LambdaRank<br/>score and order"]
+    LG["LightGBM LambdaRank<br/>the route's booster: learned or fallback"]
     CI --> FT --> LG
   end
 
   KC["Keycloak<br/>one realm per tenant<br/>issues tokens, serves JWKS"]
   PGB["pgBouncer<br/>transaction pool mode"]
-  PG[("Postgres<br/>forced RLS on 7 tenant-scoped tables<br/>shared catalog beside them")]
+  PG[("Postgres<br/>forced RLS on 8 tenant-scoped tables<br/>shared catalog beside them")]
   RD[("Redis<br/>Feast online store")]
   FSV["feature-server<br/>evidence surface only<br/>serves GET /users/{id}/features<br/>NOT on the ranking path"]
 
@@ -54,13 +55,13 @@ flowchart TB
     ING["src/data/ingest.py<br/>Postgres is the source of truth"]
     SPL["Temporal split<br/>train / holdout / test"]
     FEA["Point-in-time features<br/>into feature_store.* in Postgres"]
-    TRN["Training<br/>candidates + LightGBM ranker<br/>tracked in MLflow"]
-    BUN["ServingManifest<br/>SHA-256 per artifact<br/>committed at infra/model-bundle/"]
+    TRN["Training<br/>retrievers + LightGBM ranker<br/>tracked in MLflow"]
+    BUN["ServingManifest, SHA-256 per artifact<br/>demo fixture: infra/model-bundle/<br/>served bundle: infra/model-bundle-served/<br/>a placeholder until published"]
     ML --> ING --> SPL --> FEA --> TRN --> BUN
   end
 
   TMDB(["TMDB"]) -. "offline catalog enrichment<br/>no request-time call" .-> ING
-  BUN -- "baked into the features image at build" --> CI
+  BUN -- "both baked into the features image<br/>MODEL_ARTIFACT_DIR picks one" --> CI
   FEA -- "materialize<br/>tenant-keyed snapshots" --> RD
 
   DEV["Dev stack only, never deployed<br/>MLflow · Prometheus · Grafana<br/>there is no /metrics endpoint to scrape"]

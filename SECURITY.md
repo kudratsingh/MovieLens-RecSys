@@ -3,7 +3,7 @@
 This is a personal portfolio project, but it runs real security machinery —
 Keycloak OIDC with a realm per tenant, JWT validation against a cached JWKS,
 PostgreSQL row-level security as the tenant boundary, a token-bucket rate
-limiter, and a deploy path that puts all of it on a public host behind Caddy.
+limiter shared across workers in Redis (ADR 0014), and a deploy path that puts all of it on a public host behind Caddy.
 A report against any of that is on-topic and welcome.
 
 ## Reporting a vulnerability
@@ -12,11 +12,8 @@ Use GitHub's private vulnerability reporting: the repository's **Security** tab
 → **Report a vulnerability**. That opens a private advisory thread visible only
 to the maintainer.
 
-If that option is not visible (private reporting has to be enabled on the
-repository, and it may not be yet), email the address on the maintainer's
-GitHub profile — `<owner's email in the GitHub profile>` — with `SECURITY` in
-the subject line. Please do not open a public issue for a vulnerability, and
-please do not disclose publicly until there has been a chance to fix it.
+Please do not open a public issue for a vulnerability, and please do not
+disclose publicly until there has been a chance to fix it.
 
 Useful in a report: the endpoint or component, the exact request, the observed
 result, and which of the guarantees below it breaks. The `X-Request-ID` header
@@ -52,6 +49,9 @@ project's own non-negotiables, not aspirations:
 
 - The FastAPI service in `src/` — auth middleware, tenancy, serving,
   the rate limiter, the audit writer, and the offline TMDB enrichment path.
+- The serving bundles and their loaders — the SHA-256-pinned manifest
+  (`src/models/artifacts.py`), the SASRec archive loader, and the champion
+  promotion path (`make promote`, `src/release/promote.py`).
 - The Next.js app in `web/`, including the BFF session boundary and its
   Origin/CSRF handling.
 - The Compose stacks (`docker-compose.yml`, `.demo.yml`, `.prod.yml`) as
@@ -76,7 +76,8 @@ project's own non-negotiables, not aspirations:
 
 ## The development credentials in this repository
 
-`docker-compose.yml` and `infra/keycloak/realms/*.json` contain literal
+`docker-compose.yml`, `docker-compose.demo.yml`, `infra/pgbouncer/userlist.txt`,
+the first Alembic migration and `infra/keycloak/realms/*.json` contain literal
 passwords, an `admin`/`admin` Keycloak account, and a client secret whose value
 is the string `movielens-api-secret-dev-only`. These are seeded for local
 development, are labelled as such in the files, and are not a finding.
@@ -88,6 +89,8 @@ convention:
   the app can accept a request — if `dev_auth_bypass` is set outside
   `environment == "dev"`, and again if the default model-server token or the
   default pgBouncer admin password is still in place outside `dev`.
+- `Settings` also refuses an in-process rate-limit bucket outside `dev` unless
+  `RATE_LIMIT_ALLOW_IN_PROCESS_BUCKET` acknowledges the per-worker limit.
 - `docker-compose.prod.yml` names no `DEV_AUTH_BYPASS` variable at all: absent
   rather than `false`, so a typo during an incident cannot turn it back on. CI's
   `demo-compose` job renders the production model and fails if that string

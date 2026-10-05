@@ -18,14 +18,20 @@ If you are here to judge whether the engineering holds up, read in this order.
 3. **[`modeling-roadmap.md`](modeling-roadmap.md)** — the model ladder: where the
    models are today, the rungs from here to a Netflix-class stack, and the
    approval each rung needs before it starts.
-4. **[`model-planning/`](model-planning/README.md)** — the executable model
-   program: current gaps, dependencies, owner decisions, PR-sized work items,
-   detailed phase plans, experiment templates, and review agendas. It does not
-   approve a roadmap rung or replace an ADR.
+4. **[`model-planning/phase-a-work-orders.md`](model-planning/phase-a-work-orders.md)**
+   — the current phase, as of 2026-10-05: nine strict work orders that rewrite
+   the transformer by hand, train it larger, and put three seeds and three time
+   windows under every headline number. Serving is parked while it runs. The
+   folder around it, [`model-planning/`](model-planning/README.md), holds the
+   executable model program — decisions ([`owner-decisions.md`](model-planning/owner-decisions.md)
+   defines the `O-n` and `W-n` ids the ADRs cite), work items, experiment
+   templates and dated planning snapshots. It does not approve a roadmap rung
+   or replace an ADR.
 5. **[`adr/README.md`](adr/README.md)** — the decision records. It carries a
    reading order of its own; the short version is 0001 (the evaluation
-   contract), 0003 (why two stages), 0006 (the retrieval model), 0008 (tenant
-   isolation), then 0013 if what you care about is how this runs off a laptop.
+   contract), 0003 (why two stages), 0016 (SASRec, the measured transformer
+   retriever), 0008 (tenant isolation), then 0020 for the phase under way and
+   0013 if what you care about is how this runs off a laptop.
    ADRs are never rewritten — a correction is a dated note appended to one.
 6. **[`api/overview.md`](api/overview.md)** — every path and method, the auth
    rules, the rate-limit and correlation headers, and a worked recommendation
@@ -49,8 +55,9 @@ If you are here to judge whether the engineering holds up, read in this order.
    popularity tail, the temporal split as it lands on real data, and cold-start
    sizing.
 12. **[`results.md`](results.md)** — the measured offline numbers: baselines,
-    candidate stage, ranker and the cold-start cohort, each with its run, date,
-    machine and caveats.
+    the candidate stage, the ranker, the cold-start cohort, and the September
+    modeling runs — SASRec, the corrected two-tower v2 and the per-route bundle
+    — each with its run, date, machine and caveats.
 
 ## By subject
 
@@ -65,14 +72,14 @@ If you are here to judge whether the engineering holds up, read in this order.
 | [`api/`](api/README.md) | The generated OpenAPI contract, how it is checked, and a readable [overview](api/overview.md) of the surface |
 | [`frontend/`](frontend/README.md) | Product and delivery docs, surface contracts, the finish gate, and the [evidence index](frontend/evidence/README.md) |
 | [`results.md`](results.md) | The measured offline results table, every figure with its MLflow run and wall-clock |
-| [`experiments/`](experiments/) | The committed grids a swept result was produced from, so a table in `results.md` is reproducible from an artifact rather than from a diff |
+| [`experiments/`](experiments/README.md) | The committed grids, gate verdicts and latency measurements behind the numbers in `results.md`, so each is reproducible from an artifact rather than from a diff |
 | [`cold-start-routing-decision.md`](cold-start-routing-decision.md) | Both cold-start routing policies measured side by side, and the ADR 0001 decision the numbers put to the owner |
 | [`promotion-gate-slice-decision.md`](promotion-gate-slice-decision.md) | Which holdout slice the +3% promotion gate reads, and what each option would have said about the ranker |
 | [`demo-runbook.md`](demo-runbook.md) | Clean-checkout startup, seeding, the walkthrough, the audit and latency proofs, reset, troubleshooting |
 | [`deployment-runbook.md`](deployment-runbook.md) | The machine, DNS, host bootstrap, secrets, the one-time SQL, the first deploy, verify, rollback, backups and the restore drill, and §14's plain list of what the deployment does not do |
 | [`production-readiness-review.md`](production-readiness-review.md) | The pre-deployment gap review and the rehearsal record. A record, banner and all, but a useful one |
 | [`eda.md`](eda.md) | Exploratory data analysis on MovieLens 25M |
-| [`data/`](data/tmdb-metadata.md) | Dataset-level documentation beyond the MovieLens CSVs: the TMDB catalog snapshot, what is pulled, the six as-of-pull columns that must never become features, and the coverage report ADR 0017 increment 2 is decided on |
+| [`data/`](data/tmdb-metadata.md) | Dataset-level documentation beyond the MovieLens CSVs: the TMDB catalog snapshot, what is pulled, the six as-of-pull columns that must never become features, and the generated [coverage report](data/tmdb-coverage.md) ADR 0017 increment 2 is decided on |
 | [`records/`](records/README.md) | Documents that were accurate on a date and are kept for the reasoning, not the status |
 
 Two READMEs outside this directory belong to the same map:
@@ -96,14 +103,18 @@ never rewritten, and corrections arrive as dated notes.
 
 ## What is claimed, and what is not
 
-Phases 1 and 2 are complete; Phase 3 is in progress. The parts of Phase 3 that
-are still open are listed at the end of the status section in
-[`../CLAUDE.md`](../CLAUDE.md) rather than left to be discovered — the offline
-cold-start routing gap the ADR 0011 cohort found, per-tenant champion routing,
-audit retention, and the Feast-backed training refactor. The deployment is
-specified and rehearsed but the machine does not exist yet, the dev and staging
-Compose environments exist but neither is deployed anywhere either, and the
-frontend finish gate holds on participant research.
+Phases 1 and 2 are complete. Phase 3's engineering harness is on `main`, and
+as of 2026-10-05 the rest of Phase 3 is parked behind Phase A of the modeling
+brief rather than left to be discovered: the open items are listed in
+[`status/phase-3.md`](status/phase-3.md) — per-tenant champion *routing* (the
+registry columns and a manual `make promote` exist; traffic splitting does not),
+audit retention, `/me` ownership, and the training feature source, deferred as
+D-009. The SASRec retriever and the two-tower v2 are measured and gate-eligible
+but not promoted; nothing serves them. The deployment is specified and rehearsed
+but the machine does not exist, production will not boot until the served
+bundle is published, the dev and staging Compose environments exist but neither
+is deployed anywhere either, and the frontend finish gate holds on participant
+research.
 
 Documents here say which of those they describe. Where one goes stale, the fix is
 a dated correction rather than a quiet edit.

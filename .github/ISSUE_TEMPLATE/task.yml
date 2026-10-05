@@ -18,6 +18,7 @@ body:
         - web (Next.js product surfaces and the BFF)
         - serving (candidates, ranker, feature reads, the model sidecar)
         - infra (Compose stacks, images, deploy, CI)
+        - models (training, evaluation, retrievers, ranker)
         - docs (ADRs, runbooks, contracts)
     validations:
       required: true
@@ -28,6 +29,7 @@ body:
       label: Phase
       description: Per the phased plan in CLAUDE.md.
       options:
+        - "Modeling — a roadmap rung or a Phase A work order (docs/modeling-roadmap.md, docs/model-planning/phase-a-work-orders.md)"
         - "3 — serving, auth, multi-tenancy, feature store, load harness"
         - "4 — orchestration and retraining"
         - "5 — monitoring and drift"

@@ -72,6 +72,8 @@ ratings alone. M8 may remain a reading list without weakening the project.
 - [`01-program-guardrails.md`](01-program-guardrails.md) — rules every work package inherits.
 - [`02-dependency-map.md`](02-dependency-map.md) — critical path and external dependencies.
 - [`03-decision-register.md`](03-decision-register.md) — questions requiring owner decisions.
+- [`owner-decisions.md`](owner-decisions.md) — the owner decisions (`O-n`) and work items (`Wn`)
+  cited from ADRs, results and code, with where each one landed.
 - [`work-items.md`](work-items.md) — PR-sized backlog with acceptance evidence.
 - [`risks-and-assumptions.md`](risks-and-assumptions.md) — active risk register.
 - [`workstreams/`](workstreams/) — cross-phase contracts for evaluation, data, artifacts,

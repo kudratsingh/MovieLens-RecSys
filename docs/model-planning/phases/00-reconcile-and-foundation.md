@@ -25,7 +25,9 @@ promotion claim is valid until this package exits.
 2. Review the two ranker-fix commits against SASRec-era sequence/exclusion semantics.
 3. Decide whether two-tower v2 and SASRec ship as stacked PRs or one reviewed series.
 4. Resolve documentation conflicts without rewriting historical ADR context.
-5. Leave `docs/progress.md` untouched until D-014 is answered.
+5. Leave `docs/progress.md` untouched until D-014 is answered. (Answered: archived as
+   [`docs/records/progress-log-2026-05-31.md`](../../records/progress-log-2026-05-31.md) and
+   removed from `docs/`.)
 
 Exit artifact: one branch plan, conflict list, and status files that will change together.
 

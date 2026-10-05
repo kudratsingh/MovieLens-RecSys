@@ -12,3 +12,13 @@ docs
 __pycache__
 **/__pycache__
 **/*.pyc
+.env
+.env.*
+.claude
+.coordination
+.release
+artifacts
+mlruns
+models
+*.pem
+*.key

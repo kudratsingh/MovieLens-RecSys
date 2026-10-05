@@ -142,3 +142,8 @@ columns. What it does mean is that a promotion takes effect within a TTL rather
 than instantly, and that a bundle which no longer matches its tenant's champion
 fails closed to popularity with an audited reason for that window rather than
 serving under a version nobody registered.
+
+## Note — 2026-10-05: eight forced-RLS tables, not seven
+
+The 2026-08-29 implementation note lists seven tables. Migration `0017_request_audits` added
+`request_audits` with the same forced policy and grants, so eight tables carry forced RLS.

@@ -321,3 +321,101 @@ effect being checked is large.
   (SASRec v1 and its verdicts), [ADR 0018](0018-sequence-aware-ranking.md) (why the control is not
   optional), [`docs/results.md`](../results.md) and
   [`docs/experiments/sasrec/`](../experiments/sasrec/) (every number quoted above).
+
+## Amendment 2026-10-05 — Phase A: repair the fast trainer first, write the encoder by hand, serving parked
+
+**Decided by the owner** in the 2026-10-05 build brief. The executable work orders, with every run,
+stop rule and done-when, are [`../model-planning/phase-a-work-orders.md`](../model-planning/phase-a-work-orders.md)
+(WO-1 to WO-9). This amendment records the five places where that brief changes what this ADR says.
+Nothing below moves a gate threshold. The cells, their order, gate 1, gate 2 and stop rules 1–4 and
+6–7 stand as written; stop rule 5 is read as described under D3.
+
+### D4 — try to repair the fast trainer before paying for the slow one
+
+The 2026-09-15 decision note (O-22) makes the copied-prefix objective the objective of record and
+requires every predeclared cell to run on it once its data path is memory-bounded. **This amendment
+overrides the second half.** Before any cell runs, the all-positions trainer measured in #183 gets
+one bounded attempt at repair, because its pilots cost about 81 seconds each while the copied-prefix
+trainer prices this grid at 35 to 58 CPU-days.
+
+- **The objective of record does not change.** WO-1 restores the copied-prefix loop as the default
+  `training_objective` (`strict-prefix-final-position-v1`) on P1's memory-bounded data path, at v1's
+  window of 50. It is the reference every repair is judged against, and v1's numbers stay
+  reproducible on it.
+- **What is tested.** Three causes, one at a time, on pilots: short history (windows cut back to
+  back, so the first prediction in a window sees one movie — the "shorter prefix" this ADR's P2
+  already names), narrow batches (512 examples drawn from about 12 windows — the effective-batch risk
+  named under Risks), and too few passes (recall still rising after pass 2, 0.4652 to 0.4856).
+- **What a repair must clear.** Mean warm recall@500 over pilot seeds 42, 7, 13 and 21 within 3% of
+  the mean of WO-1's four new-path reference pilots, **and** one full run within 1% of 0.5091713455 —
+  stop rule 2 of this ADR, unchanged. The four WO-1 pilots replace 0.3186 as the reference stop rule
+  1 compares against, because 0.3186 (and 0.3103, 0.3258, 0.2957) was measured before #162 merged
+  and understates the original trainer. The ±3% in stop rule 1 does not move.
+- **Its name.** A repaired objective gets its own name in `SASRecConfig` and in a dated note on this
+  ADR when WO-3 lands. It is not `all-positions-strict-timestamp-v1`, which stays the named ablation
+  #183 measured, never a silent baseline.
+- **Stop rule (WO-3).** At most 8 pilots and one full run. If no variant passes, tuning stops and the
+  cells train on the original objective, on the Mac's GPU or a rented one under D6. A full-data
+  result outside ±1% of 0.5091713455 stops for an owner decision rather than proceeding.
+
+This also replaces the execution order recorded with the approval (O-23: W10 and W11, then M4b, then
+Rung 5 increment 1, then these cells). Under D3 W10 and W11 are parked, and Rung 5 waits behind
+Phase A, so the order is WO-1 (which is M4b at L=50) through WO-9.
+
+### D6 — hardware order: laptop CPU, then the Mac's GPU, then a rented GPU
+
+`cpu` stays the default and the only bit-reproducible device. `mps` comes before any rental. A rented
+GPU is used only on O-3's trigger — a predeclared cell costs more than one night on the fixed CPU
+loop — or because WO-3's stop rule sent the cells back to the original objective, and any step that
+spends money stops for the owner first (the rental ceiling is an open question in the work orders).
+
+**The accepted difference must be written here, as a dated note, before any non-CPU run.** It is the
+largest relative difference in warm recall@500 between a run trained off the CPU and the same
+configuration on the CPU that is still treated as the same result. **It is not stated yet**, so until
+that note exists no `mps` or `cuda` run is admissible. Read literally, "before any non-CPU run"
+includes WO-4's paired `mps`/`cpu` pilot; that pilot is then the first measurement against the stated
+difference, and its speed-up is recorded beside it. Every model trained off the CPU is re-scored from
+its saved weights on the CPU, so every published number is computed on one machine. This narrows the
+"Cost, honestly" section's recommendation rather than reversing it: the reproducibility contract is
+still what a GPU spends, and the tolerance is the price stated in advance.
+
+### D7 — what "from scratch" means
+
+Allowed building blocks: `nn.Module`, `nn.Parameter`, `nn.Linear`, `nn.Embedding`, `nn.Dropout`, and
+plain tensor math including `softmax` and `gelu`. Not allowed anywhere under `src/`:
+`nn.Transformer*`, `nn.MultiheadAttention`, `nn.LayerNorm`, `F.scaled_dot_product_attention`,
+`F.multi_head_attention_forward`.
+
+WO-2 builds the encoder from those pieces in `src/models/candidates/transformer.py`. Its padding rule
+— a padded position always outputs zeros and can never produce NaN — replaces the process-wide
+`torch.backends.mha.set_fastpath_enabled(False)` switch that "How it is judged" names as a
+precondition. The precondition's purpose (no left-padded history may encode to NaN, at any L) is
+unchanged; it is met by construction and pinned by the existing 1, 3, 12, 49, 50 length tests rather
+than by a global flag.
+
+### D3 — serving is parked, and what that does to gate 3
+
+Nothing is being served in Phase A: no cell or bundle is promoted, and the champion swap, the k6
+run and the deployment are out of scope until Phase A closes. Gate 3's budgets (encoder p99 < 15 ms,
+service p99 < 100 ms) do not move and still bind any future promotion. Within Phase A the winner's
+encoder speed is measured by the unmodified `src/evaluation/sasrec_latency.py` and **reported, not
+gated** (WO-6). Stop rule 5 is read accordingly: a cell over the encoder budget is recorded as over
+budget and cannot be promoted, but it does not stop the offline sweep, because nothing in Phase A is
+being promoted.
+
+### D5 — one run per cell, three for the headline
+
+The cells stay one run each at seed 42, as "One run per cell" says. The three-seed requirement applies
+to the final headline models only — SASRec v1, the WO-5 winner and two-tower v2 at seeds 42, 7 and 13
+— together with rolling windows w1 and w2 (WO-7). The policy note is in `CLAUDE.md`.
+
+### Retraining v1 after the hand-written encoder
+
+After WO-2, retraining v1 gives an **equivalent model, not a bit-identical one**: a hand-written layer
+norm and attention do not reproduce PyTorch's fused kernels to the last bit, so the artifact hash of
+a fresh v1 run will differ from `a11af5ed…`'s. What ties the new encoder to the number of record is
+the saved model instead: archive SHA-256 `43320b87e3cb…` loads through the weight-name converter
+(`encoder_impl` in `sasrec_artifact.py`), and an inference-only evaluation must reproduce warm
+recall@500 0.5091713455 to 4 decimals and cold 0.5262729520 exactly, with the exact difference and
+the number of changed top-500 lists reported. A CPU run of the new encoder at a fixed seed remains
+bit-reproducible against itself, which is what non-negotiable #5 asks for.
