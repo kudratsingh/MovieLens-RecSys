@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Pilot 3 of 8, cause 2 (narrow batches). Each step's 512 targets come from 512",
+    "window visits of one target each, instead of about a dozen whole windows: the",
+    "batch composition of the trainer of record, with the all-positions windows kept.",
+    "This is the full removal of the cause, so its result bounds the cause's share; a",
+    "cheaper width is a later pilot only if this one recovers a material part of the gap.",
+    "Every target is still scored exactly once per pass. Cost: a window is encoded once",
+    "per visit, so the encoder runs about as often as in the trainer of record.",
+    "Projection (solo): fit about 22 min, wall about 23 min; kill past 46 min."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "fit_seconds": 1320,
+    "wall_minutes": 23,
+    "kill_wall_minutes": 46
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-wide512-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-wide-v2",
+      "windows_per_step": 512
+    }
+  ]
+}

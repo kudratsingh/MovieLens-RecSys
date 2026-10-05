@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "HELD. WO-3's one full-data run, of the winning variant at seed 42: it must land",
+    "within 1% of 0.5091713455 (ADR 0020 stop rule 2), that is in [0.5040796320,",
+    "0.5142630590]; any other result stops for an owner decision. Full-data protocol",
+    "hash below; one full-data job machine-wide; caffeinate -i; kill past 2x projection.",
+    "The cells below are PROVISIONAL (the overlap variant at 2 passes; projected fit",
+    "about 40 min from #183's 1,797 s, the hand-written encoder's measured slowdown, and",
+    "about twice the windows) and are replaced by the winner in a commit first."
+  ],
+  "expected_protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+  "hold": "provisional: the winning variant is not chosen yet (WO-3 pilots first)",
+  "full_data_reference": {
+    "run": "528b14513d9a49e098a0525417f23285",
+    "warm_recall_at_500": 0.5091713455,
+    "band": [
+      0.504079632,
+      0.514263059
+    ]
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "wo3-repaired-full-bce-neg32",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-overlap-v2",
+      "window_stride": 25
+    }
+  ]
+}

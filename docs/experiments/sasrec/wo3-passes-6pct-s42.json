@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Pilot 4 of 8, cause 3 (too few passes). The baseline cell at 8 passes, nothing else",
+    "changed. The 4-pass result is read from this run's pass-4 warm recall@500",
+    "(epoch_warm_recall_at_k_candidates, step 4): pass k of a longer run is the k-pass",
+    "run, bit for bit, including the per-pass evaluation",
+    "(test_sasrec_fast_trainer_repair.py::test_the_kth_pass_of_a_longer_run_is_the_k_pass_run).",
+    "Projection (solo): fit about 6 min, wall about 7 min; kill past 14 min."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "fit_seconds": 345,
+    "wall_minutes": 7,
+    "kill_wall_minutes": 14
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-8pass-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 8,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-strict-timestamp-v1"
+    }
+  ]
+}
