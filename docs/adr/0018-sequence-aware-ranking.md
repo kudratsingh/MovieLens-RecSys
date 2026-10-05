@@ -432,3 +432,14 @@ bidirectional encoder becomes the interesting question, arriving with a reason.
 - [`docs/model-planning/phases/04-sequence-aware-ranking.md`](../model-planning/phases/04-sequence-aware-ranking.md)
   — the hypothesis ladder and stage plan; [`01-program-guardrails.md`](../model-planning/01-program-guardrails.md)
   — the evidence, approval, and serving-eligibility rules this proposal is bound by.
+
+## Note — 2026-10-05: O-1 was decided before the final result
+
+"How it is judged" above says **O-1 is open**, and the superseded pre-O-9 result says the same.
+It was not open by the time the final result was read: [ADR 0001](0001-evaluation-protocol.md)'s
+2026-09-05 amendment settled it as **warm-primary** for a change confined to the learned route —
+warm NDCG@10 must gain 3%, cold must not regress beyond `T_cold`, and overall is reported but does
+not gate — and `make gate GATE_ARGS="--scope learned-route"` implements it (PR #155). Increment 1
+is such a change, so warm-primary is the reading in force. The verdict does not move: the final
+result above records both scopes, and the learned-route scope refuses at +2.78% warm against
++3.00%. The text above stays as written; this note only corrects its description of O-1's status.

@@ -322,3 +322,31 @@ with the trade-off — comparability against realism — stated openly.
 to decide with after M0-07's rolling windows are in place. That is a measurement, not an opinion, and
 it is available before any migration is committed to — which is exactly why D-007 should stay open
 until M0-07 has run rather than being settled on judgement now.
+
+## Proposed amendment 2026-10-05 — the trigger under serving parked (not approved)
+
+**Status: proposed, awaiting the owner's written approval. Until that approval is recorded here, the
+unseal trigger above stands unchanged and the sealed partition stays closed.**
+
+The trigger requires a bundle that has reached **serving eligible**. Under the owner's 2026-10-05
+decision D3 nothing is being served, so no bundle can reach serving eligibility during Phase A, and
+the one-time read in work order WO-8 of
+[`../phase-a-work-orders.md`](../phase-a-work-orders.md) could never be triggered. The proposed
+wording replaces the first condition of the trigger with:
+
+> a frozen offline release candidate that passed the WO-5 and WO-6 gates.
+
+Everything else in the trigger is unchanged: the owner decides once, in writing; the DVC revision,
+derived snapshot hash, model family, configuration, seed set, protocol manifest, thresholds,
+tolerances and artifact checksums are frozen and committed; and the owner names the release
+candidate with an identifier. WO-8 adds that the list of models scored in the same pass — the release
+candidate plus every baseline in the README table — is approved in the same writing. The window is
+the one ADR 0001's 2026-09-05 amendment already sets, `[1469256597, 1471675797)`, 2016-07-23 to
+2016-08-20; each frozen configuration is retrained on all ratings before `1469256597` and scored
+once; every number is published as it comes out, including a bad one; and the window is then spent.
+
+What the change gives up, stated before it is approved: the serving-eligible condition included
+artifact export equivalence, latency, reliability and audit checks, and the proposed wording drops
+them. A model read on the sealed window under this wording has not been shown to serve. The number is
+still an honest offline estimate on data no decision has used, which is what the read is for; it is
+not evidence that the model is ready to serve.

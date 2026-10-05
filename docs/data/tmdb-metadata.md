@@ -1,7 +1,9 @@
 # TMDB catalog metadata
 
-**Status:** ingestion built and verified end to end on 2026-09-05; **the snapshot has
-not been pulled** — see [Running it](#running-it). Owner decision O-2, 2026-09-05.
+**Status:** ingestion built and verified end to end on 2026-09-05, and the snapshot was
+pulled the same day — 61,468 of the catalog's 62,423 movies resolved (98.5%); see
+[Coverage](#coverage) and [`tmdb-coverage.md`](tmdb-coverage.md). Owner decision O-2,
+2026-09-05.
 **Depends on:** [ADR 0017](../adr/0017-content-based-cold-item-retrieval.md) (why),
 [ADR 0009](../adr/0009-feature-store-feast.md) (where features come from),
 [ADR 0001](../adr/0001-evaluation-protocol.md) (the temporal split the leakage rule is about).
@@ -233,16 +235,20 @@ against a live Postgres — the migration applies, the twelve tables are created
 column comments and grants and without RLS, the loader is idempotent across two runs, the
 duplicate-`tmdb_id` fan-out lands as two rows, and the coverage report renders.
 
-**The snapshot itself has not been pulled.** `TMDB_READ_ACCESS_TOKEN` is not set in this
-environment and there is no `.env` in the checkout — only `.env.example` with an empty
-value. The pull was stopped there rather than proceeding with an invented credential. When
-the owner supplies the token, the three commands above produce the snapshot, the tables and
-the coverage numbers with no further code changes.
+When this section was first written the snapshot had not been pulled, because no token
+was available and the pull stopped rather than proceed without one. The owner supplied the
+token that evening and the pull ran on 2026-09-05 (recorded in PR #181): 62,081 requests, 0 failures,
+142 minutes at a self-throttled 7.1 requests/second after 429s, which is slower than the
+52 minutes the 20/s design figure above implies. The snapshot is DVC-tracked at
+`data/raw/tmdb/2026-09-05.dvc` (436 MB, 34 gzipped shards), but no DVC remote is
+configured, so `dvc push` has not run and the bytes exist only on the pulling machine.
+Loaded into the dev database: 61,468 movies, 745,593 cast rows, 580,241 crew rows and
+303,280 keyword links.
 
 ## Coverage
 
-The generated numbers land in `tmdb-coverage.md` beside this file, with the raw counts in
-`tmdb-coverage.json`. Three populations, in ascending order of how much they matter:
+The generated numbers are in [`tmdb-coverage.md`](tmdb-coverage.md) beside this file, with
+the raw counts in [`tmdb-coverage.json`](tmdb-coverage.json). Three populations, in ascending order of how much they matter:
 
 1. **The whole catalog** — 62,423 movies, 62,316 of which carry a `tmdbId` (99.8%) over
    62,282 distinct TMDB ids.

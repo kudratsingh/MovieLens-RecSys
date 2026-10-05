@@ -375,6 +375,42 @@ commit SHA and a moving `main` tag. Two things to settle once, in GitHub's packa
 
 ## 7. The first deploy
 
+> **Parked as of 2026-10-05.** The owner's brief of that date puts serving behind the modeling
+> track, so the first deploy is not scheduled. The steps below stay correct; nothing in them has
+> been run against a real host.
+
+### 7.0 Publish the served bundle first
+
+Do this before the first deploy, in a pull request, not on the box. Production's sidecar and its
+materialization job both set `MODEL_ARTIFACT_DIR: /app/models/served-bundle` as a literal
+(`docker-compose.prod.yml`, lines 630 and 835), and `infra/features/Dockerfile` fills that path
+from `infra/model-bundle-served/` (line 107), beside the demo fixture it copies to
+`/app/models/serving` (line 85). On `main` today that directory holds only a placeholder
+`.gitkeep`, so an image built from it has no manifest at the served path and the model-server
+**refuses to boot**: `lifespan` cannot load the bundle, the worker exits before it joins the accept
+loop, and `make prod-serve` never sees it healthy. That is deliberate — production must not quietly
+fall back to the compact fixture — but it means a first deploy from the current tree fails at
+step 5.
+
+1. Write the bundle spec (`infra/served-bundle.spec.json` by default, or pass `SERVED_BUNDLE_SPEC`)
+   naming the encoder or index and the per-route boosters to bake. Which artifacts those are is an
+   owner decision, recorded in the spec, never a default in code.
+2. `make serving-artifacts-publish`, then `make serving-artifacts-verify`. The publisher copies
+   and hashes the named artifacts, writes the schema 2 manifest and `bundle-kind.json`, and loads
+   the result back through the real loader; verify re-hashes everything and re-runs every
+   manifest validator.
+3. Commit the bundle under `infra/model-bundle-served/` and merge it, so CI's `publish-images`
+   bakes it into the SHA-tagged image this section then deploys.
+4. Register it. Migration `0016` seeds the `demo` tenant's champion as the demo fixture's
+   versions, and the sidecar refuses any bundle that is not the tenant's registered champion, so
+   until the row moves every warm request is answered from popularity with
+   `fallback_reason: champion-mismatch` — audited and safe, but not the model.
+   `make promote TENANT=<tenant> BUNDLE=<bundle dir>` (`src/release/promote.py`) is the manual
+   repoint, after the image that bakes the bundle is running. How it is pointed at the production
+   database from the box is not yet written into this runbook.
+
+### 7.1 Run the deploy
+
 Run it from the Actions tab: **Deploy production** → *Run workflow* → `sha` = the commit to deploy,
 `rollback` = false. (After that, every merge to `main` deploys itself: the workflow triggers on CI's
 successful run and re-asserts the SHA's CI conclusion before it opens an SSH connection.)

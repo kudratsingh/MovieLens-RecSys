@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Protect concurrent development sessions and make every experiment attributable. Planning, training,
+Protect concurrent contributors and concurrent runs, and make every experiment attributable. Planning, training,
 artifact generation, and documentation should remain inside the worktree and run roots explicitly
 created for that effort.
 
@@ -13,13 +13,13 @@ For each implementation effort:
 1. Start from a recorded base commit.
 2. Create a uniquely named branch and linked worktree.
 3. Verify branch, worktree path, base SHA, and clean/known status before editing.
-4. Read repository instructions from the base and worktree before delegating.
+4. Read repository instructions from the base and worktree before starting.
 5. Limit edits, formatting, tests, staging, and commits to the assigned worktree.
 6. Inspect staged paths and branch again immediately before commit.
-7. Never merge, rebase, cherry-pick, push, delete worktrees, or modify another session's branch unless
+7. Never merge, rebase, cherry-pick, push, delete worktrees, or modify another contributor's branch unless
    the owner explicitly expands the task.
 
-Untracked or modified files in another worktree belong to that session. Do not clean, stash, move,
+Untracked or modified files in another worktree belong to whoever is working there. Do not clean, stash, move,
 format, stage, or inspect their contents beyond the minimum read-only status needed to avoid overlap.
 
 ## Experiment run roots
@@ -56,16 +56,16 @@ Before a run or batch:
 A dirty worktree can be allowed for exploratory work only when captured in provenance. Promotion
 evidence must come from committed code or an archived diff with an explicit exception.
 
-## Parallel-agent boundaries
+## Concurrent-contributor boundaries
 
-- Delegate concrete, non-overlapping scopes with named output paths.
-- Agents may read shared committed context but edit only their assigned worktree/subpaths.
+- Assign concrete, non-overlapping scopes with named output paths.
+- Contributors may read shared committed context but edit only their assigned worktree/subpaths.
 - One integrator owns overlapping index/navigation files and final staging.
-- Agents report findings instead of modifying unrelated issues they discover.
+- Contributors report findings instead of modifying unrelated issues they discover.
 - Before integration, inspect changed paths and reconcile concurrent edits deliberately.
 
-If agents share one physical worktree, assign disjoint files and avoid concurrent formatters or git
-operations. Prefer independent worktrees for implementation agents when commits are expected.
+If contributors share one physical worktree, assign disjoint files and avoid concurrent formatters or
+git operations. Prefer independent worktrees for implementation work when commits are expected.
 
 ## Run-state machine
 
@@ -105,4 +105,4 @@ Before handing off an effort:
 - Concurrent smoke runs cannot overwrite each other's files.
 - Every result points to a code/data/config/environment identity.
 - Invalid or interrupted runs remain distinguishable from negative scientific results.
-- The handoff process proves other sessions and worktrees were left untouched.
+- The handoff process proves other contributors' branches and worktrees were left untouched.

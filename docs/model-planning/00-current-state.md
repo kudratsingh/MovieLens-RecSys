@@ -1,5 +1,8 @@
 # Current model state and gap assessment
 
+> **Record.** Accurate as of 2026-09-04 (`1d189a8`). Superseded by
+> [`../status/`](../status/README.md) and [`../results.md`](../results.md). Not maintained.
+
 This snapshot describes committed code at `1d189a8` on 2026-09-04. It distinguishes
 research models, the small served demo bundle, and lifecycle capabilities; treating them
 as one thing would overstate readiness.
@@ -19,15 +22,16 @@ full-data v2 or begin a third tuning cycle without new evidence and a new owner 
 
 ## Repository reality
 
-- `main` and `origin/main` are at `1821dc5` from 2026-08-30.
+- At the snapshot, `main` was at `1821dc5` from 2026-08-30.
 - The current SASRec line is stacked on the two-tower v2 line and is ahead of `main`.
 - `fix/ranker-training-exclusions` contains two model-platform fixes not present in the
   SASRec lineage: point-in-time serving-equivalent exclusions and a tested definition of
   the Python-training/Feast-serving feature boundary.
 - Several status and index documents still describe SASRec as deferred or the next rung
   as undecided. These must be reconciled before publication.
-- The original worktree contains an untracked, stale `docs/progress.md`. It is user-owned
-  and must not be deleted or silently treated as current truth.
+- A stale `docs/progress.md` (last updated 2026-05-31) sat beside the status ledger. It has since
+  been archived as [`docs/records/progress-log-2026-05-31.md`](../records/progress-log-2026-05-31.md)
+  and removed from `docs/` (D-014).
 
 ## What the SASRec branch already provides
 
@@ -134,3 +138,11 @@ The repository has a strong production-shaped demo serving path for item-item pl
 LightGBM. It does not yet have a production lifecycle for the exact full-data artifacts
 that won offline, and SASRec is research-only. Bridging `train -> evaluate -> immutable
 artifact -> register -> promote -> serve -> observe` is the central program dependency.
+
+## 2026-10-05 — the current executable state
+
+This snapshot stays as written. The modeling track's current executable state is
+[`phase-a-work-orders.md`](phase-a-work-orders.md): the owner's 2026-10-05 build brief transcribed
+as nine work orders (WO-1 to WO-9), with decisions D1–D7, stop rules, run budget and open questions.
+What has landed since this snapshot is in [`../status/`](../status/README.md); the numbers are in
+[`../results.md`](../results.md).

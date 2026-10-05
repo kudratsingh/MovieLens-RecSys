@@ -98,3 +98,54 @@ src/features/feast_repo/data/registry.db
 
 # Private working notes for the agents coordinating on this repo; never published
 .coordination/
+
+# Key material and local credentials: nothing of this kind belongs in a public tree
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.agekey
+*age-identity*
+rclone.conf
+.rclone.conf
+.netrc
+.pgpass
+.envrc
+.direnv/
+*.env.*
+!*.env.example
+
+# Python tooling output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+.tox/
+.nox/
+
+# Model weights and dumps that are produced locally, never committed
+*.ckpt
+*.safetensors
+*.faiss
+*.npy
+*.npz
+*.h5
+mlflow.db
+*.dump
+*.sql.gz
+/backups/
+
+# Root-level node output (web/.gitignore covers web/)
+node_modules/
+.next/
+
+# Local notes and scratch
+CLAUDE.local.md
+*.local.md
+/scratch/
+/tmp/
+._*
+*~

@@ -7,7 +7,8 @@ This project started as a portfolio-grade applied ML build and, **as of 2026-06-
 - **Original framing (still load-bearing).** Confront the technologies and scenarios a mid-to-senior ML engineer actually deals with at an enterprise — the engineering around the model as much as the model itself. ML counterpart to my Incident & Workflow Platform project — same philosophy, same trick of building something substantial enough that production concerns force themselves on you end-to-end.
 - **Expanded framing (2026-06-02 scope shift).** The system itself should meet enterprise standards on **real auth, multi-tenancy, observability, and synthetic-load realism** — not just look enterprisey in writeups. The Phase 3+ work that previously assumed "internal-only, no real auth" is replaced with the real shape: an authenticated, multi-tenant API with synthetic-traffic harnesses that exercise the latency SLO and cold-start path under load. See the Phase 3 section for the expanded scope and the "What the system does" section for the updated system description.
 - **Modeling framing (2026-08-29).** The main goal is the models. Keep building recommenders that track what the industry ships today: the two-stage architecture now (item-item and two-tower retrieval, a LightGBM ranker), sequence models with transformer encoders (the SASRec / BERT4Rec family) next, and whatever follows them — each choice with its own ADR, each scored through the one evaluation harness. The harness — auth, tenancy, the feature store, the latency gate, the product — is being finished **now** so those models are usable by a real user, and that is what Phase 3 is about. Once Phase 3 closes, the remaining phases are re-prioritized by urgency, and the modeling track resumes as the primary line of work. Anything in this file or the public docs that reads as "the engineering is the point, the modeling is incidental" is out of date. The ladder itself, with its approval gate and decision log, is `docs/modeling-roadmap.md`.
-- **Experiment cost policy (2026-09-05).** **One run per configuration.** Do not repeat a run two or three times to confirm it by seed, and do not treat a single-seed result as unusable — until the ladder reaches modern advanced transformer-based models, the cost is not worth it. A full-data SASRec seed is ~4.5 hours, so a three-seed set is ~13.5 hours, and the priority is reaching advanced architectures rather than re-confirming results already believed. Uncertainty that would have come from seed spread is sought from cheaper sources instead: a subsample, a bootstrap over users, or an already-recorded run. This supersedes the three-seed requirement in ADR 0004's 2026-09-04 amendment; `src/evaluation/retrieval_gate.py` still enforces the complete set and returns `incomplete` without it, so the gate cannot issue a verdict until that is amended.
+- **Experiment cost policy (2026-09-05).** **One run per configuration.** Do not repeat a run two or three times to confirm it by seed, and do not treat a single-seed result as unusable — until the ladder reaches modern advanced transformer-based models, the cost is not worth it. A full-data SASRec seed is ~4.5 hours, so a three-seed set is ~13.5 hours, and the priority is reaching advanced architectures rather than re-confirming results already believed. Uncertainty that would have come from seed spread is sought from cheaper sources instead: a subsample, a bootstrap over users, or an already-recorded run. This supersedes the three-seed requirement in ADR 0004's 2026-09-04 amendment. Since #139 `src/evaluation/retrieval_gate.py` takes the seed policy as an argument rather than a constant: the default is still the three-seed set, a stated single seed (`RETRIEVAL_SEEDS=42` on `make gate-retrieval`) reaches a verdict that records `seed_regime=single_seed` and an `uncertainty_basis` saying what one run cannot show, and in either regime the warm clause passes on the one-sided 95% lower bound of the paired user bootstrap rather than on the point estimate. A run set that does not match the stated seeds exactly, or lacks per-user recall vectors, still returns `incomplete`.
+- **Experiment cost policy note (2026-10-05, D5).** **Three training runs for the final headline models only.** SASRec v1, the Phase A winner and two-tower v2 are each trained at seeds 42, 7 and 13 and on the rolling windows w1 and w2 beside the current holdout ([`docs/model-planning/phase-a-work-orders.md`](docs/model-planning/phase-a-work-orders.md), WO-7); popularity and item-item are deterministic and need no repeats. Everything else — every pilot and every ADR 0020 cell — stays at one run per configuration under the 2026-09-05 policy above. Why the headline models are different: one run cannot rule out luck, and a headline number is the claim a reader will take away; and the cost argument that justified one run has moved, because the fast trainer makes repeats cheap (a full fast run is about 30 minutes against 4.9 hours on the original trainer). If WO-3 does not repair the fast trainer, each SASRec v1 repeat goes back to 4.9 hours and the rule still holds — the cost is then stated, not avoided.
 
 The output I care about: I should be able to defend every architectural choice in a senior-level design review, debug any layer when it breaks, and articulate the tradeoffs vs. alternatives — *and* I should be able to hand the running system to an enterprise SRE without needing to apologize for what's missing.
 
@@ -86,7 +87,7 @@ browser → Next.js app → auth → FastAPI (recommendations, features, model m
 
 Each phase earns a specific set of mid-level muscles. Don't skip ahead — the lessons compound.
 
-The modeling track has its own ladder in [`docs/modeling-roadmap.md`](docs/modeling-roadmap.md) — two-tower v2, SASRec, a sequence-aware ranker, multi-objective ranking, mixing and re-ranking, bandits, and the generative/foundation end state. **Every rung needs my approval before work starts** (an ADR proposal, then an *approved* row in the roadmap's decision log), rungs can be skipped with a recorded reason, and the champion changes only through ADR 0001's gate.
+The modeling track has its own ladder in [`docs/modeling-roadmap.md`](docs/modeling-roadmap.md) — two-tower v2, SASRec, a sequence-aware ranker, multi-objective ranking, mixing and re-ranking, bandits, and the generative/foundation end state. **Every rung needs my approval before work starts** (an ADR proposal, then an *approved* row in the roadmap's decision log), rungs can be skipped with a recorded reason, and the champion changes only through ADR 0001's gate. The modeling track's next phase is Phase A of the 2026-10-05 build brief — the SASRec encoder written by hand, trained larger, and compared fairly — run from [`docs/model-planning/phase-a-work-orders.md`](docs/model-planning/phase-a-work-orders.md); Phases 4–6 below are parked behind it.
 
 The execution sequence and definition of done for the working Phase 3 demo live
 in [`docs/records/demo-plan.md`](docs/records/demo-plan.md). This file remains authoritative for
@@ -211,16 +212,17 @@ These are the things I'll hold the project to. Every one of them maps to a real 
 movielens-recsys/
 ├── CLAUDE.md                  # this file
 ├── README.md                  # the public front door: status, quickstart, measured numbers, ADR index
-├── Makefile                   # train, serving-artifacts*, serve, test, lint, db-migrate, promote*, demo-*,
-│                              #   prod-*, api-contract*, web-api-types* targets
+├── Makefile                   # train, train-sasrec*, gate*, serving-artifacts*, serve, test, lint, db-migrate,
+│                              #   tmdb-*, promote*, demo-*, prod-*, staging-*, api-contract*, web-api-types* targets
 ├── scripts/                   # generate_openapi.py — committed OpenAPI contract + CI drift check
 ├── alembic.ini
-├── alembic/                   # Phase 3 — tenant roles, tenants registry, tenant_id + forced RLS, personas, feature tables, audits
+├── alembic/                   # Phase 3 — tenant roles, tenants registry, tenant_id + forced RLS, personas, feature tables, audits,
+│                              #   the TMDB catalog tables, retrieval provenance on the prediction audit
 ├── docker-compose.yml         # default dev stack: postgres, redis, mlflow, prometheus, grafana, pgbouncer, keycloak
 ├── docker-compose.demo.yml    # layered on the default stack: api, web, feature-server, model-server, k6 (load profile)
 ├── docker-compose.ci-load.yml # CI load job only (DEMO_COMPOSE_EXTRA): postgres data directory on tmpfs,
 │                              #   so the runner's disk is out of the latency measurement (ADR 0010)
-├── docker-compose.staging.yml # planned — Phase 3 multi-environment infra
+├── docker-compose.staging.yml # staging: an environment-only overlay on docker-compose.prod.yml, never a copy (`make up-staging`)
 ├── docker-compose.prod.yml    # THE production stack, and its own local rehearsal: generated secrets,
 │                              #   ENVIRONMENT=production, no published data-store ports, Caddy edge
 │                              #   terminating https; GHCR images on the box, build contexts on a laptop
@@ -232,17 +234,17 @@ movielens-recsys/
 │   ├── status/                # the project ledger: per-phase detail + the long-form current step (moved out of this file)
 │   ├── architecture.md        # public architecture overview (offline + online paths)
 │   ├── diagrams/              # mermaid sources + rendered light/dark SVGs (`make diagrams`)
-│   ├── assets/                # social-preview.png and the script that renders it
 │   ├── adr/                   # backend ADRs (flat numeric line) + cross-cutting
 │   │   └── frontend/          # frontend ADRs (own numeric line)
 │   ├── api/                   # generated openapi.json (do not hand-edit) + regeneration notes,
 │   │                          #   plus overview.md — every path/method, auth, headers, worked response
-│   ├── assets/                # social preview + eda/ — the figures docs/eda.md embeds (`make eda`)
+│   ├── assets/                # social-preview.png and the script that renders it, plus eda/ — the figures
+│   │                          #   docs/eda.md embeds (`make eda`)
 │   ├── frontend/              # movie-discovery product docs: design contracts, frontend system,
 │   │   │                      #   implementation plan, readiness, surface contracts (catalog, library
 │   │   │                      #   feedback, seen), testing strategy, finish-gate review
 │   │   ├── evidence/          # per-bundle + per-surface screenshot matrices with per-file provenance;
-│   │   │                      #   README.md indexes all 13 sets and says which describe the current build
+│   │   │                      #   README.md indexes all 14 sets and says which describe the current build
 │   │   └── records/           # not maintained: product discovery, bundles 5–7 handoff, baseline
 │   │                          #   evidence, and the four dated finish-gate passes verbatim
 │   ├── records/               # not maintained: demo plan, MVP/deployment handoff, serving-fix handoff,
@@ -250,6 +252,13 @@ movielens-recsys/
 │   ├── eda.md
 │   ├── results.md             # the measured offline numbers — baselines, candidate stage, ranker,
 │   │                          #   ADR 0011 cold-start coverage; each carries its run, date and machine
+│   ├── model-planning/        # the model program: guardrails, decision register, owner decisions (O-n),
+│   │                          #   memos, experiment template, and phase-a-work-orders.md (the current spec)
+│   ├── modeling/              # model-side contracts and walkthroughs (sasrec-artifacts.md)
+│   ├── experiments/           # per-run configuration and evidence JSON (sasrec/, tolerance/, twotower-sweep/)
+│   ├── data/                  # TMDB metadata snapshot notes and catalog coverage
+│   ├── cold-start-routing-decision.md   # 2026-08-30: the routing divergence measured both ways (threshold 10)
+│   ├── promotion-gate-slice-decision.md # 2026-08-29: which slice the promotion gate reads
 │   ├── demo-runbook.md        # clean-checkout demo startup, seeding, smoke, reset, troubleshooting
 │   ├── deployment-runbook.md  # production: the machine, DNS, host bootstrap, secrets, one-time SQL, the
 │   │                          #   first deploy, verify, rollback, backups + restore drill, housekeeping
@@ -263,16 +272,22 @@ movielens-recsys/
 │   ├── features/              # point-in-time feature module, Feast repo (feast_repo/), materialization, online reads
 │   ├── models/
 │   │   ├── artifacts.py       # SHA-256-pinned serving manifest + deterministic item-item index
-│   │   ├── candidates/        # popularity, CF/ALS, item-item, two-tower
+│   │   ├── bundle_publisher.py # assembles the schema 2 served bundle from pinned artifacts
+│   │   ├── retriever.py       # one retrieval interface across item-item and SASRec
+│   │   ├── popularity_artifact.py # the popularity fill order a bundle publishes, as deterministic bytes
+│   │   ├── candidates/        # popularity, CF/ALS, item-item, last-item, content (cold items), two-tower,
+│   │   │                      #   SASRec (encoder, artifact, sequence data)
 │   │   └── ranker/            # LightGBM LambdaRank
 │   ├── training/              # offline training entrypoints + demo artifact packaging
-│   ├── evaluation/            # offline metrics, evaluation gate
+│   ├── evaluation/            # offline metrics, the ranking gate (gate.py), the retrieval recall@500 gate
+│   │                          #   (retrieval_gate.py), rolling-origin backtest aggregation, the tolerance
+│   │                          #   study, the protocol manifest, and the SASRec encoder latency benchmark
 │   ├── auth/                  # Phase 3 — JWKS cache, auth middleware, tenant-scoped request transaction
 │   ├── serving/
 │   │   ├── app.py             # FastAPI entrypoint
 │   │   ├── tenancy/           # Phase 3 — tenant router, per-tenant config resolution
 │   │   ├── audit.py           # Phase 3 — RLS-scoped prediction audit writer
-│   │   ├── model_server.py    # Phase 3 — private Feast + LightGBM sidecar
+│   │   ├── model_server.py    # Phase 3 — private Feast + LightGBM (+ SASRec encoder) sidecar
 │   │   ├── policy.py          # Phase 3 — serving-policy, exclusion-filter, and audit-digest vocabulary
 │   │   ├── request_id.py      # Phase 3 — X-Request-ID adoption and echo on every response
 │   │   ├── routing/           # Phase 6 — champion/challenger split, shadow routing
@@ -322,7 +337,9 @@ movielens-recsys/
     │                          #   manifest.json, retrained and hash-compared by `serving-artifacts-check`
     ├── model-bundle-served/   # the *served* full-data bundle: schema 2 with lineage, assembled from
     │                          #   pinned artifacts by `make serving-artifacts-publish`, checked by
-    │                          #   `serving-artifacts-verify`. Both are baked; MODEL_ARTIFACT_DIR picks
+    │                          #   `serving-artifacts-verify`. Both are baked; MODEL_ARTIFACT_DIR picks which
+    │                          #   one an image serves (prod: the served bundle; demo: the fixture). Holds only
+    │                          #   a placeholder .gitkeep until `make serving-artifacts-publish` writes a payload
     ├── pgbouncer/             # dev config plus the production image: env-rendered, scram-sha-256, forced-user aliases
     ├── postgres/              # pgbouncer_auth SECURITY DEFINER lookup, run once during provisioning
     ├── postgres-init/         # dev-only mlflow database bootstrap
@@ -355,17 +372,18 @@ movielens-recsys/
 
 ## Current status
 
-**Updated 2026-09-15.** Phases 1 and 2 are complete; Phase 3 is in progress. This is the short form — the full ledger (every PR, what it landed and why, the remaining items per track, and the long-form current step) lives in [`docs/status/`](docs/status/README.md).
+**Updated 2026-10-05.** Phases 1 and 2 are complete. Phase 3's engineering harness is on `main`; serving is parked (D3), and the modeling track is running Phase A of the 2026-10-05 build brief. This is the short form — the full ledger (every PR, what it landed and why, the remaining items per track, and the long-form current step) lives in [`docs/status/`](docs/status/README.md).
 
-- **On `main`:** the authenticated, RLS-isolated two-stage serving path — item-item retrieval and a LightGBM ranker in a private sidecar, Feast/Redis features, durable prediction *and* request audits, per-tenant champion/quota columns on the registry, a shared Redis rate limiter, the pinned k6 p99 gate; the movie-discovery product (Discover, Browse, movie detail, Library with Seen, Quick Picks) cut over at `/`; the ADR 0011 cold-start cohort; measured offline results in `docs/results.md`; the production deployment specified and rehearsed (ADR 0013) but **not provisioned — nothing is deployed**; dev and staging Compose beside it.
-- **Frontend finish gate:** every criterion a reviewer can settle passes; HOLD only on moderated sessions with real participants.
-- **Modeling ladder:** two learned retrievers now clear the retrieval gate — SASRec at warm recall@500 **0.5092** (after the eval fast-path fix, #162) and the corrected two-tower v2 at **0.5113** (#158 fixed the FAISS row mapping that had made every earlier two-tower number a measurement of a bug; #182) — against item-item's 0.3991. The per-route bundle (SASRec + a learned-route LightGBM retrained on its candidates + the incumbent LightGBM on the fallback route, O-7) clears the end-to-end gate at overall NDCG@10 0.2218 vs 0.2008. Rung 3 increment 1 was measured and refused (+2.78% warm vs +3%, #159); the all-positions SASRec objective is an opt-in ablation, −4.62% at full scale (#183, O-22). Champion is still item-item + LightGBM until the SASRec bundle passes the authenticated k6 gate on the full-catalog demo and is promoted with `make promote`.
-- **Open decisions, mine:** ADR 0019 (Rung 5, multi-retriever mixing, PR #174) and ADR 0020 (SASRec v2 capacity cells, PR #179) await the approval gate; a DVC remote for the TMDB snapshot; the GPU trigger stands as decided (CPU until a predeclared cell costs more than a night). The two 2026-08-30 proposals (`logit_temperature`, `RANKER_POSITIVE_WINDOW_DAYS`) are superseded by the corrected two-tower run and the retrained-ranker result.
-- **Remaining Phase 3 work** is itemised in [`docs/status/phase-3.md`](docs/status/phase-3.md): product track — moderated sessions then `/legacy` retirement, `/me` ownership, N6. Training-time candidate exclusions match the serving rule as of 2026-09-03; the feature-source boundary is D-009, costed in [`docs/model-planning/memos/feature-source-boundary.md`](docs/model-planning/memos/feature-source-boundary.md) and deferred on 2026-09-04 to prioritise modeling — it becomes blocking before any full-25M materialization.
+- **On `main`:** the authenticated, RLS-isolated two-stage serving path — item-item retrieval and a LightGBM ranker in a private sidecar, Feast/Redis features, durable prediction *and* request audits with retrieval provenance on every audit row, per-tenant champion/quota columns on the registry, a shared Redis rate limiter, the pinned k6 p99 gate; the schema 2 bundle format, which the sidecar can load fail-closed with a SASRec retriever and one LightGBM ranker per route; the manual champion promotion and revert (`make promote`, `make promote-revert`); TMDB metadata for 98.5% of the catalog, DVC-tracked and loaded; the movie-discovery product (Discover, Browse, movie detail, Library with Seen, Quick Picks) cut over at `/`; the ADR 0011 cold-start cohort; measured offline results in `docs/results.md`; the production deployment specified and rehearsed (ADR 0013) but **not provisioned — nothing is deployed**; dev and staging Compose beside it.
+- **Serving is parked (D3, 2026-10-05).** Nothing new is being served. The SASRec champion swap, its authenticated k6 run, the Hetzner deploy, the moderated frontend sessions and `/legacy` retirement are out of scope until Phase A closes — parked, not dropped. Item-item + LightGBM stays the champion. One deploy prerequisite is parked with them: `infra/model-bundle-served/` holds only a placeholder, and since the production compose points the sidecar at that directory, production will not boot until `make serving-artifacts-publish` writes a bundle into it.
+- **Frontend finish gate:** every criterion a reviewer can settle passes; HOLD only on moderated sessions with real participants, which are parked under D3.
+- **Modeling ladder:** two learned retrievers clear the retrieval gate — SASRec at warm recall@500 **0.5092** (after the eval fast-path fix, #162) and the corrected two-tower v2 at **0.5113** (#158 fixed the FAISS row mapping that had made every earlier two-tower number a measurement of a bug; #182) — against item-item's 0.3991; both are measured, not promoted. The per-route bundle (SASRec + a learned-route LightGBM retrained on its candidates + the incumbent LightGBM on the fallback route, O-7) clears the end-to-end gate at overall NDCG@10 0.2218 vs 0.2008. Rung 3 increment 1 was measured and refused (+2.78% warm vs +3%, #159), so DIN was not built. The all-positions SASRec objective is 9.8× faster and −4.62% at full scale (#183); Phase A's WO-3 tries to repair it. ADR 0019 (Rung 5) and ADR 0020 (SASRec v2) were approved on 2026-09-15; ADR 0020 carries a 2026-10-05 amendment recording the brief's decisions, and Rung 5 is deferred behind Phase A.
+- **Open decisions, mine:** from the brief — who writes WO-2, a spending ceiling for rented GPU time, and a DVC remote for the 436 MB TMDB snapshot (needed before Phase B's B2); the accepted CPU-versus-GPU difference, which goes into ADR 0020 before any non-CPU run; and the WO-8 sealed-window trigger, proposed in `docs/model-planning/memos/sealed-test-and-dataset-policy.md` and awaiting my written approval. MovieLens 32M stays out of Phase A (D2). The two 2026-08-30 proposals (`logit_temperature`, `RANKER_POSITIVE_WINDOW_DAYS`) are superseded by the corrected two-tower run and the retrained-ranker result.
+- **Remaining Phase 3 work** is itemised in [`docs/status/phase-3.md`](docs/status/phase-3.md): product track — moderated sessions then `/legacy` retirement, `/me` ownership, N6, all parked under D3. Training-time candidate exclusions match the serving rule as of 2026-09-03; the feature-source boundary is D-009, costed in [`docs/model-planning/memos/feature-source-boundary.md`](docs/model-planning/memos/feature-source-boundary.md) and deferred on 2026-09-04 to prioritise modeling — it becomes blocking before any full-25M materialization.
 
 ### Current step
 
-Measure the SASRec per-route bundle under the unchanged authenticated k6 gate on the full-catalog demo (`make promote` on the demo tenant is the measurement setup, incumbent control p99 11.06 ms), then swap the champion. Then the memory-bounded rewrite of the copied-prefix SASRec data path (O-22), the sequence-valid synthetic cold cohort, and the owner's calls on ADR 0019 and ADR 0020. Long form and the ledger: [`docs/status/README.md`](docs/status/README.md#current-step).
+Phase A, from [`docs/model-planning/phase-a-work-orders.md`](docs/model-planning/phase-a-work-orders.md): nine work orders in order, one branch and one PR each, one full-data training job at a time. **WO-1 first** — restore the trainer of record (`strict-prefix-final-position-v1` as the default `training_objective`, on a data path that never builds the examples-times-window table) and prove it with bit-identical weights on a `pilot6-bce-neg32` pilot; **then WO-2** — the SASRec encoder written from the pieces D7 allows, reproducing v1's warm recall@500 0.5091713455 from the saved model. WO-3 to WO-9 follow. Long form and the ledger: [`docs/status/README.md`](docs/status/README.md#current-step).
 
 ## How to work with Claude Code on this
 

@@ -18,6 +18,7 @@ body:
         - web (Next.js product surfaces and the BFF)
         - serving (candidates, ranker, feature reads, the model sidecar)
         - infra (Compose stacks, images, deploy, CI)
+        - models (training, evaluation, retrievers, ranker)
         - docs (ADRs, runbooks, contracts)
     validations:
       required: true

@@ -1,9 +1,11 @@
 %% Sources: src/data/ingest.py, src/data/split.py, docs/eda.md (split figures),
 %% src/features/, src/features/feast_repo/, src/models/candidates/,
 %% src/models/ranker/lgbm.py, src/evaluation/protocol.py, src/training/demo_artifacts.py,
-%% src/models/artifacts.py, infra/model-bundle/manifest.json, infra/features/Dockerfile,
-%% Makefile (serving-artifacts-check), .github/workflows/ci.yml.
-%% No offline metric values appear here: none are recorded in the repository.
+%% src/models/artifacts.py, src/models/bundle_publisher.py, src/models/candidates/sasrec.py,
+%% infra/model-bundle/manifest.json, infra/model-bundle-served/, infra/features/Dockerfile,
+%% docker-compose.demo.yml, docker-compose.prod.yml (MODEL_ARTIFACT_DIR),
+%% Makefile (serving-artifacts-check, serving-artifacts-publish), .github/workflows/ci.yml.
+%% No offline metric values are drawn here; the measured numbers are in docs/results.md.
 flowchart TB
   ML["MovieLens 25M<br/>25,000,095 ratings · 162,541 users<br/>59,047 rated movies · 0.2605% dense"]
   ING["src/data/ingest.py<br/>Postgres is the source of truth<br/>the dataset is DVC-tracked"]
@@ -20,8 +22,9 @@ flowchart TB
     direction TB
     C1["popularity baseline"]
     C2["CF / ALS"]
-    C3["item-item cosine, k=200<br/>the shipped generator"]
-    C4["two-tower + FAISS IVF-Flat"]
+    C3["item-item cosine, k=200<br/>the demo fixture's generator"]
+    C4["two-tower + FAISS<br/>measured, not promoted"]
+    C5["SASRec encoder + exact FAISS<br/>gated, loadable by the sidecar<br/>measured, not promoted"]
   end
 
   RANK["LightGBM LambdaRank<br/>scored on NDCG@10<br/>8 ordered features from src/feature_contract.py"]
@@ -33,17 +36,22 @@ flowchart TB
   CAND -.-> MLF
   RANK -.-> MLF
 
-  PKG["src/training/<br/>demo_artifacts.py<br/>packages the serving bundle"]
+  PKG["src/training/demo_artifacts.py<br/>trains and packages the demo fixture"]
   C3 --> PKG
   RANK --> PKG
 
-  MAN["ServingManifest — src/models/artifacts.py<br/>SHA-256 per artifact, tenant_id, ordered feature contract<br/>candidate item-item-cosine / demo-itemitem-v1<br/>ranker lightgbm-lambdarank / demo-lgbm-v1<br/>feature_version feast-phase3-v1"]
-  PKG --> MAN
+  PUB["src/models/bundle_publisher.py<br/>assembles a full-data bundle<br/>from an owner-approved spec, trains nothing"]
+  C5 --> PUB
+  RANK --> PUB
 
-  COMMIT["Committed at infra/model-bundle/<br/>candidate-index.json · ranker.txt · manifest.json"]
+  MAN["ServingManifest — src/models/artifacts.py, schema 2<br/>a retriever family, one LightGBM booster per route,<br/>tenant_id, ordered feature contract, lineage, SHA-256 per artifact<br/>the demo fixture is schema 1, normalised on load:<br/>item-item-cosine / demo-itemitem-v1 · demo-lgbm-v1 · feast-phase3-v1"]
+  PKG --> MAN
+  PUB --> MAN
+
+  COMMIT["Two bundles at distinct paths<br/>infra/model-bundle/ — the demo fixture<br/>infra/model-bundle-served/ — the served bundle,<br/>a placeholder until one is published"]
   MAN --> COMMIT
 
-  IMG["Baked into the features image at build<br/>feast apply runs at build time<br/>CI's serving-artifacts job rebuilds and diffs<br/>against the committed bundle"]
+  IMG["Both baked into the features image at build<br/>MODEL_ARTIFACT_DIR picks one: demo the fixture,<br/>production the served path · feast apply at build<br/>CI's serving-artifacts job rebuilds and diffs the fixture"]
   COMMIT --> IMG
 
   GHCR["GHCR — linux/amd64<br/>tagged with the commit SHA<br/>rolling back the model is rolling back the image"]
@@ -53,7 +61,7 @@ flowchart TB
   RDS[("Redis — Feast online store")]
   FST --> MATZ --> RDS
 
-  SERVE["model-server loads the bundle once at startup,<br/>verifies every SHA-256, warms through a real rank,<br/>and refuses traffic until it is warm"]
+  SERVE["model-server loads the bundle once at startup,<br/>verifies every SHA-256, warms through a real rank,<br/>and refuses traffic until it is warm —<br/>or refuses to boot when the directory has no manifest"]
   GHCR --> SERVE
   RDS --> SERVE
 

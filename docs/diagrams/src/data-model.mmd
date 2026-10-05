@@ -1,6 +1,9 @@
-%% Sources: src/data/schema.py and alembic/versions/0001..0017. Every column,
-%% type and key below was read from those files. RLS marks a table carrying
-%% ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
+%% Sources: src/data/schema.py and alembic/versions/0001..0019. Every column,
+%% type and key below was read from those files. The twelve tmdb_* tables
+%% (migration 0018) are the normalised TMDB snapshot: shared catalog data with
+%% no tenant_id and no RLS, read by app_user and written by admin_user. Six of
+%% tmdb_movies' columns are as-of-pull values and never model features.
+%% RLS marks a table carrying ENABLE + FORCE ROW LEVEL SECURITY, whose policy is
 %% tenant_id = current_setting('app.tenant_id', true) on USING and WITH CHECK.
 %% Comments are kept short on purpose: an erDiagram lays entities out side by
 %% side, so a wide third column is what makes the whole picture unreadable at
@@ -146,6 +149,10 @@ erDiagram
     INTEGER excluded_count
     TEXT filter_policy
     TIMESTAMPTZ feature_event_time
+    TEXT retriever_family "0019"
+    TEXT retriever_sha256 "0019, replay key"
+    TEXT ranker_route "0019"
+    DOUBLE encoder_ms "0019, >= 0"
     TIMESTAMPTZ created_at
   }
 
@@ -163,6 +170,108 @@ erDiagram
     TEXT model_version
     TIMESTAMPTZ created_at
     NOTE every_other_route
+  }
+
+  tmdb_movies {
+    INTEGER movie_id PK, FK
+    INTEGER tmdb_id "indexed, not unique"
+    TEXT title
+    TEXT original_title
+    TEXT overview
+    TEXT tagline
+    DATE release_date
+    INTEGER runtime
+    TEXT original_language
+    BOOLEAN adult
+    BIGINT budget "as-of-pull"
+    BIGINT revenue "as-of-pull"
+    TEXT status "as-of-pull"
+    DOUBLE vote_average "as-of-pull"
+    INTEGER vote_count "as-of-pull"
+    DOUBLE popularity "as-of-pull"
+    INTEGER collection_id
+    TEXT collection_name
+    TEXT poster_path
+    TEXT backdrop_path
+    TEXT imdb_id
+    TIMESTAMPTZ pulled_at
+    NOTE shared "no tenant_id, no RLS"
+  }
+
+  tmdb_movie_genres {
+    INTEGER movie_id PK, FK
+    INTEGER genre_id PK
+    TEXT genre_name
+  }
+
+  tmdb_keywords {
+    INTEGER keyword_id PK
+    TEXT name
+  }
+
+  tmdb_movie_keywords {
+    INTEGER movie_id PK, FK
+    INTEGER keyword_id PK, FK
+  }
+
+  tmdb_people {
+    INTEGER person_id PK
+    TEXT name
+    TEXT original_name
+    SMALLINT gender
+    TEXT known_for_department
+    TEXT profile_path
+  }
+
+  tmdb_movie_cast {
+    INTEGER movie_id PK, FK
+    TEXT credit_id PK
+    INTEGER person_id FK
+    TEXT character
+    SMALLINT cast_order
+  }
+
+  tmdb_movie_crew {
+    INTEGER movie_id PK, FK
+    TEXT credit_id PK
+    INTEGER person_id FK
+    TEXT department
+    TEXT job
+  }
+
+  tmdb_production_companies {
+    INTEGER company_id PK
+    TEXT name
+    TEXT origin_country
+  }
+
+  tmdb_movie_production_companies {
+    INTEGER movie_id PK, FK
+    INTEGER company_id PK, FK
+  }
+
+  tmdb_production_countries {
+    INTEGER movie_id PK, FK
+    TEXT iso_3166_1 PK
+    TEXT name
+  }
+
+  tmdb_spoken_languages {
+    INTEGER movie_id PK, FK
+    TEXT iso_639_1 PK
+    TEXT name
+    TEXT english_name
+  }
+
+  tmdb_release_dates {
+    INTEGER movie_id PK, FK
+    TEXT iso_3166_1 PK
+    SMALLINT release_type PK
+    SMALLINT release_index PK
+    TEXT certification
+    TIMESTAMPTZ release_date
+    TEXT note
+    TEXT iso_639_1
   }
 
   user_features {
@@ -203,3 +312,16 @@ erDiagram
   movies ||--o| movie_catalog_metadata : describes
   movies ||--o{ user_movie_state : subject
   movies ||--o{ user_feedback_events : subject
+  movies ||--o| tmdb_movies : "TMDB snapshot"
+  tmdb_movies ||--o{ tmdb_movie_genres : has
+  tmdb_movies ||--o{ tmdb_movie_keywords : has
+  tmdb_keywords ||--o{ tmdb_movie_keywords : tags
+  tmdb_movies ||--o{ tmdb_movie_cast : has
+  tmdb_people ||--o{ tmdb_movie_cast : plays
+  tmdb_movies ||--o{ tmdb_movie_crew : has
+  tmdb_people ||--o{ tmdb_movie_crew : works
+  tmdb_movies ||--o{ tmdb_movie_production_companies : has
+  tmdb_production_companies ||--o{ tmdb_movie_production_companies : made
+  tmdb_movies ||--o{ tmdb_production_countries : has
+  tmdb_movies ||--o{ tmdb_spoken_languages : has
+  tmdb_movies ||--o{ tmdb_release_dates : has

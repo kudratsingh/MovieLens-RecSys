@@ -45,7 +45,7 @@ instead would be stricter, but it would change which positives survive into the
 training set and confound the retriever comparison with a population change. The
 count of learned-path positives whose strict prefix was shorter than the threshold
 is logged per arm, so the size of that compromise is on the record rather than
-hidden (decision O-6 in the private coordination notes).
+hidden (owner decision O-6, `docs/model-planning/owner-decisions.md`).
 
 Run with ``make train-sasrec-ranker``. Requires Postgres, a reachable MLflow
 tracking store, and the pinned SASRec artifact directory.

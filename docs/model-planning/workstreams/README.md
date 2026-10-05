@@ -11,7 +11,7 @@ across phases.
   manifest v2, lifecycle states, registration, promotion, and rollback.
 - [`capacity-and-observability.md`](capacity-and-observability.md) — training budgets, cloud/local
   selection, inference budgets, load scaling, and model-health signals.
-- [`worktree-and-run-safety.md`](worktree-and-run-safety.md) — isolation from other sessions,
+- [`worktree-and-run-safety.md`](worktree-and-run-safety.md) — isolation from concurrent work,
   resource coordination, and safe integration rules.
 
 When a workstream proposal becomes a lasting architecture choice, record it in an ADR. These files
