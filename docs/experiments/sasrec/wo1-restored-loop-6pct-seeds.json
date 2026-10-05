@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "WO-1 reference pilots (Next-Phase Build Brief, 2026-10-05; ADR 0020 amendment",
+    "2026-10-05): the objective of record on the memory-bounded data path (ADR 0020",
+    "step P1). pilot-6pct.json's pilot6-bce-neg32 cell, unchanged except the seed and",
+    "the now-explicit objective.",
+    "Seeds 7, 13 and 21. Runs only after the seed-42 cell matched the control. With",
+    "seed 42 these four results replace the 2026-09-04/05 pilot values",
+    "0.3186 / 0.3103 / 0.3258 / 0.2957 in docs/results.md. Record every result.",
+    "O-25 (2026-10-05): the 6% sample is cut at the full split's boundaries (cutoff 1466837397, holdout_end 1469256597). Expected protocol hash, from the preflight:"
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo1-pilot6-bce-neg32-s7",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 7,
+      "training_objective": "strict-prefix-final-position-v1"
+    },
+    {
+      "label": "wo1-pilot6-bce-neg32-s13",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 13,
+      "training_objective": "strict-prefix-final-position-v1"
+    },
+    {
+      "label": "wo1-pilot6-bce-neg32-s21",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 21,
+      "training_objective": "strict-prefix-final-position-v1"
+    }
+  ]
+}

@@ -6,14 +6,24 @@ import hashlib
 import json
 import logging
 import os
+import resource
+import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import mlflow
+import numpy as np
 import pandas as pd
 
 from src.config import Settings
-from src.data.split import temporal_split
+from src.data.split import (
+    TemporalSplit,
+    sealed_test_boundary,
+    temporal_cutoff,
+    temporal_split,
+)
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -22,7 +32,7 @@ from src.evaluation.protocol import (
     per_user_recall_document,
 )
 from src.models.candidates.sasrec import (
-    ALL_POSITION_TRAINING_OBJECTIVE,
+    LEGACY_TRAINING_OBJECTIVE,
     SASRecConfig,
     SASRecModel,
     gbce_beta,
@@ -58,8 +68,11 @@ SUBSAMPLE_SEED = 42
 ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 MODEL_TYPE = "sasrec"
-TRAINING_OBJECTIVE = ALL_POSITION_TRAINING_OBJECTIVE
 EVALUATION_INDEX = "torch-exact-inner-product-v1"
+
+
+class SealedPartitionError(RuntimeError):
+    """A run would fit on or score a rating at or after the sealed-test boundary."""
 
 
 def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> str:
@@ -85,10 +98,17 @@ def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> 
     ids recorded after. That is correct rather than unfortunate — the earlier ids
     could not express the distinction — and it is why the protocol hash, not this
     id, is what binds a comparison.
+
+    The training objective is part of the experiment, so it is in the id — except
+    for the objective of record, whose ids were all minted before the field
+    existed. Leaving it out there keeps a restored-loop v1 run carrying the same
+    id as run 528b1451 (it is the same experiment), while an all-positions run
+    keeps the id PR #183 gave it.
     """
     parameters = config.as_params()
     parameters.pop("seed")
-    parameters["training_objective"] = TRAINING_OBJECTIVE
+    if parameters["training_objective"] == LEGACY_TRAINING_OBJECTIVE:
+        parameters.pop("training_objective")
     parameters["sample_fraction"] = sample_fraction
     if sample_fraction != 1.0:
         parameters["subsample_seed"] = SUBSAMPLE_SEED
@@ -104,6 +124,71 @@ def resolve_sasrec_sample_fraction() -> float:
 def resolve_artifact_dir() -> Path:
     raw = os.environ.get(ARTIFACT_DIR_ENV_VAR, "").strip()
     return Path(raw) if raw else DEFAULT_ARTIFACT_DIR
+
+
+def peak_rss_bytes() -> int:
+    """This process's peak resident set size so far, in bytes.
+
+    ``ru_maxrss`` is bytes on macOS and kibibytes on Linux. It is a high-water
+    mark for the whole process — data loading included — which is the number
+    that decides whether a run fits on the machine.
+    """
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak if sys.platform == "darwin" else peak * 1024
+
+
+def encoder_weights_sha256(arrays: Mapping[str, Any]) -> str:
+    """Digest of encoder weights alone: names, dtypes, shapes, and raw bytes.
+
+    The archive's own SHA-256 also covers its metadata — the config, which now
+    carries ``training_objective`` — so two archives of identical weights from
+    two code versions hash differently. This digest is what "same weights"
+    means. It accepts a live ``state_dict`` or the arrays an exported archive
+    holds, so a model from any commit can be compared with one from this one.
+    """
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        value = arrays[name]
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        array = np.ascontiguousarray(value)
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(str(array.dtype).encode())
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes())
+    return f"sha256:{digest.hexdigest()}"
+
+
+def sealed_partition_params(
+    full_ratings: pd.DataFrame,
+    split: TemporalSplit,
+    fitted_frame: pd.DataFrame,
+) -> dict[str, int]:
+    """Refuse a run that would touch the sealed partition; return what it did touch.
+
+    The boundary is derived from the full frame, before any user subsample, so a
+    pilot is held to the same sealed window as a full run. Before O-25 a
+    subsample computed its own 80th-percentile cutoff, and the 6% pilot's landed
+    past the full split's ``holdout_end``. ``run_once`` now cuts a subsample at
+    the full frame's boundaries; this check stays as the backstop, on the rows
+    themselves. The returned timestamps fill the experiment record's partition
+    declaration.
+    """
+    boundary = sealed_test_boundary(full_ratings)
+    latest_fit = int(fitted_frame["timestamp"].max()) if not fitted_frame.empty else 0
+    latest_scored = int(split.holdout["timestamp"].max()) if not split.holdout.empty else 0
+    if latest_fit >= boundary or latest_scored >= boundary:
+        raise SealedPartitionError(
+            f"run would read the sealed partition: boundary {boundary}, latest fitted "
+            f"timestamp {latest_fit}, latest scored timestamp {latest_scored}"
+        )
+    return {
+        "sealed_boundary_timestamp": boundary,
+        "holdout_end_timestamp": split.holdout_end,
+        "latest_fit_timestamp": latest_fit,
+        "latest_scored_timestamp": latest_scored,
+    }
 
 
 def retrieval_diagnostics(
@@ -143,12 +228,19 @@ def run_once(
     run_label: str = "",
     artifact_root: Path | None = None,
 ) -> None:
+    full_ratings = ratings
     if sample_fraction != 1.0:
         ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
-    split = temporal_split(ratings)
+        # O-25: a subsample inherits the full frame's boundaries rather than
+        # computing its own quantile, which put the 6% pilot's whole holdout
+        # inside the sealed window. The guard below still checks the rows.
+        split = temporal_split(ratings, cutoff=temporal_cutoff(full_ratings))
+    else:
+        split = temporal_split(ratings)
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
     )
+    partition = sealed_partition_params(full_ratings, split, train_frame)
     train_counts = split.train.groupby("userId").size().to_dict()
     holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
     user_ids = list(holdout)
@@ -181,8 +273,8 @@ def run_once(
                 "n_train_rows": len(split.train),
                 "n_holdout_rows": len(split.holdout),
                 "k_candidates": K_CANDIDATES,
-                "training_objective": TRAINING_OBJECTIVE,
                 "evaluation_index": EVALUATION_INDEX,
+                **partition,
             }
         )
         envelope = protocol_manifest.run_envelope(
@@ -199,6 +291,7 @@ def run_once(
             recommendations = model.recommend_for_users(user_ids, K_CANDIDATES)
             result = evaluate(recommendations, holdout, train_counts, k=K_CANDIDATES)
             mlflow.log_metric("epoch_warm_recall_at_k_candidates", result.warm.recall, step=epoch)
+            mlflow.log_metric("epoch_peak_rss_bytes", peak_rss_bytes(), step=epoch)
             logger.info(
                 "Epoch %d loss=%.4f warm recall@%d=%.4f",
                 epoch,
@@ -210,6 +303,14 @@ def run_once(
         started = time.perf_counter()
         model.fit(train_frame, on_epoch=on_epoch, retrieval_backend="torch")
         fit_seconds = time.perf_counter() - started
+        fit_peak_rss = peak_rss_bytes()
+        logger.info(
+            "Fit %.1fs objective=%s example store %.3f GiB, peak RSS after fit %.3f GiB",
+            fit_seconds,
+            config.training_objective,
+            model._training_example_bytes / 2**30,
+            fit_peak_rss / 2**30,
+        )
         active_run = mlflow.active_run()
         if active_run is None:
             raise RuntimeError("MLflow run ended before SASRec artifact export")
@@ -218,8 +319,10 @@ def run_once(
         # The run-specific local copy is durable even if the tracking upload
         # fails. MLflow receives a second immutable copy for registry lineage.
         mlflow.log_artifacts(str(artifact_dir), artifact_path="model")
+        assert model._encoder is not None
         mlflow.set_tags(
             {
+                "sasrec_weights_sha256": encoder_weights_sha256(model._encoder.state_dict()),
                 "sasrec_artifact_sha256": manifest.model_sha256,
                 "sasrec_vocabulary_sha256": manifest.vocabulary_sha256,
                 "sasrec_manifest": f"model/{MANIFEST_FILENAME}",
@@ -288,6 +391,9 @@ def run_once(
                 "overall_ndcg_at_k_candidates": result.overall.ndcg,
                 "n_warm_users": result.n_warm_users,
                 "n_cold_users": result.n_cold_users,
+                "training_example_store_bytes": model._training_example_bytes,
+                "fit_peak_rss_bytes": fit_peak_rss,
+                "peak_rss_bytes": peak_rss_bytes(),
                 **diagnostics,
             }
         )

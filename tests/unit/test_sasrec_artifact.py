@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from src.models.candidates.sasrec import (
-    ALL_POSITION_TRAINING_OBJECTIVE,
+    LEGACY_TRAINING_OBJECTIVE,
     SASRecConfig,
     SASRecModel,
 )
@@ -67,8 +67,11 @@ def test_export_load_preserves_embeddings_and_candidates(tmp_path: Path) -> None
     )
     assert not (set(expected_candidates) & (set(history) | excluded))
     assert manifest == SASRecArtifactManifest.load(tmp_path / "run" / MANIFEST_FILENAME)
-    assert manifest.training_objective == ALL_POSITION_TRAINING_OBJECTIVE
-    assert loaded._training_objective == ALL_POSITION_TRAINING_OBJECTIVE
+    # The default objective is the objective of record again (WO-1); the
+    # manifest, the metadata and the reloaded config all have to agree on it.
+    assert manifest.training_objective == LEGACY_TRAINING_OBJECTIVE
+    assert loaded._training_objective == LEGACY_TRAINING_OBJECTIVE
+    assert loaded.config.training_objective == LEGACY_TRAINING_OBJECTIVE
 
 
 def test_export_is_byte_deterministic_and_never_overwrites(tmp_path: Path) -> None:

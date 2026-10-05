@@ -231,6 +231,11 @@ train-content:
 train-twotower:
 	python -m src.training.twotower
 
+# SASRec trains the objective of record (strict-prefix-final-position-v1, the loop
+# behind warm recall@500 0.5092) on the memory-bounded data path unless
+# SASREC_TRAINING_OBJECTIVE=all-positions-strict-timestamp-v1 selects the ablation.
+# Hyper-parameters come from SASREC_* variables; the frozen v1 cell itself is
+# docs/experiments/sasrec/full.json, run with `python -m src.training.sasrec_sweep`.
 train-sasrec:
 	python -m src.training.sasrec
 

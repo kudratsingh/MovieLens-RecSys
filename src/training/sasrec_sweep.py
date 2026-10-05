@@ -28,7 +28,14 @@ def parse_grid(spec: dict[str, Any]) -> tuple[float, list[tuple[str, SASRecConfi
         unknown = set(overrides) - fields
         if unknown:
             raise ValueError(f"cell {index} sets unknown SASRecConfig fields: {sorted(unknown)}")
-        cells.append((str(raw.get("label", f"cell{index}")), SASRecConfig(**overrides)))
+        config = SASRecConfig(**overrides)
+        # Validate before any data loads: a misspelled ``training_objective`` in
+        # a cells JSON should fail in a second, not after a 25M-row read.
+        try:
+            config.validate()
+        except ValueError as error:
+            raise ValueError(f"cell {index} is invalid: {error}") from error
+        cells.append((str(raw.get("label", f"cell{index}")), config))
     return float(spec.get("sample_fraction", 1.0)), cells
 
 

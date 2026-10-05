@@ -181,7 +181,8 @@ def test_fit_encodes_one_window_once_for_all_of_its_targets(
         [(user, user * 100 + item, item) for user in (1, 2) for item in range(5)],
         columns=["userId", "movieId", "timestamp"],
     )
-    model = SASRecModel(config=_config(batch_size=8), cold_start_threshold=None).fit(
+    config = _config(batch_size=8, training_objective="all-positions-strict-timestamp-v1")
+    model = SASRecModel(config=config, cold_start_threshold=None).fit(
         train, retrieval_backend="torch"
     )
 

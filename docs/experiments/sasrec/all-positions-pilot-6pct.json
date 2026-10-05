@@ -3,7 +3,10 @@
     "W28 canonical all-position training check on the established 6% user sample.",
     "Architecture and optimization match the frozen SASRec v1 BCE cell; only",
     "the training objective changes from copied final-position prefixes to one",
-    "causal encoder pass per bounded sequence window with every eligible target."
+    "causal encoder pass per bounded sequence window with every eligible target.",
+    "2026-10-05 (WO-1): training_objective written out when SASRecConfig gained the",
+    "field and its default returned to the objective of record. The run is unchanged;",
+    "without this line, re-running the file would train the copied-prefix objective."
   ],
   "sample_fraction": 0.06,
   "cells": [
@@ -13,7 +16,8 @@
       "negative_count": 32,
       "epochs": 2,
       "faiss_exact": true,
-      "seed": 42
+      "seed": 42,
+      "training_objective": "all-positions-strict-timestamp-v1"
     }
   ]
 }

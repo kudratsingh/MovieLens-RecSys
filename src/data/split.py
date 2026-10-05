@@ -74,7 +74,7 @@ class TemporalSplit:
     holdout_end: int  # cutoff + HOLDOUT_DAYS · 86400. timestamp ≥ holdout_end → test.
 
 
-def temporal_split(ratings: pd.DataFrame) -> TemporalSplit:
+def temporal_split(ratings: pd.DataFrame, *, cutoff: int | None = None) -> TemporalSplit:
     """Split a ratings DataFrame on time per ADR 0001.
 
     The cutoff T is the timestamp of the 80th-percentile interaction selected
@@ -89,6 +89,12 @@ def temporal_split(ratings: pd.DataFrame) -> TemporalSplit:
 
     Empty input returns three empty frames and ``cutoff == 0`` so callers can
     use the same code path regardless of whether their query produced rows.
+
+    ``cutoff`` imposes boundaries computed elsewhere — in practice
+    ``temporal_cutoff`` of the full frame — instead of this frame's own
+    quantile. A user subsample must use it (owner decision O-25, 2026-10-05):
+    the 6% pilot sample's own quantile landed 23.5 days past the full split's
+    sealed boundary, so its holdout was entirely sealed-test data.
     """
     if ratings.empty:
         empty = ratings.iloc[0:0]
@@ -101,7 +107,8 @@ def temporal_split(ratings: pd.DataFrame) -> TemporalSplit:
         )
 
     _require_timestamp_column(ratings)
-    cutoff = _cutoff(ratings)
+    if cutoff is None:
+        cutoff = _cutoff(ratings)
     holdout_end = cutoff + _HOLDOUT_SECONDS
 
     is_train = ratings[TIMESTAMP_COL] < cutoff
@@ -126,6 +133,14 @@ def _cutoff(ratings: pd.DataFrame) -> int:
     """ADR 0001's cutoff T, computed in the one place both split flavours read."""
     timestamps = ratings[TIMESTAMP_COL].to_numpy()
     return int(np.quantile(timestamps, TRAIN_FRACTION, method="lower"))
+
+
+def temporal_cutoff(ratings: pd.DataFrame) -> int:
+    """ADR 0001's train cutoff T for ``ratings``, without splitting it (0 if empty)."""
+    if ratings.empty:
+        return 0
+    _require_timestamp_column(ratings)
+    return _cutoff(ratings)
 
 
 def sealed_test_boundary(ratings: pd.DataFrame) -> int:

@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "WO-1 control (Next-Phase Build Brief, 2026-10-05): the trainer of record exactly as",
+    "git holds it, run once. Execute this file from a detached worktree at 89520be^, not",
+    "from the WO-1 branch; that commit's sweep accepts no training_objective field, and",
+    "its loop is the copied-prefix objective by construction. The cell is pilot-6pct.json's",
+    "pilot6-bce-neg32 at seed 42 with nothing changed. Its weights digest and metrics are",
+    "compared with wo1-restored-loop-6pct-s42.json; any difference stops WO-1.",
+    "O-25 (2026-10-05): the 6% sample is cut at the full split's boundaries (cutoff 1466837397, holdout_end 1469256597). Expected protocol hash, from the preflight:"
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "control_patch": "89520be^ plus the O-25 cut only: src/data/split.py gains temporal_split(cutoff=) and temporal_cutoff exactly as on the WO-1 branch; run_once splits the subsample at temporal_cutoff(full ratings). Recorded verbatim in the WO-1 run record.",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo1-oldloop-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42
+    }
+  ]
+}
