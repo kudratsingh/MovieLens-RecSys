@@ -2,7 +2,7 @@
 
 The first section is the guarantee the work order asks for — the v1 cell's first
 batches and loss are unchanged by WO-4. It is pinned two ways. A frozen copy of
-the pre-WO-4 loop, sampler and loss (``git show bfbd707:src/models/candidates/
+the pre-WO-4 loop, sampler and loss (``git show c07b4e0:src/models/candidates/
 sasrec.py``) lives in this file, so the comparison cannot drift with ``src/``; it
 runs everywhere. And the values that copy produced on the capture machine before
 any WO-4 code existed are pinned as constants, checked wherever the environment
@@ -95,7 +95,7 @@ def _frozen_sample_negatives(
     count: int,
     rng: np.random.Generator,
 ) -> torch.Tensor:
-    """``sample_negatives`` at bfbd707, verbatim."""
+    """``sample_negatives`` at c07b4e0, verbatim."""
     output = np.empty((len(positives), count), dtype=np.int64)
     for row, (history, positive) in enumerate(zip(histories.numpy(), positives.numpy())):
         forbidden = set(int(item) for item in history if item)
@@ -120,14 +120,14 @@ def _frozen_sample_negatives(
 def _frozen_sampled_gbce_loss(
     positive_logits: torch.Tensor, negative_logits: torch.Tensor, *, beta: float
 ) -> torch.Tensor:
-    """``sampled_gbce_loss`` at bfbd707, verbatim."""
+    """``sampled_gbce_loss`` at c07b4e0, verbatim."""
     positive = beta * F.softplus(-positive_logits)
     negative = F.softplus(negative_logits).sum(dim=1)
     return ((positive + negative) / (negative_logits.shape[1] + 1)).mean()
 
 
 def _frozen_v1_fit(train: pd.DataFrame, config: SASRecConfig) -> dict[str, Any]:
-    """``SASRecModel.fit`` plus ``_train_strict_prefix`` at bfbd707, index build omitted."""
+    """``SASRecModel.fit`` plus ``_train_strict_prefix`` at c07b4e0, index build omitted."""
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     items = sorted(int(item) for item in train["movieId"].unique())
@@ -227,7 +227,7 @@ def _current_v1_fit(
     }
 
 
-# Captured on 2026-10-05 from bfbd707 (WO-2's head, before any WO-4 code), with
+# Captured on 2026-10-05 from c07b4e0 (main with WO-1 and WO-2, before any WO-4 code), with
 # torch 2.13.0 / NumPy 2.4.6 on Darwin arm64 and one thread: the first three
 # batches, the first three step losses and both epoch losses (as float.hex), and
 # the trained weights' digest.
@@ -250,10 +250,10 @@ _GOLDEN_V1 = {
             "negatives": "207dddaeb9073ee56f426d3c3caefdde8646d9c6516883e5b9f761bb39c1ee8b",
         },
     ],
-    "first_step_losses": ["0x1.9950cc0000000p-1", "0x1.84a5460000000p-1", "0x1.6568a60000000p-1"],
+    "first_step_losses": ["0x1.9971100000000p-1", "0x1.84790a0000000p-1", "0x1.651c7a0000000p-1"],
     "n_steps": 12,
-    "epoch_losses": ["0x1.61f5220000000p-1", "0x1.0eb1c30000000p-1"],
-    "weights_sha256": "sha256:6b108090895313ce07ff00c6278ebaf5927ce125908d8fe72b45c07bc23d3cf0",
+    "epoch_losses": ["0x1.61c63caaaaaabp-1", "0x1.0ebeb6aaaaaabp-1"],
+    "weights_sha256": "sha256:391d6960c0f354dd755e47acc4894e9205895d01fb711f1b1b5fe39a0264e878",
 }
 
 
@@ -291,7 +291,7 @@ def test_the_v1_cell_reproduces_the_values_captured_before_wo4(
 def test_configuration_ids_of_recorded_cells_do_not_move() -> None:
     """Every WO-4 field is left out of the id at its default, so no id changes.
 
-    The values are what ``_configuration_id`` returned for these files at bfbd707.
+    The values are what ``_configuration_id`` returned for these files at c07b4e0.
     """
     expected = {
         "full.json": "c57774687d8151b9e605084a6eacd3eb5bc4fb32be1af00f9abd08b2af568efa",

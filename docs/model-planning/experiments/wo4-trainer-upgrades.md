@@ -15,8 +15,9 @@ D7), and [ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
 **Specification version:** wo4-v1 (2026-10-05). The cells are
 [`wo4-cell0b-pilot-6pct.json`](../../experiments/sasrec/wo4-cell0b-pilot-6pct.json) (CPU) and
 [`wo4-cell0b-mps-pilot-6pct.json`](../../experiments/sasrec/wo4-cell0b-mps-pilot-6pct.json)
-(`mps`). Branch `feat/wo4-trainer-upgrades`, cut from `feat/wo2-transformer-from-scratch` at
-`bfbd707` (WO-1 and WO-2 included).
+(`mps`). Branch `feat/wo4-trainer-upgrades`. It was first cut from `feat/wo2-transformer-from-scratch`
+at `bfbd707`, where the cell 0b CPU pilot ran. It was then rebased onto `main` at `c07b4e0`, which
+holds WO-1 (#194) and WO-2 (#196) squashed, including WO-2's training-parity fix.
 
 ## Decision this experiment informs
 
@@ -62,8 +63,11 @@ Two decisions:
 - Against a frozen copy of the pre-WO-4 loop, sampler and loss kept in the test file. The first
   three batches (histories, targets and negatives, by digest), every step's loss, both epoch losses
   and the trained weights' digest must match exactly. This runs everywhere.
-- Against values captured from `bfbd707` before any WO-4 code existed (torch 2.13.0, Darwin arm64).
-  These are checked wherever that environment matches.
+- Against values captured from `c07b4e0` before any WO-4 code existed (torch 2.13.0, Darwin arm64).
+  These are checked wherever that environment matches. The first capture, at `bfbd707` before WO-2's
+  dropout-layout fix, had the same batches but different losses and weights. The fix changes the
+  same-seed trajectory, so the pin was re-captured on the new base. WO-4 on `c07b4e0` reproduces
+  it bit for bit.
 
 The configuration ids of every recorded cell are unchanged too (`full.json`, the WO-1 cells, the
 all-positions cells): each WO-4 field is left out of the id while it holds its default.
@@ -202,6 +206,13 @@ cd $WT && caffeinate -i /usr/bin/time -l env OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB
 Run `bd1b04082e5b4c1db354d5df1b3cdcd0`, 2026-10-05 13:52:29–14:56:49 UTC, commit `88b5d6b`. The
 protocol hash read `sha256:faf2828d…`, equal to the cells file's, and was checked before any number
 was read. 108 warm and 39 cold users.
+
+**Encoder version.** Commit `88b5d6b` sits on `bfbd707`, before WO-2's training-parity fix. That
+fix corrected the memory layout in which the residual dropout after attention drew its mask; outputs
+and gradients were already correct. This run therefore trained on the pre-fix hand-written encoder:
+a statistically identical model on a different same-seed trajectory. The result stands as WO-4's
+cell 0b CPU pilot and is not re-run. The paired `cpu`/`mps` device pilot runs on the rebased, fixed
+encoder, so both of its halves share one code version.
 
 | Metric | Cell 0b (sampled softmax, 1,024 negatives, 5 passes) | WO-1 references (BCE, 32 negatives, 2 passes) |
 |---|---:|---:|
