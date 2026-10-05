@@ -30,7 +30,7 @@ dependencies = [
     "uvicorn[standard]",
     "redis",
     "httpx",
-    "pyjwt[crypto]>=2.8",
+    "pyjwt[crypto]>=2.15.1",
     # Monitoring
     "evidently",
     "prometheus-client",
