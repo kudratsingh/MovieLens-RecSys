@@ -99,31 +99,25 @@ def test_two_block_eval_retrieves_500_for_every_supported_history_length() -> No
         assert model.recommend_from_history(history, 500) == [movie_id for movie_id, _ in scored]
 
 
-def test_safe_attention_path_preserves_full_length_output() -> None:
-    torch.manual_seed(11)
-    config = _config(max_sequence_length=50, num_blocks=2, dropout=0.0)
-    encoder = SASRecEncoder(64, config).eval()
-    sequence = torch.arange(1, 51).unsqueeze(0)
-    positions = torch.arange(50).unsqueeze(0)
-    values = encoder.item_embedding(sequence) + encoder.position_embedding(positions)
-    causal_mask = torch.triu(torch.ones(50, 50, dtype=torch.bool), diagonal=1)
+def test_encoding_neither_needs_nor_touches_torch_s_global_attention_switch() -> None:
+    """The O-9 workaround was a process-wide switch; WO-2 retired it.
 
+    With PyTorch's fast path switched on — its default, and the setting that
+    turned every padded history to NaN in the old encoder — the two-block encoder
+    still returns finite vectors for padded histories, and leaves the switch as
+    it found it.
+    """
+    model = _two_block_retrieval_model()
+    movie_ids = sorted(model._item_to_index)
+    previous = torch.backends.mha.get_fastpath_enabled()
+    torch.backends.mha.set_fastpath_enabled(True)
     try:
-        torch.backends.mha.set_fastpath_enabled(True)
-        with torch.no_grad():
-            fast = encoder.output_norm(
-                encoder.transformer(
-                    values,
-                    mask=causal_mask,
-                    src_key_padding_mask=sequence.eq(0),
-                )
-            )
+        for length in (1, 3, 12, 49, 50):
+            assert torch.isfinite(model.encode_movie_history(movie_ids[:length])).all()
+            assert len(model.recommend_from_history(movie_ids[:length], 500)) == 500
+        assert torch.backends.mha.get_fastpath_enabled() is True
     finally:
-        torch.backends.mha.set_fastpath_enabled(False)
-    with torch.no_grad():
-        safe = encoder.encode_positions(sequence)
-
-    assert torch.max(torch.abs(fast - safe)).item() <= 1e-6
+        torch.backends.mha.set_fastpath_enabled(previous)
 
 
 def test_sampled_negatives_exclude_prefix_target_and_duplicates() -> None:

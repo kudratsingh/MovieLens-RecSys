@@ -1,0 +1,77 @@
+{
+  "_comment": [
+    "WO-2 pilots after the owner's training-parity ruling (2026-10-05). The parity check found",
+    "one difference (the attention output's memory layout, which decided where same-seed dropout",
+    "masks landed), fixed in commit 82bba87. This cell is WO-1's reference cell for the same seed,",
+    "unchanged except the label, run with the hand-written encoder. It re-runs seed 42 after the fix (ruling step b).",
+    "Decision rule (owner): accept WO-2 if the four-seed mean (42, 7, 13, 21) is not below 0.353565,",
+    "within 5% of WO-1's 0.372174. The run must carry the expected protocol hash before it is read."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "wo1_reference": {
+    "run": "7baeb7d0",
+    "seed": 42,
+    "warm_recall_at_500": 0.3625487076
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo2-handwritten-pilot6-bce-neg32-rerun-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1"
+    }
+  ],
+  "result": {
+    "status": "identical-to-wo1-same-seed",
+    "date_run": "2026-10-05",
+    "run_id": "d0b596f7171a4623b22b6b9e774ade3f",
+    "tracking_store": "local file store <wo2 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.36254870756392454,
+    "warm_ndcg_at_500": 0.13540066428140057,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.41034483512554226,
+    "train_loss_by_epoch": [
+      0.09626241005818974,
+      0.06954592580088977
+    ],
+    "epoch_warm_recall": [
+      0.3225397339401828,
+      0.36254870756392454
+    ],
+    "vs_wo1_same_seed": {
+      "wo1_warm_recall_at_500": 0.36254870756392454,
+      "difference": 0.0,
+      "wo1_train_loss_by_epoch": [
+        0.09626240980758807,
+        0.06954592609165197
+      ],
+      "per_user_warm_identical": 108,
+      "per_user_warm_higher": 0,
+      "per_user_warm_lower": 0,
+      "cold_per_user_identical": true,
+      "weights_sha256": "sha256:7429612f7f703de8ef24b93bdbe44e240b49e37e11d5f594306931e9995fbab1",
+      "wo1_weights_sha256": "sha256:86e112c75929763e78dae3b4b820237aeca0837c9de6187008cf5930f9afa8ec",
+      "weights_note": "digests differ: same function, float32 rounding differs; every metric and per-user value is identical"
+    },
+    "fit_seconds": 2072.4,
+    "peak_rss_bytes": 2336636928,
+    "concurrency_note": "run with up to 3 single-threaded pilots in flight (another worker's gBCE pilot and an ingest also ran); fit time and ru_maxrss are not comparable with WO-1's solo runs",
+    "started": "2026-10-05T13:14:26Z",
+    "ended": "2026-10-05T13:49:10Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "artifact": {
+      "directory": "artifacts/wo2-pilot/models/d0b596f7171a4623b22b6b9e774ade3f/ (main checkout, not committed)",
+      "model_sha256": "d0b3a613905077e914f880ca55bc04327c8d627265057eefbe8f3689c8e1a499"
+    },
+    "log": "artifacts/wo2-pilot/logs/wo2-pilot-rerun-s42.log (main checkout)"
+  }
+}

@@ -2,19 +2,19 @@
 
 Four things are pinned here, and only the first is about SASRec at all:
 
-1. **The fused-attention NaN defect, at the configured depth.** In ``eval()``
-   mode PyTorch's fastpath returns NaN for a fully-masked query position, so a
-   left-padded history encodes to NaN and retrieval returns nothing. It is
-   *depth-dependent*: at one encoder block the corruption stays in the padded
-   rows, and at two — ADR 0016's configuration — it reaches the last position,
-   which is the only vector retrieval reads. ``TestTheDefectItself`` measures
-   both depths so the rest of the file is provably not vacuous, and every
-   equivalence fixture runs at ``num_blocks=2`` for the same reason.
+1. **Padded histories encode, at the configured depth.** Before WO-2, PyTorch's
+   packaged encoder returned NaN in ``eval()`` mode for a fully-masked query
+   position whenever its attention fast path was on, so a left-padded history
+   encoded to NaN and retrieval returned nothing — at two blocks, ADR 0016's
+   depth, though not at one. The hand-written encoder zeroes padded rows by
+   construction and has no fast path, so ``TestPaddedHistoriesEncode`` checks the
+   property directly and with PyTorch's global switch in either position, and
+   ``test_the_old_encoder_would_have_failed_these_fixtures`` keeps the fixture
+   set honest by running the same weights through the old encoder.
 2. **Equivalence with the offline path** at histories of 1, 3, 12, 49 and 50.
-   The first four are padded and would all be NaN unguarded; 50 fills the window
-   exactly and is clean either way, which is why it is here — it pins the
-   boundary from the side that cannot fail, so a fixture set that started passing
-   for the wrong reason is still distinguishable.
+   The first four are padded; 50 fills the window exactly, which pins the
+   boundary from the side that never depended on padding. A bundle exported in
+   the pre-WO-2 parameter layout must load and retrieve identically too.
 3. **Fail-closed startup.** Every way a bundle can be unrealisable raises out of
    ``load``, which runs inside ``lifespan``, which kills the worker before it
    joins uvicorn's accept loop.
@@ -25,7 +25,6 @@ Four things are pinned here, and only the first is about SASRec at all:
 
 from __future__ import annotations
 
-import contextlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -55,7 +54,13 @@ from src.models.artifacts import (
     file_sha256,
 )
 from src.models.candidates.sasrec import SASRecConfig, SASRecEncoder, SASRecModel
-from src.models.candidates.sasrec_artifact import MANIFEST_FILENAME, MODEL_FILENAME, export_sasrec
+from src.models.candidates.sasrec_artifact import (
+    ENCODER_IMPL_HAND_WRITTEN,
+    ENCODER_IMPL_LEGACY,
+    MANIFEST_FILENAME,
+    MODEL_FILENAME,
+    export_sasrec,
+)
 from src.models.popularity_artifact import POPULARITY_ARTIFACT_FILENAME
 from src.serving import sequence_retrieval
 from src.serving.model_server import ModelRankingService
@@ -64,6 +69,11 @@ from src.serving.sequence_retrieval import (
     EncoderProducesNonFiniteVectorsError,
     SequenceBundleIncompleteError,
     top_up_to_limit,
+)
+from tests.unit.legacy_sasrec_encoder import (
+    fastpath,
+    legacy_encoder_from,
+    rewrite_as_legacy_artifact,
 )
 
 TRAINED_AT = "2026-09-05T00:00:00+00:00"
@@ -87,64 +97,11 @@ RETRIEVAL_LIMIT = 20
 HISTORY_LENGTHS = (1, 3, 12, 49, 50)
 
 
-# --- the shared-encoder dependency -----------------------------------------
-
-
 @pytest.fixture
-def fastpath_guard(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Stand in for O-9/W17 until it lands on ``main``.
-
-    The sidecar deliberately does not carry its own copy of the one-line fix —
-    it imports it from the shared encoder path so training, evaluation and
-    serving can never disagree about which numerics the published metrics were
-    measured under. That leaves this suite with a dependency that does not exist
-    yet, so the fixture supplies it in exactly the shape the loader expects: a
-    callable ``disable_attention_fastpath`` on the shared module.
-
-    It disables the fastpath *as well as* exporting the hook, and that is not
-    belt-and-braces — it is what W17 landing actually means. The defect is in the
-    shared encoder, so it corrupts the offline retrieval path too: with the
-    fastpath live, ``SASRecModel.recommend_from_history`` returns ``[]`` for a
-    padded history whether it is called from ``src/evaluation`` or from here.
-    A fixture that guarded only the sidecar would compare the sidecar against a
-    broken offline baseline and both would agree on nothing.
-
-    **When W17 lands, delete this fixture**, not the tests that use it. The
-    tests are the regression coverage; the fixture is scaffolding for a missing
-    dependency, and ``TestTheFastpathGuardIsADependency`` is what will tell you
-    the real thing is wired up.
-    """
-    previous = torch.backends.mha.get_fastpath_enabled()
-    torch.backends.mha.set_fastpath_enabled(False)
-
-    def disable_attention_fastpath() -> None:
-        torch.backends.mha.set_fastpath_enabled(False)
-
-    from src.models.candidates import sasrec as shared_encoder
-
-    monkeypatch.setattr(
-        shared_encoder,
-        sequence_retrieval.FASTPATH_GUARD_SYMBOL,
-        disable_attention_fastpath,
-        raising=False,
-    )
-    try:
+def torch_fastpath_on() -> Iterator[None]:
+    """PyTorch's default global attention setting, which broke the old encoder."""
+    with fastpath(True):
         yield
-    finally:
-        # Global process state. Restoring it is what stops one test from
-        # deciding another test's answer.
-        torch.backends.mha.set_fastpath_enabled(previous)
-
-
-@pytest.fixture
-def unguarded_fastpath() -> Iterator[None]:
-    """Torch's default: the fastpath on, and the defect live."""
-    previous = torch.backends.mha.get_fastpath_enabled()
-    torch.backends.mha.set_fastpath_enabled(True)
-    try:
-        yield
-    finally:
-        torch.backends.mha.set_fastpath_enabled(previous)
 
 
 # --- fixtures on disk -------------------------------------------------------
@@ -245,6 +202,7 @@ def _publish_sasrec_bundle(
     model: SASRecModel | None = None,
     params: dict[str, Any] | None = None,
     write_artifact_manifest: bool = True,
+    legacy_layout: bool = False,
 ) -> Path:
     """Write a schema 2 SASRec bundle and return its serving manifest path.
 
@@ -255,6 +213,8 @@ def _publish_sasrec_bundle(
     directory.mkdir(parents=True, exist_ok=True)
     fitted = model if model is not None else _fitted_sasrec()
     export_sasrec(fitted, directory)
+    if legacy_layout:
+        rewrite_as_legacy_artifact(directory)
     if not write_artifact_manifest:
         (directory / MANIFEST_FILENAME).unlink()
 
@@ -351,74 +311,7 @@ def _request_history(length: int) -> list[int]:
     return list(reversed(_model_history(length)))
 
 
-# --- 1. the defect itself ---------------------------------------------------
-
-
-class TestTheDefectItself:
-    """Measure the bug, so the rest of the file is provably not vacuous.
-
-    Without this, a suite that passes proves only that something passes. These
-    two tests establish that the equivalence fixtures below are exercising a
-    path that is genuinely broken by default, and that a single-layer version of
-    the same coverage would have been worthless.
-    """
-
-    @pytest.mark.parametrize("history_length", [1, 3, 12, 49])
-    def test_two_blocks_return_nan_for_a_padded_history_when_the_fastpath_is_on(
-        self, unguarded_fastpath: None, history_length: int
-    ) -> None:
-        encoded = _encode_at_depth(CONFIGURED_BLOCKS, history_length)
-
-        assert not bool(torch.isfinite(encoded).all()), (
-            "the fused-attention fastpath no longer corrupts a padded history at "
-            f"{CONFIGURED_BLOCKS} blocks. If torch fixed it upstream, this file's guard is now "
-            "belt-and-braces rather than load-bearing — confirm before relaxing anything."
-        )
-
-    def test_the_corruption_is_depth_dependent_and_absent_at_one_block(
-        self, unguarded_fastpath: None
-    ) -> None:
-        """One block is clean; two is not. This is why depth is pinned in the fixtures.
-
-        At a single layer the NaN stays confined to the padded rows and never
-        reaches the last position. At two, the padded row feeds the second layer,
-        the causal mask lets the last position attend over it, and the corruption
-        lands in exactly the vector retrieval reads.
-        """
-        assert bool(torch.isfinite(_encode_at_depth(1, 12)).all())
-        assert not bool(torch.isfinite(_encode_at_depth(2, 12)).all())
-
-    def test_a_full_window_is_clean_at_every_depth(self, unguarded_fastpath: None) -> None:
-        """The control: 50 items fill the window, so no query position is fully masked."""
-        for blocks in (1, CONFIGURED_BLOCKS):
-            assert bool(torch.isfinite(_encode_at_depth(blocks, WINDOW)).all())
-
-
-@contextlib.contextmanager
-def _without_the_shared_fix() -> Iterator[None]:
-    """Run the real encoder as if W17 had never landed.
-
-    W17 put `torch.backends.mha.set_fastpath_enabled(False)` inside
-    `SASRecEncoder.encode_positions`, so it applies on *every* encode. That is
-    the right place for it, and it has a side effect worth naming: the defect can
-    no longer be observed through this project's encoder at all, which would
-    leave the fixtures below unable to show they are exercising a genuinely
-    broken path.
-
-    Neutralising that one call — rather than rebuilding a parallel transformer
-    stack — keeps these tests measuring the real class, and makes them a
-    regression test for W17 itself: if someone deletes that line, the tests that
-    assert corruption *stop* failing and the ones asserting a clean encode start
-    to. Either way the suite notices.
-    """
-    original = torch.backends.mha.set_fastpath_enabled
-    torch.backends.mha.set_fastpath_enabled = lambda _enabled: None  # type: ignore[assignment]
-    original(True)
-    try:
-        yield
-    finally:
-        torch.backends.mha.set_fastpath_enabled = original  # type: ignore[assignment]
-        original(False)
+# --- 1. padded histories encode ------------------------------------------
 
 
 def _encode_at_depth(num_blocks: int, history_length: int) -> torch.Tensor:
@@ -431,114 +324,59 @@ def _encode_at_depth(num_blocks: int, history_length: int) -> torch.Tensor:
     encoder.eval()
     sequence = torch.zeros((1, WINDOW), dtype=torch.long)
     sequence[0, -history_length:] = torch.arange(1, history_length + 1)
-    with _without_the_shared_fix(), torch.no_grad():
+    with torch.no_grad():
         return encoder(sequence)
 
 
-# --- 2. the fastpath guard is a dependency, not a copy ----------------------
+class TestPaddedHistoriesEncode:
+    """The property the old fast-path guard existed to protect, checked directly."""
 
-
-class TestTheFastpathGuardIsADependency:
-    def test_a_missing_symbol_is_not_a_refusal_because_the_fix_can_be_call_time(
-        self, tmp_path: Path, unguarded_fastpath: None
+    @pytest.mark.parametrize("fastpath_enabled", [True, False])
+    @pytest.mark.parametrize("history_length", HISTORY_LENGTHS)
+    def test_every_history_length_encodes_finite_whatever_torch_s_global_switch_says(
+        self, history_length: int, fastpath_enabled: bool
     ) -> None:
-        """W17 applies the toggle inside `encode_positions`, on every encode.
+        with fastpath(fastpath_enabled):
+            for blocks in (1, CONFIGURED_BLOCKS):
+                assert bool(torch.isfinite(_encode_at_depth(blocks, history_length)).all())
+            # And the encoder leaves the global setting where it found it: it no
+            # longer owns a process-wide switch.
+            assert torch.backends.mha.get_fastpath_enabled() is fastpath_enabled
 
-        This test previously asserted the opposite — that no exported symbol and
-        no import side effect meant refusal. That premise was wrong: a symbol
-        lookup cannot see a fix that only exists once the code runs, so refusing
-        on its absence would reject a correctly-fixed bundle.
-
-        What replaces it is not weaker. The guard now *reports* how the fix
-        arrived, and `_assert_encoder_is_finite` decides whether the sidecar
-        starts by calling the real encoder at the lengths that were broken. The
-        safety property — a bundle whose encoder is genuinely unfixed must not
-        serve — is asserted directly below and by the no-op-hook test, both of
-        which exercise behaviour rather than the presence of a name.
-        """
-        assert (
-            sequence_retrieval._resolve_fastpath_guard()
-            == sequence_retrieval.GUARD_SOURCE_CALL_TIME
-        )
-
-    def test_an_encoder_that_is_still_broken_stops_the_deployment(
-        self, tmp_path: Path, unguarded_fastpath: None, monkeypatch: pytest.MonkeyPatch
+    def test_an_encoder_that_returns_nan_stops_the_deployment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The property the removed test was really protecting.
+        """The boot probe is behavioural, so it catches a padding defect whatever its cause.
 
-        The sidecar could disable the fastpath itself in one line. It deliberately
-        does not: a second copy of a global toggle is how serving and training end
-        up disagreeing about which numerics a published metric was measured under.
-        So it depends on the shared fix — and proves the dependency held by
-        encoding a short history and looking at the vector, rather than by
-        trusting that a name exists.
+        The hand-written encoder cannot produce one; this simulates a future
+        regression by making padded histories encode to NaN, and the sidecar must
+        refuse to start rather than serve popularity to every short-history user.
         """
         path = _publish_sasrec_bundle(tmp_path / "bundle")
-        # Re-enable the defect after loading would otherwise have disabled it, so
-        # the encoder really is unfixed at probe time.
-        monkeypatch.setattr(
-            sequence_retrieval,
-            "_resolve_fastpath_guard",
-            lambda: sequence_retrieval.GUARD_SOURCE_CALL_TIME,
-        )
-        with _without_the_shared_fix():
-            with pytest.raises(EncoderProducesNonFiniteVectorsError) as error:
-                ServingArtifactBundle.load(path)
+        original = SASRecEncoder.encode_positions
+
+        def broken(self: SASRecEncoder, sequences: torch.Tensor) -> torch.Tensor:
+            encoded = original(self, sequences)
+            if bool(sequences.eq(0).any()):
+                return torch.full_like(encoded, float("nan"))
+            return encoded
+
+        monkeypatch.setattr(SASRecEncoder, "encode_positions", broken)
+        with pytest.raises(EncoderProducesNonFiniteVectorsError) as error:
+            ServingArtifactBundle.load(path)
 
         # Actionable at 3am by someone who has never heard of this defect.
-        assert "fastpath" in str(error.value).lower()
+        assert "padding" in str(error.value).lower()
 
-    def test_the_guard_is_taken_from_the_shared_module_when_it_exports_a_hook(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
-        bundle = ServingArtifactBundle.load(_publish_sasrec_bundle(tmp_path / "bundle"))
-
-        assert bundle.retriever is not None
-        assert bundle.retriever.fastpath_guard_source == sequence_retrieval.GUARD_SOURCE_HOOK
-
-    def test_the_guard_is_accepted_when_the_shared_module_disables_it_on_import(
-        self, tmp_path: Path
-    ) -> None:
-        """W17 may land as an import side effect rather than a callable.
-
-        Which shape it takes is not this lane's decision, so both are accepted
-        and the boot log records which one was found. Only "neither" is a
-        failure.
-        """
-        previous = torch.backends.mha.get_fastpath_enabled()
-        torch.backends.mha.set_fastpath_enabled(False)
-        try:
-            bundle = ServingArtifactBundle.load(_publish_sasrec_bundle(tmp_path / "bundle"))
-        finally:
-            torch.backends.mha.set_fastpath_enabled(previous)
-
-        assert bundle.retriever is not None
-        assert bundle.retriever.fastpath_guard_source == sequence_retrieval.GUARD_SOURCE_IMPORT
-
-    def test_a_guard_that_resolves_but_does_not_work_is_still_refused(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unguarded_fastpath: None
-    ) -> None:
-        """The behavioural probe, not the symbol lookup, is what actually protects us.
-
-        A hook that exists and does nothing is exactly what a torch upgrade that
-        moves the flag would produce, and it is indistinguishable from a working
-        one by inspection.
-        """
-        from src.models.candidates import sasrec as shared_encoder
-
-        monkeypatch.setattr(
-            shared_encoder,
-            sequence_retrieval.FASTPATH_GUARD_SYMBOL,
-            lambda: None,
-            raising=False,
+    def test_the_boot_records_which_parameter_layout_the_archive_used(self, tmp_path: Path) -> None:
+        current = ServingArtifactBundle.load(_publish_sasrec_bundle(tmp_path / "current"))
+        legacy = ServingArtifactBundle.load(
+            _publish_sasrec_bundle(tmp_path / "legacy", legacy_layout=True)
         )
-        path = _publish_sasrec_bundle(tmp_path / "bundle")
 
-        with _without_the_shared_fix():
-            with pytest.raises(
-                EncoderProducesNonFiniteVectorsError, match="non-finite query vector"
-            ):
-                ServingArtifactBundle.load(path)
+        assert current.retriever is not None and legacy.retriever is not None
+        assert current.retriever.encoder_impl == ENCODER_IMPL_HAND_WRITTEN
+        assert legacy.retriever.encoder_impl == ENCODER_IMPL_LEGACY
 
 
 # --- 3. equivalence with the offline path -----------------------------------
@@ -554,7 +392,7 @@ class TestOfflineEquivalence:
 
     @pytest.mark.parametrize("history_length", HISTORY_LENGTHS)
     def test_the_sidecar_matches_the_offline_retrieval_exactly(
-        self, tmp_path: Path, fastpath_guard: None, history_length: int
+        self, tmp_path: Path, history_length: int
     ) -> None:
         fitted = _fitted_sasrec()
         expected = fitted.recommend_from_history(_model_history(history_length), RETRIEVAL_LIMIT)
@@ -574,7 +412,7 @@ class TestOfflineEquivalence:
 
     @pytest.mark.parametrize("history_length", HISTORY_LENGTHS)
     def test_no_history_length_is_answered_by_an_empty_retrieval(
-        self, tmp_path: Path, fastpath_guard: None, history_length: int
+        self, tmp_path: Path, history_length: int
     ) -> None:
         """The failure mode restated as a serving promise.
 
@@ -592,9 +430,7 @@ class TestOfflineEquivalence:
         assert retrieval.contributions
         assert retrieval.seed_count > 0
 
-    def test_a_history_longer_than_the_window_keeps_the_newest_titles(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_a_history_longer_than_the_window_keeps_the_newest_titles(self, tmp_path: Path) -> None:
         """The truncation half of the wire-order conversion, and the costlier half.
 
         A user with more than ``max_sequence_length`` positives is the common
@@ -625,28 +461,55 @@ class TestOfflineEquivalence:
         # Only the window drove the query, so a longer history is not counted whole.
         assert retrieval.seed_count == WINDOW
 
-    def test_the_unguarded_encoder_would_have_failed_these_fixtures(
-        self, tmp_path: Path, unguarded_fastpath: None
+    def test_the_old_encoder_would_have_failed_these_fixtures(
+        self, tmp_path: Path, torch_fastpath_on: None
     ) -> None:
         """Proof the fixtures above are load-bearing rather than incidentally green.
 
-        Built without going through ``load``, because ``load`` refuses an
-        unguarded encoder — which is the point, but it also means the only way to
-        observe what a booted-anyway sidecar would have served is to bypass it.
+        The same fitted weights, run through the packaged PyTorch encoder this
+        project used before WO-2, with PyTorch's default global setting: a padded
+        history retrieves nothing. If a PyTorch release fixes its fast path this
+        assertion will start failing; that changes nothing about the hand-written
+        encoder and the test can then be deleted.
         """
         fitted = _fitted_sasrec()
+        assert fitted._encoder is not None
+        fitted._encoder = legacy_encoder_from(fitted._encoder, fitted.config)  # type: ignore[assignment]
 
-        with _without_the_shared_fix():
-            assert fitted.recommend_from_history(_model_history(12), RETRIEVAL_LIMIT) == []
+        assert fitted.recommend_from_history(_model_history(12), RETRIEVAL_LIMIT) == []
         # And the boundary from the other side: a full window still works, so a
         # deployment would have looked healthy for its longest-history users.
         assert len(fitted.recommend_from_history(_model_history(WINDOW), RETRIEVAL_LIMIT)) == (
             RETRIEVAL_LIMIT
         )
 
-    def test_a_dismissed_seed_never_steers_the_query_vector(
-        self, tmp_path: Path, fastpath_guard: None
+    @pytest.mark.parametrize("history_length", HISTORY_LENGTHS)
+    def test_a_pre_wo2_archive_serves_what_the_offline_model_retrieves(
+        self, tmp_path: Path, history_length: int
     ) -> None:
+        """Every saved model keeps loading: a v1-layout bundle is converted on load.
+
+        The archive is rewritten into the parameter names every pre-WO-2 export
+        used, with no ``encoder_impl`` anywhere, which is exactly the shape of the
+        pinned full-data artifact. Conversion is renaming and row slicing, so the
+        retrieved ids and their order must not move at all.
+        """
+        fitted = _fitted_sasrec()
+        expected = fitted.recommend_from_history(_model_history(history_length), RETRIEVAL_LIMIT)
+
+        bundle = ServingArtifactBundle.load(
+            _publish_sasrec_bundle(tmp_path / "bundle", model=fitted, legacy_layout=True)
+        )
+        assert bundle.retriever is not None
+        retrieval = bundle.retriever.retrieve(
+            _request_history(history_length), limit=RETRIEVAL_LIMIT
+        )
+
+        assert bundle.retriever.encoder_impl == ENCODER_IMPL_LEGACY
+        assert retrieval.movie_ids == expected
+        assert len(retrieval.movie_ids) == RETRIEVAL_LIMIT
+
+    def test_a_dismissed_seed_never_steers_the_query_vector(self, tmp_path: Path) -> None:
         """ADR 0012: a dismissal drops the seed, an exclusion only hides the result.
 
         Checked against the offline model asked the narrower question, so the
@@ -678,17 +541,13 @@ class TestOfflineEquivalence:
 
 
 class TestFailClosedStartup:
-    def test_a_bundle_without_its_artifact_manifest_is_refused(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_a_bundle_without_its_artifact_manifest_is_refused(self, tmp_path: Path) -> None:
         path = _publish_sasrec_bundle(tmp_path / "bundle", write_artifact_manifest=False)
 
         with pytest.raises(SequenceBundleIncompleteError, match=MANIFEST_FILENAME):
             ServingArtifactBundle.load(path)
 
-    def test_a_declared_window_the_encoder_disagrees_with_is_refused(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_a_declared_window_the_encoder_disagrees_with_is_refused(self, tmp_path: Path) -> None:
         """``validate`` proves the parameter is present; only loading proves it is true."""
         path = _publish_sasrec_bundle(
             tmp_path / "bundle", params={"max_sequence_length": WINDOW + 1}
@@ -698,7 +557,7 @@ class TestFailClosedStartup:
             ServingArtifactBundle.load(path)
 
     def test_a_declared_threshold_the_encoder_disagrees_with_is_refused(
-        self, tmp_path: Path, fastpath_guard: None
+        self, tmp_path: Path
     ) -> None:
         path = _publish_sasrec_bundle(tmp_path / "bundle", params={"cold_start_threshold": 25})
 
@@ -706,7 +565,7 @@ class TestFailClosedStartup:
             ServingArtifactBundle.load(path)
 
     def test_an_inexact_index_is_refused_under_a_manifest_claiming_exact_search(
-        self, tmp_path: Path, fastpath_guard: None
+        self, tmp_path: Path
     ) -> None:
         """``faiss_exact`` defaults to False, and an IVF rebuild is not deterministic.
 
@@ -719,9 +578,7 @@ class TestFailClosedStartup:
         with pytest.raises(SequenceBundleIncompleteError, match="faiss_exact"):
             ServingArtifactBundle.load(path)
 
-    def test_a_tampered_encoder_archive_is_refused(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_a_tampered_encoder_archive_is_refused(self, tmp_path: Path) -> None:
         path = _publish_sasrec_bundle(tmp_path / "bundle")
         (tmp_path / "bundle" / MODEL_FILENAME).write_bytes(b"tampered")
 
@@ -917,9 +774,7 @@ class TestTopUpToLimit:
         assert topped.retrieval.movie_ids == [10, 11]
         assert topped.shortfall == 3
 
-    def test_a_sasrec_bundle_publishes_no_fill_order(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_a_sasrec_bundle_publishes_no_fill_order(self, tmp_path: Path) -> None:
         """Still empty, but for one turn longer and for a different reason.
 
         The training half of the fix has landed (W21): the bundle above now
@@ -946,9 +801,7 @@ class TestRetrievalScoresReachTheAudit:
     # W17 (#162) landed it, the tripwire flipped to a failure exactly as intended,
     # and it is now an ordinary assertion — the unscored branch in
     # `_scored_retrieval` remains only for a bundle whose model predates the method.
-    def test_sasrec_candidates_carry_a_real_retrieval_score(
-        self, tmp_path: Path, fastpath_guard: None
-    ) -> None:
+    def test_sasrec_candidates_carry_a_real_retrieval_score(self, tmp_path: Path) -> None:
         """Every candidate scoring 0.0 makes an audit in which they all look identical.
 
         The contribution field is what a prediction audit replays to explain why
@@ -966,7 +819,7 @@ class TestRetrievalScoresReachTheAudit:
         ), "every SASRec candidate scored 0.0, so the retrieval score is a placeholder"
 
     def test_the_sidecar_consumes_a_scored_method_as_soon_as_one_exists(
-        self, tmp_path: Path, fastpath_guard: None, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The other half of the tripwire: the consumer is already written.
 
@@ -1015,7 +868,7 @@ class TestRetrievalProvenanceReachesTheAudit:
     """
 
     def test_a_sequence_request_names_its_family_route_and_encoder_time(
-        self, tmp_path: Path, fastpath_guard: None
+        self, tmp_path: Path
     ) -> None:
         result = _rank(_publish_sasrec_bundle(tmp_path / "bundle"), _request_history(12))
 
@@ -1024,7 +877,7 @@ class TestRetrievalProvenanceReachesTheAudit:
         assert result.encoder_ms > 0.0
 
     def test_encoder_time_is_carved_out_of_retrieval_rather_than_being_all_of_it(
-        self, tmp_path: Path, fastpath_guard: None
+        self, tmp_path: Path
     ) -> None:
         """The column means "time in the encoder", so the FAISS search is not in it.
 
@@ -1041,7 +894,7 @@ class TestRetrievalProvenanceReachesTheAudit:
         assert 0.0 < result.encoder_ms < result.candidate_latency_ms
 
     def test_the_recorded_checksum_is_the_manifest_s_own_and_not_a_recomputed_one(
-        self, tmp_path: Path, fastpath_guard: None
+        self, tmp_path: Path
     ) -> None:
         """The replay key. Anything but the manifest's digest is a different bundle."""
         directory = tmp_path / "bundle"

@@ -3416,3 +3416,161 @@ direction, not quality. No full-data run was made, and no threshold, verdict or 
 The MLflow runs are in a local file store, because the shared server could not accept host
 artifact uploads; the run record explains this. Run record:
 [`model-planning/experiments/wo1-restore-trainer-of-record.md`](model-planning/experiments/wo1-restore-trainer-of-record.md).
+
+## SASRec v1 through the hand-written encoder — 2026-10-05 (WO-2 inference check)
+
+WO-2 replaced PyTorch's packaged Transformer encoder with a hand-written one
+(`src/models/candidates/transformer.py`, rule D7) and added a converter that loads
+pre-WO-2 archives in memory. Done-criterion 3 required the saved v1 model
+`a11af5ed…` (SHA-256 `43320b87e3cb…`) to load through that converter and, scored
+inference-only on the same protocol, to match recorded run `528b1451…`: warm
+recall@500 to four decimals and cold recall exactly. Nothing was trained.
+
+| Slice | Recorded (`528b1451…`) | Hand-written encoder (`a2c3f5ac…`) | Difference |
+|---|---:|---:|---:|
+| warm recall@500 (1,931 users) | 0.5091713455402272 | 0.5091713455402274 | +1.1e-16 |
+| cold recall@500 (710 users) | 0.5262729520330651 | 0.5262729520330651 | 0 |
+| overall recall@500 | 0.5137688997 | 0.5137688997280029 | — |
+
+**Verdict: passed.** Every user's recall equals the September per-user export:
+all 1,931 warm and 710 cold users. The aggregate's last-digit difference comes
+from summation order. Protocol hash `sha256:b4ed5afa…` reproduced. No
+short-history warm user got an empty slate.
+
+Against the packaged encoder running the same weights on the same users,
+**36 of 1,931 warm users' top-500 lists changed, all in order only and none in
+membership**. No cold list changed, because cold users go to the popularity
+fallback and never reach the encoder. The packaged encoder scores the same warm
+recall to the last digit. On the v1 weights the two encoders' per-position
+outputs differ by at most 2.1e-6 and the normalized query vectors by at most
+1.8e-7. The only movement is near-tie reordering, which shows up as a warm
+NDCG@500 change of −5.1e-10. Cold NDCG@500 reads 0.4358414 here against
+0.4358466 recorded. That −5.2e-6 is O-21's stable popularity tie-break from
+2026-09-06, not WO-2.
+
+The shared MLflow server (`localhost:5001`) accepted the run's metrics as run
+`7c1d3377…`, identical to the above. It then failed on artifact upload, because
+its artifact root `/mlartifacts` is container-local, the same fault that hit
+`833812ee…` in September. That run is tagged with the cause. The record with
+every artifact (per-user recall, top-500 lists, verdict) is the local SQLite
+store retry `a2c3f5ac09064114b24d70897d68526c` under `artifacts/wo2-converter/`.
+Before the run, the ADR 0011 cohort was regenerated from the CSV snapshot, and
+its md5 `9e0c978e…` equals the DVC pointer.
+
+Retraining v1 on the hand-written encoder will give an equivalent model, not a
+bit-identical one. Initialization is bit-identical; training rounds differently.
+The seed-42 pilot that measures this (done-criterion 5) is recorded below.
+
+Machine-readable record:
+[`experiments/sasrec/wo2-converter-recheck.json`](experiments/sasrec/wo2-converter-recheck.json).
+
+### The seed-42 pilot with the hand-written encoder (WO-2 done-criterion 5)
+
+This is one run of WO-1's reference cell, `pilot6-bce-neg32` at seed 42, after rebasing onto WO-1
+(PR #194). The objective, data path, partition and protocol are all WO-1's: O-25's 6% sample,
+protocol `sha256:faf2828d…`, 108 warm / 39 cold users. The protocol hash was confirmed before the
+number was read. The one change is the encoder. Initialization is bit-identical to WO-1's seed-42
+run; training rounds differently.
+
+| Run | Encoder | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Fit s | Peak RSS |
+|---|---|---:|---:|---:|---:|---:|
+| `7baeb7d0…` (WO-1 s42) | packaged | 0.3625487076 | 0.1354006643 | 0.5427033422 | 1,080.8 | 3.04 GB |
+| `d71f0fa6…` (WO-1 s7) | packaged | 0.3611061547 | 0.1307310996 | 0.5427033422 | 1,080.4 | 2.92 GB |
+| `2d9f3cc1…` (WO-1 s13) | packaged | 0.3714076606 | 0.1253087969 | 0.5427033422 | 1,088.9 | 2.92 GB |
+| `8668ca0c…` (WO-1 s21) | packaged | 0.3936318283 | 0.1483434889 | 0.5427033422 | 1,099.0 | 2.92 GB |
+| **`38442d1a08dd42f3868c1f6147a56fd8`** | **hand-written** | **0.3427768663** | 0.1341754441 | 0.5427033422 | **1,315.3** | 3.08 GB |
+
+**Superseded (same day): see "Training parity, the fix it found, and the four seeds" below. The
+gap was a dropout-mask layout difference, since fixed, and the re-run equals WO-1's seed 42
+exactly.**
+
+**Verdict at the time: outside the range. Done-criterion 5 was not met.** The reference range is
+0.3611–0.3936. This run is 0.0183 below its floor and 0.0198 below WO-1's own seed-42 run (−5.45%).
+It sits 1.96 sample standard deviations below the reference mean of 0.3722. Nothing was retuned or
+re-run; the result goes to the owner.
+
+What the run shows beside the number:
+- **Cold recall is identical** to all four references, as it must be: cold users go to the
+  popularity fallback.
+- **Training followed v1 closely, then diverged by rounding.**
+  - Epoch losses: 0.0962756 and 0.0696093, against WO-1 s42's 0.0962624 and 0.0695459
+    (+0.01% and +0.09%).
+  - The per-epoch warm recall crossed over. After epoch 1 the hand-written run led, 0.3313 against
+    0.3225. After epoch 2 it trailed, 0.3428 against 0.3625.
+- **Per user, against WO-1 s42:** 72 of 108 warm users have identical recall, 11 are higher and
+  25 lower. One warm user is 0.93% of the slice.
+- **Same-seed movement:** on this population, a same-seed rerun that differs only in float
+  rounding moved warm recall by 0.02, about one reference standard deviation.
+
+Whether that is noise or a real defect cannot be told from one run. The converted v1 model
+reproduces its full-data record exactly, and the equivalence tests hold outputs within 2.4e-6. The
+owner decides what comes next.
+
+**Speed at pilot scale:**
+- **Fit time:** 1,315.3 s against WO-1's 1,080.4–1,099.0 s, which is 21.7% slower than its seed-42
+  run.
+- **Wall time:** 22 min 03 s against 18 min 21 s.
+- **Where the extra cost comes from:** the slowdown is larger than the 12% measured with 4 threads
+  in a micro-benchmark. This run, like WO-1's, used `OMP_NUM_THREADS=1`.
+- **Peak RSS:** 3.08 GB (2.87 GiB), against WO-1's 3.04 GB.
+- **Start load:** load averages at the start were 1.99 / 2.35 / 2.71.
+
+The MLflow run is in a local file store in the WO-2 worktree (`mlruns/`). The exported model is at
+`artifacts/wo2-pilot/models/38442d1a…/` in the main checkout, with archive SHA-256 `093e33ac…` and
+weights digest `sha256:609c3972…`. Run record:
+[`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
+
+### Training parity, the fix it found, and the four seeds — 2026-10-05 (owner ruling)
+
+The equivalence above covered inference only. After the first seed-42 pilot missed the range, the
+owner ordered training-parity checks, a fix for any difference they found, and seeds 7, 13 and 21.
+The decision rule: accept WO-2 if the checks pass and the four-seed mean is within 5% of WO-1's
+0.372174, that is, not below 0.353565.
+
+**Parity checks.** All three pass after one fix. The full record is in the run record.
+- **Initialization:** every tensor is bit-identical at the same seed, and the same number of draws
+  is consumed.
+- **Gradients:** on the pilot's first three real batches the largest loss difference is 6.0e-8 and
+  the largest gradient difference 1.1e-8 in float32, both against the 1e-5 bound. In float64 they
+  are 1.1e-16 and 2.4e-17.
+- **Dropout:** the same four sites per block at 0.2, with none elsewhere.
+- **The one difference.** PyTorch's attention returned a `(B, L, d)` view of an `(L, B, d)` buffer,
+  and dropout draws its mask in memory order. So the residual dropout after attention put the same
+  random numbers on different elements. That leaves a statistically identical model but a
+  different trajectory from the same seed.
+- **Fix:** commit `82bba87`, with the check kept as permanent unit tests.
+
+**All eight pilots** use the O-25 6% partition, protocol `faf2828d…` confirmed on every run before
+it was read, 108 warm / 39 cold users, and cold recall@500 0.5427033422 on all of them:
+
+| Seed | WO-1, packaged encoder | WO-2, hand-written encoder (after the fix) | Difference | Per-user warm recall |
+|---:|---|---|---:|---|
+| 42 | `7baeb7d0…` **0.3625487076** | `d0b596f7171a4623b22b6b9e774ade3f` **0.3625487076** | 0 | 108 of 108 identical |
+| 7 | `d71f0fa6…` **0.3611061547** | `2d800544a27b4a67bc6f844a91ad0efc` **0.3611061547** | 0 | 108 of 108 identical |
+| 13 | `2d9f3cc1…` **0.3714076606** | `76a1cd9e13d541958e564bcaea49c414` **0.3714076606** | 0 | 108 of 108 identical |
+| 21 | `8668ca0c…` **0.3936318283** | `29ad5b791ebe48bdbf6e23de51966bfa` **0.3936318283** | 0 | 108 of 108 identical |
+| mean (sd) | **0.3721736** (0.0150130) | **0.3721736** (0.0150130) | 0 | — |
+
+**Verdict: accepted under the owner's rule.** The new four-seed mean equals WO-1's, well above
+the 0.353565 floor.
+- **Every number matches.** Each seed reproduces its WO-1 counterpart's warm and overall recall and
+  NDCG, and every per-user value.
+- **Losses agree to about 1e-9.** At seed 42 they are 0.0962624101 and 0.0695459258, against WO-1's
+  0.0962624098 and 0.0695459261.
+- **Weights do not.** The digests differ, since float32 rounding accumulates differently, but at
+  this scale it moved no ranking.
+- **What the earlier miss was.** The pre-fix seed-42 pilot `38442d1a…` (0.3427768663) is
+  superseded. Its gap was the dropout-mask layout: a different same-seed trajectory, not a weaker
+  model.
+
+**Speed and memory.**
+- **Solo:** the clean comparison is the pre-fix solo run, 1,315.3 s against WO-1 s42's 1,080.8 s,
+  about 22% slower. The fix changes no arithmetic cost.
+- **Concurrent:** these four ran with up to three pilots in flight, alongside another worker's gBCE
+  pilot and an ingest. Their fit times (2,072.4 / 2,071.3 / 1,874.2 / 1,750.9 s) and
+  `ru_maxrss` peaks (2.34 / 1.88 / 1.82 / 1.86 GB) measure the shared machine, not the encoder.
+  The peaks read lower than WO-1's solo 2.9–3.0 GB, most likely because macOS memory compression
+  under contention lowers `ru_maxrss`.
+
+Records: `experiments/sasrec/wo2-handwritten-pilot-6pct-{rerun-s42,s7,s13,s21}.json` and
+[`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
