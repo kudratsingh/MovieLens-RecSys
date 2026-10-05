@@ -63,7 +63,110 @@
     "warmup_steps_excluded": 20,
     "extrapolation": "steady-state mean step seconds x steps per pass (ceil(examples / 512))",
     "projected_cpu_seconds_per_step": 2.2,
-    "projected_cpu_wall_minutes_for_2000_steps": [75, 90],
+    "projected_cpu_wall_minutes_for_2000_steps": [
+      75,
+      90
+    ],
     "stop_if_cpu_wall_minutes_exceed": 180
+  },
+  "result": {
+    "cpu": {
+      "device": "cpu",
+      "torch_version": "2.13.0",
+      "omp_num_threads": "1",
+      "load_seconds": 3.520267458166927,
+      "split_seconds": 0.6732385000213981,
+      "build_user_history_seconds": 12.818450500024483,
+      "build_strict_prefix_example_store_seconds": 11.185531291877851,
+      "fit_setup_seconds_before_first_step": 29.214890416013077,
+      "steps_timed": 2000,
+      "warmup_steps_excluded": 20,
+      "steady_mean_step_seconds": 1.409723177799047,
+      "steady_median_step_seconds": 1.3806968124117702,
+      "steady_p10_p90_step_seconds": [
+        1.336285224976018,
+        1.5304015868110583
+      ],
+      "first_half_vs_second_half_mean": [
+        1.4201295979798423,
+        1.3993167576182521
+      ],
+      "stepping_wall_seconds": 2847.9397557501215,
+      "n_training_examples": 19739546,
+      "n_truncated_examples": 10753559,
+      "steps_per_pass": 38554,
+      "extrapolated_pass_seconds": 54350.467396864464,
+      "extrapolated_pass_hours": 15.097352054684574,
+      "example_store_bytes": 395833036,
+      "peak_rss_bytes": 4241768448,
+      "first_and_last_step_loss": [
+        7.373178482055664,
+        3.660064220428467
+      ],
+      "n_items": 34461,
+      "process_wall_seconds": 2857.01,
+      "peak_memory_footprint_bytes_time_l": 8755764328,
+      "partition": {
+        "sealed_boundary_timestamp": 1469256597,
+        "holdout_end_timestamp": 1469256597,
+        "latest_fit_timestamp": 1466837396,
+        "latest_scored_timestamp": 1469256332
+      },
+      "window": [
+        "start 2026-10-05 17:16:32 UTC; load { 2.29 2.07 2.08 }",
+        "head 778953c808b496fe83ddc3f03df245b1fec0ad83",
+        "end 2026-10-05 18:04:12 UTC rc=0; load { 2.41 2.49 2.54 }"
+      ]
+    },
+    "mps": {
+      "device": "mps",
+      "torch_version": "2.13.0",
+      "omp_num_threads": "1",
+      "load_seconds": 2.7149485829286277,
+      "split_seconds": 0.58210379187949,
+      "build_user_history_seconds": 12.387060625012964,
+      "build_strict_prefix_example_store_seconds": 11.129576832987368,
+      "fit_setup_seconds_before_first_step": 29.60348083404824,
+      "steps_timed": 2000,
+      "warmup_steps_excluded": 20,
+      "steady_mean_step_seconds": 0.5502080981272762,
+      "steady_median_step_seconds": 0.5487751250620931,
+      "steady_p10_p90_step_seconds": [
+        0.5449763083131984,
+        0.556255312054418
+      ],
+      "first_half_vs_second_half_mean": [
+        0.5507842097222109,
+        0.5496319865323415
+      ],
+      "stepping_wall_seconds": 1130.0134607921354,
+      "n_training_examples": 19739546,
+      "n_truncated_examples": 10753559,
+      "steps_per_pass": 38554,
+      "extrapolated_pass_seconds": 21212.723015199008,
+      "extrapolated_pass_hours": 5.892423059777502,
+      "example_store_bytes": 395833036,
+      "peak_rss_bytes": 4844748800,
+      "first_and_last_step_loss": [
+        7.382965564727783,
+        3.688248634338379
+      ],
+      "n_items": 34461,
+      "process_wall_seconds": 1139.06,
+      "partition": {
+        "sealed_boundary_timestamp": 1469256597,
+        "holdout_end_timestamp": 1469256597,
+        "latest_fit_timestamp": 1466837396,
+        "latest_scored_timestamp": 1469256332
+      },
+      "window": [
+        "start 2026-10-05 18:04:26 UTC; load { 2.39 2.48 2.53 }",
+        "head 6788e36b30fce3edb439511ea49ef769ec794264",
+        "end 2026-10-05 18:23:30 UTC rc=0; load { 1.55 1.68 1.96 }"
+      ]
+    },
+    "cpu_over_mps_step_ratio": 2.5621636297198673,
+    "status": "timing only; no cell started; no evaluation, export or MLflow run; mps is not a result of record",
+    "note": "docs/model-planning/experiments/wo5-cell-repricing.md"
   }
 }
