@@ -3574,3 +3574,54 @@ the 0.353565 floor.
 
 Records: `experiments/sasrec/wo2-handwritten-pilot-6pct-{rerun-s42,s7,s13,s21}.json` and
 [`model-planning/experiments/wo2-hand-written-transformer.md`](model-planning/experiments/wo2-hand-written-transformer.md).
+
+## SASRec cell 0b pilot, the WO-4 trainer — 2026-10-05
+
+WO-4 gave the trainer what ADR 0020's larger cells need:
+- sampled and full softmax losses, with a vectorized negative sampler;
+- early stopping on a probe carved from train;
+- a batch size stated as examples per step, with gradient accumulation;
+- a device setting;
+- per-step loss and gradient-norm logging.
+
+The v1 configuration trains bit for bit as before; that is pinned by unit tests. This pilot is
+ADR 0020's cell 0b run once on the CPU on O-25's 6% partition: v1's shape (64 wide, 2 blocks, history
+50) with the sampled softmax at 1,024 negatives and early stopping over 3 to 5 passes. It uses the
+objective of record, `strict-prefix-final-position-v1`; WO-3's outcome may change the objective WO-5
+uses. The protocol hash read `sha256:faf2828d…`, WO-1's, before the number was read. 108 warm and 39
+cold users.
+
+| Run | Loss | Passes | Warm recall@500 | Warm NDCG@500 | Cold recall@500 | Fit s | Peak RSS |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `7baeb7d0…` (WO-1 s42) | BCE, 32 negatives | 2 | 0.3625487076 | 0.1354006643 | 0.5427033422 | 1,080.8 | 3.04 GB |
+| WO-1 s7 / s13 / s21 | BCE, 32 negatives | 2 | 0.3611 / 0.3714 / 0.3936 | — | 0.5427033422 | 1,080–1,099 | 2.92 GB |
+| **`bd1b04082e5b4c1db354d5df1b3cdcd0`** | **sampled softmax, 1,024 negatives** | **5** | **0.4556720321** | 0.1481656414 | 0.5427033422 | 3,848.0 | 2.15 GB |
+
+**Encoder version.** This run was cut before WO-2's training-parity fix (the residual-dropout mask
+layout, in the section above), so it trained on the pre-fix hand-written encoder. That is a
+statistically identical model on a different same-seed trajectory. The result stands and is not
+re-run; the paired `cpu`/`mps` device pilot runs on the fixed encoder.
+
+**This is a pilot, so it shows direction, not a result.** The cell changes the loss and the number of
+passes together, so the 0.46-against-0.37 gap cannot be split between them here. WO-5's full-data
+cells exist to answer that.
+- One diagnostic speaks to the loss at matched passes: the per-pass holdout recall, which is
+  logged and never used to stop. It read 0.4106 after pass 2, where WO-1's seed-42 run finished at
+  0.3625.
+- Per user against WO-1 s42: 44 warm users higher, 30 lower, 34 identical.
+- Cold recall is identical user by user, as it must be.
+
+**Early stopping:**
+- The probe was 82 users.
+- Its recall@500 by pass was 0.610 / 0.646 / 0.683 / 0.756 / 0.707. It kept improving by more
+  than 0.5% through pass 4, so all 5 passes ran.
+- The probe's latest target, 1464506906, is before the cutoff.
+- Catalog coverage was 36.85% (6,920 of 18,778 movies), and mean retrieved popularity rank 2,792.5.
+
+**Speed:**
+- **Fit:** 64.3 min against a projection of 50–85 min.
+- **Per pass:** 688 s once the machine was otherwise idle, which is 0.297 s per step. WO-1's
+  2-pass reference ran at about 0.233 s per step.
+
+Run record:
+[`model-planning/experiments/wo4-trainer-upgrades.md`](model-planning/experiments/wo4-trainer-upgrades.md).
