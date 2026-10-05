@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "WO-1 control (Next-Phase Build Brief, 2026-10-05): the trainer of record exactly as",
+    "git holds it, run once. Execute this file from a detached worktree at 89520be^, not",
+    "from the WO-1 branch; that commit's sweep accepts no training_objective field, and",
+    "its loop is the copied-prefix objective by construction. The cell is pilot-6pct.json's",
+    "pilot6-bce-neg32 at seed 42 with nothing changed. Its weights digest and metrics are",
+    "compared with wo1-restored-loop-6pct-s42.json; any difference stops WO-1."
+  ],
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo1-oldloop-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42
+    }
+  ]
+}

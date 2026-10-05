@@ -19,12 +19,19 @@ from .popularity import PopularityModel
 from .sequence_data import (
     AllPositionTrainingData,
     SequenceExampleStats,
+    StrictPrefixExamples,
     build_all_position_training_data,
+    build_strict_prefix_example_store,
     build_user_history,
 )
 
+# The objective of record: one example per target, scored at the final
+# position of its strict prefix. Run 528b1451 / model a11af5ed (warm
+# recall@500 0.5092) was trained on it, and ADR 0020's 2026-09-15 decision
+# keeps it the baseline. All-positions is a named ablation (PR #183).
 LEGACY_TRAINING_OBJECTIVE = "strict-prefix-final-position-v1"
 ALL_POSITION_TRAINING_OBJECTIVE = "all-positions-strict-timestamp-v1"
+TRAINING_OBJECTIVES = (LEGACY_TRAINING_OBJECTIVE, ALL_POSITION_TRAINING_OBJECTIVE)
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class SASRecConfig:
     faiss_nprobe: int = 10
     faiss_exact: bool = False
     seed: int = 42
+    training_objective: str = LEGACY_TRAINING_OBJECTIVE
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SASRecConfig:
@@ -77,6 +85,7 @@ class SASRecConfig:
             faiss_nprobe=value("FAISS_NPROBE", int, defaults.faiss_nprobe),
             faiss_exact=value("FAISS_EXACT", boolean, defaults.faiss_exact),
             seed=value("SEED", int, defaults.seed),
+            training_objective=value("TRAINING_OBJECTIVE", str, defaults.training_objective),
         )
 
     def as_params(self) -> dict[str, Any]:
@@ -93,6 +102,11 @@ class SASRecConfig:
             raise ValueError("negative_count must be positive")
         if not 0.0 <= self.calibration_t <= 1.0:
             raise ValueError("calibration_t must be in [0, 1]")
+        if self.training_objective not in TRAINING_OBJECTIVES:
+            raise ValueError(
+                f"unsupported training_objective {self.training_objective!r}; "
+                f"expected one of {list(TRAINING_OBJECTIVES)}"
+            )
 
 
 class SASRecEncoder(nn.Module):
@@ -278,6 +292,7 @@ class SASRecModel:
     _user_history: dict[int, list[int]] = field(default_factory=dict)
     _unknown_index: int = 0
     _training_stats: SequenceExampleStats | None = None
+    _training_example_bytes: int = 0
     _training_objective: str = LEGACY_TRAINING_OBJECTIVE
     _faiss_index: Any = None
     _exact_item_matrix: torch.Tensor | None = None
@@ -293,10 +308,14 @@ class SASRecModel:
         self.config.validate()
         if retrieval_backend not in {"faiss", "torch"}:
             raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
-        self._training_objective = ALL_POSITION_TRAINING_OBJECTIVE
+        self._training_objective = self.config.training_objective
         self._popularity = PopularityModel().fit(train)
         if train.empty:
             return self
+        # Seeding, vocabulary, example construction, encoder initialization,
+        # optimizer and sampler RNG happen in exactly the order the trainer of
+        # record used. Example construction draws no randomness, so the encoder
+        # starts from the same weights under either objective.
         torch.manual_seed(self.config.seed)
         np.random.seed(self.config.seed)
         items = sorted(int(item) for item in train["movieId"].unique())
@@ -304,12 +323,32 @@ class SASRecModel:
         self._index_to_item = {index: item for item, index in self._item_to_index.items()}
         self._unknown_index = len(items) + 1
         self._user_history = build_user_history(train, self._item_to_index)
-        training_data = build_all_position_training_data(
-            train,
-            item_to_index=self._item_to_index,
-            max_length=self.config.max_sequence_length,
-        )
-        self._training_stats = training_data.stats
+        examples: StrictPrefixExamples | None = None
+        training_data: AllPositionTrainingData | None = None
+        if self._training_objective == LEGACY_TRAINING_OBJECTIVE:
+            examples = build_strict_prefix_example_store(
+                train,
+                item_to_index=self._item_to_index,
+                max_length=self.config.max_sequence_length,
+            )
+            self._training_stats = examples.stats
+            self._training_example_bytes = examples.nbytes
+        else:
+            training_data = build_all_position_training_data(
+                train,
+                item_to_index=self._item_to_index,
+                max_length=self.config.max_sequence_length,
+            )
+            self._training_stats = training_data.stats
+            self._training_example_bytes = sum(
+                tensor.numel() * tensor.element_size()
+                for tensor in (
+                    training_data.sequences,
+                    training_data.prediction_offsets,
+                    training_data.prediction_positions,
+                    training_data.positives,
+                )
+            )
         self._encoder = SASRecEncoder(len(items) + 2, self.config)
         optimizer = torch.optim.Adam(self._encoder.parameters(), lr=self.config.learning_rate)
         rng = np.random.default_rng(self.config.seed)
@@ -322,6 +361,89 @@ class SASRecModel:
                 calibration_t=self.config.calibration_t,
             )
         )
+        if examples is not None:
+            self._train_strict_prefix(
+                examples, optimizer, rng, beta=beta, n_items=len(items), on_epoch=on_epoch
+            )
+        else:
+            assert training_data is not None
+            self._train_all_positions(
+                training_data, optimizer, rng, beta=beta, n_items=len(items), on_epoch=on_epoch
+            )
+        if retrieval_backend == "faiss":
+            self.build_index()
+        else:
+            self.build_exact_tensor_index()
+        return self
+
+    def _train_strict_prefix(
+        self,
+        examples: StrictPrefixExamples,
+        optimizer: torch.optim.Optimizer,
+        rng: np.random.Generator,
+        *,
+        beta: float,
+        n_items: int,
+        on_epoch: Callable[[int, float], None] | None,
+    ) -> None:
+        """The trainer of record's loop (``git show 89520be^``), on the P1 data path.
+
+        Statement for statement the loop behind run 528b1451, with one change:
+        ``examples.batch(rows)`` cuts each window from the stored sequences
+        where the original indexed a pre-built ``(n_examples, max_length)``
+        tensor. The permutation, the batches, the sampler's draws, and the
+        per-batch-mean epoch loss are untouched, so a fixed seed on CPU gives
+        the same weights bit for bit. The per-example negative sampler stays
+        as it was for this objective so v1 numbers remain reproducible.
+        """
+        assert self._encoder is not None
+        for epoch in range(self.config.epochs):
+            self._encoder.train()
+            permutation = torch.randperm(len(examples))
+            epoch_loss = 0.0
+            batches = 0
+            for start in range(0, len(examples), self.config.batch_size):
+                rows = permutation[start : start + self.config.batch_size]
+                history_batch, positive_batch = examples.batch(rows)
+                negative_batch = sample_negatives(
+                    history_batch,
+                    positive_batch,
+                    n_items=n_items,
+                    count=self.config.negative_count,
+                    rng=rng,
+                )
+                user_vectors = self._encoder.training_user_vectors(history_batch)
+                positive_logits = (
+                    user_vectors * self._encoder.item_vectors(positive_batch, normalize=False)
+                ).sum(dim=1)
+                negative_logits = torch.einsum(
+                    "bd,bkd->bk",
+                    user_vectors,
+                    self._encoder.item_vectors(negative_batch, normalize=False),
+                )
+                loss = sampled_gbce_loss(positive_logits, negative_logits, beta=beta)
+                optimizer.zero_grad()
+                loss.backward()  # type: ignore[no-untyped-call]
+                optimizer.step()
+                with torch.no_grad():
+                    self._encoder.item_embedding.weight[0].zero_()
+                epoch_loss += float(loss.item())
+                batches += 1
+            if on_epoch is not None:
+                on_epoch(epoch + 1, epoch_loss / max(1, batches))
+
+    def _train_all_positions(
+        self,
+        training_data: AllPositionTrainingData,
+        optimizer: torch.optim.Optimizer,
+        rng: np.random.Generator,
+        *,
+        beta: float,
+        n_items: int,
+        on_epoch: Callable[[int, float], None] | None,
+    ) -> None:
+        """One causal pass per bounded window, every eligible target supervised (PR #183)."""
+        assert self._encoder is not None
         for epoch in range(self.config.epochs):
             self._encoder.train()
             permutation = torch.randperm(len(training_data.sequences))
@@ -340,7 +462,7 @@ class SASRecModel:
                     prediction_windows,
                     prediction_positions,
                     positive_batch,
-                    n_items=len(items),
+                    n_items=n_items,
                     count=self.config.negative_count,
                     rng=rng,
                 )
@@ -365,11 +487,6 @@ class SASRecModel:
                 predictions_seen += batch_predictions
             if on_epoch is not None:
                 on_epoch(epoch + 1, epoch_loss / max(1, predictions_seen))
-        if retrieval_backend == "faiss":
-            self.build_index()
-        else:
-            self.build_exact_tensor_index()
-        return self
 
     def build_index(self) -> None:
         if self._encoder is None:

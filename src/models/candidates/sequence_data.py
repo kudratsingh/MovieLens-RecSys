@@ -57,6 +57,64 @@ class AllPositionTrainingData:
         )
 
 
+@dataclass(frozen=True)
+class StrictPrefixExamples:
+    """The objective of record's examples, stored once and windowed per batch.
+
+    ``build_strict_prefix_examples_with_stats`` copies a left-padded
+    ``max_length`` window for every target: 19,739,546 x 50 int32 values, about
+    3.95 GB, on the full training split. This keeps every user's chronological
+    item sequence once in ``items`` and describes each example by where its
+    strict prefix ends, how long that prefix is, and its target. The window is
+    cut from ``items`` only when a batch is assembled (ADR 0020, step P1), so
+    resident memory is linear in interactions plus examples and no longer
+    scales with ``max_length``.
+
+    The examples, their order, and their statistics are exactly the copied
+    builder's. That is what lets the restored loop draw the same permutation,
+    the same negatives, and the same weights from the same seed.
+    """
+
+    items: np.ndarray[Any, np.dtype[np.int32]]
+    prefix_ends: np.ndarray[Any, np.dtype[np.int64]]
+    prefix_lengths: np.ndarray[Any, np.dtype[np.int32]]
+    positives: np.ndarray[Any, np.dtype[np.int32]]
+    max_length: int
+    stats: SequenceExampleStats
+
+    def __len__(self) -> int:
+        return len(self.positives)
+
+    @property
+    def nbytes(self) -> int:
+        """Resident size of the stored arrays, logged as the data path's footprint."""
+        return int(
+            self.items.nbytes
+            + self.prefix_ends.nbytes
+            + self.prefix_lengths.nbytes
+            + self.positives.nbytes
+        )
+
+    def batch(self, rows: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(len(rows), max_length)`` left-padded histories and their targets.
+
+        Each history is the latest ``max_length`` items of the example's strict
+        prefix, zero-padded on the left exactly as the copied builder pads it.
+        The only two-dimensional array ever built is this batch.
+        """
+        index = rows.numpy()
+        ends = self.prefix_ends[index]
+        lengths = np.minimum(self.prefix_lengths[index].astype(np.int64), self.max_length)
+        offsets = np.arange(-self.max_length, 0, dtype=np.int64)
+        source = ends[:, None] + offsets[None, :]
+        inside = offsets[None, :] >= -lengths[:, None]
+        histories = np.where(inside, self.items[np.maximum(source, 0)], 0)
+        return (
+            torch.from_numpy(histories.astype(np.int64)),
+            torch.from_numpy(self.positives[index].astype(np.int64)),
+        )
+
+
 def build_user_history(
     train: pd.DataFrame,
     item_to_index: Mapping[int, int],
@@ -135,6 +193,68 @@ def build_strict_prefix_examples_with_stats(
         n_truncated_interactions=n_truncated_interactions,
     )
     return torch.from_numpy(histories), torch.from_numpy(positives), stats
+
+
+def build_strict_prefix_example_store(
+    interactions: pd.DataFrame,
+    *,
+    item_to_index: Mapping[int, int],
+    max_length: int,
+) -> StrictPrefixExamples:
+    """Index the strict-prefix examples without materializing their windows.
+
+    Same ordering contract as ``build_strict_prefix_examples_with_stats``:
+    rows sorted by ``(userId, timestamp, movieId)``; every interaction outside
+    its user's first timestamp group is one example whose prefix is everything
+    in strictly earlier timestamp groups. Items sharing a timestamp share a
+    prefix and never see one another.
+    """
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+    required = {"userId", "movieId", "timestamp"}
+    missing = required - set(interactions.columns)
+    if missing:
+        raise ValueError(f"interactions is missing required columns: {sorted(missing)}")
+
+    ordered = interactions.sort_values(["userId", "timestamp", "movieId"], kind="stable")
+    dense = ordered["movieId"].map(dict(item_to_index))
+    if dense.isna().any():
+        unknown = ordered.loc[dense.isna(), "movieId"].iloc[0]
+        raise KeyError(int(unknown))
+    items = dense.to_numpy(dtype=np.int64).astype(np.int32)
+    users = ordered["userId"].to_numpy()
+    timestamps = ordered["timestamp"].to_numpy()
+    n_rows = len(ordered)
+    row_numbers = np.arange(n_rows, dtype=np.int64)
+
+    starts_user = np.ones(n_rows, dtype=bool)
+    starts_user[1:] = users[1:] != users[:-1]
+    starts_group = starts_user.copy()
+    starts_group[1:] |= timestamps[1:] != timestamps[:-1]
+    # Carry each run's first row forward: for every row, the index where its
+    # user's sequence starts and where its own timestamp group starts.
+    user_start = np.maximum.accumulate(np.where(starts_user, row_numbers, 0))
+    group_start = np.maximum.accumulate(np.where(starts_group, row_numbers, 0))
+
+    is_example = group_start > user_start
+    prefix_ends = group_start[is_example]
+    prefix_lengths = (prefix_ends - user_start[is_example]).astype(np.int32)
+    positives = items[is_example]
+    omitted = np.maximum(prefix_lengths.astype(np.int64) - max_length, 0)
+    n_examples = len(positives)
+    return StrictPrefixExamples(
+        items=items,
+        prefix_ends=prefix_ends,
+        prefix_lengths=prefix_lengths,
+        positives=positives,
+        max_length=max_length,
+        stats=SequenceExampleStats(
+            n_sequences=n_examples,
+            n_targets=n_examples,
+            n_truncated_sequences=int((omitted > 0).sum()),
+            n_truncated_interactions=int(omitted.sum()),
+        ),
+    )
 
 
 def build_all_position_training_data(
