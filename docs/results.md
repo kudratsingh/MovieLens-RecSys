@@ -1713,8 +1713,8 @@ v1's, which a test also asserts.
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
 >
-> **2026-10-05: tag list.** The twelve runs listed below are on the tag list in that memo's
-> 2026-10-05 entries. Rule: kept, never used as a comparison.
+> **2026-10-05: tag list.** The twelve runs listed below carry the 2026-10-05 contamination tags;
+> the list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison.
 
 Twelve configurations at 78 minutes each does not fit in a day, so the orders of
 magnitude were found on a subsample first. The subsample keeps **every
@@ -2224,8 +2224,8 @@ the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
 >
-> **2026-10-05: tag list.** The five runs listed below are on the tag list in that memo's
-> 2026-10-05 entries. Rule: kept, never used as a comparison.
+> **2026-10-05: tag list.** The five runs listed below carry the 2026-10-05 contamination tags; the
+> list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison.
 
 ADR 0015's five-arm Gate 1 ran locally from the checked-in DVC dataset using
 [`v2-pilot.json`](experiments/twotower-sweep/v2-pilot.json). It used the same
@@ -2310,8 +2310,8 @@ modeling track proceeds to SASRec under ADR 0016.
 > and the WO-1 section at the end of this file.
 >
 > **2026-10-05: tag list.** These three runs and the 6% item-item incumbent are on the tag list in
-> that memo's 2026-10-05 entries. No run id was recorded for them and the tracking store holds none,
-> so there is nothing to tag. Rule: kept, never used as a comparison. WO-1's four clean seeds
+> that memo's 2026-10-05 entries, as untaggable: no run id was recorded for them and the tracking
+> store holds none. Rule: kept, never used as a comparison. WO-1's four clean seeds
 > supersede this study.
 
 Three runs of ADR 0016's frozen cell at `sample_fraction = 0.06`, differing only in training seed,
@@ -2368,9 +2368,9 @@ Spec: [`experiments/tolerance/surrogate-seed-noise-6pct.json`](experiments/toler
 > and the WO-1 section at the end of this file.
 >
 > **2026-10-05: tag list.** Both runs below, and the four diagnostic-only runs before them
-> (`b4b3a7ec…`, `3d6bb37e…`, `bf95be79…`, `2706e0e6…`), are on the tag list in that memo's
-> 2026-10-05 entries. Rule: kept, never used as a comparison. The gBCE arm was re-run once on the
-> clean protocol: see the gBCE entry at the end of this file.
+> (`b4b3a7ec…`, `3d6bb37e…`, `bf95be79…`, `2706e0e6…`), carry the 2026-10-05 contamination
+> tags; the list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison. The
+> gBCE arm was re-run once on the clean protocol: see the gBCE entry at the end of this file.
 
 ADR 0016's matched loss ablation ran on the established deterministic 6% user
 sample using [`pilot-6pct.json`](experiments/sasrec/pilot-6pct.json). Both arms
@@ -2620,8 +2620,8 @@ only by moving immutable shape logging earlier than artifact transport.
 
 > **2026-10-05: two smoke runs of this runner read the sealed window.** `c5d76476…` and
 > `ec710ab7…` ran on a 1% user subsample split at its own cutoff, 1473304598. No number in this
-> section comes from them, and the full-data numbers here are clean. Both are on the tag list in the
-> 2026-10-05 entries of
+> section comes from them, and the full-data numbers here are clean. Both carry the 2026-10-05
+> contamination tags, listed in the 2026-10-05 entries of
 > [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
 
 The artifact-backed SASRec run retrieves 16.57% more warm holdout targets than
@@ -2820,8 +2820,8 @@ and latency evidence SASRec itself owes, and the k6 gate has not seen either.
 ## The ranker given the SASRec score — 2026-09-05 (ADR 0018, Rung 3 increment 1)
 
 > **2026-10-05: a smoke run of this runner read the sealed window.** `80061438…` ran on the same
-> 1% subsample, split at its own cutoff, 1473304598. No number in this section comes from it. It is
-> on the tag list in the 2026-10-05 entries of
+> 1% subsample, split at its own cutoff, 1473304598. No number in this section comes from it. It
+> carries the 2026-10-05 contamination tags, listed in the 2026-10-05 entries of
 > [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
 
 > **Superseded on 2026-09-05 by the re-measurement below.** Everything in this
@@ -3000,7 +3000,8 @@ is measured and refused.
 
 > **2026-10-05: a smoke run of this runner read the sealed window.** `b5550b18…` ran on a different
 > 1% draw, split at its own cutoff, 1469030884, and scored 1,824 sealed ratings. No number in this
-> section comes from it. It is on the tag list in the 2026-10-05 entries of
+> section comes from it. It carries the 2026-10-05 contamination tags, listed in the 2026-10-05
+> entries of
 > [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
 
 O-9's repair changed the population the verdict above was taken on. A
@@ -3131,7 +3132,8 @@ boosters were written before their holdout evaluation. Raw verdict:
 
 > **2026-10-05: the 6% diagnostic this section cites read the sealed window.** Run `8a22ed51…`
 > (warm recall@500 0.3759 on the contaminated 6% split) informed this cell's configuration as a
-> correctness check. It is on the tag list in the 2026-10-05 entries of
+> correctness check. It carries the 2026-10-05 contamination tags, listed in the 2026-10-05
+> entries of
 > [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
 > The full-data run below is clean, and its numbers and verdict stand.
 
@@ -3297,8 +3299,9 @@ verdicts are unchanged.
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
 >
-> **2026-10-05: tag list.** The 6% run `f837955c…` is on the tag list in that memo's 2026-10-05
-> entries. Attempt `833812ee…` is listed but is not in the tracking store. Rule: kept, never used as
+> **2026-10-05: tag list.** The 6% run `f837955c…` carries the 2026-10-05 contamination tags; the
+> list is in that memo's 2026-10-05 entries. Attempt `833812ee…` is listed as untaggable: it is not
+> in the tracking store. Rule: kept, never used as
 > a comparison. The full-data run `fd2ee9f6…` is clean.
 
 W28 replaced the copied-prefix training shape with the objective described by

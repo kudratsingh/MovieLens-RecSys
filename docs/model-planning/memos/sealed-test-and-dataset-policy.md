@@ -470,10 +470,11 @@ value for a pilot, and not part of any aggregate. Its numbers stay in
 | SASRec all-positions pilot, 2026-09-11 | `f837955c832440069dd8c1316a2ad0c6` | 1 |
 | Ranker smoke runs on the 1% samples, 2026-09-05 | `c5d76476e6244c2b8db96f16a70863d1`, `ec710ab7ddf442b5803306c572d4dbfe`, `8006143897dd4ac18044f47d5fc2fb0e`, `b5550b184f6d48f181d5fd7d5206494d` | 4 |
 
-**Tag status, 2026-10-05: not yet set.** All 29 ids resolve in the shared store, and none carries
-either tag yet. The table is the list the tags go on, and it is complete as of this sweep.
+**Tag status: set 2026-10-05 on all 29 runs in the shared store.** Each carries
+`sealed_window_contaminated=true` and `sealed_window_declared=2026-10-05`. A search of the store
+returns exactly these 29, and none of the WO-1 runs.
 
-**On the list but not in the store**, so there is nothing to tag:
+**On the list but untaggable**, because they are not in the store:
 - `833812eea8a341e9953285b4145cf9b8`, the all-positions attempt. It went to an earlier server whose
   artifact root the host could not write. Only its local model archive survives.
 - `ed694c47caa04e9b89bda5195c052693`, the OpenMP validation run, logged to a throwaway store.
@@ -503,9 +504,10 @@ column says what now stands in for that evidence.
 fitted and scored on the full split, and the full split never crosses the boundary. What changes is
 pilot-scale evidence and the window reserved for WO-8.
 
-**Closing the path, continued (step 6).** The sweep adds one trainer to the "still open" list above:
-`src.training.sasrec_ranker`, whose smoke path subsamples and splits the same way. So four trainers
-now compute their own cutoff on a subsample: `twotower`, `itemitem`, `last_item` and `sasrec_ranker`.
+**Closing the path, continued (step 6).** The sweep adds one path to the "still open" list above:
+`src.training.sasrec_ranker.prepare_shared`, which the ranker runners' smoke runs load through. It
+subsamples and splits the same way. So four trainers now compute their own cutoff on a subsample:
+`twotower`, `itemitem`, `last_item` and `sasrec_ranker`.
 
 ## Proposed amendment 2026-10-05 — retire the WO-8 window and set a new one (not approved)
 
