@@ -226,3 +226,48 @@ def test_the_training_seed_still_does_not_move_the_configuration_id() -> None:
     }
 
     assert len(ids) == 1
+
+
+def test_the_experiment_is_phase_2s_unless_mlflow_experiment_name_says_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(sasrec_training.EXPERIMENT_ENV_VAR, raising=False)
+    assert sasrec_training.resolve_experiment_name() == PHASE_2_EXPERIMENT
+    monkeypatch.setenv(sasrec_training.EXPERIMENT_ENV_VAR, "  ")
+    assert sasrec_training.resolve_experiment_name() == PHASE_2_EXPERIMENT
+    monkeypatch.setenv(sasrec_training.EXPERIMENT_ENV_VAR, "phase-a-sasrec")
+    assert sasrec_training.resolve_experiment_name() == "phase-a-sasrec"
+
+
+def test_a_run_logs_to_the_named_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ratings = pd.DataFrame(
+        [(user, user * 100 + item, 4.0, item) for user in range(1, 5) for item in range(8)],
+        columns=["userId", "movieId", "rating", "timestamp"],
+    )
+    config = SASRecConfig(
+        max_sequence_length=5,
+        hidden_dim=8,
+        num_blocks=1,
+        num_heads=2,
+        feedforward_dim=16,
+        dropout=0.0,
+        negative_count=2,
+        batch_size=8,
+        epochs=1,
+        faiss_exact=True,
+    )
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    monkeypatch.setenv(sasrec_training.EXPERIMENT_ENV_VAR, "phase-a-sasrec")
+    previous_uri = mlflow.get_tracking_uri()
+    try:
+        mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
+        run_once(ratings, config, run_label="named", artifact_root=tmp_path / "durable")
+        client = mlflow.MlflowClient()
+        named = client.get_experiment_by_name("phase-a-sasrec")
+        assert named is not None
+        assert len(client.search_runs([named.experiment_id])) == 1
+        assert client.get_experiment_by_name(PHASE_2_EXPERIMENT) is None
+    finally:
+        mlflow.set_tracking_uri(previous_uri)

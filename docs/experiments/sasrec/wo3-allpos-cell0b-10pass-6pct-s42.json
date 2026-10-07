@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "WO-3 continuation (owner approval relayed 2026-10-07): 'cell 0b on the all-positions trainer,",
+    "seed 42, early stopping off, 10 passes.' Cell 0b's exact settings (sampled softmax, 1,024",
+    "negatives) on O-25's 6% partition; early stopping off, so exactly 10 passes. The protocol hash",
+    "below is confirmed on the run before any number is read; the sealed boundary 1469256597 holds.",
+    "Run preservation (owner, 2026-10-07): logged to the shared store (http://localhost:5001,",
+    "experiment phase-a-sasrec) with the per-user recall file, the model archive and the console",
+    "log as run artifacts, verified through the API after the run.",
+    "THE READ, declared before the run (owner's condition 1): warm recall@500 after pass 10, the",
+    "run's final metric. Every pass is logged (epoch_warm_recall_at_k_candidates); the best pass",
+    "is not picked. Pass: within 0.03 of strict-prefix cell 0b 9b0d4994 (0.4563981551).",
+    "Condition 3: if the per-pass curve peaks before pass 10 and pass 10 is more than 0.03 below",
+    "that peak, the thread stops after this run and the per-pass numbers go to the coordinator",
+    "before item (e) runs.",
+    "Projection: about 90 s per pass (1fbde873 measured 85.3 / 88.4 / 91.5 s on passes 1-3),",
+    "so about 900 s fit, about 16 min wall solo; killed past 32 min wall."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "declared_read": {
+    "metric": "warm_recall_at_k_candidates",
+    "at_pass": 10,
+    "pass_rule": "abs(read - 0.4563981551) < 0.03",
+    "stop_rule_condition_3": "peak pass < 10 and peak - pass10 > 0.03 -> stop and report before (e)"
+  },
+  "projection": {
+    "seconds_per_pass": 90,
+    "fit_seconds": 900,
+    "wall_minutes": 16,
+    "kill_wall_minutes": 32
+  },
+  "strict_prefix_cell_0b_reference": {
+    "run": "9b0d499430474fde9de6a5305bcda649",
+    "cells_file": "wo4-cell0b-pair-cpu-6pct.json",
+    "trainer": "strict-prefix, WO-4 early stopping (3 to 5 passes); ran 5 passes",
+    "warm_recall_at_500": 0.4563981550719796,
+    "within_0_03": [
+      0.4263981551,
+      0.4863981551
+    ]
+  },
+  "previous_all_positions_cell_0b": {
+    "run": "1fbde8732ab540cf85cd672744acd9e7",
+    "note": "same cell with WO-4 early stopping on: stopped at pass 3, 0.3817862300"
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s42",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 10,
+      "early_stopping": false,
+      "faiss_exact": true,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu",
+      "seed": 42
+    }
+  ]
+}

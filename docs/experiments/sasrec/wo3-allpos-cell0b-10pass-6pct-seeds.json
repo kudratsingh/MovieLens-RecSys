@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "WO-3 continuation (owner approval relayed 2026-10-07): 'cell 0b on the all-positions trainer,",
+    "seed 42, early stopping off, 10 passes.' Cell 0b's exact settings (sampled softmax, 1,024",
+    "negatives) on O-25's 6% partition; early stopping off, so exactly 10 passes. The protocol hash",
+    "below is confirmed on the run before any number is read; the sealed boundary 1469256597 holds.",
+    "Run preservation (owner, 2026-10-07): logged to the shared store (http://localhost:5001,",
+    "experiment phase-a-sasrec) with the per-user recall file, the model archive and the console",
+    "log as run artifacts, verified through the API after the run.",
+    "Item (e), the fast trainer's three seeds, at the same fixed 10 passes as seed 42",
+    "(owner's condition 2). Pass check: the fast trainer's four-seed mean (42, 7, 13, 21)",
+    "within 3% of the strict-prefix four-seed mean (9b0d4994 is the strict-prefix seed 42).",
+    "Projection: about 900 s fit each solo; with up to three runs in flight, slower."
+  ],
+  "hold": "held until the seed-42 ten-pass read passes (within 0.03 of 0.4564) and condition 3 does not fire",
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "strict_prefix_cell_0b_reference": {
+    "run": "9b0d499430474fde9de6a5305bcda649",
+    "cells_file": "wo4-cell0b-pair-cpu-6pct.json",
+    "trainer": "strict-prefix, WO-4 early stopping (3 to 5 passes); ran 5 passes",
+    "warm_recall_at_500": 0.4563981550719796,
+    "within_0_03": [
+      0.4263981551,
+      0.4863981551
+    ]
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s7",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 10,
+      "early_stopping": false,
+      "faiss_exact": true,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu",
+      "seed": 7
+    },
+    {
+      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s13",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 10,
+      "early_stopping": false,
+      "faiss_exact": true,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu",
+      "seed": 13
+    },
+    {
+      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s21",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 10,
+      "early_stopping": false,
+      "faiss_exact": true,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu",
+      "seed": 21
+    }
+  ]
+}
