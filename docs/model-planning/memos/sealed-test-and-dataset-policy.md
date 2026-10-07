@@ -407,9 +407,19 @@ note records the fact and does not make that call.
   also refuses any run whose fitted or scored rows reach the full frame's boundary
   (`SealedPartitionError`). Both are under test. The new 6% pilot protocol hash is
   `sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc`.
-- **Still open.** The two-tower, item-item and last-item trainers subsample and then compute their
-  own quantile in the same way. WO-1 does not change them. Any pilot they run before they are fixed
-  repeats this read.
+- **Closed for every other subsampling trainer (2026-10-07, owner ruling; PR #201).** Item-item,
+  last-item, two-tower and the SASRec ranker (`prepare_shared`, which the score-feature arm reuses)
+  now subsample through `candidate_data.sample_and_split`. It cuts a subsample at the full frame's
+  boundaries, the same `temporal_split(..., cutoff=temporal_cutoff(full))` as WO-1, and leaves a
+  full-frame run exactly as it was. Each trainer then runs `sealed_partition_params` before it fits
+  anything, and refuses a run whose fitted or scored rows reach the boundary (`SealedPartitionError`).
+  - Item-item, last-item and two-tower log the partition timestamps with their params; the ranker
+    logs them at startup.
+  - `tests/unit/test_sealed_partition_guards.py` hands each trainer a late-heavy subsample and checks,
+    at the trainer's own guard, that the full boundaries were used.
+  - Item-item no longer attaches the ADR 0011 cohort to a subsampled run, matching the other
+    trainers.
+  - No trainer in `src/training/` now computes a subsample's own quantile.
 - **Tagging (step 4).** The affected MLflow runs live on the shared tracking server and have not
   been tagged yet.
 

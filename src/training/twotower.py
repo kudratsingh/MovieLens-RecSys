@@ -52,7 +52,6 @@ import mlflow
 import pandas as pd
 
 from src.config import Settings
-from src.data.split import temporal_split
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -69,6 +68,8 @@ from src.training.candidate_data import (
 from src.training.candidate_data import (
     PHASE_2_EXPERIMENT,
     load_inputs,
+    sample_and_split,
+    sealed_partition_params,
     subsample_users,
 )
 from synthetic.cold_start import harness as synth_cold
@@ -121,9 +122,16 @@ def run_once(
     policy = routing.resolve_policy() if routing_policy is None else routing_policy
     logger.info("Cold-start routing policy: %s", policy)
 
+    full_ratings = ratings
+    before_users = ratings["userId"].nunique()
+    # O-25: a pilot subsample is cut at the full frame's boundaries, never at its
+    # own 80th percentile, so its holdout cannot reach the sealed window. The
+    # subsample itself is drawn at the training seed, as it always was here.
+    logger.info("Splitting on time per ADR 0001 ...")
+    ratings, split = sample_and_split(
+        full_ratings, sample_fraction=sample_fraction, sample_seed=config.seed
+    )
     if sample_fraction != 1.0:
-        before_users = ratings["userId"].nunique()
-        ratings = subsample_users(ratings, sample_fraction, config.seed)
         logger.info(
             "Pilot subsample at fraction %.4f: %s of %s users kept, %s rows",
             sample_fraction,
@@ -132,8 +140,6 @@ def run_once(
             f"{len(ratings):,}",
         )
 
-    logger.info("Splitting on time per ADR 0001 ...")
-    split = temporal_split(ratings)
     logger.info(
         "Train=%s Holdout=%s Test=%s (cutoff=%d)",
         f"{len(split.train):,}",
@@ -156,6 +162,7 @@ def run_once(
     else:
         train_frame, cohort = split.train, None
         logger.info("Subsampled run: ADR 0011 cohort not attached (it is cutoff-anchored)")
+    partition = sealed_partition_params(full_ratings, split, train_frame)
 
     model = TwoTowerModel(
         config=config,
@@ -202,6 +209,7 @@ def run_once(
                 "user_sample_fraction": sample_fraction,
                 "run_label": run_label,
                 **config.as_params(),
+                **partition,
             }
         )
         envelope = protocol_manifest.run_envelope(

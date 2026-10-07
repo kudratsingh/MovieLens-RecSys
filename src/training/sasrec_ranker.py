@@ -70,7 +70,7 @@ from sqlalchemy import Engine, create_engine
 
 from src.config import Settings
 from src.data.load import load_ratings
-from src.data.split import TemporalSplit, temporal_split
+from src.data.split import TemporalSplit
 from src.evaluation.gate import GateDecision, promotion_decision
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
@@ -94,6 +94,7 @@ from src.models.candidates.sasrec_artifact import (
 from src.models.candidates.sasrec_ranking_features import SasrecScoreFeatures
 from src.models.ranker.lgbm import LGBMRanker, LGBMRankerConfig
 from src.training import protocol_manifest, sampling, seeds
+from src.training.candidate_data import sample_and_split, sealed_partition_params
 from src.training.ranker import (
     NEGATIVES_PER_POSITIVE,
     RANKER_APPLY_SERVING_EXCLUSIONS,
@@ -103,7 +104,6 @@ from src.training.ranker import (
     _sample_training_positives,
     _trailing_window,
 )
-from src.training.twotower import subsample_users
 from synthetic.cold_start import harness as synth_cold
 from synthetic.cold_start.load import SyntheticColdCohort
 
@@ -1057,11 +1057,14 @@ def prepare_shared() -> SharedInputs:
         engine.dispose()
     logger.info("Loaded %s ratings, %s movies", f"{len(ratings):,}", f"{len(movies):,}")
 
+    # O-25: a smoke-run subsample is cut at the full frame's boundaries, never at
+    # its own 80th percentile, so its holdout cannot reach the sealed window.
+    full_ratings = ratings
+    ratings, split = sample_and_split(
+        full_ratings, sample_fraction=sample_fraction, sample_seed=SUBSAMPLE_SEED
+    )
     if sample_fraction != 1.0:
-        ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
         logger.info("Subsampled to %s ratings for a smoke run", f"{len(ratings):,}")
-
-    split = temporal_split(ratings)
     logger.info(
         "Train=%s Holdout=%s Test=%s (cutoff=%d)",
         f"{len(split.train):,}",
@@ -1075,6 +1078,10 @@ def prepare_shared() -> SharedInputs:
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
     )
+    # Before the feature index, the positives or either arm's model: a run that
+    # would touch the sealed window stops here, not after an hour of training.
+    partition = sealed_partition_params(full_ratings, split, train_frame)
+    logger.info("Partition: %s", partition)
 
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)

@@ -50,7 +50,6 @@ from sqlalchemy import create_engine
 
 from src.config import Settings
 from src.data.load import load_ratings
-from src.data.split import temporal_split
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -61,7 +60,7 @@ from src.evaluation.protocol import (
 from src.models.candidates import routing
 from src.models.candidates.last_item import LastItemTransitionModel
 from src.training import protocol_manifest
-from src.training.twotower import subsample_users
+from src.training.candidate_data import sample_and_split, sealed_partition_params
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -134,10 +133,15 @@ def main() -> None:
 
     sample_fraction = resolve_sample_fraction()
     sample_seed = resolve_sample_seed()
+    full_ratings = ratings
+    # The same subsample function the two-tower and SASRec trainers use, so "the
+    # same sample" is a shared implementation rather than a claim; and since O-25
+    # the same cut, at the full frame's boundaries rather than the sample's own.
+    logger.info("Splitting on time per ADR 0001 ...")
+    ratings, split = sample_and_split(
+        full_ratings, sample_fraction=sample_fraction, sample_seed=sample_seed
+    )
     if sample_fraction != 1.0:
-        # The same function the two-tower and SASRec trainers subsample with, so
-        # "the same sample" is a shared implementation rather than a claim.
-        ratings = subsample_users(ratings, sample_fraction, sample_seed)
         logger.info(
             "Subsampled to %.4f of users at seed %d: %s ratings",
             sample_fraction,
@@ -145,8 +149,6 @@ def main() -> None:
             f"{len(ratings):,}",
         )
 
-    logger.info("Splitting on time per ADR 0001 ...")
-    split = temporal_split(ratings)
     logger.info(
         "Train=%s Holdout=%s Test=%s (cutoff=%d)",
         f"{len(split.train):,}",
@@ -161,6 +163,7 @@ def main() -> None:
     train_frame, cohort = (
         synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
     )
+    partition = sealed_partition_params(full_ratings, split, train_frame)
 
     routing_policy = routing.resolve_policy()
     logger.info("Cold-start routing policy: %s", routing_policy)
@@ -336,6 +339,7 @@ def main() -> None:
                 "n_holdout_users": len(holdout_user_ids),
                 "user_sample_fraction": sample_fraction,
                 "sample_seed": sample_seed,
+                **partition,
                 "backfill_with_popularity": model.backfill_with_popularity,
                 "n_transition_events": model.stats.n_transition_events,
                 "n_transition_pairs": model.stats.n_transition_pairs,

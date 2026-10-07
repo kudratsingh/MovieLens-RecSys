@@ -20,12 +20,7 @@ import pandas as pd
 import torch
 
 from src.config import Settings
-from src.data.split import (
-    TemporalSplit,
-    sealed_test_boundary,
-    temporal_cutoff,
-    temporal_split,
-)
+from src.data.split import temporal_cutoff, temporal_split
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -51,8 +46,13 @@ from src.training.candidate_data import (
     INPUT_DIR_ENV_VAR,
     PHASE_2_EXPERIMENT,
     load_inputs,
+    sealed_partition_params,
     subsample_users,
 )
+
+# The guard moved to ``candidate_data`` so every subsampling trainer shares it;
+# its error stays importable from here, where WO-1 introduced it.
+from src.training.candidate_data import SealedPartitionError as SealedPartitionError
 from src.training.sasrec_training_log import (
     LOSS_CURVE_ARTIFACT_PATH,
     LOSS_CURVE_FILENAME,
@@ -79,10 +79,6 @@ ARTIFACT_DIR_ENV_VAR = "SASREC_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = Path("artifacts/sasrec")
 MODEL_TYPE = "sasrec"
 EVALUATION_INDEX = "torch-exact-inner-product-v1"
-
-
-class SealedPartitionError(RuntimeError):
-    """A run would fit on or score a rating at or after the sealed-test boundary."""
 
 
 class StoppingProbeError(RuntimeError):
@@ -181,37 +177,6 @@ def encoder_weights_sha256(arrays: Mapping[str, Any]) -> str:
         digest.update(repr(array.shape).encode())
         digest.update(array.tobytes())
     return f"sha256:{digest.hexdigest()}"
-
-
-def sealed_partition_params(
-    full_ratings: pd.DataFrame,
-    split: TemporalSplit,
-    fitted_frame: pd.DataFrame,
-) -> dict[str, int]:
-    """Refuse a run that would touch the sealed partition; return what it did touch.
-
-    The boundary is derived from the full frame, before any user subsample, so a
-    pilot is held to the same sealed window as a full run. Before O-25 a
-    subsample computed its own 80th-percentile cutoff, and the 6% pilot's landed
-    past the full split's ``holdout_end``. ``run_once`` now cuts a subsample at
-    the full frame's boundaries; this check stays as the backstop, on the rows
-    themselves. The returned timestamps fill the experiment record's partition
-    declaration.
-    """
-    boundary = sealed_test_boundary(full_ratings)
-    latest_fit = int(fitted_frame["timestamp"].max()) if not fitted_frame.empty else 0
-    latest_scored = int(split.holdout["timestamp"].max()) if not split.holdout.empty else 0
-    if latest_fit >= boundary or latest_scored >= boundary:
-        raise SealedPartitionError(
-            f"run would read the sealed partition: boundary {boundary}, latest fitted "
-            f"timestamp {latest_fit}, latest scored timestamp {latest_scored}"
-        )
-    return {
-        "sealed_boundary_timestamp": boundary,
-        "holdout_end_timestamp": split.holdout_end,
-        "latest_fit_timestamp": latest_fit,
-        "latest_scored_timestamp": latest_scored,
-    }
 
 
 def retrieval_diagnostics(
