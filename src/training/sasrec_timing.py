@@ -1107,6 +1107,7 @@ def record_session(
     not ``sasrec``. Everything the session produced is attached as artifacts.
     """
     import mlflow
+    from mlflow.artifacts import list_artifacts
     from mlflow.tracking import MlflowClient
 
     summary = summarize_session(session_dir)
@@ -1183,45 +1184,78 @@ def record_session(
                 metrics[_mlflow_key(f"bootstrap_{key.lower()}")] = float(value)
 
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(experiment)
-    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
-    with mlflow.start_run(run_name=f"wo5-timing-{label}-{stamp}") as run:
-        mlflow.set_tags(tags)
-        mlflow.log_params({_mlflow_key(k): str(v) for k, v in params.items()})
-        if metrics:
-            mlflow.log_metrics(metrics)
-        mlflow.log_artifacts(str(session_dir), artifact_path="timing-session")
-        if tarball is not None:
-            mlflow.log_artifact(str(tarball), artifact_path="bundle")
-            sha_file = tarball.with_name(tarball.name + ".sha256")
-            if sha_file.is_file():
-                mlflow.log_artifact(str(sha_file), artifact_path="bundle")
-        run_id = run.info.run_id
-        experiment_id = run.info.experiment_id
-
+    experiment_id = mlflow.set_experiment(experiment).experiment_id
     client = MlflowClient(tracking_uri=tracking_uri)
+    run_id = _recorded_run(client, experiment_id, tags.get("tarball_sha256"))
+    reused = run_id is not None
+    if run_id is None:
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        with mlflow.start_run(run_name=f"wo5-timing-{label}-{stamp}") as run:
+            mlflow.set_tags(tags)
+            mlflow.log_params({_mlflow_key(k): str(v) for k, v in params.items()})
+            if metrics:
+                mlflow.log_metrics(metrics)
+            mlflow.log_artifacts(str(session_dir), artifact_path="timing-session")
+            if tarball is not None:
+                mlflow.log_artifact(str(tarball), artifact_path="bundle")
+                sha_file = tarball.with_name(tarball.name + ".sha256")
+                if sha_file.is_file():
+                    mlflow.log_artifact(str(sha_file), artifact_path="bundle")
+            run_id = run.info.run_id
+
     fetched = client.get_run(run_id)
-    listed = {item.path for item in client.list_artifacts(run_id, "timing-session")}
+    # Listed through the run's artifact location rather than
+    # ``MlflowClient.list_artifacts``: a 3.x client asks a 2.x server for
+    # logged models there, and the shared store's server is 2.13.
+    listed = {
+        item.path
+        for folder in ("timing-session", "bundle")
+        for item in list_artifacts(artifact_uri=f"{fetched.info.artifact_uri}/{folder}")
+    }
     problems = [
         f"tag {name} is {fetched.data.tags.get(name)!r}"
         for name in ("timing_only", "not_a_result_of_record")
         if fetched.data.tags.get(name) != "true"
     ]
-    for expected in ("timing-session/results", f"timing-session/{SUMMARY_FILENAME}"):
-        if expected not in listed:
-            problems.append(f"artifact {expected} is missing")
+    expected = ["timing-session/results", f"timing-session/{SUMMARY_FILENAME}"]
+    if tarball is not None:
+        expected.append(f"bundle/{tarball.name}")
+    problems += [f"artifact {path} is missing" for path in expected if path not in listed]
+    problems += [
+        f"metric {name} is missing" for name in metrics if name not in fetched.data.metrics
+    ]
     if problems:
         raise TimingCheckError(f"run {run_id} did not read back as written: {problems}")
     return {
         "run_id": run_id,
+        "reused_existing_run": reused,
         "experiment_id": experiment_id,
         "experiment": experiment,
         "tracking_uri": tracking_uri,
         "run_name": fetched.info.run_name,
         "artifacts": sorted(listed),
-        "metrics_logged": len(metrics),
+        "metrics_logged": len(fetched.data.metrics),
         "summary_passed": summary["passed"],
     }
+
+
+def _recorded_run(client: Any, experiment_id: str, tarball_sha256: str | None) -> str | None:
+    """The run already recorded for this tarball, so a second pull does not log a twin.
+
+    A pull that died after its run was created (a dropped connection during the
+    read-back, say) is rerun as it was; the rerun finds that run by the tarball's
+    SHA-256 and verifies it instead of logging the same session twice.
+    """
+    if tarball_sha256 is None:
+        return None
+    runs = client.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=f"tags.tarball_sha256 = '{tarball_sha256}' and tags.timing_only = 'true'",
+        max_results=2,
+    )
+    if len(runs) > 1:
+        raise TimingCheckError(f"more than one run already records tarball {tarball_sha256}")
+    return str(runs[0].info.run_id) if runs else None
 
 
 # --- command line -------------------------------------------------------------------

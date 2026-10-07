@@ -419,8 +419,9 @@ def test_record_logs_one_tagged_timing_run_with_the_session_attached(
     )
     uri = (tmp_path / "mlruns").as_uri()
     previous = mlflow.get_tracking_uri()
-    try:
-        outcome = record_session(
+
+    def record() -> dict[str, Any]:
+        return record_session(
             session,
             tracking_uri=uri,
             experiment="phase-a-sasrec",
@@ -430,8 +431,17 @@ def test_record_logs_one_tagged_timing_run_with_the_session_attached(
             label="local-smoke",
             tarball=tarball,
         )
+
+    try:
+        outcome = record()
+        again = record()
     finally:
         mlflow.set_tracking_uri(previous)
+
+    # A second pull of the same tarball verifies the first run, it logs no twin.
+    assert (outcome["reused_existing_run"], again["reused_existing_run"]) == (False, True)
+    assert again["run_id"] == outcome["run_id"]
+    assert len(MlflowClient(tracking_uri=uri).search_runs([outcome["experiment_id"]])) == 1
 
     run = MlflowClient(tracking_uri=uri).get_run(outcome["run_id"])
     assert run.data.tags["timing_only"] == "true"
@@ -442,6 +452,7 @@ def test_record_logs_one_tagged_timing_run_with_the_session_attached(
     assert "cellA_mean_step_seconds" in run.data.metrics
     assert "warm_recall_at_k_candidates" not in run.data.metrics
     assert "timing-session/results" in outcome["artifacts"]
+    assert "bundle/session.tgz" in outcome["artifacts"]
     assert (session / "summary.json").is_file()
 
 
