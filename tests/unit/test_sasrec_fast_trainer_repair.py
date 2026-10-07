@@ -866,13 +866,16 @@ def test_the_ten_pass_cell_0b_files_change_only_what_the_owner_approved() -> Non
     assert spec["declared_read"]["at_pass"] == 10 == cells[0][1].epochs
     assert [config for _label, config in cells] == [fast_42]
 
-    for name, expected in (
-        ("wo3-allpos-cell0b-10pass-6pct-seeds.json", fast_42),
-        ("wo3-strictprefix-cell0b-6pct-seeds.json", strict_42),
+    for names, expected in (
+        (["wo3-allpos-cell0b-10pass-6pct-seeds.json"], fast_42),
+        ([f"wo3-strictprefix-cell0b-6pct-s{seed}.json" for seed in (7, 13, 21)], strict_42),
     ):
-        spec, fraction, cells = _cells(name)
-        assert spec["hold"] and fraction == 0.06
-        assert spec["expected_protocol_hash"] == PILOT_PROTOCOL
-        assert [config.seed for _label, config in cells] == [7, 13, 21]
-        for _label, config in cells:
-            assert dataclasses.replace(config, seed=42) == expected
+        seeds: list[int] = []
+        for name in names:
+            spec, fraction, cells = _cells(name)
+            assert "hold" not in spec and spec["released"] and fraction == 0.06
+            assert spec["expected_protocol_hash"] == PILOT_PROTOCOL
+            for _label, config in cells:
+                assert dataclasses.replace(config, seed=42) == expected
+                seeds.append(config.seed)
+        assert seeds == [7, 13, 21]

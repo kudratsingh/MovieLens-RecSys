@@ -7,10 +7,13 @@
     "Run preservation (owner, 2026-10-07): logged to the shared store (http://localhost:5001,",
     "experiment phase-a-sasrec) with the per-user recall file, the model archive and the console",
     "log as run artifacts, verified through the API after the run.",
-    "Item (e), the fast trainer's three seeds, at the same fixed 10 passes as seed 42",
-    "(owner's condition 2). Pass check: the fast trainer's four-seed mean (42, 7, 13, 21)",
-    "within 3% of the strict-prefix four-seed mean (9b0d4994 is the strict-prefix seed 42).",
-    "Projection: about 900 s fit each solo; with up to three runs in flight, slower."
+    "Item (e), the strict-prefix trainer's three seeds under WO-4's existing rule (early",
+    "stopping, 3 to 5 passes), exactly as 9b0d4994 ran at seed 42: wo4-cell0b-pair-cpu-6pct.json's",
+    "cell with only the seed changed (owner's condition 2).",
+    "Projection: 9b0d4994 took 3,593.6 s fit (688 s per pass solo); about 60-75 min wall each",
+    "with up to three runs in flight; killed past 150 min.",
+    "One seed per file so the three strict-prefix seeds can run as separate processes; the",
+    "cell is unchanged from the three-seed file it was split from."
   ],
   "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
   "strict_prefix_cell_0b_reference": {
@@ -26,37 +29,15 @@
   "sample_fraction": 0.06,
   "cells": [
     {
-      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s7",
+      "label": "wo3-strictprefix-cell0b-pilot6-ssm-neg1024-s7",
       "loss": "sampled-softmax",
       "negative_count": 1024,
-      "epochs": 10,
-      "early_stopping": false,
+      "epochs": 5,
+      "early_stopping": true,
       "faiss_exact": true,
-      "training_objective": "all-positions-strict-timestamp-v1",
+      "training_objective": "strict-prefix-final-position-v1",
       "device": "cpu",
       "seed": 7
-    },
-    {
-      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s13",
-      "loss": "sampled-softmax",
-      "negative_count": 1024,
-      "epochs": 10,
-      "early_stopping": false,
-      "faiss_exact": true,
-      "training_objective": "all-positions-strict-timestamp-v1",
-      "device": "cpu",
-      "seed": 13
-    },
-    {
-      "label": "wo3-allpos-cell0b-10pass-pilot6-ssm-neg1024-s21",
-      "loss": "sampled-softmax",
-      "negative_count": 1024,
-      "epochs": 10,
-      "early_stopping": false,
-      "faiss_exact": true,
-      "training_objective": "all-positions-strict-timestamp-v1",
-      "device": "cpu",
-      "seed": 21
     }
   ],
   "released": "released 2026-10-07 after seed 42's declared pass-10 read passed: 02060962 read 0.4343017113 against 0.4563981551 (-0.0221, inside 0.03); condition 3 did not fire (peak pass 8 at 0.4344376606, pass 10 0.0001 below it)"
