@@ -1,0 +1,44 @@
+# The Python environment of a rented-GPU session (WO-5), installed by
+# infra/gpu/bootstrap.sh into its own venv on the pod. Nothing else reads it.
+#
+# torch is the CUDA build of the version every Phase A run used (2.13.0, the
+# Mac's dev venv), from PyTorch's own index. The `+cu126` local version is the
+# pin: a plain `torch==2.13.0` from PyPI would also be a CUDA build on Linux, but
+# of whichever CUDA release PyTorch chose as its default, and the session record
+# should not depend on that. PyTorch publishes 2.13.0 for cu126, cu129, cu130 and
+# cu132 (checked against its index on 2026-10-07; there is no cu128 build). cu126
+# is the oldest CUDA 12 build, so it runs on the widest range of drivers (any
+# CUDA 12 driver, by CUDA's minor-version compatibility) and its kernels include
+# the RTX 4090's sm_89. If the index ever stops serving it, the bootstrap probes
+# cu129 and then cu130 (the latter only on a driver that reports CUDA 13), then
+# PyPI's default build, and records which one it installed; the torch version
+# itself never moves.
+#
+# The serving sidecar's CPU pin (`torch==2.12.0+cpu` in
+# infra/features/requirements.txt) is a different environment and is untouched.
+#
+# Everything else is the slice of pyproject.toml's dependencies that the
+# trainer, the timing and the smoke actually import, pinned to the versions in
+# the Mac's venv that produced every recorded run, so a timing on the pod and a
+# timing on the Mac run the same Python code over the same libraries. Not the
+# whole list: feast, prefect, evidently and dvc would cost minutes of billed
+# install time and are never imported here. mlflow-skinny is the import that
+# `src.training.sasrec` needs (nothing on the pod logs to MLflow); lightgbm and
+# scikit-learn come in through `src.models.artifacts`, pyarrow through the cold-start
+# harness's parquet reader. A clean venv built from exactly this list (torch swapped
+# for its macOS build) ran the smoke and a timing on 2026-10-07 before it was committed.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126
+
+numpy==2.4.6
+pandas==2.3.3
+pyarrow==25.0.1
+faiss-cpu==1.15.0
+lightgbm==4.7.0
+scikit-learn==1.9.0
+scipy==1.17.1
+mlflow-skinny==3.15.1
+pydantic==2.13.4
+pydantic-settings==2.15.0
+SQLAlchemy==2.0.52
+PyYAML==6.0.3
