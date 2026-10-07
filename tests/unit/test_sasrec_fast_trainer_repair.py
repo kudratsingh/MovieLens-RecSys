@@ -850,7 +850,7 @@ def test_the_seed_repeats_and_the_full_run_are_held_until_a_variant_wins(
 
 
 def test_the_ten_pass_cell_0b_files_change_only_what_the_owner_approved() -> None:
-    """Cell 0b at a fixed 10 passes on the fast trainer; the strict-prefix seeds as WO-4 ran them."""
+    """Cell 0b at a fixed 10 passes on the fast trainer; strict-prefix seeds as WO-4 ran them."""
     _wo4_spec, _fraction, wo4 = _cells("wo4-cell0b-pair-cpu-6pct.json")
     strict_42 = wo4[0][1]
     fast_42 = dataclasses.replace(
