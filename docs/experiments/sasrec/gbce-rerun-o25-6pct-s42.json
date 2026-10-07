@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "The one gBCE re-run the owner approved on 2026-10-05, after the O-25 contamination finding.",
+    "ADR 0016 chose BCE over gBCE for SASRec v1 on pilot-6pct.json: BCE run 0c600f9d... read",
+    "warm recall@500 0.3186 and gBCE run fb63a3ae96c64205ba5e57e5ca4b0611 read 0.2937. Both read",
+    "the contaminated 6% split (cutoff 1471288304; its holdout was all sealed-window data).",
+    "This cell is pilot6-gbce-t0.5-neg32 exactly as that run logged it (gbce, calibration_t 0.5,",
+    "32 negatives, 2 epochs, exact retrieval, seed 42, every other field at its default), with",
+    "two differences the protocol imposes rather than chooses: the O-25 cut (the 6% sample is",
+    "split at the full split's boundaries, cutoff 1466837397, holdout_end 1469256597), and the",
+    "objective of record named explicitly. The gBCE beta is recomputed from this split's train",
+    "catalog, as the trainer always does. Like WO-1's pilots, it runs with PR #162's evaluation",
+    "fix, which the September pair predates.",
+    "Compared with WO-1's BCE seed-42 pilot 7baeb7d0b812486e9c86fdd3435ea715 (warm recall@500",
+    "0.3625487076, same seed, same protocol) and the four-seed BCE range [0.3611, 0.3936].",
+    "One run; no retune whatever it reads. The protocol hash must equal the value below before",
+    "the metric is read."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "o25-pilot6-gbce-t0.5-neg32-s42",
+      "loss": "gbce",
+      "calibration_t": 0.5,
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1"
+    }
+  ]
+}

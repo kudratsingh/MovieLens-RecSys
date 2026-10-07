@@ -412,3 +412,153 @@ note records the fact and does not make that call.
   repeats this read.
 - **Tagging (step 4).** The affected MLflow runs live on the shared tracking server and have not
   been tagged yet.
+
+### Scope, re-measured across every recorded subsample — 2026-10-05
+
+Step 2 asks which runs. The declaration above found them through the 6% seed-42 split. This sweep
+re-derives what every recorded subsample read, using the logic those runs ran: draw the users, then
+split the draw at its own 80th-percentile cutoff. It covers every cells JSON with a
+`sample_fraction` (SASRec and two-tower), the tolerance study, the 0.5% pilot, and every run in the
+shared tracking store whose logged cutoff differs from the full split's 1466837397. It reads the
+pinned CSV snapshot. Every computed cutoff and row count matches what the runs logged, except for
+one draw the CSV cannot reproduce, described below the table.
+
+| Sample (fraction, subsample seed) | Specs and runs | Cutoff | `holdout_end` | Latest fitted | Latest scored | Sealed rows read |
+|---|---|---:|---:|---:|---:|---|
+| 0.1%, 42 | SASRec smoke `bd2a9200…` (no cells file) | 1438726569 | 1441145769 | 1438726317 | 1440979410 | none |
+| 0.5%, 42 | `sasrec/pilot.json` (six runs) | 1466662482 | 1469081682 | 1466662479 | 1469075882 | none |
+| 6%, 42 | `sasrec/pilot-6pct.json`, `tolerance/surrogate-seed-noise-6pct.json`, `sasrec/all-positions-pilot-6pct.json`, `twotower-sweep/pilot.json`, `twotower-sweep/v2-pilot.json`, the two 2026-09-05 two-tower diagnostics, the 6% item-item incumbent | 1471288304 | 1473707504 | 1471288301 | 1473706430 | 4,870 fitted, 7,528 scored |
+| 1%, 42 | ranker smoke runs `c5d76476…`, `ec710ab7…`, `80061438…` (no cells file) | 1473304598 | 1475723798 | 1473304591 | **1475668075** | 1,792 fitted, 1,054 scored |
+| 1%, another draw | ranker smoke run `b5550b18…` | 1469030884 | 1471450084 | before 1469030884 | 1471446464 | 1,824 scored |
+| 6%, 42, cut at the full split (O-25) | the five WO-1 runs and the gBCE re-run below | 1466837397 | 1469256597 | 1466819964 | 1469247943 | none |
+
+**The 1% ranker runs are new to this record, and they reach furthest.**
+`src.training.sasrec_ranker`'s `prepare_shared`, which the score-feature runner also loads through,
+subsamples at its own `SUBSAMPLE_SEED` 42 and splits the draw at the draw's own quantile, exactly as
+the 6% path did. Four smoke runs used it on 2026-09-05. They proved the ranker runners end to end and
+informed no decision. The three on the seed-42 draw reach furthest: their latest scored rating is
+**1475668075** (2016-10-05 11:47:55 UTC), 22.7 days after the 6% split's `holdout_end`. Of the 1,792
+sealed rows they fitted, 652 lie in the old WO-8 window. None of the 1,054 rows they scored does.
+
+`b5550b18…` logged a different derived-snapshot hash from the other three (`3af47050…` against
+`c9b85551…`), so it drew a different 1% of users, and the pinned CSV does not reproduce that draw.
+Its fitted rows all precede its cutoff, which is before the boundary. Its 36 evaluated users and
+their 1,844 holdout rows are reproduced exactly from its per-user export. 1,824 of those rows are
+sealed, all inside the old window, and the latest is 1471446464.
+
+The two-tower OpenMP validation run (`ed694c47…`, 2026-09-05) used the 6% split by its own record and
+was logged to a throwaway store. The all-positions attempt `833812ee…` used the same split.
+
+### The tag list (step 4), and the rule for tagged runs
+
+The owner's 2026-10-05 decision: every affected run carries `sealed_window_contaminated=true` and
+`sealed_window_declared=2026-10-05` in the shared tracking store. The list is every run that fitted
+or scored on a per-subsample cutoff past the boundary. The original run ids were preserved when the
+September runs were imported.
+
+**Rule going forward: a tagged run is kept, and is never used as a comparison.** It is not a gate
+incumbent or challenger. It is not an input to a tolerance or seed-dispersion study, not a reference
+value for a pilot, and not part of any aggregate. Its numbers stay in
+[`../../results.md`](../../results.md) for audit, under a dated mark.
+
+| Group | Runs | Count |
+|---|---|---:|
+| Two-tower v1 learning-rate and temperature pilot, 2026-08-30 | `425d5b966d4b47c893c8aec05c7ee75a`, `f55e543fcda944e5854df61769f8aabd`, `a0f48c0ae4c2477c8b865418807408e3`, `dee1f21169cf4de8b979b4fe0f868dac`, `6a35f8688e504848b7e811b8007fcb06`, `bed3da944c6a410ba852d1e4ec23d9c6`, `58f3cfc00fec4ce0a1f6d1e795ad9ddc`, `e53cfa588229410ba7d349ef920eddda`, `be91e8dfce96432c94e3d2ac09d11a74`, `fbf5ed6693474deba5e4853e6894d5fd`, `72a482de7faa450dbc947b4ba4e9bdcb`, `36b4c21602ac46b9ad32cefd396a310c` | 12 |
+| Two-tower v2 Gate 1 pilot, 2026-09-04 | `3b41a19854b94b329fd9424a0e65f773`, `7e803d6c93d3480aa3c1ff50b824d6ff`, `736d1156cd1a414aba1fdb5614a0aeab`, `dfa5143725f346859522a72f170a8f19`, `2348ef2b16cc49bd944df4964a9dc6e9` | 5 |
+| Two-tower FAISS row-mapping diagnostic, 2026-09-05 | `8a22ed513b8f457eb0d5f93b826dc82a` | 1 |
+| SASRec BCE-versus-gBCE pilot, 2026-09-04: the valid pair, then four diagnostic-only runs from before commit `1d189a8` | `0c600f9dd15e47a99cb9fa364b23ed02`, `fb63a3ae96c64205ba5e57e5ca4b0611`, `b4b3a7ec2bc8483ea6c1ca9350b524dd`, `3d6bb37e2bcc4173912db9960d71fdf5`, `bf95be79d4154722bfde98323161dd9f`, `2706e0e6cb5c48d590a132640823ee95` | 6 |
+| SASRec all-positions pilot, 2026-09-11 | `f837955c832440069dd8c1316a2ad0c6` | 1 |
+| Ranker smoke runs on the 1% samples, 2026-09-05 | `c5d76476e6244c2b8db96f16a70863d1`, `ec710ab7ddf442b5803306c572d4dbfe`, `8006143897dd4ac18044f47d5fc2fb0e`, `b5550b184f6d48f181d5fd7d5206494d` | 4 |
+
+**Tag status: set 2026-10-05 on all 29 runs in the shared store.** Each carries
+`sealed_window_contaminated=true` and `sealed_window_declared=2026-10-05`. A search of the store
+returns exactly these 29, and none of the WO-1 runs.
+
+**On the list but untaggable**, because they are not in the store:
+- `833812eea8a341e9953285b4145cf9b8`, the all-positions attempt. It went to an earlier server whose
+  artifact root the host could not write. Only its local model archive survives.
+- `ed694c47caa04e9b89bda5195c052693`, the OpenMP validation run, logged to a throwaway store.
+- The M0-14 seed-dispersion runs (`sasrec-noise6-bce-neg32-s7`, `-s13`, `-s21`) and the 6% item-item
+  incumbent they were compared with. No run id for them is recorded in the tree or in PR #153, and
+  the store holds no run under those names.
+
+**Not on the list:**
+- The five WO-1 runs. They are cut at the full split (O-25) and are clean.
+- The 0.1% and 0.5% runs. Their splits end before the boundary.
+- `982b5cdb903f4c54ba1831aa9cc59a1e`, an empty ranker run left `RUNNING` on 2026-09-05. It logged no
+  parameter and no metric, so nothing shows it read a split.
+
+### What rested on the 6% pilots (step 5)
+
+Each decision below was taken, at least in part, on a pilot that read the sealed window. The status
+column says what now stands in for that evidence.
+
+| Decision | Evidence on the contaminated split | Status |
+|---|---|---|
+| **BCE over gBCE for SASRec v1.** ADR 0016's pilot outcome; `full.json` froze the v1 cell on it. | BCE `0c600f9d…` 0.3186 against gBCE `fb63a3ae…` 0.2937 warm recall@500, seed 42, 115 warm users: BCE ahead by 8.5%. | **Re-run on the clean protocol, once, 2026-10-05. The choice holds.** gBCE run `4f87185e…` reads warm recall@500 0.3355 against WO-1's BCE seed-42 pilot `7baeb7d0…` at 0.3625, same seed and protocol: BCE ahead by 8.1%, against 8.5% in September. gBCE also sits below all four clean BCE seeds (0.3611–0.3936), 2.4 of their standard deviations under their mean. It is one gBCE seed on 108 warm users, so it confirms the direction, not the size of the gap. |
+| **The all-positions verdict.** ADR 0016's W28 note and the 6% leg of ADR 0020's cell-0 control. | All-positions `f837955c…` 0.1822 against copied-prefix `0c600f9d…` 0.3186, −42.82%. | **Re-measured by WO-3**, not yet run: its fast-trainer pilots are judged against WO-1's clean reference set. The full-data leg (`fd2ee9f6…` 0.4856 against 0.5092, −4.62%) is clean and fired ADR 0020's stop rule 2 on its own, so O-22 stands. |
+| **The seed-noise and tolerance study.** M0-14, and O-5's working answer. | SASRec seeds 7, 13 and 21: 0.3103, 0.3258 and 0.2957 (relative range 9.71%), with 0.3186 at seed 42. The 6% item-item incumbent read 0.3587. | **Superseded** by WO-1's four clean seeds, 0.3625, 0.3611, 0.3714 and 0.3936: mean 0.372174, sample sd 0.015013. No full-data claim used the old spread as a tolerance. |
+| **The two-tower pilots.** ADR 0006's learning-rate and temperature sweep, ADR 0015's Gate 1 arms, and the FAISS row-mapping diagnostic. | v1 sweep band 0.0392–0.0520 over 12 cells; v2 arms 0.0398–0.0445; diagnostic `8a22ed51…` 0.3759. Popularity read 0.1974 and item-item 0.3619 on the same split. | **Correctness evidence only.** They found the τ = 1.0 loss floor and the FAISS row-to-id defect, which are properties of the code, not of the split. ADR 0006's τ = 0.05 proposal took its τ from this pilot and is still a proposal. Gate 1's stop was overtaken by O-10's full-data run, `2d7f1a49…` (0.5113), which is clean and is the two-tower's standing number. |
+
+**No full-data verdict changes.** Every gate verdict, every promotion and every number of record was
+fitted and scored on the full split, and the full split never crosses the boundary. What changes is
+pilot-scale evidence and the window reserved for WO-8.
+
+**Closing the path, continued (step 6).** The sweep adds one path to the "still open" list above:
+`src.training.sasrec_ranker.prepare_shared`, which the ranker runners' smoke runs load through. It
+subsamples and splits the same way. So four trainers now compute their own cutoff on a subsample:
+`twotower`, `itemitem`, `last_item` and `sasrec_ranker`.
+
+## Proposed amendment 2026-10-05 — retire the WO-8 window and set a new one (not approved)
+
+**Status: proposed. The owner approves by merging the pull request that adds this section.** Until
+then no window is approved for the one-time read. The 2026-09-05 window is contaminated, as recorded
+above, and the window below is only a proposal. Nothing reads either one.
+
+This is step 3 of the contamination procedure. The matching ADR note is
+[ADR 0001's amendment of 2026-10-05](../../adr/0001-evaluation-protocol.md#amendment-2026-10-05-proposed--the-final-window-moves-past-every-subsampled-read).
+
+**Retired:** `[1469256597, 1471675797)`, 2016-07-23 06:49:57 to 2016-08-20 06:49:57 UTC, 126,304
+ratings. Pilot runs fitted on 5,394 of its ratings and scored 2,950: 8,327 distinct ratings, 6.6% of
+the window. It can no longer be read as data no decision has used.
+
+**Proposed:** `[1475668076, 1478087276)`.
+- Start: 1475668076, 2016-10-05 11:47:56 UTC.
+- End: 1478087276, 2016-11-02 11:47:56 UTC.
+- 28 days, 106,904 ratings. This is a row count, which is not a read.
+
+**Why the start is there.** It is one second after the latest timestamp any recorded subsampled run
+read: 1475668075, a holdout rating scored by the 1% ranker smoke runs. No rating any recorded run
+fitted or scored lies at or after 1475668076. The start is later than the 6% split's `holdout_end`
+(1473707504) only because the sweep found the 1% runs.
+
+**How the read trains.** Each frozen configuration is retrained on all ratings before 1475668076,
+then scored once on the window. That is the rule WO-8 already uses, applied to the new start: the
+window sits immediately after its own training data, as the holdout does. This replaces "all ratings
+before 1469256597" in WO-8's procedure and in this memo's 2026-10-05 trigger proposal.
+
+**The 74 days in between are spent.** `[1469256597, 1475668076)` holds 318,523 ratings over 74.2
+days. Its one remaining use is as training data for the one-time read. It is not a development
+window, and no decision is evaluated on it.
+
+**What stays sealed.** Everything from 1478087276 on: 4,444,910 ratings to 2019-11-21. That leaves
+39 whole 28-day windows after this one. The development boundary does not move: "Sealed,
+operationally" above still holds every run to `timestamp < 1469256597`.
+
+**What the move costs:**
+- The read's models train on 102 more days than the holdout models: up to 1475668076 rather than
+  `T`, 1466837397. Its number keeps the holdout's shape (28 days straight after training), but it
+  describes a different month, on models trained on more data. It is not a like-for-like twin of any
+  holdout number.
+- The window holds 106,904 ratings against the old window's 126,304, so its interval is a little
+  wider.
+
+**What keeps the window clean.** The four trainers listed under step 6 still split a subsample at the
+subsample's own cutoff. The 1% draw at seed 42 already reads up to the second before this window, and
+another fraction or seed can land later. **Proposed rule:** none of the four runs on a subsample
+until it cuts at the full split's boundaries and carries a guard like `SealedPartitionError`.
+
+**How we would know this is wrong.** A run found later whose latest fitted or scored timestamp is at
+or after 1475668076 burns this window too. The answer is the same procedure again, with a later
+window, recorded here. The cheap check is to repeat this record's sweep over the tracking store
+before WO-8 starts.

@@ -405,3 +405,47 @@ this amendment is really making.
   comparison moves all three the same way, the per-slice clause is costing
   complexity for nothing, and the honest response is to say so and simplify back
   to (b) — with the 2026-08-29 run recorded as the one time it mattered.
+
+## Amendment 2026-10-05 (proposed) — the final window moves past every subsampled read
+
+**Proposed, not approved.** The owner approves it by merging the pull request that adds this
+section. Until then neither window below is approved for the one-time read.
+
+The 2026-09-05 amendment above reserves `[1469256597, 1471675797)` as the final evaluation window.
+That window has been read. The pilot path split a user subsample at the subsample's own
+80th-percentile cutoff rather than at `T`, and a subsample's cutoff can land well past `T + 28d`: the
+6% pilot sample's landed 23.5 days past it, and a 1% ranker smoke sample's 46.9 days past it. Pilot
+runs between 2026-08-30 and 2026-09-11 fitted on 5,394 of the window's ratings and scored 2,950. No
+full-data run, gate verdict or promotion read it. O-25 closed the path for SASRec. The scope, the
+run list and the decisions that rested on those pilots are recorded in the sealed-test memo's
+2026-10-05 entries,
+[`../model-planning/memos/sealed-test-and-dataset-policy.md`](../model-planning/memos/sealed-test-and-dataset-policy.md).
+
+**Proposed decision.**
+
+1. The 2026-09-05 window `[1469256597, 1471675797)` is retired.
+2. The final evaluation window is **`[1475668076, 1478087276)`**, 2016-10-05 11:47:56 to 2016-11-02
+   11:47:56 UTC: 28 days, 106,904 ratings. It starts one second after the latest rating any
+   subsampled run fitted or scored, 1475668075.
+3. For the read, each frozen configuration is retrained on all ratings before 1475668076 and scored
+   once, so the window again follows its own training data directly. The 74.2 days between
+   `T + 28d` and the new start are spent. They are training data for that read and nothing else:
+   never a development window, never an evaluation window.
+4. Everything from 1478087276 on stays sealed: 4,444,910 ratings, and 39 further whole 28-day
+   windows.
+
+`T`, the holdout, the gates and the unseal trigger are unchanged, and so is the boundary every
+development run is held to: nothing reads a rating at or after 1469256597 outside the one-time read.
+The 2026-09-05 reasoning (read 28 days, not 3.4 years) carries over as written; only the dates move.
+
+**What this costs.** The read's models train on 102 more days than the holdout models, up to
+1475668076 rather than `T`. The number keeps the holdout's shape but not its calendar position, so it
+is not a twin of any holdout number.
+The window holds about 15% fewer ratings than the retired one, so its interval is wider. And it stays
+clean only while the remaining subsample paths stay shut. Four trainers still split a subsample at
+the subsample's own cutoff, and the memo proposes that none of them runs on a subsample until it
+cuts at the full split's boundaries.
+
+**How we would know this is wrong.** A run whose latest fitted or scored timestamp is at or after
+1475668076 burns this window too, and the procedure repeats with a later one. The sweep that set
+this start should be re-run over the tracking store before the read.

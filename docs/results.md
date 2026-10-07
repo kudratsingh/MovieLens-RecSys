@@ -1712,6 +1712,9 @@ v1's, which a test also asserts.
 > are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
+>
+> **2026-10-05: tag list.** The twelve runs listed below carry the 2026-10-05 contamination tags;
+> the list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison.
 
 Twelve configurations at 78 minutes each does not fit in a day, so the orders of
 magnitude were found on a subsample first. The subsample keeps **every
@@ -2220,6 +2223,9 @@ the model: `TWOTOWER_USER_SAMPLE_FRACTION` (the seeded pilot subsample) and
 > are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
+>
+> **2026-10-05: tag list.** The five runs listed below carry the 2026-10-05 contamination tags; the
+> list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison.
 
 ADR 0015's five-arm Gate 1 ran locally from the checked-in DVC dataset using
 [`v2-pilot.json`](experiments/twotower-sweep/v2-pilot.json). It used the same
@@ -2302,6 +2308,11 @@ modeling track proceeds to SASRec under ADR 0016.
 > are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
+>
+> **2026-10-05: tag list.** These three runs and the 6% item-item incumbent are on the tag list in
+> that memo's 2026-10-05 entries, as untaggable: no run id was recorded for them and the tracking
+> store holds none. Rule: kept, never used as a comparison. WO-1's four clean seeds
+> supersede this study.
 
 Three runs of ADR 0016's frozen cell at `sample_fraction = 0.06`, differing only in training seed,
 against the item-item incumbent on the identical subsample. Machine: local, `OMP_NUM_THREADS=1`,
@@ -2355,6 +2366,11 @@ Spec: [`experiments/tolerance/surrogate-seed-noise-6pct.json`](experiments/toler
 > are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
+>
+> **2026-10-05: tag list.** Both runs below, and the four diagnostic-only runs before them
+> (`b4b3a7ec…`, `3d6bb37e…`, `bf95be79…`, `2706e0e6…`), carry the 2026-10-05 contamination
+> tags; the list is in that memo's 2026-10-05 entries. Rule: kept, never used as a comparison. The
+> gBCE arm was re-run once on the clean protocol: see the gBCE entry at the end of this file.
 
 ADR 0016's matched loss ablation ran on the established deterministic 6% user
 sample using [`pilot-6pct.json`](experiments/sasrec/pilot-6pct.json). Both arms
@@ -2602,6 +2618,12 @@ only by moving immutable shape logging earlier than artifact transport.
 
 ## The ranker retrained on SASRec candidates — 2026-09-05
 
+> **2026-10-05: two smoke runs of this runner read the sealed window.** `c5d76476…` and
+> `ec710ab7…` ran on a 1% user subsample split at its own cutoff, 1473304598. No number in this
+> section comes from them, and the full-data numbers here are clean. Both carry the 2026-10-05
+> contamination tags, listed in the 2026-10-05 entries of
+> [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
+
 The artifact-backed SASRec run retrieves 16.57% more warm holdout targets than
 item-item at K=500. Handing those candidates to the *champion* booster bought
 +1.67% warm NDCG@10 and +0.43% overall, which was never a verdict on sequential
@@ -2797,6 +2819,11 @@ and latency evidence SASRec itself owes, and the k6 gate has not seen either.
 
 ## The ranker given the SASRec score — 2026-09-05 (ADR 0018, Rung 3 increment 1)
 
+> **2026-10-05: a smoke run of this runner read the sealed window.** `80061438…` ran on the same
+> 1% subsample, split at its own cutoff, 1473304598. No number in this section comes from it. It
+> carries the 2026-10-05 contamination tags, listed in the 2026-10-05 entries of
+> [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
+
 > **Superseded on 2026-09-05 by the re-measurement below.** Everything in this
 > section was measured before O-9's fast-path repair, when a left-padded
 > sequence encoded to NaN and **34,190 of 153,947 learned-route positives
@@ -2971,6 +2998,12 @@ is measured and refused.
 
 ## The same question, asked again after O-9 — 2026-09-05
 
+> **2026-10-05: a smoke run of this runner read the sealed window.** `b5550b18…` ran on a different
+> 1% draw, split at its own cutoff, 1469030884, and scored 1,824 sealed ratings. No number in this
+> section comes from it. It carries the 2026-10-05 contamination tags, listed in the 2026-10-05
+> entries of
+> [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
+
 O-9's repair changed the population the verdict above was taken on. A
 left-padded sequence encoded to NaN in `eval()` mode, so every positive whose
 strict prefix was shorter than the encoder's 50-item window retrieved an empty
@@ -3096,6 +3129,13 @@ boosters were written before their holdout evaluation. Raw verdict:
 **Nothing is promoted.** Item-item plus LightGBM remains the champion.
 
 ## Two-tower v2 on the full dataset, after the FAISS mapping fix — 2026-09-06
+
+> **2026-10-05: the 6% diagnostic this section cites read the sealed window.** Run `8a22ed51…`
+> (warm recall@500 0.3759 on the contaminated 6% split) informed this cell's configuration as a
+> correctness check. It carries the 2026-10-05 contamination tags, listed in the 2026-10-05
+> entries of
+> [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md).
+> The full-data run below is clean, and its numbers and verdict stand.
 
 The corrected v2 measured once at full scale. This closes the question ADR 0015's
 2026-09-05 amendment reopened: the below-popularity numbers on this page were an
@@ -3258,6 +3298,11 @@ verdicts are unchanged.
 > are kept for audit and are not comparable with anything measured since. See the 2026-10-05 entry
 > in [`model-planning/memos/sealed-test-and-dataset-policy.md`](model-planning/memos/sealed-test-and-dataset-policy.md)
 > and the WO-1 section at the end of this file.
+>
+> **2026-10-05: tag list.** The 6% run `f837955c…` carries the 2026-10-05 contamination tags; the
+> list is in that memo's 2026-10-05 entries. Attempt `833812ee…` is listed as untaggable: it is not
+> in the tracking store. Rule: kept, never used as
+> a comparison. The full-data run `fd2ee9f6…` is clean.
 
 W28 replaced the copied-prefix training shape with the objective described by
 Kang and McAuley: each bounded sequence window is encoded once and every causal
@@ -3636,3 +3681,57 @@ proposal are in the run record only.
 
 Run record:
 [`model-planning/experiments/wo4-trainer-upgrades.md`](model-planning/experiments/wo4-trainer-upgrades.md).
+
+## SASRec gBCE pilot re-run on the clean protocol — 2026-10-05
+
+ADR 0016 froze SASRec v1 on standard BCE because a 6% pilot put BCE 8.5% ahead of gBCE: 0.3186
+against 0.2937 warm recall@500. Both runs read the contaminated split (O-25). The owner approved one
+re-run of the gBCE arm on the clean protocol, with no retune, to check whether that choice holds.
+
+**The setup.**
+- **Cell.** `pilot6-gbce-t0.5-neg32` as run `fb63a3ae…` logged it: gBCE with calibration t = 0.5, 32
+  uniform negatives, 2 epochs, exact retrieval, seed 42, every other field at its default. Spec
+  [`experiments/sasrec/gbce-rerun-o25-6pct-s42.json`](experiments/sasrec/gbce-rerun-o25-6pct-s42.json),
+  committed before the run.
+- **What differs from September.** Each difference comes with the protocol; none was chosen:
+  - the O-25 cut: cutoff 1466837397, `holdout_end` 1469256597; train 1,202,444 rows, holdout 6,604
+    rows, 108 warm / 39 cold users;
+  - the restored trainer of record on the P1 data path, which WO-1 showed is bit-identical to the
+    old loop;
+  - PR #162's evaluation fix, which the September pair predates;
+  - gBCE's β, recomputed from this split's 18,778 train items: 0.5008521 (September: 0.5008419 over
+    19,005).
+- **Protocol.** `sha256:faf2828d…`, checked equal to WO-1's before the metric was read. Latest fitted
+  timestamp 1466819964 and latest scored 1469247943, both below the sealed boundary 1469256597.
+- **Machine.** Local CPU, `OMP_NUM_THREADS=1`, `caffeinate -i`. Two other pilots and a database
+  ingest ran alongside it (load average 3.8 at the start, up to 7.3), which is why its fit took longer
+  than WO-1's.
+
+**The result**, against WO-1's BCE pilot at the same seed and protocol:
+
+| Seed 42, protocol `faf2828d…` | BCE `7baeb7d0…` | gBCE `4f87185e…` | Change |
+|---|---:|---:|---:|
+| warm recall@500 | 0.3625487076 | **0.3354878871** | **−7.46%** |
+| warm NDCG@500 | 0.1354006643 | 0.1260177856 | −6.93% |
+| cold recall@500 | 0.5427033422 | 0.5427033422 | 0.00% |
+| cold NDCG@500 | 0.4341170760 | 0.4341170760 | 0.00% |
+| overall recall@500 | 0.4103448351 | 0.3904634160 | −4.85% |
+| overall NDCG@500 | 0.2146519572 | 0.2077584137 | −3.21% |
+| fit seconds | 1,080.8 | 1,666.2 | — |
+
+- **Against all four clean BCE seeds** (0.3625, 0.3611, 0.3714, 0.3936; mean 0.372174, sample sd
+  0.015013): gBCE is 0.0256 below the lowest, and 2.44 standard deviations under the mean.
+- **Per user**, counted from the two per-user exports: of the 108 warm users, gBCE retrieves more of
+  the holdout for 6, less for 23, and the same for 79.
+- **Per epoch**, gBCE's warm recall@500 went 0.2875, then 0.3355.
+- **Cold** is identical, as the popularity routing requires.
+
+**Verdict: the BCE-over-gBCE choice holds on the clean protocol.** At the same seed BCE leads by
+8.07%, against 8.5% on the contaminated split, and the gBCE run falls below every BCE seed. This is
+one gBCE seed on 108 warm users, so it confirms the direction, not the size of the gap. No threshold,
+verdict or champion changes, and the v1 cell stays BCE.
+
+**Run.** `4f87185e72b841ce95a924bdd6cf5141`, `FINISHED`. Fit 1,666.2 s (27 min 46 s), 27 min 56 s
+wall. Peak RSS 2,650,095,616 bytes (2.47 GiB), the same after fit and at the end of the run. Weights
+digest `sha256:6436271c…`, artifact SHA-256 `5820fa7a…`. Like WO-1's runs, it was logged to a local
+file store and can be imported into the shared server with its id.

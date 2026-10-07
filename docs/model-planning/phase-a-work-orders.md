@@ -453,6 +453,13 @@ there is no function named `backtest_windows`. `apply_backtest_window` exists un
   windows use, then score once.
 - Publish every number in `docs/results.md` as it comes out, including a bad one.
 
+*2026-10-05 note.* The window above is contaminated: 6% and 1% pilot runs fitted on or scored 8,327
+of its ratings (sealed-test memo, 2026-10-05). A proposed amendment to ADR 0001 retires it and moves
+the read to `[1475668076, 1478087276)`, 2016-10-05 to 2016-11-02, with each frozen configuration
+retrained on all ratings before 1475668076. Until the owner approves that amendment, no window is
+approved for this work order. The development boundary in the rules above, 1469256597, is
+unchanged.
+
 **After the read.** No later change may cite this number as its reason, and this window is spent.
 
 ### WO-9: README and results write-up

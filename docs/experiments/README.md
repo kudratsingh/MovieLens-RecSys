@@ -34,6 +34,7 @@ are what a run, a gate or a benchmark produced. Section links below point at
 | [`all-positions-pilot-6pct.json`](sasrec/all-positions-pilot-6pct.json) | Grid: the all-positions training objective on the 6% sample. **Read by `tests/unit/test_sasrec_sweep.py`.** | [SASRec canonical all-position training](../results.md#sasrec-canonical-all-position-training--2026-09-1011); [ADR 0020](../adr/0020-sasrec-v2.md) cell 0 |
 | [`all-positions-full.json`](sasrec/all-positions-full.json) | Grid: the same objective at full scale. **Read by `tests/unit/test_sasrec_sweep.py`.** | [SASRec canonical all-position training](../results.md#sasrec-canonical-all-position-training--2026-09-1011); ADR 0020 cell 0 |
 | [`all-positions-training-2026-09-11.json`](sasrec/all-positions-training-2026-09-11.json) | Record: both all-positions runs against the copied-prefix v1 — 9.8× faster, −4.62% warm recall@500 at full scale (PR #183). | [SASRec canonical all-position training](../results.md#sasrec-canonical-all-position-training--2026-09-1011); ADR 0020's cell 0 outcome |
+| [`gbce-rerun-o25-6pct-s42.json`](sasrec/gbce-rerun-o25-6pct-s42.json) | Grid: the gBCE arm of `pilot-6pct.json` re-run once on the clean O-25 protocol, seed 42, written before the run. | [SASRec gBCE pilot re-run on the clean protocol](../results.md#sasrec-gbce-pilot-re-run-on-the-clean-protocol--2026-10-05); the sealed-test memo's 2026-10-05 revisit table |
 
 ## `twotower-sweep/`
 
