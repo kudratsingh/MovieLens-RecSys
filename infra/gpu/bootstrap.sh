@@ -323,11 +323,16 @@ else
         log "skipping torch +$candidate: the driver reports CUDA ${driver_cuda:-unknown}"
         continue
       fi
-      if curl -fsSL "https://download.pytorch.org/whl/$candidate/torch/" |
-        grep -Eq "torch-${torch_version}(%2B|\+)${candidate}-cp${tag}-cp${tag}-(manylinux[^\"]*|linux)_x86_64\.whl"; then
+      # Fetched to a file, not piped: under pipefail, `curl | grep -q` fails
+      # whenever grep stops reading early, which is exactly when it matched.
+      index_page="$OUT/env/torch-index-$candidate.html"
+      if curl -fsSL -o "$index_page" "https://download.pytorch.org/whl/$candidate/torch/" &&
+        grep -Eq "torch-${torch_version}(%2B|\+)${candidate}-cp${tag}-cp${tag}-(manylinux[^\"]*|linux)_x86_64\.whl" "$index_page"; then
         variant="$candidate"
+        rm -f "$index_page"
         break
       fi
+      rm -f "$index_page"
       log "no torch $torch_version+$candidate wheel for cp$tag on PyTorch's index"
     done
     installed_requirements="$OUT/env/requirements-installed.txt"
