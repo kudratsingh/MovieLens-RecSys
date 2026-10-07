@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "The bytes every recorded run read. Written 2026-10-07 from the Mac's data/raw/ml-25m (the",
+    "TWOTOWER_INPUT_DIR of every Phase A run), for WO-5's rented-GPU sessions: infra/gpu/bootstrap.sh",
+    "downloads ml-25m.zip from GroupLens, checks its MD5 against the one GroupLens publishes beside",
+    "it and against `zip` below, extracts these two files and refuses to go on unless both SHA-256s",
+    "match. They are the only files src.training.candidate_data.load_inputs reads. The same day the",
+    "zip was fetched from GroupLens once on the Mac (TLS certificate valid to 2026-12-13): its MD5",
+    "equalled the published one, and the two files extracted from it matched these SHA-256s, so the",
+    "download and the copies of record are the same bytes. raw_data_revision is the DVC pointer every",
+    "protocol manifest already names."
+  ],
+  "dataset": "MovieLens 25M",
+  "source_url": "https://files.grouplens.org/datasets/movielens/ml-25m.zip",
+  "published_md5_url": "https://files.grouplens.org/datasets/movielens/ml-25m.zip.md5",
+  "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+  "computed": "2026-10-07, from the Mac's data/raw/ml-25m",
+  "zip": {
+    "md5": "6b51fb2759a8657d3bfcbfc42b592ada",
+    "bytes": 261978986,
+    "published_md5_matched": "2026-10-07"
+  },
+  "files": {
+    "ratings.csv": {
+      "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+      "md5": "b0e866381b9fa56c9e3f87afa46a618f",
+      "bytes": 678260987,
+      "lines_including_header": 25000096
+    },
+    "movies.csv": {
+      "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+      "md5": "52e9ec0de217791bca8742e9280acc4e",
+      "bytes": 3038099,
+      "lines_including_header": 62424
+    }
+  }
+}

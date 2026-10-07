@@ -37,12 +37,14 @@ script a service uses.
 | [`deploy/`](#deploy) | The release script, the production **and staging** environment contracts, the role SQL, the rollback rehearsal | `make prod-deploy` / `prod-rollback` / `prod-rollback-rehearsal`; prod and staging `postgres-provision`; `make up-staging` reads `staging.env.example`; both deploy workflows |
 | `mlflow/` | The official MLflow image plus the `psycopg2` driver it lacks, so a Postgres `--backend-store-uri` does not crash on import. The one build context here that is not the repository root | Dev stack's `mlflow` |
 | [`ci/`](#ci) | One file: the pinned k6 version | Makefile and CI both read it |
+| [`gpu/`](#gpu) | The rented-GPU session kit for WO-5 (D-050): the pod's bootstrap, the Mac's pull-and-record, and the pod's pinned CUDA requirements. Not part of any stack | **Nothing automated.** Run by hand from [the runbook](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md): `bootstrap.sh` on a RunPod pod, `pull_and_record.sh` on the Mac |
 | `prometheus.yml` | Dev-stack scrape config, pointed at an API on the host | Dev stack's `prometheus`. Not used in production |
 
 Which stack uses what, at a glance: **dev only** — `postgres-init/`, `mlflow/`,
 `prometheus.yml`. **Production only** — `postgres/`, `edge/`, `backup/`, `k6/`,
 `deploy/`, `host/`. **Shared** — `api/`, `features/`, `pgbouncer/`, `keycloak/`,
-`model-bundle/`, `model-bundle-served/`, `ci/`.
+`model-bundle/`, `model-bundle-served/`, `ci/`. **Neither** — `gpu/`, which serves no stack: it
+is the training side's one rented machine.
 
 ## Notes worth having before you read the files
 
@@ -183,6 +185,26 @@ rollback rehearsal, the two rehearsal-only environment switches, **and**
 The one thing worth repeating: `deploy.sh` rolls back to `.release/previous` and
 re-verifies **on its own** when verification fails. `DEPLOY-OK` and `ROLLBACK-OK`
 are its sentinels, and the deploy workflow greps for them.
+
+### `gpu/`
+
+Three files for WO-5's rented-GPU timing session; the runbook is
+[`docs/model-planning/experiments/wo5-gpu-timing-runbook.md`](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md).
+
+- `bootstrap.sh <commit>` runs on a RunPod PyTorch pod as root, under `nohup`. Preflight (one GPU
+  named like `RTX 4090`, disk, memory), clone at exactly that commit, a venv from
+  `requirements-cuda.txt`, the MovieLens zip with its published MD5 and the two CSVs' SHA-256s
+  against `docs/experiments/sasrec/ml-25m-input-sha256.json`, the `cuda` smoke, the three timings,
+  then one tarball and its `.sha256` under `/workspace/wo5-timing/`. It stops at the first failed
+  check and still packages the logs (`...-FAILED.tgz`). Idempotent: a rerun reuses the clone, a venv
+  whose torch sees the GPU, and verified data. `WO5_LOCAL_SMOKE=1` rehearses it on the Mac.
+- `pull_and_record.sh <tarball>` runs on the Mac: SHA-256, the inner manifest, a credential scan,
+  one MLflow run tagged `timing_only` and `not_a_result_of_record` (a second pull of the same tarball
+  verifies the first run instead of logging another), then the backup commands, printed.
+- `requirements-cuda.txt` is the pod's environment only: `torch==2.13.0+cu126` and the slice of
+  `pyproject.toml` the trainer imports, pinned to the Mac's venv. The sidecar's
+  `torch==2.12.0+cpu` in `features/requirements.txt` is a different environment and does not move
+  with it.
 
 ### `ci/`
 

@@ -1,0 +1,2114 @@
+{
+  "_comment": [
+    "LOCAL SMOKE - NOT RESULTS. The two Mac rehearsals of infra/gpu/bootstrap.sh run on 2026-10-07",
+    "before the rented-GPU session, in its rehearsal mode (WO5_LOCAL_SMOKE=1): the pod's command end",
+    "to end except the clone, the venv and the download, with the device (mps, then cpu), a 1% user",
+    "subsample (an 11,623-movie catalog instead of 34,461), 20 s budgets and 5 warm-up steps",
+    "overridden, each override recorded in every document. Written by a script from the two sessions'",
+    "summary.json and results/*.json, verbatim. They prove the path, and give the session a sanity",
+    "reference for its step times; they are not the full-data timings the cells files describe and",
+    "are cited nowhere as a measurement. Commit e9d9c2e. The mps session was recorded in the shared",
+    "MLflow store as a tagged local-smoke run; its first record attempt created the run and failed",
+    "the read-back against the 2.13 server, and the fixed script's second pull verified that same run",
+    "(a5362fe)."
+  ],
+  "result_status": "local smoke - not a result of record",
+  "runbook": "docs/model-planning/experiments/wo5-gpu-timing-runbook.md",
+  "sessions": {
+    "mps": {
+      "session": "wo5-timing-20261007T153323Z-local-smoke",
+      "tarball": "wo5-timing-20261007T153323Z-local-smoke.tgz",
+      "tarball_sha256": "2d6136823fcb294f0d9cbf348a8508fe825794e04c89881e6107c702b439335c",
+      "mlflow": {
+        "experiment": "phase-a-sasrec",
+        "experiment_id": "6",
+        "run_id": "8318e187aba54e90a4f7f17f17f94db1",
+        "how": "infra/gpu/pull_and_record.sh against the shared store (localhost:5001)"
+      },
+      "summary": {
+        "kind": "sasrec-timing-session-summary",
+        "schema_version": 1,
+        "result_status": "timing only - not a result of record",
+        "run_kind": "local-smoke",
+        "git_commits": [
+          "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca"
+        ],
+        "facts": {
+          "SESSION": "wo5-timing-20261007T153323Z-local-smoke",
+          "RUN_KIND": "local-smoke",
+          "DEVICE": "mps",
+          "STARTED_UTC": "2026-10-07T15:33:23Z",
+          "GPU_NAME": "local-mps",
+          "CPU_COUNT": "8",
+          "DISK_FREE_GB": "148",
+          "PREFLIGHT_SECONDS": "0",
+          "REPO_DIRTY": "false",
+          "COMMIT": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+          "REPO_SECONDS": "0",
+          "VENV_HOW": "existing WO5_PYTHON",
+          "TORCH_WHEEL_VARIANT": "local",
+          "TORCH_VERSION": "2.13.0",
+          "PYTHON_VERSION": "3.11.16",
+          "VENV_SECONDS": "1",
+          "DATASET_SOURCE": "local WO5_INPUT_DIR",
+          "DATA_SECONDS": "3",
+          "OVERRIDES": "--device mps --sample-fraction 0.01 --timing-seconds 20 --warmup-steps 5",
+          "SMOKE_SECONDS": "10",
+          "TIMING_A_SECONDS": "31",
+          "TIMING_0b_SECONDS": "29",
+          "TIMING_B_SECONDS": "33"
+        },
+        "gpu_smoke": {
+          "passed": true,
+          "device": "mps",
+          "failed_checks": []
+        },
+        "cells": [
+          {
+            "label": "wo5-gpu-timing-cell0b-cuda",
+            "output_label": "wo5-gpu-timing-cell0b-cuda__local-smoke-mps",
+            "cell": "0b",
+            "device": "mps",
+            "device_name": "Apple GPU via mps (Apple M3)",
+            "sample_fraction": 0.01,
+            "steps_completed": 194,
+            "steady_steps": 189,
+            "mean_step_seconds": 0.10597367526559287,
+            "median_step_seconds": 0.10562387527897954,
+            "p10_step_seconds": 0.10473374975845218,
+            "p90_step_seconds": 0.10735883377492428,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.011863164203342757,
+            "hours_3_passes": 0.03558949261002827,
+            "hours_5_passes": 0.05931582101671379,
+            "peak_rss_bytes": 3734421504,
+            "device_memory": {
+              "peak_driver_allocated_bytes_sampled": 1298907136,
+              "recommended_max_bytes": 12713115648
+            },
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": []
+          },
+          {
+            "label": "wo5-gpu-timing-cellA-cuda",
+            "output_label": "wo5-gpu-timing-cellA-cuda__local-smoke-mps",
+            "cell": "A",
+            "device": "mps",
+            "device_name": "Apple GPU via mps (Apple M3)",
+            "sample_fraction": 0.01,
+            "steps_completed": 43,
+            "steady_steps": 38,
+            "mean_step_seconds": 0.5302078322335881,
+            "median_step_seconds": 0.5286719165742397,
+            "p10_step_seconds": 0.5226000422146171,
+            "p90_step_seconds": 0.5407821458764375,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.059353821219482225,
+            "hours_3_passes": 0.17806146365844666,
+            "hours_5_passes": 0.29676910609741114,
+            "peak_rss_bytes": 3159212032,
+            "device_memory": {
+              "peak_driver_allocated_bytes_sampled": 3303784448,
+              "recommended_max_bytes": 12713115648
+            },
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": []
+          },
+          {
+            "label": "wo5-gpu-timing-cellB-cuda",
+            "output_label": "wo5-gpu-timing-cellB-cuda__local-smoke-mps",
+            "cell": "B",
+            "device": "mps",
+            "device_name": "Apple GPU via mps (Apple M3)",
+            "sample_fraction": 0.01,
+            "steps_completed": 23,
+            "steady_steps": 18,
+            "mean_step_seconds": 1.1173032314464864,
+            "median_step_seconds": 1.1158016042318195,
+            "p10_step_seconds": 1.1100831502582877,
+            "p90_step_seconds": 1.125690249633044,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.12507588952025944,
+            "hours_3_passes": 0.3752276685607783,
+            "hours_5_passes": 0.6253794476012973,
+            "peak_rss_bytes": 4072357888,
+            "device_memory": {
+              "peak_driver_allocated_bytes_sampled": 5468045312,
+              "recommended_max_bytes": 12713115648
+            },
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": []
+          }
+        ],
+        "failed_checks": [],
+        "session_status": null,
+        "passed": true
+      },
+      "gpu_smoke": {
+        "kind": "gpu-smoke",
+        "schema_version": 1,
+        "result_status": "smoke test - not a result of record",
+        "device": "mps",
+        "device_info": {
+          "type": "mps",
+          "name": "Apple GPU via mps (Apple M3)",
+          "available": true,
+          "macos": "26.5.2"
+        },
+        "software": {
+          "python": "3.11.16",
+          "torch": "2.13.0",
+          "torch_cuda": null,
+          "cudnn": null,
+          "numpy": "2.4.6",
+          "pandas": "2.3.3",
+          "float32_matmul_precision": "highest",
+          "cuda_matmul_allow_tf32": false,
+          "cudnn_allow_tf32": true,
+          "cuda_matmul_fp32_precision": "none",
+          "omp_num_threads": "1",
+          "torch_num_threads": 1
+        },
+        "host": {
+          "platform": "macOS-26.5.2-arm64-arm-64bit",
+          "machine": "arm64",
+          "cpu_model": "Apple M3",
+          "cpu_count": 8
+        },
+        "git": {
+          "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+          "dirty": false
+        },
+        "datasets": {
+          "memorization": {
+            "users": 128,
+            "catalog": 60,
+            "train_length": 9,
+            "batch_size": 128,
+            "epochs": 25
+          },
+          "sampled_softmax_walk": {
+            "users": 200,
+            "catalog": 1500,
+            "train_length": 33,
+            "seed": 20261007
+          }
+        },
+        "checks": [
+          {
+            "name": "device_available",
+            "passed": true,
+            "detail": {
+              "device": "mps"
+            }
+          },
+          {
+            "name": "resolve_device",
+            "passed": true,
+            "detail": {
+              "resolved": "mps"
+            }
+          },
+          {
+            "name": "v1_trains_on_device",
+            "passed": true,
+            "detail": {
+              "steps": 200,
+              "expected_steps": 200,
+              "devices": [
+                "mps"
+              ]
+            }
+          },
+          {
+            "name": "v1_loss_finite_and_falling",
+            "passed": true,
+            "detail": {
+              "first_20_mean": 0.41362619698047637,
+              "last_20_mean": 0.057439578138291834,
+              "all_finite": true
+            }
+          },
+          {
+            "name": "back_on_cpu_after_fit",
+            "passed": true,
+            "detail": {
+              "devices": [
+                "cpu"
+              ]
+            }
+          },
+          {
+            "name": "v1_memorizes",
+            "passed": true,
+            "detail": {
+              "recall_at_10": 1.0,
+              "minimum": 0.9,
+              "chance": 0.16666666666666666
+            }
+          },
+          {
+            "name": "sampled_softmax_1024_on_device",
+            "passed": true,
+            "detail": {
+              "steps": 13,
+              "devices": [
+                "mps"
+              ],
+              "first_loss": 7.395143985748291,
+              "last_loss": 7.158382415771484
+            }
+          },
+          {
+            "name": "export_reload_on_cpu",
+            "passed": true,
+            "detail": {
+              "archive_sha256": "4ddfaf27dbca439322492df4503f499604a5d9a09220521d7eb7fce692fcf5c0",
+              "weights_sha256": "sha256:88859017b72442f1543f310706ba39436dae74de75e980895413da2c4e0c5b8a",
+              "reloaded_weights_sha256": "sha256:88859017b72442f1543f310706ba39436dae74de75e980895413da2c4e0c5b8a",
+              "changed_top_k_lists": 0,
+              "users": 128
+            }
+          },
+          {
+            "name": "forward_parity_device_vs_cpu",
+            "passed": true,
+            "detail": {
+              "max_abs_difference": 1.430511474609375e-06,
+              "tolerance": 0.001
+            }
+          }
+        ],
+        "seconds": {
+          "v1_fit": 5.271944374777377,
+          "v1_eval": 0.057167541701346636,
+          "sampled_softmax_fit": 2.011653999798,
+          "export_reload": 0.18047170899808407,
+          "total": 7.573241000063717
+        },
+        "passed": true
+      },
+      "timings": {
+        "0b": {
+          "label": "wo5-gpu-timing-cell0b-cuda",
+          "output_label": "wo5-gpu-timing-cell0b-cuda__local-smoke-mps",
+          "cell": "0b",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:34:14Z",
+            "end": "2026-10-07T15:34:36Z"
+          },
+          "config": {
+            "max_sequence_length": 50,
+            "hidden_dim": 64,
+            "num_blocks": 2,
+            "num_heads": 2,
+            "feedforward_dim": 256,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "mps",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "mps",
+            "name": "Apple GPU via mps (Apple M3)",
+            "available": true,
+            "macos": "26.5.2"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 2.6280977078713477,
+            "input_hash": 0.3720165826380253,
+            "split": 0.21957099996507168,
+            "protocol_hash": 0.04869454214349389,
+            "build_user_history_seconds": 0.05968641582876444,
+            "build_strict_prefix_example_store_seconds": 0.03637891635298729,
+            "stepping_wall": 21.872501041274518,
+            "fit_setup_before_first_step": 1.2981336247175932
+          },
+          "steps": {
+            "completed": 194,
+            "warmup_excluded": 5,
+            "steady": 189,
+            "first_step_seconds_including_setup": 1.4127593329176307
+          },
+          "step_seconds_steady": {
+            "n": 189,
+            "mean": 0.10597367526559287,
+            "median": 0.10562387527897954,
+            "p10": 0.10473374975845218,
+            "p90": 0.10735883377492428,
+            "min": 0.10442004073411226,
+            "max": 0.12240987503901124,
+            "first_half_mean": 0.10593533643739338,
+            "second_half_mean": 0.10601161052717974
+          },
+          "losses": {
+            "first": 7.400202751159668,
+            "last": 5.7120256423950195,
+            "first_20_mean": 7.049017357826233,
+            "last_20_mean": 5.767787122726441,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 149141,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 42.707391132033926,
+            "hours_per_pass": 0.011863164203342757,
+            "hours_3_passes": 0.03558949261002827,
+            "hours_5_passes": 0.05931582101671379
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 3734421504,
+            "device": {
+              "peak_driver_allocated_bytes_sampled": 1298907136,
+              "recommended_max_bytes": 12713115648
+            }
+          },
+          "process_cpu_seconds": {
+            "user": 8.55532,
+            "system": 1.256966
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [],
+          "step_seconds_all": [
+            1.412759,
+            0.114626,
+            0.104463,
+            0.104653,
+            0.106976,
+            0.104709,
+            0.104988,
+            0.105206,
+            0.106127,
+            0.105948,
+            0.105013,
+            0.105087,
+            0.105034,
+            0.105133,
+            0.10629,
+            0.104448,
+            0.104936,
+            0.106089,
+            0.12241,
+            0.113391,
+            0.106181,
+            0.106408,
+            0.104844,
+            0.107286,
+            0.10708,
+            0.106361,
+            0.106771,
+            0.105044,
+            0.106643,
+            0.104987,
+            0.104513,
+            0.104976,
+            0.10556,
+            0.106102,
+            0.105272,
+            0.105488,
+            0.105988,
+            0.106455,
+            0.10539,
+            0.104657,
+            0.104734,
+            0.104555,
+            0.107115,
+            0.105273,
+            0.10623,
+            0.106277,
+            0.104809,
+            0.106171,
+            0.104459,
+            0.104858,
+            0.104517,
+            0.10517,
+            0.106238,
+            0.104802,
+            0.107867,
+            0.106409,
+            0.106658,
+            0.104608,
+            0.104729,
+            0.105042,
+            0.105347,
+            0.107621,
+            0.105432,
+            0.104835,
+            0.106287,
+            0.105029,
+            0.105624,
+            0.107478,
+            0.106102,
+            0.1052,
+            0.105514,
+            0.105711,
+            0.106154,
+            0.108561,
+            0.107626,
+            0.107359,
+            0.105903,
+            0.104712,
+            0.104971,
+            0.10499,
+            0.106092,
+            0.105029,
+            0.10559,
+            0.1052,
+            0.105349,
+            0.10689,
+            0.105412,
+            0.104661,
+            0.10484,
+            0.105541,
+            0.105244,
+            0.106525,
+            0.107268,
+            0.10582,
+            0.106336,
+            0.104863,
+            0.10553,
+            0.105062,
+            0.104873,
+            0.106856,
+            0.105346,
+            0.105483,
+            0.106041,
+            0.105704,
+            0.105285,
+            0.105024,
+            0.105006,
+            0.104572,
+            0.1058,
+            0.105282,
+            0.104425,
+            0.105406,
+            0.107997,
+            0.107399,
+            0.10698,
+            0.108332,
+            0.105358,
+            0.105158,
+            0.106224,
+            0.10675,
+            0.105737,
+            0.10619,
+            0.105957,
+            0.104956,
+            0.105088,
+            0.105082,
+            0.10467,
+            0.106455,
+            0.105463,
+            0.105689,
+            0.105284,
+            0.105608,
+            0.107998,
+            0.106379,
+            0.106213,
+            0.104666,
+            0.106545,
+            0.108136,
+            0.107741,
+            0.105614,
+            0.10527,
+            0.105907,
+            0.108996,
+            0.106458,
+            0.105074,
+            0.104579,
+            0.107205,
+            0.106201,
+            0.108432,
+            0.107977,
+            0.106264,
+            0.106445,
+            0.106799,
+            0.105907,
+            0.105893,
+            0.106835,
+            0.106615,
+            0.106807,
+            0.106445,
+            0.107015,
+            0.108519,
+            0.10678,
+            0.107581,
+            0.105829,
+            0.105338,
+            0.105098,
+            0.105059,
+            0.107006,
+            0.107101,
+            0.106634,
+            0.107033,
+            0.105462,
+            0.10596,
+            0.105917,
+            0.105907,
+            0.10639,
+            0.105289,
+            0.105009,
+            0.105715,
+            0.105478,
+            0.105334,
+            0.104968,
+            0.10442,
+            0.104809,
+            0.105604,
+            0.105171,
+            0.105443,
+            0.10614,
+            0.105786,
+            0.104797,
+            0.10488,
+            0.104754,
+            0.104579,
+            0.106292
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cell0b-180s.json",
+            "sha256": "50c11fc81d5212140c81555dfab340414587d10112f5539bd37877ddc29354cb"
+          },
+          "overrides": {
+            "device": "mps",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        },
+        "A": {
+          "label": "wo5-gpu-timing-cellA-cuda",
+          "output_label": "wo5-gpu-timing-cellA-cuda__local-smoke-mps",
+          "cell": "A",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:33:43Z",
+            "end": "2026-10-07T15:34:07Z"
+          },
+          "config": {
+            "max_sequence_length": 100,
+            "hidden_dim": 128,
+            "num_blocks": 2,
+            "num_heads": 4,
+            "feedforward_dim": 512,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "mps",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "mps",
+            "name": "Apple GPU via mps (Apple M3)",
+            "available": true,
+            "macos": "26.5.2"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 3.0957832080312073,
+            "input_hash": 0.32751299999654293,
+            "split": 0.26950195897370577,
+            "protocol_hash": 0.0668122498318553,
+            "build_user_history_seconds": 0.07468079216778278,
+            "build_strict_prefix_example_store_seconds": 0.04146566707640886,
+            "stepping_wall": 24.324225374963135,
+            "fit_setup_before_first_step": 1.3920991667546332
+          },
+          "steps": {
+            "completed": 43,
+            "warmup_excluded": 5,
+            "steady": 38,
+            "first_step_seconds_including_setup": 1.99022095836699
+          },
+          "step_seconds_steady": {
+            "n": 38,
+            "mean": 0.5302078322335881,
+            "median": 0.5286719165742397,
+            "p10": 0.5226000422146171,
+            "p90": 0.5407821458764375,
+            "min": 0.5220742500387132,
+            "max": 0.546816207934171,
+            "first_half_mean": 0.5271899846235388,
+            "second_half_mean": 0.5332256798436376
+          },
+          "losses": {
+            "first": 7.490153789520264,
+            "last": 5.954558849334717,
+            "first_20_mean": 6.833818030357361,
+            "last_20_mean": 6.009206461906433,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 116881,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 213.67375639013602,
+            "hours_per_pass": 0.059353821219482225,
+            "hours_3_passes": 0.17806146365844666,
+            "hours_5_passes": 0.29676910609741114
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 3159212032,
+            "device": {
+              "peak_driver_allocated_bytes_sampled": 3303784448,
+              "recommended_max_bytes": 12713115648
+            }
+          },
+          "process_cpu_seconds": {
+            "user": 5.972456,
+            "system": 1.406724
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [],
+          "step_seconds_all": [
+            1.990221,
+            0.598122,
+            0.530332,
+            0.526108,
+            0.531544,
+            0.526433,
+            0.52513,
+            0.522074,
+            0.527263,
+            0.526373,
+            0.522523,
+            0.522811,
+            0.523972,
+            0.546816,
+            0.527561,
+            0.52997,
+            0.53524,
+            0.52255,
+            0.525997,
+            0.522606,
+            0.525515,
+            0.528588,
+            0.529779,
+            0.525409,
+            0.528916,
+            0.528756,
+            0.526713,
+            0.526896,
+            0.534252,
+            0.529473,
+            0.525991,
+            0.534425,
+            0.53425,
+            0.533935,
+            0.52958,
+            0.539684,
+            0.536723,
+            0.541492,
+            0.540703,
+            0.534643,
+            0.525941,
+            0.534464,
+            0.54445
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cellA-600s.json",
+            "sha256": "355556b928399882bea5e199c32b64d6b1942ae83dd70eaf154ee887393ec31c"
+          },
+          "overrides": {
+            "device": "mps",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        },
+        "B": {
+          "label": "wo5-gpu-timing-cellB-cuda",
+          "output_label": "wo5-gpu-timing-cellB-cuda__local-smoke-mps",
+          "cell": "B",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:34:42Z",
+            "end": "2026-10-07T15:35:09Z"
+          },
+          "config": {
+            "max_sequence_length": 100,
+            "hidden_dim": 256,
+            "num_blocks": 2,
+            "num_heads": 8,
+            "feedforward_dim": 1024,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "mps",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "mps",
+            "name": "Apple GPU via mps (Apple M3)",
+            "available": true,
+            "macos": "26.5.2"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 2.6249585417099297,
+            "input_hash": 0.363842916674912,
+            "split": 0.22173874964937568,
+            "protocol_hash": 0.05004716711118817,
+            "build_user_history_seconds": 0.05851629190146923,
+            "build_strict_prefix_example_store_seconds": 0.03612004220485687,
+            "stepping_wall": 27.334714875090867,
+            "fit_setup_before_first_step": 1.599086292553693
+          },
+          "steps": {
+            "completed": 23,
+            "warmup_excluded": 5,
+            "steady": 18,
+            "first_step_seconds_including_setup": 2.7376925838179886
+          },
+          "step_seconds_steady": {
+            "n": 18,
+            "mean": 1.1173032314464864,
+            "median": 1.1158016042318195,
+            "p10": 1.1100831502582877,
+            "p90": 1.125690249633044,
+            "min": 1.1099630002863705,
+            "max": 1.140170875005424,
+            "first_half_mean": 1.113689861105134,
+            "second_half_mean": 1.1209166017878387
+          },
+          "losses": {
+            "first": 7.487199306488037,
+            "last": 6.256782054901123,
+            "first_20_mean": 6.580212712287903,
+            "last_20_mean": 6.397058701515197,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 116881,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 450.273202272934,
+            "hours_per_pass": 0.12507588952025944,
+            "hours_3_passes": 0.3752276685607783,
+            "hours_5_passes": 0.6253794476012973
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 4072357888,
+            "device": {
+              "peak_driver_allocated_bytes_sampled": 5468045312,
+              "recommended_max_bytes": 12713115648
+            }
+          },
+          "process_cpu_seconds": {
+            "user": 5.639058,
+            "system": 1.143635
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [],
+          "step_seconds_all": [
+            2.737693,
+            1.138606,
+            1.112279,
+            1.121129,
+            1.113549,
+            1.117028,
+            1.112822,
+            1.110925,
+            1.116221,
+            1.113834,
+            1.111881,
+            1.110097,
+            1.120438,
+            1.109963,
+            1.119526,
+            1.123217,
+            1.123845,
+            1.124081,
+            1.115383,
+            1.116286,
+            1.112455,
+            1.140171,
+            1.113285
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cellB-180s.json",
+            "sha256": "a42b5b3cbc1e518e916d750ad9bae9820b2f271e4350feb3552099359a5f75ec"
+          },
+          "overrides": {
+            "device": "mps",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        }
+      }
+    },
+    "cpu": {
+      "session": "wo5-timing-20261007T153514Z-local-smoke",
+      "tarball": "wo5-timing-20261007T153514Z-local-smoke.tgz",
+      "tarball_sha256": "4071cdde63a41548059a81a3632dc7424467eb906c80718d9bf1f0bdbe526133",
+      "mlflow": {
+        "run_id": null,
+        "why": "only the mps rehearsal was recorded; this one is kept as an example"
+      },
+      "summary": {
+        "kind": "sasrec-timing-session-summary",
+        "schema_version": 1,
+        "result_status": "timing only - not a result of record",
+        "run_kind": "local-smoke",
+        "git_commits": [
+          "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca"
+        ],
+        "facts": {
+          "SESSION": "wo5-timing-20261007T153514Z-local-smoke",
+          "RUN_KIND": "local-smoke",
+          "DEVICE": "cpu",
+          "STARTED_UTC": "2026-10-07T15:35:14Z",
+          "GPU_NAME": "local-cpu",
+          "CPU_COUNT": "8",
+          "DISK_FREE_GB": "147",
+          "PREFLIGHT_SECONDS": "0",
+          "REPO_DIRTY": "false",
+          "COMMIT": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+          "REPO_SECONDS": "0",
+          "VENV_HOW": "existing WO5_PYTHON",
+          "TORCH_WHEEL_VARIANT": "local",
+          "TORCH_VERSION": "2.13.0",
+          "PYTHON_VERSION": "3.11.16",
+          "VENV_SECONDS": "2",
+          "DATASET_SOURCE": "local WO5_INPUT_DIR",
+          "DATA_SECONDS": "2",
+          "OVERRIDES": "--device cpu --sample-fraction 0.01 --timing-seconds 20 --warmup-steps 5",
+          "SMOKE_SECONDS": "17",
+          "TIMING_A_SECONDS": "34",
+          "TIMING_0b_SECONDS": "28",
+          "TIMING_B_SECONDS": "43"
+        },
+        "gpu_smoke": {
+          "passed": true,
+          "device": "cpu",
+          "failed_checks": []
+        },
+        "cells": [
+          {
+            "label": "wo5-gpu-timing-cell0b-cuda",
+            "output_label": "wo5-gpu-timing-cell0b-cuda__local-smoke-cpu",
+            "cell": "0b",
+            "device": "cpu",
+            "device_name": "Apple M3",
+            "sample_fraction": 0.01,
+            "steps_completed": 73,
+            "steady_steps": 68,
+            "mean_step_seconds": 0.2942455496351399,
+            "median_step_seconds": 0.2936512914020568,
+            "p10_step_seconds": 0.2925489252433181,
+            "p90_step_seconds": 0.2965143078472465,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.03293915458415594,
+            "hours_3_passes": 0.0988174637524678,
+            "hours_5_passes": 0.16469577292077967,
+            "peak_rss_bytes": 4653219840,
+            "device_memory": {},
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": []
+          },
+          {
+            "label": "wo5-gpu-timing-cellA-cuda",
+            "output_label": "wo5-gpu-timing-cellA-cuda__local-smoke-cpu",
+            "cell": "A",
+            "device": "cpu",
+            "device_name": "Apple M3",
+            "sample_fraction": 0.01,
+            "steps_completed": 21,
+            "steady_steps": 16,
+            "mean_step_seconds": 1.3066461223934311,
+            "median_step_seconds": 1.304943521041423,
+            "p10_step_seconds": 1.2999196793418377,
+            "p90_step_seconds": 1.318106008088216,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.1462717742568202,
+            "hours_3_passes": 0.43881532277046065,
+            "hours_5_passes": 0.731358871284101,
+            "peak_rss_bytes": 5058052096,
+            "device_memory": {},
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": []
+          },
+          {
+            "label": "wo5-gpu-timing-cellB-cuda",
+            "output_label": "wo5-gpu-timing-cellB-cuda__local-smoke-cpu",
+            "cell": "B",
+            "device": "cpu",
+            "device_name": "Apple M3",
+            "sample_fraction": 0.01,
+            "steps_completed": 13,
+            "steady_steps": 8,
+            "mean_step_seconds": 2.801996104128193,
+            "median_step_seconds": 2.791410396108404,
+            "p10_step_seconds": 2.701434191968292,
+            "p90_step_seconds": 2.934643033333123,
+            "steps_per_pass": 403,
+            "hours_per_pass": 0.3136678972121283,
+            "hours_3_passes": 0.9410036916363849,
+            "hours_5_passes": 1.5683394860606414,
+            "peak_rss_bytes": 5178556416,
+            "device_memory": {},
+            "speedups": {},
+            "checks": {
+              "all_losses_finite": true,
+              "steady_steps_timed": true,
+              "protocol_hash_matches_expected": null,
+              "steps_per_pass_matches_expected": null,
+              "inputs_match_manifest": true
+            },
+            "warnings": [
+              "only 8 steady steps; the percentiles are rough"
+            ]
+          }
+        ],
+        "failed_checks": [],
+        "session_status": null,
+        "passed": true
+      },
+      "gpu_smoke": {
+        "kind": "gpu-smoke",
+        "schema_version": 1,
+        "result_status": "smoke test - not a result of record",
+        "device": "cpu",
+        "device_info": {
+          "type": "cpu",
+          "name": "Apple M3"
+        },
+        "software": {
+          "python": "3.11.16",
+          "torch": "2.13.0",
+          "torch_cuda": null,
+          "cudnn": null,
+          "numpy": "2.4.6",
+          "pandas": "2.3.3",
+          "float32_matmul_precision": "highest",
+          "cuda_matmul_allow_tf32": false,
+          "cudnn_allow_tf32": true,
+          "cuda_matmul_fp32_precision": "none",
+          "omp_num_threads": "1",
+          "torch_num_threads": 1
+        },
+        "host": {
+          "platform": "macOS-26.5.2-arm64-arm-64bit",
+          "machine": "arm64",
+          "cpu_model": "Apple M3",
+          "cpu_count": 8
+        },
+        "git": {
+          "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+          "dirty": false
+        },
+        "datasets": {
+          "memorization": {
+            "users": 128,
+            "catalog": 60,
+            "train_length": 9,
+            "batch_size": 128,
+            "epochs": 25
+          },
+          "sampled_softmax_walk": {
+            "users": 200,
+            "catalog": 1500,
+            "train_length": 33,
+            "seed": 20261007
+          }
+        },
+        "checks": [
+          {
+            "name": "device_available",
+            "passed": true,
+            "detail": {
+              "device": "cpu"
+            }
+          },
+          {
+            "name": "resolve_device",
+            "passed": true,
+            "detail": {
+              "resolved": "cpu"
+            }
+          },
+          {
+            "name": "v1_trains_on_device",
+            "passed": true,
+            "detail": {
+              "steps": 200,
+              "expected_steps": 200,
+              "devices": [
+                "cpu"
+              ]
+            }
+          },
+          {
+            "name": "v1_loss_finite_and_falling",
+            "passed": true,
+            "detail": {
+              "first_20_mean": 0.4136262059211731,
+              "last_20_mean": 0.05743875708431005,
+              "all_finite": true
+            }
+          },
+          {
+            "name": "back_on_cpu_after_fit",
+            "passed": true,
+            "detail": {
+              "devices": [
+                "cpu"
+              ]
+            }
+          },
+          {
+            "name": "v1_memorizes",
+            "passed": true,
+            "detail": {
+              "recall_at_10": 1.0,
+              "minimum": 0.9,
+              "chance": 0.16666666666666666
+            }
+          },
+          {
+            "name": "sampled_softmax_1024_on_device",
+            "passed": true,
+            "detail": {
+              "steps": 13,
+              "devices": [
+                "cpu"
+              ],
+              "first_loss": 7.395144462585449,
+              "last_loss": 7.158381938934326
+            }
+          },
+          {
+            "name": "export_reload_on_cpu",
+            "passed": true,
+            "detail": {
+              "archive_sha256": "66a9eef45b133cf56287cda3d717c2856a63a52134b976698ee22c75dbbaf63f",
+              "weights_sha256": "sha256:b7b8fb28b69aafb5862dc787985503d6fc0b6209e2cced2c56a97da0008f0350",
+              "reloaded_weights_sha256": "sha256:b7b8fb28b69aafb5862dc787985503d6fc0b6209e2cced2c56a97da0008f0350",
+              "changed_top_k_lists": 0,
+              "users": 128
+            }
+          },
+          {
+            "name": "forward_parity_device_vs_cpu",
+            "passed": true,
+            "detail": {
+              "max_abs_difference": 0.0,
+              "tolerance": 0.001
+            }
+          }
+        ],
+        "seconds": {
+          "v1_fit": 10.507880249992013,
+          "v1_eval": 0.05757116712629795,
+          "sampled_softmax_fit": 3.206160916015506,
+          "export_reload": 0.23257279209792614,
+          "total": 14.053514208178967
+        },
+        "passed": true
+      },
+      "timings": {
+        "0b": {
+          "label": "wo5-gpu-timing-cell0b-cuda",
+          "output_label": "wo5-gpu-timing-cell0b-cuda__local-smoke-cpu",
+          "cell": "0b",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:36:14Z",
+            "end": "2026-10-07T15:36:36Z"
+          },
+          "config": {
+            "max_sequence_length": 50,
+            "hidden_dim": 64,
+            "num_blocks": 2,
+            "num_heads": 2,
+            "feedforward_dim": 256,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "cpu",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "cpu",
+            "name": "Apple M3"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 2.5753877093084157,
+            "input_hash": 0.3184947920963168,
+            "split": 0.19049637485295534,
+            "protocol_hash": 0.04920774977654219,
+            "build_user_history_seconds": 0.05729149980470538,
+            "build_strict_prefix_example_store_seconds": 0.03657412528991699,
+            "stepping_wall": 22.14063304103911,
+            "fit_setup_before_first_step": 0.657812331803143
+          },
+          "steps": {
+            "completed": 73,
+            "warmup_excluded": 5,
+            "steady": 68,
+            "first_step_seconds_including_setup": 0.9529477907344699
+          },
+          "step_seconds_steady": {
+            "n": 68,
+            "mean": 0.2942455496351399,
+            "median": 0.2936512914020568,
+            "p10": 0.2925489252433181,
+            "p90": 0.2965143078472465,
+            "min": 0.2907663327641785,
+            "max": 0.30553970765322447,
+            "first_half_mean": 0.29425432108452215,
+            "second_half_mean": 0.29423677818575766
+          },
+          "losses": {
+            "first": 7.40233039855957,
+            "last": 5.808082103729248,
+            "first_20_mean": 7.055232810974121,
+            "last_20_mean": 5.947510242462158,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 149141,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 118.58095650296137,
+            "hours_per_pass": 0.03293915458415594,
+            "hours_3_passes": 0.0988174637524678,
+            "hours_5_passes": 0.16469577292077967
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 4653219840,
+            "device": {}
+          },
+          "process_cpu_seconds": {
+            "user": 26.431228,
+            "system": 0.7360089999999999
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [],
+          "step_seconds_all": [
+            0.952948,
+            0.295135,
+            0.298744,
+            0.292445,
+            0.292663,
+            0.29506,
+            0.292334,
+            0.293635,
+            0.293483,
+            0.296071,
+            0.291407,
+            0.292829,
+            0.296934,
+            0.292563,
+            0.293295,
+            0.293662,
+            0.293293,
+            0.29321,
+            0.29332,
+            0.294264,
+            0.29242,
+            0.293465,
+            0.296177,
+            0.295518,
+            0.293359,
+            0.293536,
+            0.294609,
+            0.291721,
+            0.294217,
+            0.298041,
+            0.292968,
+            0.294005,
+            0.294221,
+            0.294194,
+            0.293285,
+            0.293505,
+            0.29578,
+            0.30554,
+            0.292726,
+            0.292985,
+            0.293791,
+            0.294129,
+            0.294198,
+            0.296272,
+            0.292736,
+            0.294343,
+            0.297775,
+            0.292801,
+            0.293066,
+            0.294063,
+            0.29364,
+            0.292819,
+            0.294213,
+            0.294575,
+            0.290766,
+            0.293312,
+            0.294562,
+            0.29336,
+            0.292859,
+            0.29383,
+            0.296475,
+            0.293127,
+            0.294332,
+            0.296868,
+            0.294742,
+            0.293142,
+            0.294088,
+            0.295298,
+            0.292071,
+            0.292739,
+            0.294061,
+            0.3044,
+            0.292611
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cell0b-180s.json",
+            "sha256": "50c11fc81d5212140c81555dfab340414587d10112f5539bd37877ddc29354cb"
+          },
+          "overrides": {
+            "device": "cpu",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        },
+        "A": {
+          "label": "wo5-gpu-timing-cellA-cuda",
+          "output_label": "wo5-gpu-timing-cellA-cuda__local-smoke-cpu",
+          "cell": "A",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:35:39Z",
+            "end": "2026-10-07T15:36:08Z"
+          },
+          "config": {
+            "max_sequence_length": 100,
+            "hidden_dim": 128,
+            "num_blocks": 2,
+            "num_heads": 4,
+            "feedforward_dim": 512,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "cpu",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "cpu",
+            "name": "Apple M3"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 2.5400680410675704,
+            "input_hash": 0.31829824997112155,
+            "split": 0.1902631246484816,
+            "protocol_hash": 0.048857207875698805,
+            "build_user_history_seconds": 0.05686250003054738,
+            "build_strict_prefix_example_store_seconds": 0.03629449987784028,
+            "stepping_wall": 28.34442854207009,
+            "fit_setup_before_first_step": 0.8900578333996236
+          },
+          "steps": {
+            "completed": 21,
+            "warmup_excluded": 5,
+            "steady": 16,
+            "first_step_seconds_including_setup": 2.2069998336955905
+          },
+          "step_seconds_steady": {
+            "n": 16,
+            "mean": 1.3066461223934311,
+            "median": 1.304943521041423,
+            "p10": 1.2999196793418377,
+            "p90": 1.318106008088216,
+            "min": 1.2987157083116472,
+            "max": 1.3242518329061568,
+            "first_half_mean": 1.3095417863805778,
+            "second_half_mean": 1.3037504584062845
+          },
+          "losses": {
+            "first": 7.508694171905518,
+            "last": 6.362979888916016,
+            "first_20_mean": 6.829323649406433,
+            "last_20_mean": 6.772037935256958,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 116881,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 526.5783873245528,
+            "hours_per_pass": 0.1462717742568202,
+            "hours_3_passes": 0.43881532277046065,
+            "hours_5_passes": 0.731358871284101
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 5058052096,
+            "device": {}
+          },
+          "process_cpu_seconds": {
+            "user": 32.419305,
+            "system": 0.885477
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [],
+          "step_seconds_all": [
+            2.207,
+            1.316942,
+            1.30747,
+            1.303055,
+            1.303623,
+            1.307391,
+            1.30403,
+            1.324252,
+            1.300436,
+            1.315472,
+            1.303725,
+            1.309901,
+            1.311128,
+            1.307201,
+            1.305656,
+            1.304165,
+            1.303598,
+            1.300781,
+            1.304984,
+            1.304903,
+            1.298716
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cellA-600s.json",
+            "sha256": "355556b928399882bea5e199c32b64d6b1942ae83dd70eaf154ee887393ec31c"
+          },
+          "overrides": {
+            "device": "cpu",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        },
+        "B": {
+          "label": "wo5-gpu-timing-cellB-cuda",
+          "output_label": "wo5-gpu-timing-cellB-cuda__local-smoke-cpu",
+          "cell": "B",
+          "run_kind": "local-smoke",
+          "kind": "sasrec-step-timing",
+          "schema_version": 1,
+          "result_status": "timing only - not a result of record",
+          "window_utc": {
+            "start": "2026-10-07T15:36:41Z",
+            "end": "2026-10-07T15:37:19Z"
+          },
+          "config": {
+            "max_sequence_length": 100,
+            "hidden_dim": 256,
+            "num_blocks": 2,
+            "num_heads": 8,
+            "feedforward_dim": 1024,
+            "dropout": 0.2,
+            "negative_count": 1024,
+            "loss": "sampled-softmax",
+            "calibration_t": 0.5,
+            "batch_size": 512,
+            "epochs": 5,
+            "learning_rate": 0.001,
+            "faiss_nlist": 100,
+            "faiss_nprobe": 10,
+            "faiss_exact": true,
+            "seed": 42,
+            "training_objective": "strict-prefix-final-position-v1",
+            "microbatch_size": 0,
+            "device": "cpu",
+            "early_stopping": false,
+            "early_stopping_min_epochs": 3,
+            "early_stopping_min_relative_improvement": 0.005,
+            "early_stopping_probe_fraction": 0.01,
+            "early_stopping_probe_seed": 42,
+            "window_stride": 0,
+            "windows_per_step": 0
+          },
+          "budget": {
+            "mode": "seconds",
+            "timing_seconds": 20.0,
+            "steps": null,
+            "warmup_steps_excluded": 5
+          },
+          "stopped_by": "seconds",
+          "device": {
+            "type": "cpu",
+            "name": "Apple M3"
+          },
+          "software": {
+            "python": "3.11.16",
+            "torch": "2.13.0",
+            "torch_cuda": null,
+            "cudnn": null,
+            "numpy": "2.4.6",
+            "pandas": "2.3.3",
+            "float32_matmul_precision": "highest",
+            "cuda_matmul_allow_tf32": false,
+            "cudnn_allow_tf32": true,
+            "cuda_matmul_fp32_precision": "none",
+            "omp_num_threads": "1",
+            "torch_num_threads": 1
+          },
+          "host": {
+            "platform": "macOS-26.5.2-arm64-arm-64bit",
+            "machine": "arm64",
+            "cpu_model": "Apple M3",
+            "cpu_count": 8
+          },
+          "git": {
+            "commit": "e9d9c2efd1e63c1a165fca7125d95fe4c3f6ecca",
+            "dirty": false
+          },
+          "data": {
+            "sample_fraction": 0.01,
+            "subsample_seed": 42,
+            "n_ratings_read": 25000095,
+            "n_ratings_in_sample": 264312,
+            "n_train_rows": 208331,
+            "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+            "inputs": {
+              "ratings.csv": {
+                "sha256": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "expected": "9c85525758597dca76e8d98cebb9c13e018c2317b09a0878b6d383179526e385",
+                "matches_manifest": true,
+                "bytes": 678260987
+              },
+              "movies.csv": {
+                "sha256": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "expected": "c50dea6973e619f9bc1decd4afa3e35358b83a5fb663dac0ec82252a011d023d",
+                "matches_manifest": true,
+                "bytes": 3038099
+              }
+            }
+          },
+          "protocol": {
+            "semantic_hash": "sha256:3b5a6dc361dfdc18f7a2b9c72f1fdad9c23e1bb081380aeb83bfecb214472ebf",
+            "fitted_frame": "split.train, without ADR 0011's cohort (it adds no training example)",
+            "expected_semantic_hash": null
+          },
+          "partition": {
+            "sealed_boundary_timestamp": 1469256597,
+            "holdout_end_timestamp": 1469256597,
+            "latest_fit_timestamp": 1466790973,
+            "latest_scored_timestamp": 1469151271
+          },
+          "seconds": {
+            "load": 2.5415567909367383,
+            "input_hash": 0.31955124996602535,
+            "split": 0.19142241636291146,
+            "protocol_hash": 0.04815979162231088,
+            "build_user_history_seconds": 0.05652229115366936,
+            "build_strict_prefix_example_store_seconds": 0.03595333267003298,
+            "stepping_wall": 37.57060925010592,
+            "fit_setup_before_first_step": 1.2649094993248582
+          },
+          "steps": {
+            "completed": 13,
+            "warmup_excluded": 5,
+            "steady": 8,
+            "first_step_seconds_including_setup": 4.103729708120227
+          },
+          "step_seconds_steady": {
+            "n": 8,
+            "mean": 2.801996104128193,
+            "median": 2.791410396108404,
+            "p10": 2.701434191968292,
+            "p90": 2.934643033333123,
+            "min": 2.7020676252432168,
+            "max": 2.9327397500164807,
+            "first_half_mean": 2.8142290625255555,
+            "second_half_mean": 2.7897631457308307
+          },
+          "losses": {
+            "first": 7.488187789916992,
+            "last": 6.353708744049072,
+            "first_20_mean": 6.832524739778959,
+            "last_20_mean": 6.832524739778959,
+            "all_finite": true
+          },
+          "training_examples": {
+            "n_targets": 205880,
+            "n_truncated_sequences": 116881,
+            "example_store_bytes": 4127404,
+            "n_items": 11623
+          },
+          "extrapolation": {
+            "steps_per_pass": 403,
+            "basis": "ceil(training examples / examples per step)",
+            "expected_steps_per_pass": null,
+            "matches_expected": null,
+            "seconds_per_pass": 1129.2044299636618,
+            "hours_per_pass": 0.3136678972121283,
+            "hours_3_passes": 0.9410036916363849,
+            "hours_5_passes": 1.5683394860606414
+          },
+          "references": {},
+          "memory": {
+            "peak_rss_bytes": 5178556416,
+            "device": {}
+          },
+          "process_cpu_seconds": {
+            "user": 40.405359,
+            "system": 1.929244
+          },
+          "checks": {
+            "all_losses_finite": true,
+            "steady_steps_timed": true,
+            "protocol_hash_matches_expected": null,
+            "steps_per_pass_matches_expected": null,
+            "inputs_match_manifest": true
+          },
+          "warnings": [
+            "only 8 steady steps; the percentiles are rough"
+          ],
+          "step_seconds_all": [
+            4.10373,
+            2.83882,
+            2.827465,
+            2.696085,
+            2.688541,
+            2.708402,
+            2.913707,
+            2.93274,
+            2.702068,
+            2.719126,
+            2.866932,
+            2.863694,
+            2.7093
+          ],
+          "cells_file": {
+            "path": "docs/experiments/sasrec/wo5-gpu-timing-cellB-180s.json",
+            "sha256": "a42b5b3cbc1e518e916d750ad9bae9820b2f271e4350feb3552099359a5f75ec"
+          },
+          "overrides": {
+            "device": "cpu",
+            "sample_fraction": 0.01,
+            "timing_seconds": 20.0,
+            "warmup_steps": 5
+          }
+        }
+      }
+    }
+  }
+}

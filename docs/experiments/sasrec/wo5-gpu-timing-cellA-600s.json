@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "WO-5 step one, the rented-GPU timing session. TIMING ONLY - NOT A RESULT OF RECORD. Prepared",
+    "2026-10-07 under D-050 (the owner chose to prepare the RunPod Secure Cloud RTX 4090 session);",
+    "the spend itself still needs the owner's explicit approval at the session (D-047). Nothing is",
+    "evaluated, exported or logged to MLflow by the run; the fit is interrupted after the budget. ADR",
+    "0020's cell A on cuda: hidden 128, 2 blocks, 4 heads, feed-forward 512, dropout 0.2, history",
+    "100, sampled softmax with 1,024 negatives, 512 examples per step, Adam 1e-3, seed 42, the",
+    "objective of record (strict-prefix-final-position-v1), the full dataset, early stopping off.",
+    "Timed by `python -m src.training.sasrec_timing run`: 600 s of steady-state stepping after 20",
+    "warm-up steps (the WO-4 method's warm-up, excluded), then the steady mean x 38,554 steps per",
+    "pass. epochs is 5, the cell's ceiling, only so no pass boundary can end the fit before the",
+    "budget does. The protocol hash is the no-cohort hash of the full split.train, pinned so a",
+    "machine reading different data fails rather than times it. References: the 2026-10-05 CPU and",
+    "mps timings of this exact step."
+  ],
+  "result_status": "timing only - not a result of record",
+  "sample_fraction": 1.0,
+  "timing": {
+    "cell": "A",
+    "timing_seconds": 600,
+    "warmup_steps_excluded": 20,
+    "expected_steps_per_pass": 38554,
+    "expected_protocol_hash": "sha256:e016234f1f571883443d8373d0d23754058629400842ccfc9518cd0d26b88117",
+    "references": {
+      "cpu": {
+        "step_seconds": 1.409723177799047,
+        "basis": "measured: 2,000 steps, full dataset, Mac CPU, one thread, 2026-10-05",
+        "source": "docs/experiments/sasrec/wo5-prep-cellA-step-timing-full.json"
+      },
+      "mps": {
+        "step_seconds": 0.5502080981272762,
+        "basis": "measured: the same 2,000 steps on mps, 2026-10-05",
+        "source": "docs/experiments/sasrec/wo5-prep-cellA-step-timing-full.json"
+      }
+    }
+  },
+  "cells": [
+    {
+      "label": "wo5-gpu-timing-cellA-cuda",
+      "max_sequence_length": 100,
+      "hidden_dim": 128,
+      "num_blocks": 2,
+      "num_heads": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.2,
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "batch_size": 512,
+      "epochs": 5,
+      "learning_rate": 0.001,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "early_stopping": false,
+      "device": "cuda"
+    }
+  ]
+}

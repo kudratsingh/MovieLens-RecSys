@@ -36,6 +36,21 @@ are what a run, a gate or a benchmark produced. Section links below point at
 | [`all-positions-training-2026-09-11.json`](sasrec/all-positions-training-2026-09-11.json) | Record: both all-positions runs against the copied-prefix v1 — 9.8× faster, −4.62% warm recall@500 at full scale (PR #183). | [SASRec canonical all-position training](../results.md#sasrec-canonical-all-position-training--2026-09-1011); ADR 0020's cell 0 outcome |
 | [`gbce-rerun-o25-6pct-s42.json`](sasrec/gbce-rerun-o25-6pct-s42.json) | Grid: the gBCE arm of `pilot-6pct.json` re-run once on the clean O-25 protocol, seed 42, written before the run. | [SASRec gBCE pilot re-run on the clean protocol](../results.md#sasrec-gbce-pilot-re-run-on-the-clean-protocol--2026-10-05); the sealed-test memo's 2026-10-05 revisit table |
 
+### `sasrec/`, WO-5 step one: the rented-GPU timing kit
+
+Written 2026-10-07 for the session [D-050](../model-planning/03-decision-register.md#owner-decisions-from-2026-10-05--one-dated-row-each)
+prepared; run from the [runbook](../model-planning/experiments/wo5-gpu-timing-runbook.md). Every grid
+here is **timing only, not a result of record**, and `src.training.sasrec_timing run` is what reads
+it (the `timing` block is that module's; `parse_grid` still validates the cells).
+
+| File | What it is | Backs |
+|---|---|---|
+| [`wo5-gpu-timing-cellA-600s.json`](sasrec/wo5-gpu-timing-cellA-600s.json) | Grid: ADR 0020's cell A on `cuda`, 600 s of steady stepping after 20 warm-up steps, full data; pins the no-cohort protocol hash and 38,554 steps per pass; references the measured CPU and `mps` steps. **Read by `tests/unit/test_sasrec_timing.py`.** | The rented-GPU timing; [WO-5 cell re-pricing](../model-planning/experiments/wo5-cell-repricing.md) |
+| [`wo5-gpu-timing-cell0b-180s.json`](sasrec/wo5-gpu-timing-cell0b-180s.json) | Grid: cell 0b on `cuda`, 180 s; references WO-4's measured CPU and `mps` steps. **Read by the same test.** | Same |
+| [`wo5-gpu-timing-cellB-180s.json`](sasrec/wo5-gpu-timing-cellB-180s.json) | Grid: cell B on `cuda`, 180 s; its references are projections (no step of B has been measured). **Read by the same test.** | Same |
+| [`ml-25m-input-sha256.json`](sasrec/ml-25m-input-sha256.json) | Record: SHA-256 and MD5 of `ratings.csv` and `movies.csv` as every recorded run read them, and the GroupLens zip's MD5, matched on 2026-10-07. The pod refuses data that differs. **Read by `src.training.sasrec_timing` and its tests.** | The session's data check |
+| [`wo5-gpu-timing-local-smoke-2026-10-07.json`](sasrec/wo5-gpu-timing-local-smoke-2026-10-07.json) | Record: the two Mac rehearsals of the session (`mps` and `cpu`, a 1% subsample, 20 s budgets), every output verbatim. **Local smoke, not results**; the `mps` one is MLflow run `8318e187…` (`run_kind=local-smoke`). | The runbook's "What was tested before the session" |
+
 ## `twotower-sweep/`
 
 | File | What it is | Backs |
