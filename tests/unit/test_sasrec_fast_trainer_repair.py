@@ -847,3 +847,35 @@ def test_the_seed_repeats_and_the_full_run_are_held_until_a_variant_wins(
     monkeypatch.setattr(sweep_module, "load_inputs", refuse)
     for name in ("wo3-repaired-6pct-seeds.json", "wo3-repaired-full.json"):
         assert sweep_module.main([str(EXPERIMENTS / name)]) == 3
+
+
+def test_the_ten_pass_cell_0b_files_change_only_what_the_owner_approved() -> None:
+    """Cell 0b at a fixed 10 passes on the fast trainer; strict-prefix seeds as WO-4 ran them."""
+    _wo4_spec, _fraction, wo4 = _cells("wo4-cell0b-pair-cpu-6pct.json")
+    strict_42 = wo4[0][1]
+    fast_42 = dataclasses.replace(
+        strict_42,
+        training_objective=ALL_POSITION_TRAINING_OBJECTIVE,
+        early_stopping=False,
+        epochs=10,
+    )
+
+    spec, fraction, cells = _cells("wo3-allpos-cell0b-10pass-6pct-s42.json")
+    assert fraction == 0.06 and spec["expected_protocol_hash"] == PILOT_PROTOCOL
+    assert "hold" not in spec
+    assert spec["declared_read"]["at_pass"] == 10 == cells[0][1].epochs
+    assert [config for _label, config in cells] == [fast_42]
+
+    for names, expected in (
+        (["wo3-allpos-cell0b-10pass-6pct-seeds.json"], fast_42),
+        ([f"wo3-strictprefix-cell0b-6pct-s{seed}.json" for seed in (7, 13, 21)], strict_42),
+    ):
+        seeds: list[int] = []
+        for name in names:
+            spec, fraction, cells = _cells(name)
+            assert "hold" not in spec and spec["released"] and fraction == 0.06
+            assert spec["expected_protocol_hash"] == PILOT_PROTOCOL
+            for _label, config in cells:
+                assert dataclasses.replace(config, seed=42) == expected
+                seeds.append(config.seed)
+        assert seeds == [7, 13, 21]

@@ -64,6 +64,11 @@ from synthetic.cold_start import harness as synth_cold
 logger = logging.getLogger(__name__)
 RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
 SAMPLE_FRACTION_ENV_VAR = "SASREC_USER_SAMPLE_FRACTION"
+# MLflow's own variable, honoured here because ``run_once`` names its experiment
+# explicitly and so would otherwise override it. Phase A runs log to one shared
+# experiment whose artifacts the server proxies (``phase-2-candidates`` predates
+# that and stores artifacts where the host cannot write).
+EXPERIMENT_ENV_VAR = "MLFLOW_EXPERIMENT_NAME"
 
 # Which users a subsample keeps is a property of the *experiment*, not of the model's
 # randomness, so it is drawn from its own fixed seed rather than from the training seed.
@@ -133,6 +138,11 @@ def _configuration_id(config: SASRecConfig, *, sample_fraction: float = 1.0) -> 
         parameters["subsample_seed"] = SUBSAMPLE_SEED
     canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode()
     return f"sasrec-sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def resolve_experiment_name() -> str:
+    """The MLflow experiment a run logs to: ``MLFLOW_EXPERIMENT_NAME``, else phase 2's."""
+    return os.environ.get(EXPERIMENT_ENV_VAR, "").strip() or PHASE_2_EXPERIMENT
 
 
 def resolve_sasrec_sample_fraction() -> float:
@@ -250,7 +260,7 @@ def run_once(
         k=K_CANDIDATES,
     )
 
-    mlflow.set_experiment(PHASE_2_EXPERIMENT)
+    mlflow.set_experiment(resolve_experiment_name())
     run_name = "sasrec" if not run_label else f"sasrec-{run_label}"
     with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags(

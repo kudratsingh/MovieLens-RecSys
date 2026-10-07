@@ -1,0 +1,105 @@
+{
+  "_comment": [
+    "WO-3 continuation (owner approval relayed 2026-10-07): 'cell 0b on the all-positions trainer,",
+    "seed 42, early stopping off, 10 passes.' Cell 0b's exact settings (sampled softmax, 1,024",
+    "negatives) on O-25's 6% partition; early stopping off, so exactly 10 passes. The protocol hash",
+    "below is confirmed on the run before any number is read; the sealed boundary 1469256597 holds.",
+    "Run preservation (owner, 2026-10-07): logged to the shared store (http://localhost:5001,",
+    "experiment phase-a-sasrec) with the per-user recall file, the model archive and the console",
+    "log as run artifacts, verified through the API after the run.",
+    "Item (e), the strict-prefix trainer's three seeds under WO-4's existing rule (early",
+    "stopping, 3 to 5 passes), exactly as 9b0d4994 ran at seed 42: wo4-cell0b-pair-cpu-6pct.json's",
+    "cell with only the seed changed (owner's condition 2).",
+    "Projection: 9b0d4994 took 3,593.6 s fit (688 s per pass solo); about 60-75 min wall each",
+    "with up to three runs in flight; killed past 150 min.",
+    "One seed per file so the three strict-prefix seeds can run as separate processes; the",
+    "cell is unchanged from the three-seed file it was split from."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "strict_prefix_cell_0b_reference": {
+    "run": "9b0d499430474fde9de6a5305bcda649",
+    "cells_file": "wo4-cell0b-pair-cpu-6pct.json",
+    "trainer": "strict-prefix, WO-4 early stopping (3 to 5 passes); ran 5 passes",
+    "warm_recall_at_500": 0.4563981550719796,
+    "within_0_03": [
+      0.4263981551,
+      0.4863981551
+    ]
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-strictprefix-cell0b-pilot6-ssm-neg1024-s7",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "training_objective": "strict-prefix-final-position-v1",
+      "device": "cpu",
+      "seed": 7
+    }
+  ],
+  "released": "released 2026-10-07 after seed 42's declared pass-10 read passed: 02060962 read 0.4343017113 against 0.4563981551 (-0.0221, inside 0.03); condition 3 did not fire (peak pass 8 at 0.4344376606, pass 10 0.0001 below it)",
+  "result": {
+    "status": "complete; preserved and verified in the shared store",
+    "date_run": "2026-10-07",
+    "trainer": "strict-prefix, WO-4 early stopping (3 to 5 passes)",
+    "run_id": "dc8a5b1912b9400e9107c3d00821dbfe",
+    "store": "http://localhost:5001, experiment phase-a-sasrec (id 6), artifacts mlflow-artifacts:/6",
+    "git_commit": "c3fc4ecc7834d01481044675f6adea2effb446e9",
+    "protocol_hash_matches_expected": true,
+    "seed": 7,
+    "device": "cpu",
+    "read_warm_recall_at_500": 0.44876006073746194,
+    "epochs_completed": 3,
+    "stopped_early": true,
+    "per_pass_warm_recall": [
+      0.3627153455030698,
+      0.3950457903755325,
+      0.44876006073746194
+    ],
+    "per_pass_loss": [
+      4.814484881573036,
+      4.157767375344547,
+      3.9085563942725745
+    ],
+    "per_pass_train_seconds": [
+      1041.2930863329675,
+      1021.4127842909656,
+      1011.197343125008
+    ],
+    "peak_pass": 3,
+    "last_pass_below_peak": 0.0,
+    "warm_ndcg_at_500": 0.14939140832830783,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.4736837884775289,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "catalog_coverage": 0.28171264245393546,
+    "fit_seconds": 3076.8,
+    "peak_rss_bytes": 2765570048,
+    "started": "2026-10-07T09:39:47Z",
+    "ended": "2026-10-07T10:31:14Z",
+    "load_at_start": "2.31 3.25 3.43",
+    "concurrency_note": "ran beside the other (e) runs (up to 3 of mine in flight)",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:5bbe53d0455f05bf1f25e794b5f38cfeac9de5ce224e84ae80bf28bfef706b5b",
+    "model_archive_sha256": "814ac046782150dae12d2714cd0c2fbd2396de2b15e50a8b1e6d14e95304b3c4",
+    "archive_verified_from_store": true,
+    "artifacts_in_store": [
+      "config/wo3-strictprefix-cell0b-6pct-s7.json",
+      "logs/wo3-e-sp-s7.log",
+      "model/popularity-order.json",
+      "model/sasrec-manifest.json",
+      "model/sasrec-model.zip",
+      "per_user_recall.json",
+      "training/loss_curve.png"
+    ],
+    "backup": "kudratsingh/movielens-backups 1fc7e41fbc60ee9f55cc64f825e294a308613f34, wo3e-runs-2026-10-07.tgz; metadata in mlflow-post-wo3e-20261007T113834.sql.gz"
+  }
+}
