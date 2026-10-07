@@ -14,7 +14,7 @@
     "by the winner's settings in a commit before the hold is removed."
   ],
   "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
-  "hold": "provisional: the winning variant is not chosen yet (WO-3 pilots 1-4 first)",
+  "hold": "superseded 2026-10-07 by the owner's revised plan: the pass check is cell 0b on both trainers (item e), which did not trigger; never run",
   "wo1_reference": {
     "runs": {
       "42": "7baeb7d0",

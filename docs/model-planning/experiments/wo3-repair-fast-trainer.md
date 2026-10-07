@@ -1,8 +1,15 @@
 # Experiment: SASRec v1 / repairing the all-positions trainer / wo3-v1
 
-**Status:** stopped for the owner after 3 of 8 pilots. Pilots 2 and 3 each contradicted their
-predeclared expectation: each removed one cause and scored *below* the baseline. No further pilot,
-seed repeat or full run has been made.
+**Status:** measured under the owner's revised plan (2026-10-07). Its run phase is over:
+- **More passes close the gap on the v1 cell:** at 4 passes the fast trainer is no different from
+  the trainer of record.
+- **At the WO-5 loss** (cell 0b) the all-positions trainer stopped at pass 3 and lands 0.0746 below
+  the strict-prefix run, so the seed repeats in item (e) do not run.
+- **No position-mismatch design is due:** item (f) needs both checks to leave a gap.
+- No full-data run, by the revised plan.
+
+The 2026-10-05 stop after pilots 2 and 3 is kept below as it was decided. Under the 0.03 noise
+rule pilot 2 is no longer a finding (see the verdict).
 
 **Governing ADR:** [ADR 0020](../../adr/0020-sasrec-v2.md), amendment 2026-10-05, D4 ("try to
 repair the fast trainer before paying for the slow one"), with stop rules 1 and 2 unchanged.
@@ -16,6 +23,16 @@ Also [ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
   migration. The first launch, during the migration, was refused by the harness's permission
   check; the second, at 08:46 with the machine quiet, was allowed. The full run stays held for a
   separate approval.
+- **2026-10-07, the owner's revised plan**, relayed by the coordinator, binds what follows:
+  - (a) Pilot 4 as written.
+  - (b) A new pilot of the all-positions trainer on cell 0b's exact settings.
+  - (c) A 0.03 single-seed noise rule, replacing the 0.015 tripwire.
+  - (d) The wide-batch variant dropped from further pilots.
+  - (e) Cell 0b seeds 7, 13 and 21 on both trainers, if (b) lands within 0.03.
+  - (f) A position-mismatch design, reported and not run, only if (a) and (b) both leave a gap.
+  - (g) About 4 hours of machine time in place of the 8-pilot cap, and no full-data run.
+  - (h) An ADR 0020 amendment.
+  - (i) The sealed-partition guard on every other subsampling trainer.
 
 **Specification version:** wo3-v1 (2026-10-05). The cells, written before any run:
 
@@ -25,9 +42,10 @@ Also [ADR 0016](../../adr/0016-sasrec-sequential-retrieval.md).
 | 2 | [`wo3-overlap-6pct-s42.json`](../../experiments/sasrec/wo3-overlap-6pct-s42.json) | `window_stride` 25 (objective `all-positions-overlap-v2`) |
 | 3 | [`wo3-wide-6pct-s42.json`](../../experiments/sasrec/wo3-wide-6pct-s42.json) | `windows_per_step` 512 (objective `all-positions-wide-v2`) |
 | 4 | [`wo3-passes-6pct-s42.json`](../../experiments/sasrec/wo3-passes-6pct-s42.json) | `epochs` 8; the 4-pass result is read at pass 4 |
-| 5–8 | written after pilots 1–4, under the rules below | at most 4 more |
-| seeds | [`wo3-repaired-6pct-seeds.json`](../../experiments/sasrec/wo3-repaired-6pct-seeds.json) | the winner at seeds 7, 13, 21; **held, cells provisional** |
-| full | [`wo3-repaired-full.json`](../../experiments/sasrec/wo3-repaired-full.json) | the winner on full data, seed 42; **held, cells provisional** |
+| 5–8 | superseded on 2026-10-07 by the revised plan's items (b), (e) and (f) | — |
+| cell 0b | [`wo3-allpos-cell0b-6pct-s42.json`](../../experiments/sasrec/wo3-allpos-cell0b-6pct-s42.json) (2026-10-07) | WO-4's cell 0b (sampled softmax, 1,024 negatives, early stopping), objective all-positions |
+| seeds | [`wo3-repaired-6pct-seeds.json`](../../experiments/sasrec/wo3-repaired-6pct-seeds.json) | **held, never run**; under the revised plan the pass check is cell 0b on both trainers (item e), which did not trigger |
+| full | [`wo3-repaired-full.json`](../../experiments/sasrec/wo3-repaired-full.json) | **held, never run**; the full-data control moves to WO-5 (ADR 0020 amendment 2026-10-07) |
 
 ## Decision this experiment informs
 
@@ -179,6 +197,18 @@ Pilots 5–8, decided from pilots 1–4 by these rules, each cells file committe
 **Stop rule.** At most 8 pilots and one full run. If no variant passes, tuning stops and WO-5 trains
 on the original objective (D6).
 
+**Revised 2026-10-07 (owner).** The rules for pilots 5–8 and the 8-pilot cap above are superseded:
+- **Noise rule.** A single-seed difference under **0.03 absolute** warm recall@500 is not a finding.
+  It replaces the 0.015 tripwire, which was tighter than one WO-1 seed sd (0.0150).
+- **Runs:** (a) pilot 4 as written; (b) cell 0b on the all-positions trainer, compared with
+  strict-prefix `9b0d4994` (0.4564).
+- **(e)** If (b) lands within 0.03 of 0.4564, cell 0b runs at seeds 7, 13 and 21 on both trainers.
+  Pass: the fast trainer's four-seed mean within 3% of the strict-prefix four-seed mean.
+- **(f)** If (a) and (b) both leave a gap, a position-mismatch design is written here and reported.
+  It is not run.
+- **The wide-batch variant is dropped:** it costs as much as the trainer of record.
+- **Budget:** about 4 hours of machine time, tallied below. No full-data run.
+
 ## Compute and storage budget
 
 **Projections** (solo, the hand-written encoder). They come from the recorded pilots:
@@ -210,6 +240,26 @@ is re-stated before the run.
 - **Memory:** about 3 GB peak per pilot (the real-data check peaked at 2.1 GB). The full run is
   expected below #183's 7.2 GB.
 - **Spend:** none.
+
+**Cell 0b on the all-positions trainer (2026-10-07), projected before the run** and written into its
+cells file:
+- **Encoder:** about 15 s per pass (27,940 windows).
+- **Loss:** the sampled-softmax logits are one (512 × 64) @ (64 × 18,778) product per step, about
+  0.024–0.04 s × 2,425 steps.
+- **Total:** 75–115 s per pass, 230–590 s fit for 3–5 passes (point 450 s), wall 5–11 min. Killed
+  past 22 min.
+
+**Machine-time tally (fit seconds), the record the revised budget asks for:**
+
+| Run | Projected fit | Actual fit | Wall | Ran beside |
+|---|---:|---:|---:|---|
+| P1 baseline (2026-10-05) | 90 s | 90.2 s | 1 min 39 s | nothing (solo) |
+| P2 overlap (2026-10-05) | 117 s | 120.3 s | 2 min 9 s | P3 |
+| P3 wide (2026-10-05) | 1,388 s (re-projected) | 1,477.6 s | 24 min 46 s | P2, then WO-4's cell 0b pilot |
+| P4 8 passes (2026-10-07) | 345 s | 371.2 s | 6 min 18 s | the cell 0b pilot |
+| Cell 0b, all-positions (2026-10-07) | 230–590 s | 279.5 s (3 passes; 85.3 / 88.4 / 91.5 s per pass) | 4 min 48 s | P4 |
+| **Under the revised plan** | | **650.7 s (10.8 min)** of about 4 h | | |
+| **All WO-3 runs** | | **2,338.8 s (39.0 min)** | | |
 
 ## Pre-run correctness checklist
 
@@ -277,53 +327,73 @@ cd $WT && SASREC_WO3_UNCHANGED_CHECK=1 TWOTOWER_INPUT_DIR=$MAIN/data/raw/ml-25m 
 
 ## Verdict
 
-**Validity:** valid. All three pilots ran on protocol `faf2828d…`, confirmed on each run before any
+**Validity:** valid. All five runs ran on protocol `faf2828d…`, confirmed on each run before any
 number was read, with 108 warm / 39 cold users and cold recall@500 0.5427033422 on every run (the
 guardrail).
 
-**Partition affirmation:** intact. Latest fit 1466819964 and latest scored 1469247943 on every
-pilot, both below 1469256597.
+**Partition affirmation:** intact. Latest fit 1466819964 and latest scored 1469247943 on every run,
+both below 1469256597. The cell 0b pilot's early-stopping probe reached no later than 1464506906.
+Claude (WO-3 implementer), 2026-10-07: no run in this record read an interaction at or after
+1469256597.
 
-**Decision:** stopped for the owner, under the predeclared expectation rule. Not a verdict on the
-repair: WO-3's done-criteria are neither met nor failed, and the stop rule (8 pilots) has not fired.
+**Rule application (seed 42, warm recall@500; noise rule 0.03 absolute):**
 
-**Rule application (seed 42, warm recall@500):**
+| Run | Run id | Warm recall@500 | Compared with | Difference | Finding? | Fit s |
+|---|---|---:|---|---:|---|---:|
+| P1 baseline (#183 cell, 2 passes) | `5911fe7fbcbc477c85261d2ec6531987` | 0.3211451711 | WO-1 mean 0.3721736 | −0.0510 | yes: the clean gap | 90.2 |
+| P2 overlap, stride 25 | `95003b498d7f41459f5f2b4ec6f4dfbc` | 0.2992780178 | P1 | −0.0219 | **no** (under 0.03) | 120.3 |
+| P3 wide, 512 visits per step | `4929b4942d7645c38495c27f943b5d18` | 0.2837269604 | P1 | −0.0374 | yes: wider batches did worse | 1,477.6 |
+| P4 at pass 4 | `001adb45a47549278680ccfd5658fe10` | 0.3635361437 (pass 4) | WO-1 mean | −0.0086 | **no**: no gap at 4 passes | 4 × ~46 |
+| P4 at pass 8 | same run | 0.4095967223 | WO-1 mean | +0.0374 | yes, at one seed | 371.2 |
+| Cell 0b, all-positions (early stop at pass 3) | `1fbde8732ab540cf85cd672744acd9e7` | 0.3817862300 | strict-prefix cell 0b `9b0d4994`, 0.4563982 | −0.0746 | yes | 279.5 |
 
-| Pilot | Run | Warm recall@500 | vs pilot 1 | vs WO-1 mean 0.3721736 | Warm NDCG@500 | Fit s | Peak RSS |
-|---|---|---:|---:|---:|---:|---:|---:|
-| 1 baseline (#183 cell) | `5911fe7fbcbc477c85261d2ec6531987` | **0.3211451711** | — | −13.71% | 0.1066530 | 90.2 | 2.93 GB |
-| 2 overlap, stride 25 | `95003b498d7f41459f5f2b4ec6f4dfbc` | **0.2992780178** | −0.0219 | −19.59% | 0.1085791 | 120.3 | 2.89 GB |
-| 3 wide, 512 visits per step | `4929b4942d7645c38495c27f943b5d18` | **0.2837269604** | −0.0374 | −23.76% | 0.0967268 | 1,477.6 | 2.56 GB |
+**Pilots 2 and 3, re-read under the 0.03 rule.** The 2026-10-05 stop fired on a 0.015 tripwire.
+- **Pilot 2's −0.0219 is not a finding.** It rests mostly on four single-target users (three went
+  from 1.0 to 0, one from 0 to 1). Restoring context neither helped nor demonstrably hurt at this
+  seed.
+- **Pilot 3's −0.0374 stands.** Drawing each step from 512 windows, which reproduces the trainer of
+  record's batch composition, did worse and cost as much as that trainer. The wide-batch variant is
+  dropped (item d). Its code and its record stay.
 
-- **Pilot 1** behaved as expected: below WO-1's range (floor 0.3610084), a gap of 0.0510, about
-  3.4 of WO-1's seed sd. The recorded −42.82% (`f837955c…`) was the contaminated split's.
-- **Pilot 2** restored context (every scored target sees at least 25 movies, or all the user has;
-  mean 34.3 against 24.2) and fell 0.0219, past the predeclared 0.015. It led pilot 1 after pass 1
-  (0.2586 against 0.2438) and trailed after pass 2. Per user against pilot 1: 25 higher, 34 lower,
-  49 unchanged; three single-target users went from 1.0 to 0, one from 0 to 1. Warm NDCG and
-  catalog coverage (14.1% against 10.4%) rose.
-- **Pilot 3** restored the trainer of record's batch composition (each step reads 511.8 windows,
-  one target each) and fell 0.0374. Per user: 15 higher, 34 lower, 59 unchanged. It costs as much
-  as the trainer of record (1,477.6 s fit, beside another pilot).
-- **Pilot 3 started before pilot 2's result** and was allowed to finish after the stop, as an
-  approved single-cause pilot whose result informs the owner's decision.
+**Pilot 4: more passes close the gap on the v1 cell.**
+- **Per pass:** warm recall reads 0.2438 / 0.3211 / 0.3396 / 0.3635 / 0.3816 / 0.3745 / 0.3786 /
+  0.4096. Passes 1 and 2 reproduce pilot 1 exactly.
+- **At 4 passes** the fast trainer is within noise of the copied-prefix trainer at 2 (−0.0086
+  against the WO-1 mean, +0.0010 against WO-1's seed 42). Fit is about 186 s against 1,081 s.
+- **At 8 passes** it is 0.0374 above, a finding at one seed, at 371 s.
+- **The pass ratio:** the all-positions trainer needs about twice the passes of the copied-prefix
+  trainer for the same recall, at about a twelfth of the cost per pass.
 
-**What the three runs say, and do not say.** At one seed on 108 warm users, neither cause, removed
-alone, moved warm recall toward the trainer of record; both moved it down. Pilot 2's fall is 1.5
-seed sd and rests mostly on four users; pilot 3's is 2.5 sd and broader. The diagnosis has not yet
-attributed any share of the gap to a cause. One difference the brief did not list (a hypothesis,
-untested): the trainer of record always predicts from position 49 with the history right-aligned,
-which is exactly how evaluation queries the model, while every all-positions variant trains
-predictions at many positions.
+**Cell 0b: the gap does not close at the WO-5 loss within early stopping's passes.**
+- **Where it stopped:** the all-positions trainer stopped at pass 3. Probe recall@500 read 0.500 /
+  0.622 / 0.610 on 82 probe users, so a fall of one user ended the run. Holdout recall was still
+  rising: 0.263 / 0.342 / 0.382.
+- **The strict-prefix run** `9b0d4994` went all 5 passes: holdout 0.350 / 0.419 / 0.449 / 0.461 /
+  0.456; probe 0.585 / 0.646 / 0.707 / 0.744 / 0.720.
+- **At matched passes** the gap is −0.0675 at pass 3. It is −0.0746 at each run's stopping point.
+- **Pass ratio:** the all-positions run's pass 3 lies between the strict-prefix run's passes 1 and 2,
+  the same about-two-to-one ratio as pilot 4.
 
-**Runs:** `5911fe7fbcbc477c85261d2ec6531987` (pilot 1), `95003b498d7f41459f5f2b4ec6f4dfbc` (pilot 2),
-`4929b4942d7645c38495c27f943b5d18` (pilot 3). Five of eight pilots, the seed repeats and the full
-run remain in the budget.
+**Decision:**
+- **(e) does not run:** (b) is not within 0.03 of 0.4564.
+- **(f) is not reached:** (a) leaves no gap at 4 passes. No position-mismatch design is written.
+- **No repaired objective is named.** The repair pilot 4 found is a pass budget, not a new
+  objective: passes are `epochs`, not part of `training_objective`. At the WO-5 loss, the 3–5-pass
+  early-stopping budget left the gap open.
+- **Whether the all-positions trainer gets a longer pass budget at cell 0b**, and how, is the
+  owner's decision. For example, a fixed 8–10 passes, or early stopping with a higher minimum, at
+  about 90 s per pass. This record does not run it.
+- `all-positions-overlap-v2`, `-wide-v2` and `-overlap-wide-v2` remain in code as the named
+  diagnostics they were, defaulting off.
 
-**What is not authorized next:** no further pilot until the owner decides. The options are:
-- continue the plan (pilot 4, passes);
-- repeat pilots 2 and 3 at a second seed;
-- stop WO-3 on the D6 path, so that WO-5 trains on the original objective.
+**Runs:**
+- `5911fe7fbcbc477c85261d2ec6531987` (P1), `95003b498d7f41459f5f2b4ec6f4dfbc` (P2),
+  `4929b4942d7645c38495c27f943b5d18` (P3);
+- `001adb45a47549278680ccfd5658fe10` (P4), `1fbde8732ab540cf85cd672744acd9e7` (cell 0b).
 
-No gate threshold, champion or serving change in any case. No repaired objective is named, and the
-ADR 0020 note waits for the outcome.
+Machine time: 650.7 s under the revised plan, 2,338.8 s in all.
+
+**What is not authorized next:**
+- no further WO-3 run without the owner;
+- no full-data run (the full-data control moves to WO-5, cell 0b on both trainers);
+- no gate threshold, champion or serving change.

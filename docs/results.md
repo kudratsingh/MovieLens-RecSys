@@ -3736,35 +3736,55 @@ wall. Peak RSS 2,650,095,616 bytes (2.47 GiB), the same after fit and at the end
 digest `sha256:6436271c…`, artifact SHA-256 `5820fa7a…`. Like WO-1's runs, it was logged to a local
 file store and can be imported into the shared server with its id.
 
-## The all-positions trainer's gap, first three causes — 2026-10-05 (WO-3, stopped after 3 pilots)
+## The all-positions trainer's gap, by cause — 2026-10-05 and 07 (WO-3)
 
-WO-3 tests why the all-positions trainer (#183, 9.8× faster) scores below the trainer of record,
-one cause at a time. Each cause is a setting that defaults off (PR #201). Every pilot is the #183
-cell at seed 42 on O-25's 6% partition: protocol `sha256:faf2828d…` confirmed on each run before
-reading, 108 warm / 39 cold users, cold recall@500 0.5427033422 on every run.
+WO-3 asks why the all-positions trainer (#183, 9.8× faster) scores below the trainer of record, and
+whether the gap can be closed cheaply (PR #201). Every run is seed 42 on O-25's 6% partition:
+- protocol `sha256:faf2828d…`, confirmed on each run before reading;
+- 108 warm / 39 cold users;
+- cold recall@500 0.5427033422 on every run.
 
-| Pilot | What changed | Run | Warm recall@500 | vs pilot 1 | Fit s |
-|---|---|---|---:|---:|---:|
-| 1 | nothing: the clean baseline | `5911fe7fbcbc477c85261d2ec6531987` | **0.3211451711** | — | 90.2 |
-| 2 | overlapping windows, stride 25: every scored target sees ≥ 25 movies (or all the user has); mean context 34.3 against 24.2 | `95003b498d7f41459f5f2b4ec6f4dfbc` | **0.2992780178** | −0.0219 | 120.3 |
-| 3 | each step's 512 targets from 512 window visits, the trainer of record's batch composition (against 11.5 windows) | `4929b4942d7645c38495c27f943b5d18` | **0.2837269604** | −0.0374 | 1,477.6 |
+Under the owner's noise rule (2026-10-07), a single-seed difference under 0.03 absolute is not a
+finding.
 
-**The clean gap is smaller than the recorded one.** Against WO-1's four-seed mean 0.3721736 the
-baseline is −13.71% (about 3.4 seed sd). It is not −42.82%: that figure (`f837955c…`) came from the
-contaminated split.
+**The v1 cell** (BCE, 32 negatives), against WO-1's four-seed mean 0.3721736:
 
-**Neither cause, removed alone, closed any of it at this seed; both made recall worse.** Each fall is
-past the 0.015 the run record set before the runs as contradicting its expectation, so the thread
-stopped for the owner with 5 of 8 pilots, the seed repeats and the full run unspent.
-- Pilot 2 led the baseline after pass 1 (0.2586 against 0.2438) and trailed after pass 2. Its fall
-  rests mostly on four single-target users (three went from 1.0 to 0, one from 0 to 1), about 1.5
-  seed sd.
-- Pilot 3's fall is broader (15 users higher, 34 lower) and about 2.5 seed sd. It costs as much as
-  the trainer of record.
+| Run | What changed | Run id | Warm recall@500 | Difference | Finding? | Fit s |
+|---|---|---|---:|---:|---|---:|
+| P1 | nothing: the clean baseline, 2 passes | `5911fe7fbcbc477c85261d2ec6531987` | 0.3211451711 | −0.0510 vs WO-1 mean | yes | 90.2 |
+| P2 | overlapping windows, stride 25 (every scored target sees ≥ 25 movies or all the user has) | `95003b498d7f41459f5f2b4ec6f4dfbc` | 0.2992780178 | −0.0219 vs P1 | no | 120.3 |
+| P3 | 512 window visits per step (the trainer of record's batch composition) | `4929b4942d7645c38495c27f943b5d18` | 0.2837269604 | −0.0374 vs P1 | yes, worse | 1,477.6 |
+| P4, pass 4 | 4 passes, nothing else | `001adb45a47549278680ccfd5658fe10` | 0.3635361437 | −0.0086 vs WO-1 mean | no | ~186 |
+| P4, pass 8 | 8 passes | same run | 0.4095967223 | +0.0374 vs WO-1 mean | yes | 371.2 |
 
-**No share of the gap is attributed yet, and no repaired objective is named.** The passes pilot was
-not run. One untested difference: the trainer of record always predicts from position 49 with the
-history right-aligned, as evaluation does; every all-positions variant trains at many positions.
+**Which cause explains how much.**
+- **Too few passes explains the whole gap on this cell.** At 4 passes the fast trainer is within
+  noise of the trainer of record at 2, for about 186 s of fit against 1,081 s. At 8 passes it is
+  ahead. It needs about twice the passes for the same recall, at about a twelfth of the cost per
+  pass.
+- **Short history explains none of it** at this seed. Restoring context moved recall by less than
+  the noise rule.
+- **Narrow batches explain none of it.** Removing them made recall worse and cost as much as the
+  trainer of record, so the variant is dropped.
+- The clean gap at 2 passes is −13.71%. It is not the −42.82% the contaminated split showed.
+
+**At the WO-5 loss** (cell 0b: sampled softmax, 1,024 negatives, early stopping at 3 to 5 passes):
+
+| Trainer | Run id | Passes | Warm recall@500 by pass | Final | Fit s |
+|---|---|---:|---|---:|---:|
+| strict-prefix (WO-4) | `9b0d499430474fde9de6a5305bcda649` | 5 | 0.350 / 0.419 / 0.449 / 0.461 / 0.456 | 0.4563981551 | 3,593.6 |
+| all-positions | `1fbde8732ab540cf85cd672744acd9e7` | 3 (stopped early) | 0.263 / 0.342 / 0.382 | 0.3817862300 | 279.5 |
+
+**Here the gap stays open within the passes early stopping allows.**
+- **The gap:** −0.0746 at each run's stopping point, −0.0675 at matched pass 3.
+- **Why it stopped:** the 82-user probe fell by one user at pass 3 (0.622 to 0.610) while holdout
+  recall was still rising.
+- **Consequences:** the cell 0b seed repeats did not run, because the result is not within 0.03.
+  WO-3 names no repaired objective: the repair it found is a pass budget, not an objective.
+  Whether the all-positions trainer gets a longer pass budget at the WO-5 loss is the owner's call.
+
+No full-data run was made. The full-data control moves to WO-5, as cell 0b on both trainers (ADR
+0020 amendment 2026-10-07). Machine time: 2,338.8 s of fit in all.
 
 Run record:
 [`model-planning/experiments/wo3-repair-fast-trainer.md`](model-planning/experiments/wo3-repair-fast-trainer.md);

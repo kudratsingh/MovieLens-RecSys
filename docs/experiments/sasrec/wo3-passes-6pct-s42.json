@@ -47,5 +47,77 @@
       "seed": 42,
       "training_objective": "all-positions-strict-timestamp-v1"
     }
-  ]
+  ],
+  "result": {
+    "status": "4 passes: 0.3635, -0.0086 against WO-1's mean, not a finding under the 0.03 rule (no gap); 8 passes: 0.4096, +0.0374, a finding at one seed",
+    "date_run": "2026-10-07",
+    "run_id": "001adb45a47549278680ccfd5658fe10",
+    "commit": "7525c59 (WO-3 rebased onto main 18610d2)",
+    "tracking_store": "local file store <wo3 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.40959672227373906,
+    "warm_ndcg_at_500": 0.13884163552228848,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.44491072348377336,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "train_loss_by_epoch": [
+      0.10478267434645583,
+      0.08609147395622466,
+      0.076276872395539,
+      0.07089364006916614,
+      0.06766461207178627,
+      0.06465468430975359,
+      0.062701718294004,
+      0.06120732219836427
+    ],
+    "epoch_warm_recall": [
+      0.24382138897504757,
+      0.3211451711235242,
+      0.3396495004545507,
+      0.36353614371445,
+      0.3815582500979146,
+      0.3745105542053338,
+      0.3785996470774076,
+      0.40959672227373906
+    ],
+    "n_training_windows": 27940,
+    "n_training_targets": 1186847,
+    "train_steps_per_epoch": 2425.375,
+    "train_encoded_windows_per_step": 11.519868061639952,
+    "train_targets_per_step": 489.34577127248366,
+    "catalog_coverage": 0.2611566727020982,
+    "fit_seconds": 371.2,
+    "wall": "6 min 18 s",
+    "peak_rss_bytes": 3401695232,
+    "concurrency_note": "ran beside the cell 0b all-positions pilot; load 2.09 / 2.56 / 2.32 at start",
+    "started": "2026-10-07T07:29:30Z",
+    "ended": "2026-10-07T07:35:48Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:606cbd139a8e9c44ace8410b40d0803aeeeb2a69c88a752b76e85a2bb9efc03c",
+    "artifact": {
+      "directory": "artifacts/wo3/models/001adb45a47549278680ccfd5658fe10/ (main checkout, not committed)",
+      "model_sha256": "e759f6a1985261dc7ae3dc87befffeab0da324270b5aeb04b6e97b1618dc513b"
+    },
+    "log": "artifacts/wo3/logs/wo3-p4-passes.log (main checkout)",
+    "warm_recall_at_pass_4": 0.36353614371445,
+    "warm_recall_at_pass_8": 0.40959672227373906,
+    "pass_4_vs_wo1_mean": -0.0086374441,
+    "pass_8_vs_wo1_mean": 0.0374231345,
+    "passes_1_2_equal_pilot_1": true,
+    "projection_vs_actual": {
+      "fit_seconds": [
+        345,
+        371.2
+      ],
+      "wall_minutes": [
+        7,
+        6.3
+      ]
+    }
+  }
 }

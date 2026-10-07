@@ -16,7 +16,7 @@
     "about twice the windows) and are replaced by the winner in a commit first."
   ],
   "expected_protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
-  "hold": "provisional: the winning variant is not chosen yet (WO-3 pilots first)",
+  "hold": "superseded 2026-10-07 by the owner's revised plan: no full-data run in WO-3; the full-data control is cell 0b on both trainers in WO-5; never run",
   "full_data_reference": {
     "run": "528b14513d9a49e098a0525417f23285",
     "warm_recall_at_500": 0.5091713455,
