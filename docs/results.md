@@ -3798,3 +3798,41 @@ No full-data run was made. The full-data control moves to WO-5, as cell 0b on bo
 Run record:
 [`model-planning/experiments/wo3-repair-fast-trainer.md`](model-planning/experiments/wo3-repair-fast-trainer.md);
 cells and results: `experiments/sasrec/wo3-*.json`.
+
+## Cell 0b at ten passes on the all-positions trainer — 2026-10-07 (WO-3 continuation, D-048)
+
+The owner approved one run of cell 0b on the all-positions trainer:
+- sampled softmax, 1,024 negatives;
+- seed 42, early stopping off, a fixed 10 passes;
+- read declared before the run: warm recall@500 at pass 10, no best pass picked.
+
+If it landed within 0.03 of strict-prefix `9b0d4994` (0.4564), item (e) ran seeds 7, 13 and 21 on
+both trainers. The all-positions trainer stayed at a fixed 10 passes; the strict-prefix trainer kept
+WO-4's early stopping. The (e) check passes when the fast trainer's four-seed mean is within 3% of
+the strict-prefix four-seed mean.
+
+All runs are on O-25's 6% partition: protocol `sha256:faf2828d…`, confirmed before reading; 108 warm
+/ 39 cold users; cold recall@500 0.5427033422 on every run. They are logged to the shared store,
+experiment `phase-a-sasrec`.
+
+| Trainer | Seed 42 | Seed 7 | Seed 13 | Seed 21 | Mean (sd) |
+|---|---:|---:|---:|---:|---:|
+| all-positions, 10 fixed passes | **0.4343** `02060962` | 0.3831 `b15c8194` | 0.4085 `d0c67983` | 0.4119 `21e9473e` | **0.4095** (0.0210) |
+| strict-prefix, early stopping | 0.4564 `9b0d4994` | 0.4488 `dc8a5b19` | 0.4558 `43653546` | 0.4442 `13218e76` | **0.4513** (0.0059) |
+
+**Seed 42 passed its read; item (e) does not pass.**
+- **Seed 42:** −0.0221 at pass 10, inside 0.03. Its curve peaked at pass 8 and pass 10 sits 0.0001
+  below the peak.
+- **The four seeds:** the all-positions trainer's mean is 9.27% below the strict-prefix trainer's,
+  against a 3% bar (floor 0.4378).
+- **Seed 42 was the fast trainer's best seed.** The other three trail their same-seed strict-prefix
+  runs by 0.032 to 0.066.
+- **Late in training the fast trainer's curves swing by 0.04–0.05 between adjacent passes.** Two
+  seeds peaked before pass 10 and ended 0.036 and 0.048 below their peak. Its seed sd is 3.6 times
+  the strict-prefix trainer's.
+- **Cost:** it is about 3.4 times cheaper in fit time here (a mean of 1,147 s against 3,893 s, with
+  several runs in flight).
+
+No full-data run, gate, threshold or champion changed. Record, every pass of all eight runs, run
+data and backups:
+[`model-planning/experiments/wo3-cell0b-ten-pass.md`](model-planning/experiments/wo3-cell0b-ten-pass.md).

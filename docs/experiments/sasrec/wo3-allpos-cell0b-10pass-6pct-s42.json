@@ -56,5 +56,107 @@
       "device": "cpu",
       "seed": 42
     }
-  ]
+  ],
+  "result": {
+    "status": "passes the declared read: pass 10 within 0.03 of 0.4564; condition 3 did not fire",
+    "date_run": "2026-10-07",
+    "run_id": "02060962064d41fd95e37c8941a596c5",
+    "store": "http://localhost:5001, experiment phase-a-sasrec (id 6), artifacts mlflow-artifacts:/6",
+    "git_commit": "057a8abc2cdef5468fc721be60df609870ad2c69",
+    "protocol_hash_matches_expected": true,
+    "data": {
+      "raw_data_revision": "md5:c3ce6309f6f0ec347a9e0a662c640021.dir",
+      "derived_snapshot_hash": "sha256:d469ff0016b91c8db424d93ce93f8a075d92a2745987de07bb617ec7819e8363",
+      "catalog_fingerprint": "sha256:e2117c4ea9442df513460cd7bba9798a59664e7e01134d0d3ae476adee280b78"
+    },
+    "seed": 42,
+    "device": "cpu",
+    "declared_read_pass_10_warm_recall_at_500": 0.43430171127032513,
+    "vs_strict_prefix_cell_0b": -0.0220964438,
+    "within_0_03": true,
+    "condition_3": {
+      "peak_pass": 8,
+      "peak_warm_recall": 0.4344376606315243,
+      "pass_10_below_peak": 0.0001359494,
+      "fires": false
+    },
+    "per_pass_warm_recall": [
+      0.2610285484065652,
+      0.3452203739625154,
+      0.37120127063870045,
+      0.4033218888358529,
+      0.4109845768147241,
+      0.412537270593285,
+      0.3735540344122721,
+      0.4344376606315243,
+      0.4094182087423286,
+      0.43430171127032513
+    ],
+    "per_pass_loss": [
+      5.1577637496497335,
+      4.661713866500549,
+      4.383800026878381,
+      4.206403714268054,
+      4.102150950048823,
+      4.012164289612974,
+      3.917918798683631,
+      3.829437009436573,
+      3.755528526510443,
+      3.696872339462462
+    ],
+    "per_pass_train_seconds": [
+      85.19489745795727,
+      85.66187870805152,
+      85.63860312500037,
+      82.34804266714491,
+      84.57819137489423,
+      80.07913058297709,
+      88.13691412494518,
+      81.4514181248378,
+      79.88396137487143,
+      79.5637712078169
+    ],
+    "warm_ndcg_at_500": 0.1379651997100617,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.46306132764453045,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "catalog_coverage": 0.30562360208754924,
+    "fit_seconds": 849.4,
+    "wall": "14 min 20 s (09:23:10 to 09:37:30 UTC)",
+    "peak_rss_bytes": 2438545408,
+    "concurrency_note": "no other training process; load 4.94 / 4.07 / 2.96 at start from other workers' store imports",
+    "projection_vs_actual": {
+      "fit_seconds": [
+        900,
+        849.4
+      ],
+      "wall_minutes": [
+        16,
+        14.3
+      ]
+    },
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:731940ea31988e3427464c4f33e38ea7a19f47288b2f2f6c1bbed6e6b739f519",
+    "model_archive_sha256": "3157a36348e031789b36a6991e2dd0b6f2e33e6c8841f30286c7e44384487d41",
+    "archive_verified_from_store": true,
+    "artifacts_in_store": [
+      "config/wo3-allpos-cell0b-10pass-6pct-s42.json",
+      "logs/wo3-cell0b-10pass-s42.log",
+      "model/popularity-order.json",
+      "model/sasrec-manifest.json",
+      "model/sasrec-model.zip",
+      "per_user_recall.json",
+      "training/loss_curve.png"
+    ],
+    "local_copies": {
+      "model": "artifacts/wo3/models/02060962064d41fd95e37c8941a596c5/ (main checkout)",
+      "log": "artifacts/wo3/logs/wo3-cell0b-10pass-s42.log (main checkout)"
+    },
+    "backup": "kudratsingh/movielens-backups 531f62ec7e8b297b8ae1abcd04ca758e48064a7a, wo3-10pass-run-2026-10-07.tgz"
+  }
 }

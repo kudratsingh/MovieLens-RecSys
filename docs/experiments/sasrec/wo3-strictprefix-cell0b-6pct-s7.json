@@ -40,5 +40,66 @@
       "seed": 7
     }
   ],
-  "released": "released 2026-10-07 after seed 42's declared pass-10 read passed: 02060962 read 0.4343017113 against 0.4563981551 (-0.0221, inside 0.03); condition 3 did not fire (peak pass 8 at 0.4344376606, pass 10 0.0001 below it)"
+  "released": "released 2026-10-07 after seed 42's declared pass-10 read passed: 02060962 read 0.4343017113 against 0.4563981551 (-0.0221, inside 0.03); condition 3 did not fire (peak pass 8 at 0.4344376606, pass 10 0.0001 below it)",
+  "result": {
+    "status": "complete; preserved and verified in the shared store",
+    "date_run": "2026-10-07",
+    "trainer": "strict-prefix, WO-4 early stopping (3 to 5 passes)",
+    "run_id": "dc8a5b1912b9400e9107c3d00821dbfe",
+    "store": "http://localhost:5001, experiment phase-a-sasrec (id 6), artifacts mlflow-artifacts:/6",
+    "git_commit": "c3fc4ecc7834d01481044675f6adea2effb446e9",
+    "protocol_hash_matches_expected": true,
+    "seed": 7,
+    "device": "cpu",
+    "read_warm_recall_at_500": 0.44876006073746194,
+    "epochs_completed": 3,
+    "stopped_early": true,
+    "per_pass_warm_recall": [
+      0.3627153455030698,
+      0.3950457903755325,
+      0.44876006073746194
+    ],
+    "per_pass_loss": [
+      4.814484881573036,
+      4.157767375344547,
+      3.9085563942725745
+    ],
+    "per_pass_train_seconds": [
+      1041.2930863329675,
+      1021.4127842909656,
+      1011.197343125008
+    ],
+    "peak_pass": 3,
+    "last_pass_below_peak": 0.0,
+    "warm_ndcg_at_500": 0.14939140832830783,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.4736837884775289,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "catalog_coverage": 0.28171264245393546,
+    "fit_seconds": 3076.8,
+    "peak_rss_bytes": 2765570048,
+    "started": "2026-10-07T09:39:47Z",
+    "ended": "2026-10-07T10:31:14Z",
+    "load_at_start": "2.31 3.25 3.43",
+    "concurrency_note": "ran beside the other (e) runs (up to 3 of mine in flight)",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:5bbe53d0455f05bf1f25e794b5f38cfeac9de5ce224e84ae80bf28bfef706b5b",
+    "model_archive_sha256": "814ac046782150dae12d2714cd0c2fbd2396de2b15e50a8b1e6d14e95304b3c4",
+    "archive_verified_from_store": true,
+    "artifacts_in_store": [
+      "config/wo3-strictprefix-cell0b-6pct-s7.json",
+      "logs/wo3-e-sp-s7.log",
+      "model/popularity-order.json",
+      "model/sasrec-manifest.json",
+      "model/sasrec-model.zip",
+      "per_user_recall.json",
+      "training/loss_curve.png"
+    ],
+    "backup": "kudratsingh/movielens-backups 1fc7e41fbc60ee9f55cc64f825e294a308613f34, wo3e-runs-2026-10-07.tgz; metadata in mlflow-post-wo3e-20261007T113834.sql.gz"
+  }
 }
