@@ -12,6 +12,13 @@ its dated note, the results section, or the PR. The earlier `D-nnn` decisions ar
 folder's work packages and backlog, defined in [`README.md`](README.md#program-map) and
 [`work-items.md`](work-items.md).
 
+**2026-10-07: the decision register is now the single home for owner decisions.** Under
+`CLAUDE.md` non-negotiable 13, every decision the owner makes gets one dated row in
+[`03-decision-register.md`](03-decision-register.md#owner-decisions-from-2026-10-05--one-dated-row-each),
+added in the pull request that acts on it. The O-table below is kept as history and gets no new
+rows. O-25 also appears there as D-028, and every decision of 5–7 October is D-018 to D-049. The
+work-item table below is unaffected.
+
 ## Owner decisions
 
 `#n` is a pull request. A decision marked *provisional* was taken as the working answer so

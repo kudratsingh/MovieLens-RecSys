@@ -322,3 +322,22 @@ pilot, and the four post-fix pilots.
 **What is not authorized next:** this accepts the encoder for WO-3 onward. It is not a quality
 claim: these are 108-user pilots that check correctness and direction. No full-data run, gate,
 threshold or champion changes.
+
+## Run data
+
+Added 2026-10-07 under non-negotiable 12 (run preservation); the run-by-run table is [`run-ledger-2026-10-05..07.md`](run-ledger-2026-10-05..07.md).
+
+- **Shared store:** `http://localhost:5001`, experiment `phase-2-candidates` (id 1):
+  - item 3's record `a2c3f5ac09064114b24d70897d68526c`, imported with its original id from the local
+    SQLite store `artifacts/wo2-converter/mlflow.db` on 2026-10-07 and verified through the API;
+  - its metrics-only first attempt `7c1d3377de164914bb5758a6c7fb9527`, which logged there directly.
+- **Lost (metadata):** the five pilots `38442d1a…`, `d0b596f7…`, `2d800544…`, `76a1cd9e…` and
+  `29ad5b79…`. Their file store lived in the WO-2 worktree and went with it, so their params, metrics,
+  tags and per-user files as logged are gone. A run cannot be re-created with its original id, so none
+  was. Their numbers are in this record, `docs/results.md` and the `wo2-*` cells JSONs.
+- **Artifacts:** the pilots' model archives in `artifacts/wo2-pilot/models/<run id>/`, their console
+  logs in `artifacts/wo2-pilot/logs/`, the parity report `artifacts/wo2-pilot/training-parity.json`;
+  item 3's evidence, logs and SQLite store in `artifacts/wo2-converter/`.
+- **Backup:** `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+  `wo2-runs-2026-10-05.tgz`; run metadata for the two stored runs also in the post-catch-up dump,
+  commit `531f62ec7e8b297b8ae1abcd04ca758e48064a7a`.

@@ -397,3 +397,26 @@ Machine time: 650.7 s under the revised plan, 2,338.8 s in all.
 - no further WO-3 run without the owner;
 - no full-data run (the full-data control moves to WO-5, cell 0b on both trainers);
 - no gate threshold, champion or serving change.
+
+## Run data
+
+Added 2026-10-07 under non-negotiable 12 (run preservation); the run-by-run table is [`run-ledger-2026-10-05..07.md`](run-ledger-2026-10-05..07.md).
+
+- **Shared store:** `http://localhost:5001`, experiment `phase-2-candidates` (id 1): P1
+  `5911fe7fbcbc477c85261d2ec6531987`, P2 `95003b498d7f41459f5f2b4ec6f4dfbc` and P3
+  `4929b4942d7645c38495c27f943b5d18`, imported with their original ids on 2026-10-07 from the copy of
+  the WO-3 worktree's store (`artifacts/local-mlruns/mlruns-wo3/`) and verified through the API.
+- **Lost (metadata):** P4 `001adb45a47549278680ccfd5658fe10` and cell 0b
+  `1fbde8732ab540cf85cd672744acd9e7`. They ran on 2026-10-07 into the WO-3 worktree's store after
+  that copy was taken, and the store went with the worktree: params, metrics, tags and per-user files
+  as logged are gone. The run summaries read from the store before it went (`p4.json`, `b0.json`),
+  this record and the cells JSONs hold every number.
+- **Artifacts:** model archives in `artifacts/wo3/models/<run id>/`, console logs in
+  `artifacts/wo3/logs/`.
+- **Backup:** `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+  `wo3-runs-2026-10-05-to-07.tgz` (the P1–P3 store, P4's and cell 0b's archives, the five logs, the
+  cells JSONs and the two summaries); run metadata for P1–P3 also in the post-catch-up dump, commit
+  `531f62ec7e8b297b8ae1abcd04ca758e48064a7a`.
+- **The 10-pass run** `02060962064d41fd95e37c8941a596c5` (D-048 in the decision register) logged
+  straight to the shared store, experiment `phase-a-sasrec` (id 6), with its cells JSON and console
+  log as run artifacts. Backup: commit `531f62ec7e8b297b8ae1abcd04ca758e48064a7a`, `wo3-10pass-run-2026-10-07.tgz`.

@@ -3736,6 +3736,15 @@ wall. Peak RSS 2,650,095,616 bytes (2.47 GiB), the same after fit and at the end
 digest `sha256:6436271c…`, artifact SHA-256 `5820fa7a…`. Like WO-1's runs, it was logged to a local
 file store and can be imported into the shared server with its id.
 
+**Run data** (2026-10-07, non-negotiable 12). In the shared store, experiment `phase-2-candidates`
+(id 1), run `4f87185e72b841ce95a924bdd6cf5141`, imported with its original id on 2026-10-07 from the
+copy of its worktree's store (`artifacts/local-mlruns/mlruns-contam/`) and verified through the API;
+its archive and per-user file are in the store's volume. The console log went with the worktree.
+Backup: `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+`contamination-gbce-run-2026-10-05.tgz`; run metadata also in the post-catch-up dump, commit
+`531f62ec7e8b297b8ae1abcd04ca758e48064a7a`. Ledger:
+[`model-planning/experiments/run-ledger-2026-10-05..07.md`](model-planning/experiments/run-ledger-2026-10-05..07.md).
+
 ## The all-positions trainer's gap, by cause — 2026-10-05 and 07 (WO-3)
 
 WO-3 asks why the all-positions trainer (#183, 9.8× faster) scores below the trainer of record, and

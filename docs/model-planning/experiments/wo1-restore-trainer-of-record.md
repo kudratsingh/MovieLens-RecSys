@@ -328,3 +328,19 @@ contaminated split (protocol `090985d7…`), before PR #162.
 - No comparison of these values with the September 6% numbers: those read the sealed window.
 
 WO-2 and WO-3 judge their pilots against this reference set, on protocol `faf2828d…`.
+
+## Run data
+
+Added 2026-10-07 under non-negotiable 12 (run preservation); the run-by-run table is [`run-ledger-2026-10-05..07.md`](run-ledger-2026-10-05..07.md).
+
+- **Shared store:** `http://localhost:5001`, experiment `phase-2-candidates` (id 1), runs
+  `3e031fa2046b42b4a1f50fc6e91fcc71`, `7baeb7d0b812486e9c86fdd3435ea715`,
+  `d71f0fa6321d4fd6bf3288ee9c28e710`, `2d9f3cc1ed1943b495fbecc7ac101485` and
+  `8668ca0c57f6411dacd0d53af0b8b2fa`. Imported with their original ids from `$MAIN/mlruns` on
+  2026-10-05 and re-verified against that store on 2026-10-07 (5 of 5, per-user files by SHA-256).
+- **Artifacts:** in the store's volume under `1/<run id>/artifacts/`; working copies in
+  `artifacts/sasrec/<run id>/` (byte-identical) and the logs in `artifacts/sasrec/logs/wo1-*.log`.
+- **Backup:** `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+  `wo1-runs-2026-10-05.tgz` (the original file store with archives and per-user files, the four
+  console logs, the cells JSONs); run metadata also in the post-catch-up dump, commit `531f62ec7e8b297b8ae1abcd04ca758e48064a7a`.
+- Nothing on rule 1's list is missing for these runs.

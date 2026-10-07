@@ -400,10 +400,27 @@ let device noise straddle gate 1's +3% bar, which is why it is not proposed.
 - `9b0d499430474fde9de6a5305bcda649` (pair, CPU).
 - `faeb03a68e514941b8d37d1f74574318` (pair, `mps`; not a result of record).
 
-All three are in a local MLflow file store in the WO-4 worktree (`mlruns/`).
+All three were logged to a local MLflow file store in the WO-4 worktree (`mlruns/`) and are now
+in the shared store; see [Run data](#run-data).
 
 **What is not authorized next:**
 - Citing the `mps` run's recall anywhere but this record.
 - Treating any `mps`-trained model as a result before the owner sets the D6 tolerance in ADR 0020's
   amendment.
 - Starting any WO-5 cell. WO-5 is owner-gated and depends on WO-3's outcome for its objective.
+
+## Run data
+
+Added 2026-10-07 under non-negotiable 12 (run preservation); the run-by-run table is [`run-ledger-2026-10-05..07.md`](run-ledger-2026-10-05..07.md).
+
+- **Shared store:** `http://localhost:5001`, experiment `phase-2-candidates` (id 1): cell 0b
+  `bd1b04082e5b4c1db354d5df1b3cdcd0`, the pair's CPU half `9b0d499430474fde9de6a5305bcda649` and its
+  `mps` half `faeb03a68e514941b8d37d1f74574318` (not a result of record). Imported with their original
+  ids on 2026-10-07 from the copy of the WO-4 worktree's store (`artifacts/local-mlruns/mlruns-wo4/`),
+  per-step history included, and verified through the API.
+- **Artifacts:** each run's model archive, per-user file and `training/loss_curve.png` are in the
+  store's volume under `1/<run id>/artifacts/`.
+- **Lost:** the three console logs, which were under `models/logs/` in the removed WO-4 worktree.
+- **Backup:** `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+  `wo4-runs-2026-10-05.tgz` (the store with archives and per-user files, the cells JSONs, the
+  timing and re-pricing scripts); run metadata also in the post-catch-up dump, commit `531f62ec7e8b297b8ae1abcd04ca758e48064a7a`.
