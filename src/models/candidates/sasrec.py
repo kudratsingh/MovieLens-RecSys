@@ -111,6 +111,7 @@ def all_position_objective_for(*, window_stride: int, windows_per_step: int) -> 
         (True, True): OVERLAP_WIDE_BATCH_TRAINING_OBJECTIVE,
     }[(window_stride > 0, windows_per_step > 0)]
 
+
 # Probe users are encoded and scored this many at a time. Fixed, because float
 # results depend on the batch shape and the stopping decision should not.
 _PROBE_BATCH = 256

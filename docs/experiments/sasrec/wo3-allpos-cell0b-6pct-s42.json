@@ -1,0 +1,89 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Revised plan (owner, 2026-10-07), item (b): the all-positions trainer on cell 0b's",
+    "exact settings (sampled softmax, 1,024 negatives, early stopping as WO-4 built it: 3",
+    "to 5 passes, probe = last training target of a seeded 1% of users), seed 42, O-25 6%",
+    "partition. Compared with the strict-prefix cell 0b run 9b0d4994 (warm recall@500",
+    "0.4563981551, WO-4's CPU half of the mps/cpu pair). The only difference from that",
+    "run's cells file (wo4-cell0b-pair-cpu-6pct.json) is training_objective.",
+    "Noise rule (owner, 2026-10-07): a single-seed difference under 0.03 absolute is not",
+    "a finding. If this lands within 0.03 of 0.4564, cell 0b runs at seeds 7, 13 and 21",
+    "on both trainers (item e); otherwise a position-mismatch design goes to the owner",
+    "first (item f), and is not run.",
+    "Projection, made before the run (see 'projection'): kill past 2x."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "basis": [
+      "Encoder: 27,940 back-to-back windows per pass at about 533 us each (WO-3 pilot 1",
+      "measured 45.1 s per pass for the BCE cell, matching the cost model), so about 15 s",
+      "per pass. Loss: the strict-prefix cell 0b spent about 0.024 s per step outside the",
+      "encoder (0.297 s per step solo, of which 512 encoder rows are about 0.273 s); the",
+      "sampled-softmax logits are one (512 x 64) @ (64 x 18,778) product per step whatever",
+      "the trainer, so about 0.024-0.04 s per step x 2,425 steps = 60-100 s per pass.",
+      "Per pass 75-115 s; 3-5 passes plus probe and holdout scoring each pass."
+    ],
+    "steps_per_pass": 2425,
+    "seconds_per_pass": [
+      75,
+      115
+    ],
+    "fit_seconds": [
+      230,
+      590
+    ],
+    "fit_seconds_point": 450,
+    "wall_minutes": [
+      5,
+      11
+    ],
+    "kill_wall_minutes": 22,
+    "versus_strict_prefix_cell_0b": "9b0d4994: 3,593.6 s fit, 687.6-792.0 s per pass"
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "strict_prefix_cell_0b_reference": {
+    "run": "9b0d499430474fde9de6a5305bcda649",
+    "cells_file": "wo4-cell0b-pair-cpu-6pct.json",
+    "warm_recall_at_500": 0.4563981550719796,
+    "within_0_03": [
+      0.4263981551,
+      0.4863981551
+    ]
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-cell0b-pilot6-ssm-neg1024-s42",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu"
+    }
+  ]
+}

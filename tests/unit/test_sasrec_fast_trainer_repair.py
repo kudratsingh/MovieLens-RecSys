@@ -812,6 +812,20 @@ def test_each_single_cause_pilot_changes_one_thing_from_the_baseline(
     assert cells[0][1] == dataclasses.replace(baseline[0][1], **changed)  # type: ignore[arg-type]
 
 
+def test_the_cell_0b_pilot_is_wo4s_strict_prefix_cell_on_the_all_positions_trainer() -> None:
+    """Revised plan (b): the pass check made at the WO-5 loss, objective the only change."""
+    _wo4_spec, wo4_fraction, wo4 = _cells("wo4-cell0b-pair-cpu-6pct.json")
+    spec, fraction, cells = _cells("wo3-allpos-cell0b-6pct-s42.json")
+
+    assert fraction == wo4_fraction == 0.06
+    assert spec["expected_protocol_hash"] == PILOT_PROTOCOL
+    assert "hold" not in spec and spec["projection"]["kill_wall_minutes"] > 0
+    assert wo4[0][1].training_objective == LEGACY_TRAINING_OBJECTIVE
+    assert cells[0][1] == dataclasses.replace(
+        wo4[0][1], training_objective=ALL_POSITION_TRAINING_OBJECTIVE
+    )
+
+
 def test_the_seed_repeats_and_the_full_run_are_held_until_a_variant_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
