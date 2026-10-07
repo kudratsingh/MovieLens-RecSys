@@ -314,12 +314,14 @@ else
     # Probe PyTorch's index for the wheel before downloading anything. Its
     # simple index lists every file, with '+' written as %2B.
     variant=""
-    driver_major="$(printf '%s' "${driver_cuda:-0}" | cut -d. -f1)"
+    driver_major="$(printf '%s' "${driver_cuda:-}" | cut -d. -f1)"
+    case "$driver_major" in '' | *[!0-9]*) driver_major="" ;; esac
     for candidate in $pinned_variant $TORCH_FALLBACK_VARIANTS; do
       # A CUDA 13 build needs a driver that reports CUDA 13; minor versions of
-      # one major release are compatible, majors are not.
+      # one major release are compatible, majors are not. A driver that did not
+      # say is not held against any build: the CUDA check after the install decides.
       candidate_major="$(printf '%s' "$candidate" | cut -c3-4)"
-      if [ "$candidate_major" -gt "$driver_major" ]; then
+      if [ -n "$driver_major" ] && [ "$candidate_major" -gt "$driver_major" ]; then
         log "skipping torch +$candidate: the driver reports CUDA ${driver_cuda:-unknown}"
         continue
       fi
