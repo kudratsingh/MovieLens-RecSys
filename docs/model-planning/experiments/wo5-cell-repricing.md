@@ -180,6 +180,19 @@ cd $WT && caffeinate -i /usr/bin/time -l env PYTHONPATH=$WT OMP_NUM_THREADS=1 KM
 # then the same with the label wo5-prep-cellA-timing-mps
 ```
 
+## Run data
+
+Added 2026-10-07 under non-negotiable 12 (run preservation); the run-by-run table is [`run-ledger-2026-10-05..07.md`](run-ledger-2026-10-05..07.md).
+
+- **No MLflow run, by design.** The two cell-A timings (CPU, and `mps` as timing only) ran the script
+  below, which logs nothing to MLflow.
+- **What survives:** the measurements in the result block of
+  [`wo5-prep-cellA-step-timing-full.json`](../../experiments/sasrec/wo5-prep-cellA-step-timing-full.json)
+  and in this record, and the script itself (verbatim below). The script's own JSON outputs
+  (`models/logs/wo5-cellA-*-timing.json`) were in the WO-4 worktree and went with it.
+- **Backup:** `kudratsingh/movielens-backups` commit `b6f92ac418f58600aa60fb56227c86495e66ceb4`,
+  inside `wo4-runs-2026-10-05.tgz` (the cells JSON and the timing and re-pricing scripts).
+
 <details>
 <summary>The timing script, verbatim</summary>
 

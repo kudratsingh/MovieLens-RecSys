@@ -559,7 +559,9 @@ Seven items need an answer from the owner; the first three should be settled bef
 2. **Who writes WO-2?** The implementer can build it, but interviewers will ask the owner to explain
    attention and masking without notes. The walkthrough page is the minimum; rebuilding the encoder by
    hand once is stronger. *Open.*
-3. **Set a spending ceiling for rented GPU time**, in case D6 reaches that step. *Open.*
+3. **Set a spending ceiling for rented GPU time**, in case D6 reaches that step. *Answered
+   2026-10-07: $75, and nothing is spent before the owner approves the specific proposal
+   ([D-044](03-decision-register.md#owner-decisions-from-2026-10-05--one-dated-row-each)).*
 4. **`.coordination/` is tracked in the public repo**, while its own `RESUME.md` calls those files
    local-only. Keep it public, or stop tracking it? *Answered: no longer tracked — PR #188,
    2026-10-05, removed it from the index; the files stay on disk locally.*
