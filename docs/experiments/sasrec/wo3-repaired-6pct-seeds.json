@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "HELD. The three seed repeats (7, 13, 21) of the winning variant, for the pilot check:",
+    "the four-seed mean warm recall@500 (with that variant's seed-42 pilot) must not be",
+    "below 0.3610083802, 3% under WO-1's mean 0.3721735878 (the brief rounds it 0.361009).",
+    "The cells below are PROVISIONAL (the overlap variant at 2 passes) and are replaced",
+    "by the winner's settings in a commit before the hold is removed."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "hold": "superseded 2026-10-07 by the owner's revised plan: the pass check is cell 0b on both trainers (item e), which did not trigger; never run",
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-repaired-pilot6-bce-neg32-s7",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 7,
+      "training_objective": "all-positions-overlap-v2",
+      "window_stride": 25
+    },
+    {
+      "label": "wo3-repaired-pilot6-bce-neg32-s13",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 13,
+      "training_objective": "all-positions-overlap-v2",
+      "window_stride": 25
+    },
+    {
+      "label": "wo3-repaired-pilot6-bce-neg32-s21",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 21,
+      "training_objective": "all-positions-overlap-v2",
+      "window_stride": 25
+    }
+  ]
+}

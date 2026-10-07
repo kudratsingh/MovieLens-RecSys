@@ -1,0 +1,101 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Pilot 3 of 8, cause 2 (narrow batches). Each step's 512 targets come from 512",
+    "window visits of one target each, instead of about a dozen whole windows: the",
+    "batch composition of the trainer of record, with the all-positions windows kept.",
+    "This is the full removal of the cause, so its result bounds the cause's share; a",
+    "cheaper width is a later pilot only if this one recovers a material part of the gap.",
+    "Every target is still scored exactly once per pass. Cost: a window is encoded once",
+    "per visit, so the encoder runs about as often as in the trainer of record.",
+    "Projection (solo): fit about 22 min, wall about 23 min; kill past 46 min."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "fit_seconds": 1320,
+    "wall_minutes": 23,
+    "kill_wall_minutes": 46
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-wide512-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-wide-v2",
+      "windows_per_step": 512
+    }
+  ],
+  "result": {
+    "status": "contradicts the predeclared expectation: -0.0374 against pilot 1; started before pilot 2's result and allowed to finish",
+    "date_run": "2026-10-05",
+    "run_id": "4929b4942d7645c38495c27f943b5d18",
+    "tracking_store": "local file store <wo3 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.28372696038312956,
+    "warm_ndcg_at_500": 0.09672683024465069,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.3524349800539378,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "vs_pilot_1": -0.0374182107,
+    "vs_wo1_mean_relative": -0.237649,
+    "train_loss_by_epoch": [
+      0.10525885573035547,
+      0.08668802949909034
+    ],
+    "epoch_warm_recall": [
+      0.24837896772574192,
+      0.28372696038312956
+    ],
+    "n_training_windows": 27940,
+    "n_training_targets": 1186847,
+    "min_window_context": 0,
+    "train_steps_per_epoch": 2319.0,
+    "train_encoded_windows_per_step": 511.7925830099181,
+    "train_targets_per_step": 511.7925830099181,
+    "catalog_coverage": 0.09921184364682074,
+    "fit_seconds": 1477.6,
+    "wall": "24 min 46 s",
+    "peak_rss_bytes": 2560229376,
+    "concurrency_note": "ran beside pilot 2 for its first 2 min and beside WO-4's cell-0b pilot from about 15:53Z; load 2.20 / 2.26 / 2.51 at start",
+    "started": "2026-10-05T15:48:36Z",
+    "ended": "2026-10-05T16:13:22Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:9c447750c15a52c4e77461c530105ad2a10b8d4078a1732a521b2d60ce06c519",
+    "artifact": {
+      "directory": "artifacts/wo3/models/4929b4942d7645c38495c27f943b5d18/ (main checkout, not committed)",
+      "model_sha256": "926a0a719aab14eed7a0226d888162ec6d3610677bf25626d871f326b494941d"
+    },
+    "log": "artifacts/wo3/logs/wo3-p3-wide.log (main checkout)"
+  }
+}

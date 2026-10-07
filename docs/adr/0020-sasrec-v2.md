@@ -419,3 +419,70 @@ the saved model instead: archive SHA-256 `43320b87e3cb…` loads through the wei
 recall@500 0.5091713455 to 4 decimals and cold 0.5262729520 exactly, with the exact difference and
 the number of changed top-500 lists reported. A CPU run of the new encoder at a fixed seed remains
 bit-reproducible against itself, which is what non-negotiable #5 asks for.
+
+## Amendment 2026-10-07 — WO-3's checks move to the WO-5 loss; a noise rule; the D6 tolerance
+
+**Decided by the owner** on 2026-10-07, after WO-3's first pilots, and relayed through the Phase A
+coordinator. The run-level detail is in
+[`../model-planning/experiments/wo3-repair-fast-trainer.md`](../model-planning/experiments/wo3-repair-fast-trainer.md)
+and [`../results.md`](../results.md). Nothing below moves a gate threshold. The 2026-10-05 amendment
+stands except where this one says otherwise.
+
+### WO-3's checks are made at the WO-5 loss
+
+D4's checks were written against v1's cell (BCE, 32 negatives, 2 passes). The cells WO-5 trains use
+sampled softmax with 1,024 negatives and early stopping, so the repair is now checked there:
+- **Pilot check.** The all-positions trainer runs cell 0b's exact settings (sampled softmax, 1,024
+  negatives, early stopping as WO-4 built it, 3 to 5 passes) at seeds 42, 7, 13 and 21, on O-25's
+  6% partition. The strict-prefix trainer runs the same cell at the same seeds; WO-4's `9b0d4994` is
+  its seed 42. The check passes when the all-positions trainer's four-seed mean warm recall@500 is
+  within 3% of the strict-prefix trainer's four-seed mean. The other three seeds run only if the
+  seed-42 all-positions run lands within 0.03 of `9b0d4994`'s 0.4564.
+- **Full-data control.** WO-3 makes no full-data run. Its full-data control is cell 0b trained on
+  both trainers as part of WO-5. This note does not restate the band that control is judged by.
+
+### A single-seed noise rule
+
+On the 6% pilot, a difference under **0.03 absolute** warm recall@500 between two single-seed runs
+is not a finding. For scale, WO-1's four reference seeds have a sample sd of 0.0150 on 108 warm
+users, one of whom is 0.93% of the slice. The rule replaces the 0.015 tripwire WO-3's run record set
+on 2026-10-05, which was tighter than one seed sd. It applies to reading pilots. It does not touch
+any gate threshold or the 3% bars above.
+
+### The wide-batch variant is dropped
+
+WO-3's `windows_per_step` variant draws each step's 512 targets from 512 window visits, the trainer
+of record's batch composition. At 6% it cost 1,477.6 s of fit against 90.2 s for the unchanged
+all-positions trainer, about as much as the trainer of record, and scored 0.0374 lower. It is
+dropped from further pilots; its code (default off) and its record stay.
+
+### D6 — the accepted difference for a non-CPU run
+
+This is the tolerance the 2026-10-05 amendment required before any `mps` or `cuda` run:
+- **The tolerance.** A model trained off the CPU is the same result as its CPU counterpart when its
+  warm recall@500 is within **±1% relative**.
+- **Calibration.** v1's exact cell is trained once on the GPU and scored on the CPU, against
+  0.5091713455. That run doubles as the same-device baseline for the cells trained after it.
+- **A calibration miss** triggers one more GPU seed before any fallback.
+- **Cells near the +3% bar** of gate 1 are confirmed by WO-7's seeds, not by a CPU rerun.
+- **The hardware itself** (the Mac's GPU or a rented one) is the owner's choice and is not made by
+  this note. Any step that spends money still stops for the owner first.
+
+### Where WO-3 stands, and the name D4 asked for
+
+- **On v1's cell, more passes close the gap.** At 4 passes the all-positions trainer is within noise
+  of the trainer of record at 2 passes (0.3635 against the WO-1 mean 0.3722), for about a sixth of
+  the fit time. At 8 passes it is 0.0374 above.
+- **Neither of the other two causes accounts for any of the gap.** Overlapping windows moved
+  recall by less than the noise rule. Wide batches made it worse.
+- **At the WO-5 loss the gap is open.** The all-positions trainer's early stopping ended cell 0b at
+  pass 3: the 82-user probe fell by one user while holdout recall was still rising. It lands at
+  0.3818 against 0.4564, so the four-seed pilot check did not run.
+- **No repaired objective is named.** D4 asked for a name for a repaired objective. The repair WO-3
+  found is a pass budget, which is `epochs`, not a change to the objective, so
+  `all-positions-strict-timestamp-v1` keeps its name and its meaning. The diagnostic objectives
+  `all-positions-overlap-v2`, `-wide-v2` and `-overlap-wide-v2` remain in code, default off. If a
+  longer pass budget is adopted for the all-positions trainer at the WO-5 loss, a later dated note
+  records it here.
+- **Open for the owner:** whether the all-positions trainer gets a longer pass budget at cell 0b,
+  and how.

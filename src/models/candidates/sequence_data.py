@@ -56,6 +56,27 @@ class AllPositionTrainingData:
             torch.cat(positives).long(),
         )
 
+    def batch_visits(
+        self,
+        window_indices: torch.Tensor,
+        target_indices: torch.Tensor,
+        local_windows: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return chosen targets of chosen windows, in ``batch``'s layout (WO-3).
+
+        ``batch`` scores every target of every window it is given. This scores
+        only ``target_indices`` (flat indices into ``positives``), each read from
+        row ``local_windows[i]`` of the returned sequences, which are
+        ``window_indices``. A window may appear in several batches of one epoch,
+        each time with a different share of its targets.
+        """
+        return (
+            self.sequences[window_indices],
+            local_windows.long(),
+            self.prediction_positions[target_indices].long(),
+            self.positives[target_indices].long(),
+        )
+
 
 @dataclass(frozen=True)
 class StrictPrefixExamples:
@@ -367,6 +388,143 @@ def build_all_position_training_data(
         stats=SequenceExampleStats(
             n_sequences=n_windows,
             n_targets=n_targets,
+            n_truncated_sequences=n_truncated_targets,
+            n_truncated_interactions=n_truncated_interactions,
+        ),
+    )
+
+
+def build_overlapping_all_position_training_data(
+    interactions: pd.DataFrame,
+    *,
+    item_to_index: Mapping[int, int],
+    max_length: int,
+    window_stride: int,
+) -> AllPositionTrainingData:
+    """All-position windows that overlap, so no scored target starts from nothing (WO-3).
+
+    ``build_all_position_training_data`` cuts a long history into windows back
+    to back, so the first prediction in each window sees one movie even when the
+    user has hundreds behind it. Here the timestamp groups are packed into
+    *chunks* of at most ``window_stride`` movies by the same greedy rule, and each
+    chunk becomes one window holding the latest ``max_length`` movies that end
+    where the chunk ends. A window scores only its own chunk's predictions. So:
+
+    * every target is scored exactly once, the same targets the copied-prefix
+      objective trains on;
+    * a scored position has at least ``max_length - window_stride`` movies behind
+      it in its window, or every movie the user has, whichever is fewer. The
+      positions before that are context only, never scored;
+    * consecutive windows overlap by about ``max_length - window_stride`` movies,
+      so a history is encoded about ``max_length / window_stride`` times as often.
+
+    Timestamp groups stay atomic exactly as in the back-to-back builder: a target
+    is predicted from the final movie of the group before it, and movies sharing
+    a timestamp never enter one another's visible prefix. A window may begin
+    inside a group, which is still causal because every movie in it is strictly
+    earlier than the target. ``window_stride`` must be below ``max_length``; the
+    back-to-back builder is the recorded behaviour and stays as it was.
+    """
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+    if not 0 < window_stride < max_length:
+        raise ValueError("window_stride must be positive and below max_length")
+    required = {"userId", "movieId", "timestamp"}
+    missing = required - set(interactions.columns)
+    if missing:
+        raise ValueError(f"interactions is missing required columns: {sorted(missing)}")
+
+    ordered = interactions.sort_values(["userId", "timestamp", "movieId"], kind="stable")
+    dense = ordered["movieId"].map(dict(item_to_index))
+    if dense.isna().any():
+        unknown = ordered.loc[dense.isna(), "movieId"].iloc[0]
+        raise KeyError(int(unknown))
+    items = dense.to_numpy(dtype=np.int64).astype(np.int32)
+    users = ordered["userId"].to_numpy()
+    all_timestamps = ordered["timestamp"].to_numpy()
+    user_bounds = np.r_[np.flatnonzero(np.r_[True, users[1:] != users[:-1]]), len(items)]
+    windows: list[np.ndarray[Any, np.dtype[np.int32]]] = []
+    window_positions: list[np.ndarray[Any, np.dtype[np.int16]]] = []
+    window_positives: list[np.ndarray[Any, np.dtype[np.int32]]] = []
+    n_truncated_targets = 0
+    n_truncated_interactions = 0
+
+    for user_start, user_end in zip(user_bounds[:-1], user_bounds[1:]):
+        sequence = items[user_start:user_end]
+        timestamps = all_timestamps[user_start:user_end]
+        starts = np.flatnonzero(np.r_[True, timestamps[1:] != timestamps[:-1]])
+        bounds = np.r_[starts, len(sequence)]
+        if len(starts) < 2:
+            continue
+
+        # (end of the source group, start and end of its target group)
+        assignments: list[tuple[int, int, int]] = []
+        chunk_length = 0
+
+        def flush() -> None:
+            nonlocal assignments, chunk_length, n_truncated_targets, n_truncated_interactions
+            if not assignments:
+                return
+            chunk_end = assignments[-1][0]
+            window_start = max(0, chunk_end - max_length)
+            tokens = sequence[window_start:chunk_end]
+            padding = max_length - len(tokens)
+            window = np.zeros(max_length, dtype=np.int32)
+            window[padding:] = tokens
+            sizes = [target_end - target_start for _end, target_start, target_end in assignments]
+            window_positions.append(
+                np.repeat(
+                    np.asarray(
+                        [
+                            padding + source_end - 1 - window_start
+                            for source_end, _s, _e in assignments
+                        ],
+                        dtype=np.int16,
+                    ),
+                    sizes,
+                )
+            )
+            window_positives.append(
+                np.concatenate([sequence[start:end] for _source_end, start, end in assignments])
+            )
+            if window_start:
+                n_truncated_targets += sum(sizes)
+                n_truncated_interactions += window_start * sum(sizes)
+            windows.append(window)
+            assignments = []
+            chunk_length = 0
+
+        for index in range(len(starts) - 1):
+            source_start, source_end = int(bounds[index]), int(bounds[index + 1])
+            retained = min(source_end - source_start, window_stride)
+            if chunk_length and chunk_length + retained > window_stride:
+                flush()
+            if retained == window_stride and chunk_length:
+                flush()
+            assignments.append((source_end, source_end, int(bounds[index + 2])))
+            chunk_length += retained
+            if chunk_length == window_stride:
+                flush()
+        flush()
+
+    offsets = np.zeros(len(windows) + 1, dtype=np.int64)
+    offsets[1:] = np.cumsum([len(targets) for targets in window_positives], dtype=np.int64)
+    positions = (
+        np.concatenate(window_positions) if window_positions else np.zeros(0, dtype=np.int16)
+    )
+    positives = (
+        np.concatenate(window_positives) if window_positives else np.zeros(0, dtype=np.int32)
+    )
+    return AllPositionTrainingData(
+        sequences=torch.from_numpy(
+            np.stack(windows) if windows else np.zeros((0, max_length), dtype=np.int32)
+        ),
+        prediction_offsets=torch.from_numpy(offsets),
+        prediction_positions=torch.from_numpy(positions.astype(np.int16)),
+        positives=torch.from_numpy(positives.astype(np.int32)),
+        stats=SequenceExampleStats(
+            n_sequences=len(windows),
+            n_targets=len(positives),
             n_truncated_sequences=n_truncated_targets,
             n_truncated_interactions=n_truncated_interactions,
         ),

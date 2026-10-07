@@ -44,7 +44,14 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
         return 2
-    sample_fraction, cells = parse_grid(json.loads(Path(args[0]).read_text()))
+    spec = json.loads(Path(args[0]).read_text())
+    sample_fraction, cells = parse_grid(spec)
+    if spec.get("hold"):
+        # A cells file can be committed before its run is decided (WO-3 writes
+        # the seed repeats and the full run ahead of the pilots that choose
+        # their settings). It runs only once the hold is removed in a commit.
+        logger.error("cells file %s is on hold and was not run: %s", args[0], spec["hold"])
+        return 3
     settings = Settings()
     input_dir_raw = os.environ.get(INPUT_DIR_ENV_VAR, "").strip()
     ratings, _movies = load_inputs(

@@ -562,3 +562,26 @@ until it cuts at the full split's boundaries and carries a guard like `SealedPar
 or after 1475668076 burns this window too. The answer is the same procedure again, with a later
 window, recorded here. The cheap check is to repeat this record's sweep over the tracking store
 before WO-8 starts.
+
+## Closing the path, done — 2026-10-07 (PR #201)
+
+This closes the four paths step 6 left open: `twotower`, `itemitem`, `last_item` and
+`sasrec_ranker.prepare_shared`, as listed above and in the window amendment's proposed rule. The
+owner ruled on 2026-10-07 that the fix goes in WO-3's pull request rather than a later one.
+- **The cut.** All four now subsample through `candidate_data.sample_and_split`. It cuts a
+  subsample at the full frame's boundaries, the same `temporal_split(..., cutoff=temporal_cutoff(full))`
+  WO-1 gave SASRec, and leaves a full-frame run exactly as it was. `prepare_shared` also covers the
+  score-feature arm, which reuses it.
+- **The guard.** Each trainer then runs `sealed_partition_params` before it fits anything, and
+  refuses a run whose fitted or scored rows reach the full frame's boundary
+  (`SealedPartitionError`). Item-item, last-item and two-tower log the partition timestamps with
+  their params; the ranker logs them at startup.
+- **The tests.** `tests/unit/test_sealed_partition_guards.py` hands each trainer a late-heavy
+  subsample, one whose own quantile would cross the boundary. It checks, at the trainer's own guard,
+  that the full boundaries were used and that nothing fitted or scored reaches them. All four tests
+  fail if the cut is undone.
+- **One knock-on change.** Item-item no longer attaches the ADR 0011 cohort to a subsampled run,
+  matching the other trainers. Before the cut, a subsample's own cutoff made `prepare` refuse it.
+- **Status.** No trainer in `src/training/` now computes a subsample's own quantile. The proposed
+  rule above ("none of the four runs on a subsample until it cuts at the full split's boundaries
+  and carries a guard") is met from this pull request on.

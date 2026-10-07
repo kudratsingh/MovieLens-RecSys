@@ -1,0 +1,196 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Revised plan (owner, 2026-10-07), item (b): the all-positions trainer on cell 0b's",
+    "exact settings (sampled softmax, 1,024 negatives, early stopping as WO-4 built it: 3",
+    "to 5 passes, probe = last training target of a seeded 1% of users), seed 42, O-25 6%",
+    "partition. Compared with the strict-prefix cell 0b run 9b0d4994 (warm recall@500",
+    "0.4563981551, WO-4's CPU half of the mps/cpu pair). The only difference from that",
+    "run's cells file (wo4-cell0b-pair-cpu-6pct.json) is training_objective.",
+    "Noise rule (owner, 2026-10-07): a single-seed difference under 0.03 absolute is not",
+    "a finding. If this lands within 0.03 of 0.4564, cell 0b runs at seeds 7, 13 and 21",
+    "on both trainers (item e); otherwise a position-mismatch design goes to the owner",
+    "first (item f), and is not run.",
+    "Projection, made before the run (see 'projection'): kill past 2x."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "basis": [
+      "Encoder: 27,940 back-to-back windows per pass at about 533 us each (WO-3 pilot 1",
+      "measured 45.1 s per pass for the BCE cell, matching the cost model), so about 15 s",
+      "per pass. Loss: the strict-prefix cell 0b spent about 0.024 s per step outside the",
+      "encoder (0.297 s per step solo, of which 512 encoder rows are about 0.273 s); the",
+      "sampled-softmax logits are one (512 x 64) @ (64 x 18,778) product per step whatever",
+      "the trainer, so about 0.024-0.04 s per step x 2,425 steps = 60-100 s per pass.",
+      "Per pass 75-115 s; 3-5 passes plus probe and holdout scoring each pass."
+    ],
+    "steps_per_pass": 2425,
+    "seconds_per_pass": [
+      75,
+      115
+    ],
+    "fit_seconds": [
+      230,
+      590
+    ],
+    "fit_seconds_point": 450,
+    "wall_minutes": [
+      5,
+      11
+    ],
+    "kill_wall_minutes": 22,
+    "versus_strict_prefix_cell_0b": "9b0d4994: 3,593.6 s fit, 687.6-792.0 s per pass"
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "strict_prefix_cell_0b_reference": {
+    "run": "9b0d499430474fde9de6a5305bcda649",
+    "cells_file": "wo4-cell0b-pair-cpu-6pct.json",
+    "warm_recall_at_500": 0.4563981550719796,
+    "within_0_03": [
+      0.4263981551,
+      0.4863981551
+    ]
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-cell0b-pilot6-ssm-neg1024-s42",
+      "loss": "sampled-softmax",
+      "negative_count": 1024,
+      "epochs": 5,
+      "early_stopping": true,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-strict-timestamp-v1",
+      "device": "cpu"
+    }
+  ],
+  "result": {
+    "status": "-0.0746 against strict-prefix cell 0b (0.4564): outside 0.03, so item (e) does not run; early stopping ended it at pass 3",
+    "date_run": "2026-10-07",
+    "run_id": "1fbde8732ab540cf85cd672744acd9e7",
+    "commit": "7525c59 (WO-3 rebased onto main 18610d2)",
+    "tracking_store": "local file store <wo3 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.38178623004580536,
+    "warm_ndcg_at_500": 0.12275336087366649,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.4244785251122302,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "train_loss_by_epoch": [
+      5.161144381789953,
+      4.668256839648526,
+      4.380962152973038
+    ],
+    "epoch_warm_recall": [
+      0.26324678563247517,
+      0.34180159467417087,
+      0.38178623004580536
+    ],
+    "n_training_windows": 27940,
+    "n_training_targets": 1186765,
+    "train_steps_per_epoch": 2425.3333333333335,
+    "train_encoded_windows_per_step": 11.52006597031336,
+    "train_targets_per_step": 489.32036833424957,
+    "catalog_coverage": 0.19043561614655447,
+    "fit_seconds": 279.5,
+    "wall": "4 min 48 s",
+    "peak_rss_bytes": 2896297984,
+    "concurrency_note": "ran beside pilot 4; load 2.24 / 2.56 / 2.33 at start",
+    "started": "2026-10-07T07:29:52Z",
+    "ended": "2026-10-07T07:34:40Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:d01067efdc005f6179dee19b988e22216d104a613b5ae5827bae61642633bf0d",
+    "artifact": {
+      "directory": "artifacts/wo3/models/1fbde8732ab540cf85cd672744acd9e7/ (main checkout, not committed)",
+      "model_sha256": "a0f79daa98686eefb9c45de0d23ad59c3f0de7549f03736ff35b0437cb931282"
+    },
+    "log": "artifacts/wo3/logs/wo3-cell0b-allpos-s42.log (main checkout)",
+    "vs_strict_prefix_cell_0b": -0.074611925,
+    "epochs_completed": 3,
+    "stopped_early": true,
+    "probe_users": 82,
+    "probe_recall_by_pass": [
+      0.5,
+      0.6219512195121951,
+      0.6097560975609756
+    ],
+    "epoch_train_seconds": [
+      85.32,
+      88.4189,
+      91.4736
+    ],
+    "strict_prefix_cell_0b_by_pass": {
+      "run": "9b0d499430474fde9de6a5305bcda649",
+      "epoch_warm_recall": [
+        0.34961476585167867,
+        0.41913801796882494,
+        0.44932243650649895,
+        0.4607903248538505,
+        0.4563981550719796
+      ],
+      "probe_recall_by_pass": [
+        0.5853658536585366,
+        0.6463414634146342,
+        0.7073170731707317,
+        0.7439024390243902,
+        0.7195121951219512
+      ],
+      "source": "artifacts/local-mlruns/mlruns-wo4 (main checkout), read only"
+    },
+    "matched_pass_3_gap": -0.0675362065,
+    "projection_vs_actual": {
+      "fit_seconds": [
+        [
+          230,
+          590
+        ],
+        279.5
+      ],
+      "seconds_per_pass": [
+        [
+          75,
+          115
+        ],
+        [
+          85.32,
+          88.42,
+          91.47
+        ]
+      ],
+      "wall_minutes": [
+        [
+          5,
+          11
+        ],
+        4.8
+      ]
+    }
+  }
+}

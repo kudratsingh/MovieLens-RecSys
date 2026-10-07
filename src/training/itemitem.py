@@ -32,7 +32,6 @@ from sqlalchemy import create_engine
 
 from src.config import Settings
 from src.data.load import load_ratings
-from src.data.split import temporal_split
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -43,7 +42,7 @@ from src.evaluation.protocol import (
 from src.models.candidates import routing
 from src.models.candidates.itemitem import ItemItemModel
 from src.training import protocol_manifest
-from src.training.twotower import subsample_users
+from src.training.candidate_data import sample_and_split, sealed_partition_params
 from synthetic.cold_start import harness as synth_cold
 
 logger = logging.getLogger(__name__)
@@ -107,8 +106,14 @@ def main() -> None:
 
     sample_fraction = resolve_sample_fraction()
     sample_seed = resolve_sample_seed()
+    full_ratings = ratings
+    # O-25: a subsample is cut at the full frame's boundaries, never at its own
+    # 80th percentile, so its holdout cannot reach the sealed window.
+    logger.info("Splitting on time per ADR 0001 ...")
+    ratings, split = sample_and_split(
+        full_ratings, sample_fraction=sample_fraction, sample_seed=sample_seed
+    )
     if sample_fraction != 1.0:
-        ratings = subsample_users(ratings, sample_fraction, sample_seed)
         logger.info(
             "Subsampled to %.1f%% of users at seed %d: %s ratings over %s users",
             100 * sample_fraction,
@@ -117,8 +122,6 @@ def main() -> None:
             f"{ratings['userId'].nunique():,}",
         )
 
-    logger.info("Splitting on time per ADR 0001 ...")
-    split = temporal_split(ratings)
     logger.info(
         "Train=%s Holdout=%s Test=%s (cutoff=%d)",
         f"{len(split.train):,}",
@@ -131,7 +134,13 @@ def main() -> None:
     # machine has it. At most 7 000 rows against ~20 M, and none of its users
     # appear in holdout, so the warm/cold numbers below are unmoved — the
     # cohort exists to be routed and scored, not to shift an existing metric.
-    train_frame, cohort = synth_cold.prepare(split, logger=logger)
+    # Only on a full-data run: the cohort belongs to the full population, the
+    # same rule the last-item, two-tower and SASRec trainers apply. (Before the
+    # O-25 cut a subsample's own cutoff made ``prepare`` refuse it outright.)
+    train_frame, cohort = (
+        synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
+    )
+    partition = sealed_partition_params(full_ratings, split, train_frame)
 
     # Default is the index-membership routing this model has always used;
     # SYNTH_COLD_ROUTING=threshold is the opt-in experiment behind
@@ -297,6 +306,7 @@ def main() -> None:
                 "n_items_in_train": len(model._index_to_item),
                 "fit_seconds": round(fit_seconds, 1),
                 "recommend_seconds": round(recommend_seconds, 1),
+                **partition,
             }
         )
         # The strict envelope from docs/model-planning/contracts/evaluation-protocol.md:

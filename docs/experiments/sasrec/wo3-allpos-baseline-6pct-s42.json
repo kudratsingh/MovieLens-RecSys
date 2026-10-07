@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "WO-3, repair the fast trainer (Next-Phase Build Brief 2026-10-05; ADR 0020 amendment",
+    "2026-10-05, D4). Every WO-3 pilot is the all-positions cell PR #183 measured",
+    "(all-positions-pilot-6pct.json: v1's shape, BCE, 32 negatives, batch 512, seed 42) on",
+    "O-25's 6% partition, with at most one thing changed. The protocol hash below must be",
+    "confirmed on the run before any number is read. Stop rule: at most 8 pilots and one",
+    "full run in WO-3; a check that fails twice, or a result that contradicts its",
+    "expectation, stops the thread for the owner.",
+    "Pilot 1 of 8: the clean baseline. The #183 cell unchanged except its label, on the",
+    "O-25 partition. It replaces f837955c (0.1822), which read the sealed window. Every",
+    "single-cause pilot is compared with this run, and the gap to close is this run's",
+    "distance from WO-1's four-seed mean.",
+    "Projection (solo, hand-written encoder): fit about 90 s, wall about 2 min; kill",
+    "past 2x the projection. It also re-measures the per-window and per-target costs",
+    "the other projections are scaled from."
+  ],
+  "expected_protocol_hash": "sha256:faf2828d08a0b0ecf23993fcfaf037134359017e20c7601b53da7e2ebecc22bc",
+  "projection": {
+    "fit_seconds": 90,
+    "wall_minutes": 2,
+    "kill_wall_minutes": 4
+  },
+  "wo1_reference": {
+    "runs": {
+      "42": "7baeb7d0",
+      "7": "d71f0fa6",
+      "13": "2d9f3cc1",
+      "21": "8668ca0c"
+    },
+    "warm_recall_at_500": {
+      "42": 0.3625487076,
+      "7": 0.3611061547,
+      "13": 0.3714076606,
+      "21": 0.3936318283
+    },
+    "mean": 0.3721735878,
+    "pilot_check_floor": 0.3610083802
+  },
+  "sample_fraction": 0.06,
+  "cells": [
+    {
+      "label": "wo3-allpos-pilot6-bce-neg32-s42",
+      "loss": "bce",
+      "negative_count": 32,
+      "epochs": 2,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "all-positions-strict-timestamp-v1"
+    }
+  ],
+  "result": {
+    "status": "baseline: the gap to WO-1's four-seed mean is 0.0510 (-13.71%); below the floor 0.3610084 as expected",
+    "date_run": "2026-10-05",
+    "run_id": "5911fe7fbcbc477c85261d2ec6531987",
+    "tracking_store": "local file store <wo3 worktree>/mlruns",
+    "protocol_hash_matches_expected": true,
+    "warm_recall_at_500": 0.3211451711235242,
+    "warm_ndcg_at_500": 0.10665304663138746,
+    "cold_recall_at_500": 0.5427033422192526,
+    "overall_recall_at_500": 0.37992591039381957,
+    "n_warm_users": 108,
+    "n_cold_users": 39,
+    "vs_pilot_1": 0.0,
+    "vs_wo1_mean_relative": -0.137109,
+    "train_loss_by_epoch": [
+      0.10478267434645583,
+      0.08609147395622466
+    ],
+    "epoch_warm_recall": [
+      0.24382138897504757,
+      0.3211451711235242
+    ],
+    "n_training_windows": 27940,
+    "n_training_targets": 1186847,
+    "min_window_context": 0,
+    "train_steps_per_epoch": 2425.0,
+    "train_encoded_windows_per_step": 11.521649484536082,
+    "train_targets_per_step": 489.42144329896905,
+    "catalog_coverage": 0.10352540206624773,
+    "fit_seconds": 90.2,
+    "wall": "1 min 39 s",
+    "peak_rss_bytes": 2926985216,
+    "concurrency_note": "solo; load 1.97 / 2.25 / 2.55 at start, the database migration finished",
+    "started": "2026-10-05T15:46:26Z",
+    "ended": "2026-10-05T15:48:05Z",
+    "partition": {
+      "latest_fit_timestamp": 1466819964,
+      "latest_scored_timestamp": 1469247943,
+      "sealed_boundary": 1469256597
+    },
+    "weights_sha256": "sha256:652208a313f3f5f2cb882ffa4b76a5f70f46aa470fd8617c406c17e4651b97f8",
+    "artifact": {
+      "directory": "artifacts/wo3/models/5911fe7fbcbc477c85261d2ec6531987/ (main checkout, not committed)",
+      "model_sha256": "0fc56a052e02fb12ff446b047673d4ee8ba735801d2dfb1f52b8b33de4fe1259"
+    },
+    "log": "artifacts/wo3/logs/wo3-p1-baseline.log (main checkout)"
+  }
+}
