@@ -1,0 +1,50 @@
+{
+  "_comment": [
+    "WO-5 step two, ADR 0020 cell E (ceiling: A with the full softmax over all 34,461 movies (negative_count is unused by this loss and kept at A's 1,024 so E differs from A in the loss alone)), on cuda. Fixed settings (ADR 0020): feed-forward 4x hidden,",
+    "dropout 0.2, Adam 1e-3, 512 examples per step, seed 42, exact search, the objective of record",
+    "(strict-prefix-final-position-v1). Early stopping as WO-4 built it: a seeded 1% of training users give up",
+    "their last training example as the probe, recall@500 after each pass, stop when it improves by less than",
+    "0.5% relative, at least 3 and at most 5 passes (epochs is the ceiling).",
+    "Sweep order 3 of 6 (cheapest projected first: 0b, A, E, B, C, D). Killed past 2x its projected time.",
+    "Full data (sample_fraction 1.0) under the full protocol: ADR 0011's cold-start cohort attached, so the",
+    "protocol hash is v1's of record, sha256:b4ed5afa... (run 528b1451). Logged to the pod's own SQLite MLflow",
+    "store, bundled after the run, re-scored on the Mac CPU from its saved weights (ADR 0020 D6; owner condition 5).",
+    "Run only by infra/gpu/sweep.sh under the step-two approval (decision register D-052)."
+  ],
+  "expected_protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+  "expected": {
+    "n_warm_users": 1931,
+    "n_cold_users": 710,
+    "cold_recall_at_k_candidates": 0.526272952
+  },
+  "projection": {
+    "hours_per_pass": 0.69,
+    "hours_per_pass_basis": "PROJECTED, not measured: cell A's measured 0.625 h/pass x ADR 0020's cost ratio against A (1.096)",
+    "passes_ceiling": 5,
+    "overhead_hours": 0.25,
+    "projected_hours": 3.7,
+    "kill_hours": 7.4
+  },
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "wo5-cellE-cuda",
+      "max_sequence_length": 100,
+      "hidden_dim": 128,
+      "num_blocks": 2,
+      "num_heads": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.2,
+      "loss": "full-softmax",
+      "negative_count": 1024,
+      "batch_size": 512,
+      "epochs": 5,
+      "learning_rate": 0.001,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "early_stopping": true,
+      "device": "cuda"
+    }
+  ]
+}
