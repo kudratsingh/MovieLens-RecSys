@@ -1,6 +1,9 @@
 # WO-5 preparation: cell A timed, ADR 0020's cell table re-priced
 
 **Status:** measured. Preparation only: **no cell was started**. Nothing here is a model result.
+**Update 2026-10-11:** the `cuda` column below is measured on a rented RTX 4090 for 0b, A and B
+(WO-5 step one, D-051) and projected for the rest; [the GPU section](#the-gpu-column-measured-2026-10-11)
+at the end. Step two (D-052) runs from it.
 
 **Governing ADR:** [ADR 0020](../../adr/0020-sasrec-v2.md): the cost model in "The finding that
 governs the cost of everything below", stop rule 7, and D6 in the 2026-10-05 amendment. Also the
@@ -298,3 +301,31 @@ print(json.dumps({k: v for k, v in result.items() if k != "config"}, indent=1))
 ```
 
 </details>
+
+## The GPU column, measured 2026-10-11
+
+WO-5 step one (D-051; [`../../results.md`](../../results.md), timing only) timed three cells on a
+RunPod Secure Cloud RTX 4090 with the same method as above (20 warm-up steps excluded, steady mean ×
+38,554 steps): 600 s of A, 180 s each of 0b and B. MLflow `522a71dc…`, backup `d95e9bb`. The other
+cells are A's measured pass × ADR 0020's cost ratio against A (the ADR-model column), the
+conservative direction on a GPU, and stay **projections** until step two measures them.
+
+| Cell | CPU h/pass | `mps` h/pass | **`cuda` h/pass** | basis | × CPU | `cuda` h, 3–5 passes | Step two: projected h at 5 passes (+0.25 h per run) | Killed past (2×) |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| 0b | 3.2 | 1.2 | **0.479** | measured, 0.0448 s/step | 6.6 | 1.4–2.4 | 2.65 | 5.29 |
+| A | 15.1 | 5.9 | **0.625** | measured, 0.0584 s/step | 24.2 | 1.9–3.1 | 3.38 | 6.75 |
+| E | 16.5 | 6.5 | 0.69 | projected, A × 1.096 | — | 2.1–3.5 | 3.70 | 7.40 |
+| B | 56.9 | 22.2 | **0.946** | measured, 0.0884 s/step | 60.1 (vs a projected CPU step) | 2.8–4.7 | 4.98 | 9.96 |
+| C | 30.2 | 11.8 | 1.26 | projected, A × 2.000 | — | 3.8–6.3 | 6.55 | 13.10 |
+| D | 33.7 | 13.1 | 1.40 | projected, A × 2.230 | — | 4.2–7.0 | 7.25 | 14.50 |
+| v1 calibration (2 passes) | — | — | 0.479 | 0b's step (same encoder) | — | 1.0 | 1.21 | 2.42 |
+
+- **The six cells at five passes:** 27.0 GPU-hours (16.2 at three), against 467–778 CPU-hours above.
+  With the calibration, about 10 minutes of setup and the per-run overhead: **about 29.9 h, $26.60 at
+  $0.89/h** (31.1 h and $27.68 with the contingent calibration seed). Step two's hard limit is 42 h.
+- **What the measurement changed.** The memo assumed 8–20× (up to 25–35× before host limits) and
+  priced the small shapes at 5×: A came in at 24.2×, 0b at 6.6×. B ran 1.51× A's step against the
+  ADR model's 3.77× — the projection for the wide cell was pessimistic on the GPU as on the CPU
+  (the local smoke had suggested about 2.1×).
+- **Order for step two (cheapest first):** 0b, A, E, B, C, D — B's measured 0.946 h/pass sits below
+  C's and D's projections.

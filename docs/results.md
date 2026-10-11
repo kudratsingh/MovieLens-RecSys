@@ -3836,3 +3836,32 @@ experiment `phase-a-sasrec`.
 No full-data run, gate, threshold or champion changed. Record, every pass of all eight runs, run
 data and backups:
 [`model-planning/experiments/wo3-cell0b-ten-pass.md`](model-planning/experiments/wo3-cell0b-ten-pass.md).
+
+## WO-5 step one — the rented-GPU timing, 2026-10-11 (timing only, not a result of record)
+
+**Timing only — not a result of record.** Nothing was trained to the end, evaluated or exported; the
+fits were interrupted after their time budgets. The numbers below price step two and nothing else
+(D-051). RunPod Secure Cloud, one NVIDIA GeForce RTX 4090 (driver 580.126.20, CUDA 13.0), on-demand
+at **$0.89/h** (the live rate; the memo had $0.74); pod `nqx5q11n02d9hz`, 12:13:27 to about 12:42
+UTC, about **$0.43**. Session 12:15:08–12:40:43 UTC (1,535 s) at commit `c7d14b0`: torch
+`2.13.0+cu126`, Python 3.11.13, the full data (GroupLens MD5 and both SHA-256s matched), the no-cohort
+protocol `sha256:e016234f…` confirmed, one thread, FP32 (no TF32). The `cuda` smoke passed.
+
+| Cell | Steady steps timed | Mean s/step (p10–p90) | h per pass (38,554 steps) | × Mac CPU | × `mps` | Peak GPU memory |
+|---|---:|---:|---:|---:|---:|---:|
+| 0b (64/2/50, sampled 1,024) | 4,021 | **0.0448** (0.0424–0.0457) | 0.479 | 6.6 | 2.4 | 0.63 GB |
+| A (128/2/100, sampled 1,024) | 10,281 | **0.0584** (0.0576–0.0592) | 0.625 | **24.2** | 9.4 | 1.92 GB |
+| B (256/2/100, sampled 1,024) | 2,037 | **0.0884** (0.0877–0.0889) | 0.946 | 60.1 (vs a projected CPU step) | 23.5 | 3.61 GB |
+
+- The speed-up grows with the model: the small cell 0b is bound by the host (6.6×), the wide one is
+  not. B ran 1.51× A's step against ADR 0020's 3.77× cost ratio.
+- C, D and E were not timed (the owner skipped it in D-052); step two projects them from A's measured
+  pass and ADR 0020's ratios (1.26, 1.40 and 0.69 h per pass) and kills any run past twice its
+  projection.
+- **Run data:** MLflow `522a71dc3fa047419fe5a0fe84490ad0` (experiment `phase-a-sasrec`, tagged
+  `timing_only=true`, `not_a_result_of_record=true`); the session tarball
+  `wo5-timing-20261011T121508Z-rented-gpu.tgz` and the mlflow dump after it in
+  `kudratsingh/movielens-backups` `d95e9bb`. The re-priced table is
+  [`model-planning/experiments/wo5-cell-repricing.md`](model-planning/experiments/wo5-cell-repricing.md);
+  step two's runbook is
+  [`model-planning/experiments/wo5-sweep-runbook.md`](model-planning/experiments/wo5-sweep-runbook.md).

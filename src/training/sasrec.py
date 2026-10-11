@@ -20,7 +20,7 @@ import pandas as pd
 import torch
 
 from src.config import Settings
-from src.data.split import temporal_cutoff, temporal_split
+from src.data.split import TemporalSplit, temporal_cutoff, temporal_split
 from src.evaluation.protocol import (
     COLD_START_THRESHOLD,
     K_CANDIDATES,
@@ -60,6 +60,7 @@ from src.training.sasrec_training_log import (
     render_loss_curve,
 )
 from synthetic.cold_start import harness as synth_cold
+from synthetic.cold_start.load import SyntheticColdCohort
 
 logger = logging.getLogger(__name__)
 RUN_LABEL_ENV_VAR = "SASREC_RUN_LABEL"
@@ -218,6 +219,28 @@ def retrieval_diagnostics(
     }
 
 
+def evaluation_frames(
+    ratings: pd.DataFrame, sample_fraction: float = 1.0
+) -> tuple[TemporalSplit, pd.DataFrame, SyntheticColdCohort | None]:
+    """The split, the frame the model fits on, and the cohort, as ``run_once`` builds them.
+
+    Shared with WO-5's CPU re-scoring, which must rebuild exactly the frames a
+    run trained and was scored on, from nothing but the run's sample fraction.
+    """
+    if sample_fraction != 1.0:
+        sample = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
+        # O-25: a subsample inherits the full frame's boundaries rather than
+        # computing its own quantile, which put the 6% pilot's whole holdout
+        # inside the sealed window. ``sealed_partition_params`` still checks the rows.
+        split = temporal_split(sample, cutoff=temporal_cutoff(ratings))
+    else:
+        split = temporal_split(ratings)
+    train_frame, cohort = (
+        synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
+    )
+    return split, train_frame, cohort
+
+
 def run_once(
     ratings: pd.DataFrame,
     config: SASRecConfig,
@@ -226,19 +249,8 @@ def run_once(
     run_label: str = "",
     artifact_root: Path | None = None,
 ) -> None:
-    full_ratings = ratings
-    if sample_fraction != 1.0:
-        ratings = subsample_users(ratings, sample_fraction, SUBSAMPLE_SEED)
-        # O-25: a subsample inherits the full frame's boundaries rather than
-        # computing its own quantile, which put the 6% pilot's whole holdout
-        # inside the sealed window. The guard below still checks the rows.
-        split = temporal_split(ratings, cutoff=temporal_cutoff(full_ratings))
-    else:
-        split = temporal_split(ratings)
-    train_frame, cohort = (
-        synth_cold.prepare(split, logger=logger) if sample_fraction == 1.0 else (split.train, None)
-    )
-    partition = sealed_partition_params(full_ratings, split, train_frame)
+    split, train_frame, cohort = evaluation_frames(ratings, sample_fraction)
+    partition = sealed_partition_params(ratings, split, train_frame)
     train_counts = split.train.groupby("userId").size().to_dict()
     holdout = split.holdout.groupby("userId")["movieId"].apply(set).to_dict()
     user_ids = list(holdout)

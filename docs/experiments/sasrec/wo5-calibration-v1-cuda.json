@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "WO-5 step two, the D6 calibration (ADR 0020 amendment 2026-10-07; D-045): v1's EXACT cell from full.json",
+    "(hidden 64, 2 blocks, 2 heads, feed-forward 256, dropout 0.2, history 50, standard BCE against 32 uniform",
+    "negatives drawn by v1's per-example sampler, batch 512, Adam 1e-3, 2 passes, exact search, objective of",
+    "record) trained on cuda at seed 42, early stopping off as v1 was. Pass when warm recall@500 is within",
+    "+/-1% relative of 0.5091713455, i.e. in [0.5040796320, 0.5142630590].",
+    "Full data (sample_fraction 1.0) under the full protocol: ADR 0011's cold-start cohort attached, so the",
+    "protocol hash is v1's of record, sha256:b4ed5afa... (run 528b1451). Logged to the pod's own SQLite MLflow",
+    "store, bundled after the run, re-scored on the Mac CPU from its saved weights (ADR 0020 D6; owner condition 5).",
+    "Run only by infra/gpu/sweep.sh under the step-two approval (decision register D-052)."
+  ],
+  "expected_protocol_hash": "sha256:b4ed5afa0a6a798a17bcb5dc9a2b8fe4aa8f66b2bc316d3609c8d15244b0fb28",
+  "calibration_check": {
+    "metric": "warm_recall_at_k_candidates",
+    "target": 0.5091713455,
+    "relative_tolerance": 0.01,
+    "band": [
+      0.504079632,
+      0.514263059
+    ],
+    "reference_run": "528b14513d9a49e098a0525417f23285"
+  },
+  "expected": {
+    "n_warm_users": 1931,
+    "n_cold_users": 710,
+    "cold_recall_at_k_candidates": 0.526272952
+  },
+  "projection": {
+    "hours_per_pass": 0.479,
+    "hours_per_pass_basis": "cell 0b's measured 0.0448 s/step on the RTX 4090 (2026-10-11, run 522a71dc) x 38,554 steps: the same 64/2/50 encoder; v1's BCE at 32 negatives replaces the 1,024-negative sampled softmax and its per-example sampler costs about 5.5 ms/step on the Mac CPU, inside the overhead",
+    "passes_ceiling": 2,
+    "overhead_hours": 0.25,
+    "projected_hours": 1.208,
+    "kill_hours": 2.416
+  },
+  "sample_fraction": 1.0,
+  "cells": [
+    {
+      "label": "wo5-calibration-v1-cuda-s42",
+      "max_sequence_length": 50,
+      "hidden_dim": 64,
+      "num_blocks": 2,
+      "num_heads": 2,
+      "feedforward_dim": 256,
+      "dropout": 0.2,
+      "loss": "bce",
+      "negative_count": 32,
+      "batch_size": 512,
+      "epochs": 2,
+      "learning_rate": 0.001,
+      "faiss_exact": true,
+      "seed": 42,
+      "training_objective": "strict-prefix-final-position-v1",
+      "early_stopping": false,
+      "device": "cuda"
+    }
+  ]
+}

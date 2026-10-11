@@ -37,7 +37,7 @@ script a service uses.
 | [`deploy/`](#deploy) | The release script, the production **and staging** environment contracts, the role SQL, the rollback rehearsal | `make prod-deploy` / `prod-rollback` / `prod-rollback-rehearsal`; prod and staging `postgres-provision`; `make up-staging` reads `staging.env.example`; both deploy workflows |
 | `mlflow/` | The official MLflow image plus the `psycopg2` driver it lacks, so a Postgres `--backend-store-uri` does not crash on import. The one build context here that is not the repository root | Dev stack's `mlflow` |
 | [`ci/`](#ci) | One file: the pinned k6 version | Makefile and CI both read it |
-| [`gpu/`](#gpu) | The rented-GPU session kit for WO-5 (D-050): the pod's bootstrap, the Mac's pull-and-record, and the pod's pinned CUDA requirements. Not part of any stack | **Nothing automated.** Run by hand from [the runbook](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md): `bootstrap.sh` on a RunPod pod, `pull_and_record.sh` on the Mac |
+| [`gpu/`](#gpu) | The rented-GPU kits for WO-5: step one's timing (D-050: the pod's bootstrap, the Mac's pull-and-record) and step two's sweep (D-052: the pod's sweep, watchdog and self-stop, the Mac's harvester), sharing the pod phases and the pinned CUDA requirements. Not part of any stack | **Nothing automated.** Run by hand from the runbooks ([timing](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md), [sweep](../docs/model-planning/experiments/wo5-sweep-runbook.md)): `bootstrap.sh` or `sweep.sh` on a RunPod pod; `pull_and_record.sh` or `harvest.sh install` (a launchd LaunchAgent) on the Mac |
 | `prometheus.yml` | Dev-stack scrape config, pointed at an API on the host | Dev stack's `prometheus`. Not used in production |
 
 Which stack uses what, at a glance: **dev only** — `postgres-init/`, `mlflow/`,
@@ -188,8 +188,26 @@ are its sentinels, and the deploy workflow greps for them.
 
 ### `gpu/`
 
-Three files for WO-5's rented-GPU timing session; the runbook is
-[`docs/model-planning/experiments/wo5-gpu-timing-runbook.md`](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md).
+WO-5's rented-GPU kits. Step one (the timing) is
+[`docs/model-planning/experiments/wo5-gpu-timing-runbook.md`](../docs/model-planning/experiments/wo5-gpu-timing-runbook.md);
+step two (the sweep) is
+[`docs/model-planning/experiments/wo5-sweep-runbook.md`](../docs/model-planning/experiments/wo5-sweep-runbook.md).
+
+- `gpu_common.sh` is sourced, never run: the preflight, repository, venv and data phases both pod
+  scripts share, and the wait for the Mac's acknowledgements.
+- `sweep.sh <commit>` runs on the pod under `setsid nohup`: the shared phases, the cold-start
+  cohort, the `cuda` smoke, then `python -m src.training.wo5_sweep run-sweep` (the calibration and
+  the six cells, one process and one bundle each, under `/workspace/wo5-sweep/out/`); it ends with a
+  logs bundle, the DONE/HALT line, a wait of at most 30 minutes for the Mac, and `self_stop.sh`.
+- `watchdog.sh` is started by `sweep.sh` in its own session: it stops the pod at the hard limit
+  whatever else happens, and finishes the job if `sweep.sh` dies.
+- `self_stop.sh` stops (never terminates) the pod with the pod's own key from `/proc/1/environ`:
+  `runpodctl pod stop`, `runpodctl stop pod`, GraphQL `podStop`, REST, in that order; `--probe`
+  proves the key without stopping anything; `--simulate` is for rehearsals.
+- `harvest.sh` runs on the Mac (`install`, `status`, `uninstall`, `run`, `once`): every bundle
+  fetched, verified, imported with its original run id, re-scored on the CPU, backed up and
+  acknowledged (`src/training/wo5_harvest.py`); installed as a LaunchAgent that removes itself when
+  the sweep is home.
 
 - `bootstrap.sh <commit>` runs on a RunPod PyTorch pod as root, under `nohup`. Preflight (one GPU
   named like `RTX 4090`, disk, memory), clone at exactly that commit, a venv from
@@ -202,7 +220,8 @@ Three files for WO-5's rented-GPU timing session; the runbook is
   one MLflow run tagged `timing_only` and `not_a_result_of_record` (a second pull of the same tarball
   verifies the first run instead of logging another), then the backup commands, printed.
 - `requirements-cuda.txt` is the pod's environment only: `torch==2.13.0+cu126` and the slice of
-  `pyproject.toml` the trainer imports, pinned to the Mac's venv. The sidecar's
+  `pyproject.toml` the trainer imports, pinned to the Mac's venv (step two added `alembic` for the
+  pod's SQLite tracking store and `matplotlib` for the loss curve). The sidecar's
   `torch==2.12.0+cpu` in `features/requirements.txt` is a different environment and does not move
   with it.
 
