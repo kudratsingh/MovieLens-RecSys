@@ -10,6 +10,27 @@ The dated header paragraph as it stood when the ledger moved, then the current s
 
 ## Current step
 
+**2026-10-12 — WO-5 is done; the session stopped at the retrieval gate (handoff).** The rented-GPU
+sweep ran on a Secure Cloud RTX 4090 (D-051, D-052) and finished clean for **$16.46** in total, both
+days, step one included. Warm recall@500, each identical on the Mac CPU re-score: calibration 0.5072
+(D6 PASS, within 1% of v1's 0.5092), 0b 0.5181, A 0.5347, E 0.5238, B 0.5349, C 0.5282, and
+**D 0.5413** (128 wide, 2 layers, history 200, stopped after 4 passes; run `80e32acb…`, CPU re-score
+`cc36c27a…`). Every run is saved on the Mac and in the private backup (head `c90043d`); B and D
+restore exactly from the backup alone and are exported as plain state dicts (D-054,
+[`wo5-sweep-preservation.md`](../model-planning/experiments/wo5-sweep-preservation.md)). The pod is
+terminated.
+
+These are single-seed point estimates; **no retrieval verdict exists yet.** `make gate-retrieval`
+refused D against v1 because the gate only accepts an item-item incumbent (D-056). The owner
+approved changing that under six limits (D-056). **Next session, in order:** (1) implement D-056 in
+one PR: the gate accepts a named SASRec incumbent, with refusals on protocol hash, warm user set and
+recall@500, a byte-identical item-item path, an ADR 0004 amendment, and v1 re-scored on the Mac CPU
+first if its per-user file does not cover the 1,931 warm users; (2) run the gate on D against
+`528b1451`, then A, B and C for the record, recording every verdict; (3) WO-6 for D as approved in
+D-055 (the database is already at head 0019 with 25,000,095 ratings, so check it rather than
+reload); (4) WO-7 seeds for D wait for a D-053 comparison of at least three same-day-priced options
+using D's measured hours (about 4.4 h for its 4 passes on the RTX 4090). Serving stays parked.
+
 **2026-10-05 — the Phase A brief is adopted; serving is parked.** The owner's build brief of this date
 sets the next phase: the SASRec encoder written by hand, trained at a larger size, and compared fairly
 against every existing model, with each headline number backed by three runs and more than one time

@@ -386,7 +386,7 @@ movielens-recsys/
 
 ### Current step
 
-Phase A, from [`docs/model-planning/phase-a-work-orders.md`](docs/model-planning/phase-a-work-orders.md): nine work orders in order, one branch and one PR each, one full-data training job at a time. **WO-1 first** — restore the trainer of record (`strict-prefix-final-position-v1` as the default `training_objective`, on a data path that never builds the examples-times-window table) and prove it with bit-identical weights on a `pilot6-bce-neg32` pilot; **then WO-2** — the SASRec encoder written from the pieces D7 allows, reproducing v1's warm recall@500 0.5091713455 from the saved model. WO-3 to WO-9 follow. Long form and the ledger: [`docs/status/README.md`](docs/status/README.md#current-step).
+WO-5 is done (D best at warm recall@500 0.5413, $16.46 spent, every run saved and restore-tested); the session stopped at the retrieval gate. Next, in order: implement the owner-approved gate change that accepts a named SASRec incumbent (D-056), gate D then A, B, C against v1 `528b1451`, then WO-6 for D (D-055). WO-7 seeds wait for a D-053 comparison. Long form: [`docs/status/README.md`](docs/status/README.md#current-step).
 
 ## How to work with Claude Code on this
 
