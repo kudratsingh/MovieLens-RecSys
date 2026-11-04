@@ -1,6 +1,6 @@
-# MovieLens Two-Stage Recommender
+# MovieLens RecSys — Two-Stage Recommendation & MLOps
 
-A movie-discovery product backed by a measured recommendation pipeline: candidate retrieval, LightGBM ranking, authenticated FastAPI serving and a Next.js frontend. The modeling track compares item-item, two-tower and SASRec retrieval on MovieLens 25M, including a transformer encoder written from tensor-level building blocks.
+A **two-stage recommender system and MLOps platform** on **MovieLens 25M**. Hand-written **SASRec transformers**, two-tower/FAISS retrieval and route-specific **LightGBM LambdaRank** models share temporal evaluation and model-promotion contracts. Feast/Redis features, MLflow, Keycloak OIDC, PostgreSQL row-level security and an authenticated FastAPI service connect offline modeling to a **Next.js movie-discovery product** with durable prediction audits and an authenticated k6 latency gate.
 
 [![CI](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kudratsingh/MovieLens-RecSys/actions/workflows/ci.yml)
 
